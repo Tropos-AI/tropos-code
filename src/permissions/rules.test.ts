@@ -141,13 +141,8 @@ describe("pathPatternMatches: hardening (fix round 1)", () => {
     expect(pathPatternMatches("src/**", "/work/[app]/src/a.ts", bracketCwd, home)).toBe(true);
     expect(pathPatternMatches("src/**", "/work/a/src/a.ts", bracketCwd, home)).toBe(false);
   });
-  test("case-insensitive on darwin and win32", () => {
-    const insensitive = process.platform === "darwin" || process.platform === "win32";
-    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(insensitive);
-  });
-  test("case-insensitive match on darwin", () => {
-    if (process.platform !== "darwin") return;
-    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(true);
+  test("case folding is off by default", () => {
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(false);
   });
 });
 
@@ -166,5 +161,41 @@ describe("splitBashCommand: heredocs and herestrings (fix round 2)", () => {
   test("quoted << stays safe", () => {
     expect(splitBashCommand(`echo "<<"`).unsafe).toBe(false);
     expect(splitBashCommand("echo '<<'").unsafe).toBe(false);
+  });
+});
+
+describe("splitBashCommand: escaped redirects (fix round 3)", () => {
+  test("escaped \\> followed by & is a plain argument, so the & still splits", () => {
+    const { parts, unsafe } = splitBashCommand("git status \\>&zz1");
+    expect(parts).toContain("zz1");
+    expect(unsafe).toBe(false);
+  });
+  test("other escaped-redirect shapes also split", () => {
+    expect(splitBashCommand("git status [\\>&zz1").parts).toContain("zz1");
+    expect(splitBashCommand("git status zz1\\>\\>&zz1").parts).toContain("zz1");
+    expect(splitBashCommand("git status <=\\>&zz1").parts).toContain("zz1");
+  });
+  test("real redirects keep their behavior", () => {
+    expect(splitBashCommand("bun test 2>&1")).toEqual({ parts: ["bun test 2>&1"], unsafe: false });
+    expect(splitBashCommand("ls &> all.log").unsafe).toBe(true);
+  });
+});
+
+describe("pathPatternMatches: relative rules stay in cwd and folding is opt-in (fix round 3)", () => {
+  const cwd = "/work/app";
+  const home = "/home/u";
+  test("relative patterns never match outside cwd", () => {
+    expect(pathPatternMatches("**", "/etc/hosts", cwd, home)).toBe(false);
+    expect(pathPatternMatches("src/**", "/work/other/src/a.ts", cwd, home)).toBe(false);
+    expect(pathPatternMatches("../other/**", "/work/other/x", cwd, home)).toBe(false);
+    expect(pathPatternMatches("../secret", "/work/secret", cwd, home)).toBe(false);
+  });
+  test("relative patterns still match inside cwd", () => {
+    expect(pathPatternMatches("**", "/work/app/x", cwd, home)).toBe(true);
+  });
+  test("case folding is opt-in", () => {
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(false);
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home, { foldCase: true })).toBe(true);
+    expect(pathPatternMatches("src/**", "/work/app/SRC/a.ts", cwd, home, { foldCase: true })).toBe(true);
   });
 });

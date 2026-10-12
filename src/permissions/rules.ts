@@ -55,6 +55,8 @@ export function splitBashCommand(command: string): SplitCommand {
   let current = "";
   let unsafe = false;
   let quote: "'" | '"' | null = null;
+  // True when the previous character was an unquoted, unescaped `>` (a redirect operator).
+  let afterRedirect = false;
   const push = () => {
     const trimmed = current.trim();
     if (trimmed) parts.push(trimmed);
@@ -64,6 +66,8 @@ export function splitBashCommand(command: string): SplitCommand {
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
     const next = command[i + 1];
+    const prevWasRedirect = afterRedirect;
+    afterRedirect = false;
 
     if (quote === "'") {
       if (ch === "'") quote = null;
@@ -132,14 +136,17 @@ export function splitBashCommand(command: string): SplitCommand {
       continue;
     }
     if (ch === "&") {
-      if (next === ">" || current.endsWith(">")) {
+      if (next === ">" || prevWasRedirect) {
         current += ch; // `&>file` or the `&` of `2>&1`
         continue;
       }
       push(); // background operator
       continue;
     }
-    if (ch === ">" && !isSafeRedirect(command, i)) unsafe = true;
+    if (ch === ">") {
+      if (!isSafeRedirect(command, i)) unsafe = true;
+      afterRedirect = true;
+    }
     current += ch;
   }
 
@@ -160,38 +167,50 @@ export function bashPatternMatches(pattern: string, command: string): boolean {
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
-// macOS and Windows filesystems are case-insensitive by default.
-const CASE_INSENSITIVE = process.platform === "darwin" || process.platform === "win32";
 
-const fold = (s: string): string => (CASE_INSENSITIVE ? s.toLowerCase() : s);
+export interface PathPatternOptions {
+  /** Compare case-insensitively. Callers enable this only for deny/ask rules on case-insensitive filesystems. */
+  foldCase?: boolean;
+}
+
 /** Glob matching uses "/" separators; Windows paths are converted before matching. */
 const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") : s);
-const climbsUp = (p: string): boolean => p === ".." || p.startsWith("../");
-
-function globMatch(pattern: string, subject: string): boolean {
-  return new Bun.Glob(fold(pattern)).match(fold(subject));
-}
 
 /**
  * Whether `absPath` is covered by a path rule pattern. The pattern is home-expanded and
  * resolved against `cwd`; `absPath` is resolved first so `..` segments cannot escape it.
- * A pattern with no glob characters covers the path itself and everything below it.
+ * A relative pattern only ever matches paths inside `cwd`. A pattern with no glob
+ * characters covers the path itself and everything below it.
  */
-export function pathPatternMatches(pattern: string, absPath: string, cwd: string, home: string): boolean {
+export function pathPatternMatches(
+  pattern: string,
+  absPath: string,
+  cwd: string,
+  home: string,
+  opts: PathPatternOptions = {},
+): boolean {
+  const fold = (s: string): string => (opts.foldCase ? s.toLowerCase() : s);
+  const globMatch = (glob: string, subject: string): boolean =>
+    new Bun.Glob(fold(glob)).match(fold(subject));
+
   const target = resolve(absPath);
   const expanded = expandHome(pattern.trim(), home);
+  const root = resolve(cwd);
+
+  if (!isAbsolute(expanded)) {
+    // Relative patterns are scoped to cwd: anything outside it, or on another drive, is out.
+    const rel = relative(root, target);
+    if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return false;
+  }
 
   if (!GLOB_CHARS.test(expanded)) {
-    const base = fold(resolve(cwd, expanded));
+    const base = fold(resolve(root, expanded));
     const subject = fold(target);
     return subject === base || subject.startsWith(base.endsWith(sep) ? base : base + sep);
   }
   if (isAbsolute(expanded)) return globMatch(normalize(expanded), target);
 
   // Relative glob: match against the path relative to cwd, so cwd never reaches the glob
-  // (it may contain glob characters). Paths outside cwd only match patterns that climb too.
-  const globPattern = toGlobSep(normalize(expanded));
-  const rel = toGlobSep(relative(resolve(cwd), target));
-  if (climbsUp(rel) && !climbsUp(globPattern)) return false;
-  return globMatch(globPattern, rel);
+  // (it may contain glob characters).
+  return globMatch(toGlobSep(normalize(expanded)), toGlobSep(relative(root, target)));
 }
