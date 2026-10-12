@@ -1429,7 +1429,7 @@ Expected: FAIL — `Cannot find module './agent'`.
 import Anthropic from "@anthropic-ai/sdk";
 import { describeError } from "../api/errors";
 import type { Message, Model } from "../api/model";
-import { contextTokens, costUsd } from "../api/pricing";
+import { contextTokens, messageCostUsd } from "../api/pricing";
 import type { Effort, Mode } from "../config/constants";
 import { modeReminder } from "../context/system-prompt";
 import { decide, type PermissionContext } from "../permissions/engine";
@@ -1544,7 +1544,7 @@ export class Agent {
         return end("error");
       }
 
-      this.recordUsage(message);
+      this.recordUsage(message, cfg.model);
       await this.push({ role: "assistant", content: message.content });
       emit({ type: "assistant", message });
       const toolUses = message.content.filter((b): b is ToolUse => b.type === "tool_use");
@@ -1685,8 +1685,9 @@ export class Agent {
     return this.finish(block, tool.name, output, output.isError ? "error" : "done");
   }
 
-  private recordUsage(message: Message): void {
-    const cost = costUsd(message.model, message.usage);
+  private recordUsage(message: Message, requestedModel: string): void {
+    // Sums compaction/fallback iterations and prices fallbacks at the model that served them.
+    const cost = messageCostUsd(message, requestedModel);
     this.totalCostUsd += cost ?? 0;
     this.opts.emit({
       type: "usage",
