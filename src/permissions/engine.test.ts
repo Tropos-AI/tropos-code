@@ -169,8 +169,7 @@ describe("decide — symlinks", () => {
   });
   afterAll(() => removeDir(dir));
 
-  test.todo("symlinked dir counts as outside once the path is canonicalized", async () => {
-    // @ts-ignore -- ../tools/paths arrives in Task 5; drop this comment when switching back to test(...)
+  test("symlinked dir counts as outside once the path is canonicalized", async () => {
     const { resolveToolPath } = await import("../tools/paths");
     const target = resolveToolPath("link/new-file.ts", join(dir, "proj"));
     const c: PermissionContext = { ...ctx({ mode: "acceptEdits" }), cwd: join(dir, "proj"), allowedDirs: [join(dir, "proj")] };
