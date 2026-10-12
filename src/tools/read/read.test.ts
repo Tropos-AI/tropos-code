@@ -18,10 +18,43 @@ beforeAll(async () => {
   await writeFile(join(dir, "bin.dat"), Buffer.from([1, 2, 0, 3]));
   await writeFile(join(dir, "pixel.png"), Buffer.from("89504e470d0a1a0a", "hex"));
   await mkdir(join(dir, "sub"));
+  // 3000 lines of 100 characters: well over the 200,000-character cap before the line limit applies.
+  await writeFile(join(dir, "dense.txt"), Array.from({ length: 3000 }, (_, i) => `${String(i + 1).padStart(4, "0")} ${"x".repeat(95)}`).join("\n"));
 });
 afterAll(() => removeDir(dir));
 
 const run = (input: Parameters<typeof readTool.run>[0], ctx = makeToolContext({ root: dir })) => readTool.run(input, ctx);
+
+describe("Read: approved paths and output cap", () => {
+  test("refuses a path that resolves differently from the approved one", async () => {
+    const ctx = makeToolContext({ root: dir, approvedPaths: [join(dir, "other.txt")] });
+    const out = await readTool.run({ file_path: "three.txt" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("changed after it was approved; nothing was read");
+    expect(ctx.readState.check(join(dir, "three.txt"), 0)).toBe("unread");
+  });
+  test("reads normally when the resolved path is the approved one", async () => {
+    const ctx = makeToolContext({ root: dir, approvedPaths: [join(dir, "three.txt")] });
+    const out = await readTool.run({ file_path: "three.txt" }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain("alpha");
+  });
+  test("caps total text output at 200,000 characters, cutting at a line boundary", async () => {
+    const out = await run({ file_path: "dense.txt", limit: 3000 });
+    const content = out.content as string;
+    const [body, note] = content.split("\n\n[Showing lines");
+    expect(body!.length).toBeLessThanOrEqual(200_000);
+    const shown = body!.split("\n");
+    expect(shown.at(-1)).toMatch(/^ {2}\d{4}\t\d{4} x{95}$/);
+    expect(note).toContain(`1-${shown.length} of 3000`);
+    expect(note).toContain(`offset ${shown.length + 1}`);
+    expect(out.summary).toBe(`${shown.length} lines`);
+  });
+  test("output under the cap is untouched", async () => {
+    const out = await run({ file_path: "long.txt", limit: 2000 });
+    expect(out.content as string).toContain("[Showing lines 1-2000 of 2500. Use offset to read more.]");
+  });
+});
 
 describe("Read", () => {
   test("numbers lines like cat -n", async () => {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { listSessions } from "../session/store";
-import { main } from "./main";
+import { main, pickShell } from "./main";
 
 let dir: string;
 let project: string;
@@ -189,5 +189,29 @@ describe("main", () => {
     await cli([]);
     await cli(["-p", "--resume", "x"]);
     expect(await Array.fromAsync(new Glob("**/*.jsonl").scan({ cwd: home }))).toEqual([]);
+  });
+});
+
+describe("pickShell", () => {
+  const which = (name: string) => (name === "bash" ? "/opt/homebrew/bin/bash" : null);
+  test("keeps a POSIX-compatible shell", () => {
+    expect(pickShell("/bin/zsh", which)).toEqual({ shell: "/bin/zsh" });
+    expect(pickShell("/usr/bin/dash", which)).toEqual({ shell: "/usr/bin/dash" });
+    expect(pickShell("/bin/sh", which)).toEqual({ shell: "/bin/sh" });
+    expect(pickShell("/usr/local/bin/bash", which)).toEqual({ shell: "/usr/local/bin/bash" });
+    expect(pickShell("/bin/ksh", which)).toEqual({ shell: "/bin/ksh" });
+  });
+  test("falls back to bash for fish, tcsh and other non-POSIX shells", () => {
+    expect(pickShell("/usr/bin/fish", which)).toEqual({ shell: "/opt/homebrew/bin/bash", rejected: "fish" });
+    expect(pickShell("/bin/tcsh", which)).toEqual({ shell: "/opt/homebrew/bin/bash", rejected: "tcsh" });
+    expect(pickShell("/usr/bin/nu", () => null)).toEqual({ shell: "/bin/bash", rejected: "nu" });
+  });
+  test("an unset or empty SHELL means bash, without a notice", () => {
+    expect(pickShell(undefined, which)).toEqual({ shell: "/opt/homebrew/bin/bash" });
+    expect(pickShell("", () => null)).toEqual({ shell: "/bin/bash" });
+  });
+  test("print mode never prints the shell notice", async () => {
+    const r = await cli(["-p", "hi"], [() => reply([textBlock("ok")])], null, { SHELL: "/usr/bin/fish" });
+    expect(r.err).not.toContain("POSIX");
   });
 });

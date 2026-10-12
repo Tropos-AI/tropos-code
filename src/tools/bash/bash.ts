@@ -18,7 +18,7 @@ const STREAM_LIMIT = 15_000; // stdout and stderr each; about 30k characters com
 const schema = z.object({
   command: z.string().min(1).describe("The shell command to run."),
   timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional().describe("Timeout in milliseconds (default 120000, max 600000)."),
-  description: z.string().optional().describe("A few words on what the command does, shown to the user."),
+  description: z.string().optional().describe("A few words on what the command does."),
 });
 
 const SECRET_ENV = new Set([
@@ -46,7 +46,7 @@ export const bashTool = defineTool({
   kind: "exec",
   description:
     "Run a command in the user's shell and return its output. The working directory carries over between calls, so cd works. " +
-    "Default timeout is 2 minutes (timeout_ms, up to 10 minutes). Output over 30,000 characters is cut in the middle. " +
+    "Default timeout is 2 minutes (timeout_ms, up to 10 minutes). Output over 15,000 characters per stream (stdout/stderr) is cut in the middle. " +
     "Use Read, Glob, Grep, Edit and Write instead of cat, find, grep, sed or echo-redirection. " +
     "Start long-running processes such as dev servers or watchers in the background with &.",
   schema,

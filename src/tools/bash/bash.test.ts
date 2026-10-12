@@ -5,6 +5,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
+import { toInputSchema } from "../schema";
 import { bashTool } from "./bash";
 
 let dir: string;
@@ -170,5 +171,15 @@ describe("Bash", () => {
 
   test("subject is the command", () => {
     expect(bashTool.subject({ command: "ls" }, dir)).toEqual({ command: "ls", paths: [] });
+  });
+});
+
+describe("Bash tool documentation", () => {
+  test("states the real per-stream output cap and does not promise the model's text reaches the user", () => {
+    expect(bashTool.description).toContain("Output over 15,000 characters per stream (stdout/stderr)");
+    expect(bashTool.description).not.toContain("30,000");
+    const described = JSON.stringify(toInputSchema(bashTool.schema));
+    expect(described).toContain("A few words on what the command does.");
+    expect(described).not.toContain("shown to the user");
   });
 });

@@ -27,6 +27,21 @@ export interface MainDeps {
   readStdin?: () => Promise<string | null>;
 }
 
+const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
+
+/**
+ * The shell that runs Bash-tool commands. The wrapper script is POSIX, so $SHELL is used only
+ * when it is bash, zsh, sh, dash or ksh; anything else (fish, tcsh, nu ...) falls back to bash.
+ * `rejected` names the unsupported shell, when there was one.
+ */
+export function pickShell(envShell: string | undefined, which: (name: string) => string | null): { shell: string; rejected?: string } {
+  const fallback = which("bash") ?? "/bin/bash";
+  if (!envShell) return { shell: fallback };
+  const name = envShell.slice(envShell.lastIndexOf("/") + 1);
+  if (POSIX_SHELLS.has(name)) return { shell: envShell };
+  return { shell: fallback, rejected: name };
+}
+
 async function readPipedStdin(): Promise<string | null> {
   if (process.stdin.isTTY) return null;
   const text = await Bun.stdin.text();
@@ -88,6 +103,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   const { rules, invalid } = compileRules(settings.permissions);
   for (const rule of invalid) err(`tropos: ignoring invalid permission rule "${rule}"\n`);
 
+  const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const ctx: AppContext = {
     cwd,
     home,
@@ -97,7 +113,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     allowedDirs: [cwd, ...settings.additionalDirectories, ...opts.addDir].map((d) => resolveToolPath(d, cwd)),
     tools: createTools({ rgPath: Bun.which("rg") }),
     model: deps.model ?? new AnthropicModel(createClient()),
-    shell: env.SHELL ?? "/bin/bash",
+    shell: picked.shell,
     localSettingsPath: paths.userProject,
   };
 
@@ -117,6 +133,10 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   } else if (!process.stdin.isTTY || deps.readStdin) {
     err("tropos: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
     return EXIT_USAGE;
+  }
+
+  if (!opts.print && picked.rejected) {
+    err(`tropos: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
   let session: SessionStore;

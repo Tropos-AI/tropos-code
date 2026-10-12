@@ -7,6 +7,7 @@ import { defineTool, type ToolOutput } from "../types";
 
 const DEFAULT_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
+const MAX_OUTPUT_CHARS = 200_000;
 const MAX_TEXT_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_PDF_BYTES = 32 * 1024 * 1024;
@@ -63,6 +64,9 @@ export const readTool = defineTool({
     } catch (error) {
       if (error instanceof PathResolutionError) return cannotRead(input.file_path, error);
       throw error;
+    }
+    if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
+      return { content: `${path} changed after it was approved; nothing was read. Try again.`, isError: true };
     }
     let info;
     try {
@@ -128,16 +132,23 @@ export const readTool = defineTool({
     if (slice.length === 0) {
       return { content: `${path} has ${lines.length} lines; offset ${input.offset} is past the end.`, summary: "past end" };
     }
-    let body = slice
-      .map((line, i) => {
-        const shown = line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}… [line truncated]` : line;
-        return `${String(start + i + 1).padStart(6)}\t${shown}`;
-      })
-      .join("\n");
-    const last = start + slice.length;
-    if (start > 0 || last < lines.length) {
+    const formatted: string[] = [];
+    let chars = 0;
+    for (const [i, line] of slice.entries()) {
+      const shown = line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}… [line truncated]` : line;
+      const row = `${String(start + i + 1).padStart(6)}\t${shown}`;
+      // Cut at a line boundary; always keep at least one line so the offset note makes progress.
+      if (formatted.length > 0 && chars + row.length + 1 > MAX_OUTPUT_CHARS) break;
+      formatted.push(row);
+      chars += row.length + 1;
+    }
+    let body = formatted.join("\n");
+    const last = start + formatted.length;
+    if (formatted.length < slice.length) {
+      body += `\n\n[Showing lines ${start + 1}-${last} of ${lines.length} (output capped at ${MAX_OUTPUT_CHARS.toLocaleString("en-US")} characters). Use offset ${last + 1} to read more.]`;
+    } else if (start > 0 || last < lines.length) {
       body += `\n\n[Showing lines ${start + 1}-${last} of ${lines.length}. Use offset to read more.]`;
     }
-    return { content: body, summary: `${slice.length} lines` };
+    return { content: body, summary: `${formatted.length} lines` };
   },
 });
