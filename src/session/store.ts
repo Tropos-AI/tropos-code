@@ -71,26 +71,31 @@ export function danglingToolResults(messages: MessageParam[]): MessageParam | nu
   };
 }
 
-export async function readSessionFile(path: string): Promise<{ meta: Partial<SessionMeta>; messages: MessageParam[] }> {
-  const text = await readFile(path, "utf8");
+function parseSession(text: string): { meta: Partial<SessionMeta>; messages: MessageParam[] } {
   const meta: Partial<SessionMeta> = {};
   const messages: MessageParam[] = [];
   for (const raw of text.split("\n")) {
     if (!raw.trim()) continue;
-    let line: SessionLine;
+    let parsed: unknown;
     try {
-      line = JSON.parse(raw) as SessionLine;
+      parsed = JSON.parse(raw);
     } catch {
       continue; // a line cut short by a crash
     }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const line = parsed as SessionLine;
     if (line.type === "meta") {
       const { type: _type, ...rest } = line;
       Object.assign(meta, rest);
-    } else if (line.type === "message") {
+    } else if (line.type === "message" && typeof line.message === "object" && line.message !== null) {
       messages.push(line.message);
     }
   }
   return { meta, messages };
+}
+
+export async function readSessionFile(path: string): Promise<{ meta: Partial<SessionMeta>; messages: MessageParam[] }> {
+  return parseSession(await readFile(path, "utf8"));
 }
 
 export class SessionStore {
@@ -115,8 +120,12 @@ export class SessionStore {
     if (!SESSION_ID.test(id)) throw new Error("Invalid session id");
     const path = join(projectDir(home, cwd), `${id}.jsonl`);
     if (!existsSync(path)) throw new Error(`No session ${id} for ${cwd}`);
-    const { meta, messages } = await readSessionFile(path);
-    const store = new SessionStore(id, path, meta.title !== undefined);
+    const text = await readFile(path, "utf8");
+    const store = new SessionStore(id, path, false);
+    // A crash can leave a final line without "\n"; end it so the repair starts a fresh line.
+    if (text.length > 0 && !text.endsWith("\n")) await store.appendRaw("\n");
+    const { meta, messages } = parseSession(text);
+    store.titled = meta.title !== undefined;
     const repair = danglingToolResults(messages);
     if (repair) {
       await store.appendMessage(repair);
@@ -142,8 +151,14 @@ export class SessionStore {
 
   /** Appends one JSON line; writes are serialized so lines never interleave. */
   private write(line: SessionLine): Promise<void> {
-    this.writes = this.writes.then(() => appendFile(this.path, `${JSON.stringify(line)}\n`, { mode: FILE_MODE }));
-    return this.writes;
+    return this.appendRaw(`${JSON.stringify(line)}\n`);
+  }
+
+  /** The chain keeps going after a failed append; the failure is reported to this caller only. */
+  private appendRaw(text: string): Promise<void> {
+    const run = this.writes.then(() => appendFile(this.path, text, { mode: FILE_MODE }));
+    this.writes = run.catch(() => {});
+    return run;
   }
 }
 
@@ -163,14 +178,18 @@ export async function listSessions(home: string, cwd: string): Promise<SessionSu
     const id = name.slice(0, -".jsonl".length);
     if (!SESSION_ID.test(id)) continue;
     const path = join(dir, name);
-    const [info, contents] = await Promise.all([stat(path), readSessionFile(path)]);
-    if (contents.messages.length === 0) continue; // never used (e.g. opened then abandoned)
-    summaries.push({
-      id,
-      title: contents.meta.title ?? "(untitled)",
-      updatedAt: info.mtime,
-      messageCount: contents.messages.length,
-    });
+    try {
+      const [info, contents] = await Promise.all([stat(path), readSessionFile(path)]);
+      if (contents.messages.length === 0) continue; // never used (e.g. opened then abandoned)
+      summaries.push({
+        id,
+        title: contents.meta.title ?? "(untitled)",
+        updatedAt: info.mtime,
+        messageCount: contents.messages.length,
+      });
+    } catch {
+      continue; // unreadable entry (e.g. a directory with a session-like name)
+    }
   }
   return summaries.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 }

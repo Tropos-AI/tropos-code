@@ -1,6 +1,6 @@
 // src/session/store.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFile, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { projectKey } from "../paths";
@@ -15,6 +15,24 @@ afterEach(() => removeDir(home));
 
 const user = (text: string): MessageParam => ({ role: "user", content: [{ type: "text", text }] });
 const assistantText = (text: string): MessageParam => ({ role: "assistant", content: [{ type: "text", text }] });
+const isRoot = process.getuid?.() === 0;
+
+/** Every assistant tool_use is answered by a user message that directly follows it. */
+function assertToolPairs(messages: MessageParam[]) {
+  messages.forEach((m, i) => {
+    if (m.role !== "assistant" || typeof m.content === "string") return;
+    const ids = m.content.flatMap((b) => (b.type === "tool_use" ? [b.id] : []));
+    if (ids.length === 0) return;
+    const next = messages[i + 1];
+    expect(next?.role).toBe("user");
+    const content = next!.content;
+    expect(typeof content).not.toBe("string");
+    const results = (content as Array<{ type: string; tool_use_id?: string }>).flatMap((b) =>
+      b.type === "tool_result" ? [b.tool_use_id] : [],
+    );
+    expect(results).toEqual(ids);
+  });
+}
 
 describe("projectDir", () => {
   test("uses the collision-free project key", () => {
@@ -73,6 +91,34 @@ describe("SessionStore", () => {
     expect(raw.trim().split("\n")).toHaveLength(5); // meta + message + title meta + message + repair
   });
 
+  test("a torn tail is terminated before the repair, and reopening does not repair twice", async () => {
+    const store = await SessionStore.create(home, { cwd, model: "m", version: "v" });
+    await store.appendMessage(user("go"));
+    await store.appendMessage({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }],
+    });
+    await appendFile(store.path, '{"type":"message","message":{"role":"assis');
+    const first = await SessionStore.open(home, cwd, store.id);
+    assertToolPairs(first.messages);
+    const second = await SessionStore.open(home, cwd, store.id);
+    expect(second.messages).toHaveLength(3);
+    expect(second.messages.at(-1)).toEqual(first.messages.at(-1));
+    assertToolPairs(second.messages);
+    const raw = await readFile(store.path, "utf8");
+    expect(raw.match(/Not run:/g)).toHaveLength(1);
+  });
+
+  test.skipIf(isRoot)("a failed append does not poison later appends", async () => {
+    const store = await SessionStore.create(home, { cwd, model: "m", version: "v" });
+    await store.appendMessage(user("one"));
+    await chmod(store.path, 0o400);
+    await expect(store.appendMessage(user("two"))).rejects.toThrow();
+    await chmod(store.path, 0o600);
+    await store.appendMessage(user("three"));
+    expect((await readSessionFile(store.path)).messages).toEqual([user("one"), user("three")]);
+  });
+
   test("open of an unknown id throws", async () => {
     await expect(SessionStore.open(home, cwd, "00000000-0000-4000-8000-000000000000")).rejects.toThrow();
   });
@@ -86,6 +132,17 @@ describe("SessionStore", () => {
 
   test("open rejects ids that are not UUIDs before touching the path", async () => {
     await expect(SessionStore.open(home, cwd, "../x")).rejects.toThrow("Invalid session id");
+  });
+});
+
+describe("malformed lines", () => {
+  test("lines that are not objects and message lines without a message are skipped", async () => {
+    const store = await SessionStore.create(home, { cwd, model: "m", version: "v" });
+    await store.appendMessage(user("one"));
+    await appendFile(store.path, `null\n42\n${JSON.stringify({ type: "message", ts: "x" })}\n`);
+    await store.appendMessage(user("two"));
+    expect((await readSessionFile(store.path)).messages).toEqual([user("one"), user("two")]);
+    expect((await listSessions(home, cwd)).map((x) => x.messageCount)).toEqual([2]);
   });
 });
 
@@ -124,5 +181,12 @@ describe("listSessions", () => {
     await writeFile(join(projectDir(home, cwd), "notes.jsonl"), `${JSON.stringify({ type: "message", message: user("stray"), ts: "x" })}\n`);
     const list = await listSessions(home, cwd);
     expect(list.map((s) => s.id)).toEqual([a.id]);
+  });
+
+  test("entries that cannot be read are skipped instead of failing the listing", async () => {
+    const a = await SessionStore.create(home, { cwd, model: "m", version: "v" });
+    await a.appendMessage(user("real"));
+    await mkdir(join(projectDir(home, cwd), "11111111-1111-4111-8111-111111111111.jsonl"));
+    expect((await listSessions(home, cwd)).map((s) => s.id)).toEqual([a.id]);
   });
 });
