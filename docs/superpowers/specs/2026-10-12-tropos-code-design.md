@@ -102,7 +102,10 @@ always require `ask`, even in `acceptEdits`.
 
 - `default` — read-only tools run; Write, Edit, Bash ask.
 - `acceptEdits` — Write/Edit inside allowed directories auto-approve; Bash asks.
-- `plan` — only read-only tools are offered to the model; it researches and proposes.
+- `plan` — the model researches and proposes. The tool list stays the same for the whole
+  session (changing it would break the cached prefix and conversation-bound thinking
+  blocks); instead, Write/Edit/Bash are denied with a "plan mode is on" message, and the
+  next user message carries a reminder that plan mode is active.
 - `bypass` — everything auto-approves. Only via `--dangerously-skip-permissions`; red badge.
 
 **Rules** in settings `permissions.allow | ask | deny`, e.g. `Bash(npm test:*)`,
@@ -174,7 +177,7 @@ profiles). `ANTHROPIC_BASE_URL` is honoured (used by the e2e mock).
 text|json|stream-json`, `--max-turns N`, `--allowed-tools "Read,Bash(git *)"`, `--model`.
 `json` prints `{result, session_id, usage, cost_usd, num_turns, is_error}`; `stream-json`
 prints one agent event per line. Exit codes: 0 success, 1 API/tool-loop error, 2 refusal,
-3 max turns reached.
+3 max turns reached, 130 interrupted, 64 usage error (bad flags, missing prompt, no terminal).
 
 ## 10. Error handling
 
@@ -189,7 +192,10 @@ prints one agent event per line. Exit codes: 0 success, 1 API/tool-loop error, 2
 | Tool throws | `is_error: true` result with the message |
 | Crash | Session lines written before each request, so resume recovers the conversation |
 
-Errors are matched by SDK error class, never by message text.
+Errors are matched by SDK error class, not message text. Two cases have no dedicated class
+in `@anthropic-ai/sdk` 0.133: an unparseable streamed tool input is a bare `AnthropicError`
+(matched as "AnthropicError that is not an APIError"), and missing credentials is a plain
+`Error` whose message starts "Could not resolve authentication method" (the one text match).
 
 ## 11. Testing
 
