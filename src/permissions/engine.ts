@@ -73,7 +73,11 @@ function toolMatches(rule: Rule, req: PermissionRequest): boolean {
  */
 function ruleHits(rule: Rule, req: PermissionRequest, ctx: PermissionContext, mode: "any" | "all", restrict = false): boolean {
   if (!toolMatches(rule, req)) return false;
-  if (!rule.pattern) return true;
+  if (!rule.pattern) {
+    // A bare allow rule for a command tool is `Bash(*)`: it never approves a code runner.
+    if (!restrict && req.command !== undefined) return bashPatternMatches("*", req.command);
+    return true;
+  }
   if (req.command !== undefined) {
     const { parts } = splitBashCommand(req.command);
     const hit = (p: string) => bashPatternMatches(rule.pattern!, p, { restrict });

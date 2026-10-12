@@ -126,6 +126,18 @@ describe("decide — fix round 1", () => {
     expect(decide(bash("python3 x.py"), ctx({ allow: ["Bash(python3 x.py)"] }))).toEqual({ behavior: "allow" });
     expect(decide(bash("python3 y.py"), ctx({ allow: ["Bash(python3 x.py)"] })).behavior).toBe("ask");
   });
+  test("a bare Bash allow rule behaves like Bash(*)", () => {
+    const bare = ctx({ allow: ["Bash"] });
+    expect(decide(bash("git status"), bare)).toEqual({ behavior: "allow" });
+    expect(decide(bash("python3 x.py"), bare).behavior).toBe("ask");
+    expect(decide(bash("sh"), bare).behavior).toBe("ask");
+    expect(decide(bash("echo x | sh"), bare).behavior).toBe("ask");
+  });
+  test("a bare Bash deny or ask rule still matches everything", () => {
+    expect(decide(bash("python3 x.py"), ctx({ deny: ["Bash"] })).behavior).toBe("deny");
+    expect(decide(bash("sh"), ctx({ allow: ["Bash"], ask: ["Bash"] })).behavior).toBe("ask");
+    expect(decide(bash("git status"), ctx({ allow: ["Bash"], ask: ["Bash"] })).behavior).toBe("ask");
+  });
   test("bypass beats ask rules", () => {
     expect(decide(bash("git push"), ctx({ mode: "bypass", ask: ["Bash(git push:*)"] }))).toEqual({ behavior: "allow" });
   });
