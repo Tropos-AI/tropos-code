@@ -19,7 +19,7 @@
 - Every tool definition sets `eager_input_streaming: true`; every tool input is validated with its zod schema before running.
 - History is append-only: never edit or delete an element of `messages` after it was sent; the tool list is identical on every request in a session.
 - All `tool_result` blocks for one assistant turn go back in a single user message.
-- Config/home dir: `TROPOS_HOME` env var, else `~/.tropos`. Project config: `<cwd>/.tropos/settings.json`, `<cwd>/.tropos/settings.local.json`.
+- Config/home dir: `TROPOS_HOME` env var, else `~/.tropos`. Project config: `<cwd>/.tropos/settings.json`, `<cwd>/.tropos/settings.local.json` (restricted keys only — see the spec's trust split); user-owned per-project config: `~/.tropos/projects/<cwd-flattened>/settings.json` ("don't ask again" writes here).
 - Brand: accent `#4568FF` (light) / `#93B0FF` (dark); muted `#78716C` (light) / `#A8A29E` (dark). Product name "Tropos Code", command `tropos`.
 - No code or prompt text copied from Claude Code. Write all prompts and tool descriptions fresh.
 - File names kebab-case for modules, PascalCase for React components. Each task commits with a message ending in the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.

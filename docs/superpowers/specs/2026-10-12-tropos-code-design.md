@@ -115,7 +115,7 @@ allowed for the whole command to auto-approve. Command substitution (`$(…)`, b
 always asks.
 
 **Prompt options:** `Yes` · `Yes, and don't ask again for <rule>` (written to
-`.tropos/settings.local.json`) · `No, tell Tropos what to do instead` (feedback text
+`~/.tropos/projects/<project>/settings.json`) · `No, tell Tropos what to do instead` (feedback text
 becomes the tool result).
 
 **Print mode:** `ask` resolves to `deny` unless allowed by rule or `--allowed-tools`.
@@ -133,7 +133,16 @@ the **first user message** as a context block, keeping the system prompt identic
 projects for caching. `/init` writes a starter `TROPOS.md` from a model pass over the repo.
 
 **Settings** (JSON), merged in order, later wins:
-`~/.tropos/settings.json` → `.tropos/settings.json` → `.tropos/settings.local.json` → CLI flags.
+`~/.tropos/settings.json` → `~/.tropos/projects/<project>/settings.json` → `.tropos/settings.json`
+→ `.tropos/settings.local.json` → CLI flags.
+
+**Trust split.** Files under `~/.tropos/` are user-owned and may set every key. The repo's
+own `.tropos/settings.json` and `.tropos/settings.local.json` arrive with the code and are
+untrusted: they may set only `model`, `effort`, `theme`, `refusalFallback`,
+`permissions.ask` and `permissions.deny`. Any other key there (`permissions.allow`, `env`,
+`additionalDirectories`) is ignored and reported as a startup warning, so a cloned repo
+can't pre-approve commands or redirect API traffic. "Don't ask again" rules are written to
+`~/.tropos/projects/<project>/settings.json`.
 Keys: `model`, `effort`, `theme` (`auto|dark|light`), `permissions`, `additionalDirectories`,
 `refusalFallback`, `env`.
 
