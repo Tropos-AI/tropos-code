@@ -86,3 +86,67 @@ describe("pathPatternMatches", () => {
     expect(pathPatternMatches("/etc/**", "/etc/hosts", cwd, home)).toBe(true);
   });
 });
+
+describe("splitBashCommand: shell parser differentials (fix round 1)", () => {
+  test("ANSI-C and locale quoting ($'...' / $\"...\") is unsafe", () => {
+    expect(splitBashCommand(`git status $'\\'' ; rm -rf x #'`).unsafe).toBe(true);
+    expect(splitBashCommand(`echo $"x"`).unsafe).toBe(true);
+  });
+  test("$ quote inside double quotes stays literal and safe", () => {
+    expect(splitBashCommand(`echo "$'x'"`).unsafe).toBe(false);
+  });
+  test("comment at start of a word is unsafe", () => {
+    expect(splitBashCommand("git status #'\nrm -rf x").unsafe).toBe(true);
+    expect(splitBashCommand("#hello").unsafe).toBe(true);
+    expect(splitBashCommand("ls;#x").unsafe).toBe(true);
+  });
+  test("mid-word # stays safe", () => {
+    expect(splitBashCommand("curl http://x/#a").unsafe).toBe(false);
+    expect(splitBashCommand("echo a#b").unsafe).toBe(false);
+  });
+  test("quoted # stays safe", () => {
+    expect(splitBashCommand(`echo "#x" '#y'`).unsafe).toBe(false);
+  });
+  test("any unquoted parenthesis is unsafe", () => {
+    expect(splitBashCommand("diff =(ls) b").unsafe).toBe(true);
+    expect(splitBashCommand("(cd x && rm y)").unsafe).toBe(true);
+    expect(splitBashCommand("ls *(e:'rm -rf x':)").unsafe).toBe(true);
+  });
+  test("quoted parentheses stay safe", () => {
+    expect(splitBashCommand(`echo "(x)"`).unsafe).toBe(false);
+    expect(splitBashCommand("echo '(x)'").unsafe).toBe(false);
+  });
+  test(">& must be followed by only digits or -", () => {
+    expect(splitBashCommand("git status >&2/../../.zshrc").unsafe).toBe(true);
+    expect(splitBashCommand("git status >&2x").unsafe).toBe(true);
+    expect(splitBashCommand("git status >&file").unsafe).toBe(true);
+    expect(splitBashCommand("bun test 2>&1").unsafe).toBe(false);
+    expect(splitBashCommand("bun test >&-").unsafe).toBe(false);
+    expect(splitBashCommand("bun test > /dev/null 2>&1").unsafe).toBe(false);
+  });
+  test(">& word stops at a control operator", () => {
+    expect(splitBashCommand("git status >&2;ls")).toEqual({ parts: ["git status >&2", "ls"], unsafe: false });
+  });
+});
+
+describe("pathPatternMatches: hardening (fix round 1)", () => {
+  const cwd = "/work/app";
+  const home = "/home/u";
+  test("normalizes .. segments in the candidate path", () => {
+    expect(pathPatternMatches("src/**", "/work/app/src/../../etc/passwd", cwd, home)).toBe(false);
+  });
+  test("cwd containing glob characters", () => {
+    const bracketCwd = "/work/[app]";
+    expect(pathPatternMatches(".env", "/work/[app]/.env", bracketCwd, home)).toBe(true);
+    expect(pathPatternMatches("src/**", "/work/[app]/src/a.ts", bracketCwd, home)).toBe(true);
+    expect(pathPatternMatches("src/**", "/work/a/src/a.ts", bracketCwd, home)).toBe(false);
+  });
+  test("case-insensitive on darwin and win32", () => {
+    const insensitive = process.platform === "darwin" || process.platform === "win32";
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(insensitive);
+  });
+  test("case-insensitive match on darwin", () => {
+    if (process.platform !== "darwin") return;
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(true);
+  });
+});

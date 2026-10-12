@@ -1,5 +1,5 @@
 // src/permissions/rules.ts
-import { isAbsolute, join, sep } from "node:path";
+import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { expandHome } from "../paths";
 
 export interface Rule {
@@ -25,24 +25,25 @@ export interface SplitCommand {
   unsafe: boolean;
 }
 
-/** Returns the target of the redirection whose `>` is at index `i`, e.g. "&1", "/dev/null", "out.txt". */
-function redirectTarget(command: string, i: number): string {
+/**
+ * True when the redirection whose `>` is at index `i` only touches a file descriptor
+ * (`>&N`, `>&-`) or /dev/null. A `>&WORD` redirect reads the whole word up to whitespace
+ * or a control operator, so `>&2/../x` is not mistaken for `>&2`.
+ */
+function isSafeRedirect(command: string, i: number): boolean {
   let j = i + 1;
-  if (command[j] === ">") j++;
-  if (command[j] === "&") {
-    let fd = "&";
+  const append = command[j] === ">";
+  if (append) j++;
+  if (command[j] === "&" && !append) {
     j++;
-    while (j < command.length && /[0-9-]/.test(command[j]!)) fd += command[j++];
-    return fd;
+    let word = "";
+    while (j < command.length && !/[\s;|&]/.test(command[j]!)) word += command[j++];
+    return /^(\d+|-)$/.test(word);
   }
   while (command[j] === " " || command[j] === "\t") j++;
   let target = "";
   while (j < command.length && !/[\s;|&]/.test(command[j]!)) target += command[j++];
-  return target;
-}
-
-function isSafeRedirect(target: string): boolean {
-  return /^&[0-9-]+$/.test(target) || target === "/dev/null";
+  return target === "/dev/null";
 }
 
 /**
@@ -96,6 +97,24 @@ export function splitBashCommand(command: string): SplitCommand {
       current += ch;
       continue;
     }
+    // ANSI-C ($'...') and locale ($"...") quoting: bash decodes escapes we do not model.
+    if (ch === "$" && (next === "'" || next === '"')) {
+      unsafe = true;
+      current += ch;
+      continue;
+    }
+    // Any unquoted parenthesis: subshells, zsh =(cmd) and glob qualifiers.
+    if (ch === "(" || ch === ")") {
+      unsafe = true;
+      current += ch;
+      continue;
+    }
+    // A `#` starting a word is a comment in the shell, so later text may run unseen.
+    if (ch === "#" && (i === 0 || /[\s;|&(]/.test(command[i - 1]!))) {
+      unsafe = true;
+      current += ch;
+      continue;
+    }
     if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) {
       push();
       i++;
@@ -113,7 +132,7 @@ export function splitBashCommand(command: string): SplitCommand {
       push(); // background operator
       continue;
     }
-    if (ch === ">" && !isSafeRedirect(redirectTarget(command, i))) unsafe = true;
+    if (ch === ">" && !isSafeRedirect(command, i)) unsafe = true;
     current += ch;
   }
 
@@ -134,12 +153,38 @@ export function bashPatternMatches(pattern: string, command: string): boolean {
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
+// macOS and Windows filesystems are case-insensitive by default.
+const CASE_INSENSITIVE = process.platform === "darwin" || process.platform === "win32";
 
+const fold = (s: string): string => (CASE_INSENSITIVE ? s.toLowerCase() : s);
+/** Glob matching uses "/" separators; Windows paths are converted before matching. */
+const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") : s);
+const climbsUp = (p: string): boolean => p === ".." || p.startsWith("../");
+
+function globMatch(pattern: string, subject: string): boolean {
+  return new Bun.Glob(fold(pattern)).match(fold(subject));
+}
+
+/**
+ * Whether `absPath` is covered by a path rule pattern. The pattern is home-expanded and
+ * resolved against `cwd`; `absPath` is resolved first so `..` segments cannot escape it.
+ * A pattern with no glob characters covers the path itself and everything below it.
+ */
 export function pathPatternMatches(pattern: string, absPath: string, cwd: string, home: string): boolean {
+  const target = resolve(absPath);
   const expanded = expandHome(pattern.trim(), home);
-  const absPattern = isAbsolute(expanded) ? expanded : join(cwd, expanded);
-  if (!GLOB_CHARS.test(absPattern)) {
-    return absPath === absPattern || absPath.startsWith(absPattern.endsWith(sep) ? absPattern : absPattern + sep);
+
+  if (!GLOB_CHARS.test(expanded)) {
+    const base = fold(resolve(cwd, expanded));
+    const subject = fold(target);
+    return subject === base || subject.startsWith(base.endsWith(sep) ? base : base + sep);
   }
-  return new Bun.Glob(absPattern).match(absPath);
+  if (isAbsolute(expanded)) return globMatch(normalize(expanded), target);
+
+  // Relative glob: match against the path relative to cwd, so cwd never reaches the glob
+  // (it may contain glob characters). Paths outside cwd only match patterns that climb too.
+  const globPattern = toGlobSep(normalize(expanded));
+  const rel = toGlobSep(relative(resolve(cwd), target));
+  if (climbsUp(rel) && !climbsUp(globPattern)) return false;
+  return globMatch(globPattern, rel);
 }
