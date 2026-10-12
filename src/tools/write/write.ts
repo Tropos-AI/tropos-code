@@ -1,9 +1,9 @@
 // src/tools/write/write.ts
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness } from "../file-guard";
+import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 
@@ -29,13 +29,16 @@ export const writeTool = defineTool({
       if (error instanceof PathResolutionError) return cannotWrite(input.file_path, error);
       throw error;
     }
+    if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
+      return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
+    }
     let output: ToolOutput;
     try {
       const fresh = await checkFreshness(path, ctx);
       if (!fresh.ok) return { content: fresh.error, isError: true };
       const before = fresh.missing ? "" : await readFile(path, "utf8");
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, input.content);
+      await writeFileNoFollow(path, input.content);
       ctx.readState.record(path, (await stat(path)).mtimeMs);
       const diff = makeDiff(path, before, input.content);
       const lineCount = input.content.split("\n").length - (input.content.endsWith("\n") ? 1 : 0);

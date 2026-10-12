@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
+import { writeFileNoFollow } from "../file-guard";
 import { readTool } from "../read/read";
 import { writeTool } from "./write";
 
@@ -78,4 +79,37 @@ describe("Write", () => {
     expect(out.isError).toBe(true);
     expect(String(out.content)).toStartWith("Cannot write ");
   });
+
+  test("refuses a path that resolves differently from the approved one", async () => {
+    const ctx = makeToolContext({ root: dir, approvedPaths: [join(dir, "other.txt")] });
+    const out = await writeTool.run({ file_path: "f.txt", content: "x" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("changed after it was approved");
+    expect(await exists(join(dir, "f.txt"))).toBe(false);
+  });
+
+  test("writes normally when the resolved path is the approved one", async () => {
+    const ctx = makeToolContext({ root: dir, approvedPaths: [join(dir, "f.txt")] });
+    const out = await writeTool.run({ file_path: "f.txt", content: "x" }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(await readFile(join(dir, "f.txt"), "utf8")).toBe("x");
+  });
+
+  test("writeFileNoFollow never writes through a symlinked leaf", async () => {
+    const project = join(dir, "project");
+    await mkdir(project);
+    await writeFile(join(dir, "target-outside"), "untouched");
+    await symlink(join(dir, "target-outside"), join(project, "leaf"));
+    await expect(writeFileNoFollow(join(project, "leaf"), "pwned")).rejects.toThrow();
+    expect(await readFile(join(dir, "target-outside"), "utf8")).toBe("untouched");
+  });
 });
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}

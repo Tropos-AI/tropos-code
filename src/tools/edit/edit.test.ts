@@ -97,6 +97,30 @@ describe("Edit", () => {
     expect(await file()).toBe("A B");
   });
 
+  test("refuses a path that resolves differently from the approved one", async () => {
+    const ctx = await prepared("hello");
+    ctx.approvedPaths = [join(dir, "other.ts")];
+    const out = await editTool.run({ file_path: "f.ts", old_string: "hello", new_string: "bye" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("changed after it was approved");
+    expect(await file()).toBe("hello");
+  });
+
+  test("edits normally when the resolved path is the approved one", async () => {
+    const ctx = await prepared("hello");
+    ctx.approvedPaths = [join(dir, "f.ts")];
+    const out = await editTool.run({ file_path: "f.ts", old_string: "hello", new_string: "bye" }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(await file()).toBe("bye");
+  });
+
+  test("creates a missing file when the resolved path is the approved one", async () => {
+    const ctx = makeToolContext({ root: dir, approvedPaths: [join(dir, "new.ts")] });
+    const out = await editTool.run({ file_path: "new.ts", old_string: "", new_string: "fresh\n" }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(await readFile(join(dir, "new.ts"), "utf8")).toBe("fresh\n");
+  });
+
   // Root ignores file modes, so the permission case can only be exercised as a normal user.
   const permissionTest = process.getuid?.() === 0 ? test.skip : test;
   permissionTest("a write the OS refuses returns an error result instead of throwing", async () => {

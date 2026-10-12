@@ -44,6 +44,8 @@ export interface ToolContext {
   todos: TodoStore;
   shell: string;
   signal: AbortSignal;
+  /** Canonical paths the permission engine approved for this call (set by the agent). */
+  approvedPaths?: string[];
 }
 
 export interface PermissionSubject {

@@ -1,6 +1,22 @@
 // src/tools/file-guard.ts
-import { stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import type { ToolContext, ToolOutput } from "./types";
+
+/**
+ * Writes a file's contents, creating or truncating it, but never follows a symlink at the leaf.
+ * Callers resolve the path first; this closes the window where the leaf is swapped for a link.
+ * A symlinked leaf fails with ELOOP. Only the leaf is protected: parent directories are not.
+ */
+export async function writeFileNoFollow(path: string, content: string): Promise<void> {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW;
+  const handle = await open(path, flags, 0o666);
+  try {
+    await handle.writeFile(content);
+  } finally {
+    await handle.close();
+  }
+}
 
 export type Freshness = { ok: true; missing: true } | { ok: true; missing: false; mtimeMs: number } | { ok: false; error: string };
 

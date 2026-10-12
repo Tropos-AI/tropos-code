@@ -1,9 +1,9 @@
 // src/tools/edit/edit.ts
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness } from "../file-guard";
+import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 
@@ -41,6 +41,9 @@ export const editTool = defineTool({
       if (error instanceof PathResolutionError) return cannotWrite(input.file_path, error);
       throw error;
     }
+    if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
+      return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
+    }
     let output: ToolOutput;
     try {
       const fresh = await checkFreshness(path, ctx);
@@ -49,7 +52,7 @@ export const editTool = defineTool({
       if (fresh.missing) {
         if (input.old_string !== "") return { content: `File not found: ${path}`, isError: true };
         await mkdir(dirname(path), { recursive: true });
-        await writeFile(path, input.new_string);
+        await writeFileNoFollow(path, input.new_string);
         ctx.readState.record(path, (await stat(path)).mtimeMs);
         return { content: `Created ${path}.`, display: makeDiff(path, "", input.new_string), summary: "created" };
       }
@@ -85,7 +88,7 @@ export const editTool = defineTool({
         const at = original.indexOf(oldText);
         updated = original.slice(0, at) + newText + original.slice(at + oldText.length);
       }
-      await writeFile(path, updated);
+      await writeFileNoFollow(path, updated);
       ctx.readState.record(path, (await stat(path)).mtimeMs);
       const diff = makeDiff(path, original.replace(/\r\n/g, "\n"), updated.replace(/\r\n/g, "\n"));
       const replaced = input.replace_all ? count : 1;
