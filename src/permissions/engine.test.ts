@@ -138,6 +138,12 @@ describe("decide — fix round 1", () => {
     expect(decide(bash("sh"), ctx({ allow: ["Bash"], ask: ["Bash"] })).behavior).toBe("ask");
     expect(decide(bash("git status"), ctx({ allow: ["Bash"], ask: ["Bash"] })).behavior).toBe("ask");
   });
+  test("versioned interpreters are not approved by the wildcard and get an exact suggestion", () => {
+    expect(decide(bash("python3.12 x.py"), holes).behavior).toBe("ask");
+    expect(decide(bash("ssh host ls"), holes).behavior).toBe("ask");
+    expect(suggestRule(bash("python3.12 x.py"), cwd)).toBe("Bash(python3.12 x.py)");
+    expect(suggestRule(bash("bun test x"), cwd)).toBe("Bash(bun test:*)");
+  });
   test("bypass beats ask rules", () => {
     expect(decide(bash("git push"), ctx({ mode: "bypass", ask: ["Bash(git push:*)"] }))).toEqual({ behavior: "allow" });
   });

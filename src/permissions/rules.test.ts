@@ -1,6 +1,6 @@
 // src/permissions/rules.test.ts
 import { describe, expect, test } from "bun:test";
-import { CODE_RUNNERS, bashPatternMatches, formatRule, hasLeadingPrefix, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
+import { CODE_RUNNERS, bashPatternMatches, formatRule, hasLeadingPrefix, isCodeRunner, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
 
 describe("parseRule / formatRule", () => {
   test("bare tool name", () => {
@@ -505,5 +505,49 @@ describe("shell -c attached values and code runners (fix round 1)", () => {
     expect(hasLeadingPrefix("sudo -u root ls")).toBe(true);
     expect(hasLeadingPrefix("git status")).toBe(false);
     expect(hasLeadingPrefix("python3 x.py")).toBe(false);
+  });
+});
+
+describe("code-runner detection: more interpreters, versions and case (fix round 3)", () => {
+  test("CODE_RUNNERS includes the extra interpreters but not everyday build tools", () => {
+    for (const w of ["awk", "gawk", "mawk", "nawk", "python2", "pypy", "pypy3", "ipython", "pwsh", "powershell", "osascript", "lua", "luajit", "tclsh", "wish", "Rscript", "irb", "jshell", "expect", "ssh", "script", "nodejs", "tsx", "ts-node"]) {
+      expect(CODE_RUNNERS.has(w)).toBe(true);
+    }
+    for (const w of ["bun", "npm", "pnpm", "yarn", "make"]) expect(CODE_RUNNERS.has(w)).toBe(false);
+  });
+
+  test.each(["python3.12 x.py", "nodejs x.js", "ruby3.3 x.rb", "node22 x.js", "perl5.34 x.pl", "awk '{print}' f", "ssh host ls", "tsx a.ts", "/usr/bin/python3.12 x.py", "Rscript x.R", "ts-node a.ts"])(
+    "the wildcard does not allow-match %s",
+    (cmd) => {
+      expect(bashPatternMatches("*", cmd)).toBe(false);
+    },
+  );
+
+  test("case is folded only on case-insensitive platforms", () => {
+    const folding = process.platform === "darwin" || process.platform === "win32";
+    expect(bashPatternMatches("*", "PYTHON3 x.py")).toBe(!folding);
+    expect(isCodeRunner("PYTHON3")).toBe(folding);
+    expect(isCodeRunner("rscript")).toBe(folding);
+  });
+
+  test.each(["bun test", "npm run build", "make", "git status", "pnpm install", "yarn build"])("the wildcard still matches %s", (cmd) => {
+    expect(bashPatternMatches("*", cmd)).toBe(true);
+  });
+
+  test("everyday prefix rules still work", () => {
+    expect(bashPatternMatches("bun test:*", "bun test x")).toBe(true);
+    expect(bashPatternMatches("git:*", "git2 x")).toBe(false);
+  });
+
+  test("isCodeRunner handles paths and version suffixes", () => {
+    expect(isCodeRunner("/usr/local/bin/python3.12")).toBe(true);
+    expect(isCodeRunner("python3.12")).toBe(true);
+    expect(isCodeRunner("git")).toBe(false);
+    expect(isCodeRunner("")).toBe(false);
+    expect(isCodeRunner("7")).toBe(false);
+  });
+
+  test("restrict matching is unaffected", () => {
+    expect(bashPatternMatches("*", "python3.12 x.py", { restrict: true })).toBe(true);
   });
 });

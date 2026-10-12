@@ -3,10 +3,10 @@ import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
 import { isInside } from "../paths";
 import {
-  CODE_RUNNERS,
   bashPatternMatches,
   formatRule,
   hasLeadingPrefix,
+  isCodeRunner,
   parseRule,
   pathPatternMatches,
   splitBashCommand,
@@ -139,7 +139,7 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
     // A prefix rule cannot describe a command that starts with assignments, redirects or a wrapper.
     if (hasLeadingPrefix(part)) return undefined;
     const word = part.split(/\s+/)[0]!;
-    if (CODE_RUNNERS.has(word.slice(word.lastIndexOf("/") + 1))) {
+    if (isCodeRunner(word)) {
       // Interpreters run arbitrary code: only ever offer the exact command.
       const exact = part.replace(/\s+/g, " ");
       return exact.length > 200 || exact.endsWith(":*") ? undefined : `${req.toolName}(${exact})`;

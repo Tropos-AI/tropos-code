@@ -461,13 +461,29 @@ export const CODE_RUNNERS: ReadonlySet<string> = new Set([
   "python", "python3", "node", "deno", "perl", "ruby", "php", "npx", "bunx", "pnpx", "uvx",
   "sudo", "doas", "env", "timeout", "nohup", "nice", "ionice", "stdbuf", "setsid", "caffeinate",
   "unbuffer", "command", "builtin", "exec", "xargs", "time",
+  "awk", "gawk", "mawk", "nawk", "python2", "pypy", "pypy3", "ipython", "pwsh", "powershell",
+  "osascript", "lua", "luajit", "tclsh", "wish", "Rscript", "irb", "jshell", "expect", "ssh",
+  "script", "nodejs", "tsx", "ts-node",
 ]);
+
+const CODE_RUNNERS_FOLDED: ReadonlySet<string> = new Set([...CODE_RUNNERS].map((w) => w.toLowerCase()));
+
+/**
+ * Whether a command word names a code runner: compared by basename, ignoring a trailing
+ * version suffix (`python3.12`, `node22`) and, on case-insensitive platforms, case.
+ */
+export function isCodeRunner(word: string): boolean {
+  const base = baseName(word);
+  const known = (w: string): boolean =>
+    CODE_RUNNERS.has(w) || (CASE_INSENSITIVE_FS && CODE_RUNNERS_FOLDED.has(w.toLowerCase()));
+  return known(base) || known(base.replace(/[0-9][0-9.]*$/, ""));
+}
 
 /** True when the simple command begins (after assignments and safe redirects) with a code runner. */
 function startsWithCodeRunner(command: string): boolean {
   const { rest } = stripWrappers(command, false);
   const word = rest.slice(0, wordEnd(rest, 0));
-  return CODE_RUNNERS.has(baseName(word));
+  return isCodeRunner(word);
 }
 
 /** True when assignments, safe redirects or wrapper words lead the simple command. */
