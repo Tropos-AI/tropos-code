@@ -293,3 +293,93 @@ describe("splitBashCommand: fd duplication, continuations, dynamic first words (
     expect(splitBashCommand("echo a\\ b").unsafe).toBe(false);
   });
 });
+
+describe("wrappers, reserved words and unmodelled command words (fix round 5)", () => {
+  const r = { restrict: true };
+  const unsafe = (c: string) => splitBashCommand(c).unsafe;
+
+  test.each([
+    `"rm" x`,
+    `'rm' x`,
+    `r''m x`,
+    `/bin/r[m] x`,
+    `r? x`,
+    `{rm,x}`,
+    `env -S 'rm x'`,
+    `env -iS 'rm x'`,
+    `env --split-string='rm x'`,
+    `command $CMD x`,
+    `env $CMD x`,
+    `nohup \\rm x`,
+    `! rm x`,
+    `{ rm x; }`,
+    `if true; then rm x; fi`,
+    `while true; do rm x; done`,
+    `for f in a; do rm x; done`,
+    `[[ -f x ]] && rm x`,
+    `sudo --weird rm x`,
+    `sudo -i rm x`,
+    `sudo -u $U rm x`,
+    `nice -n $N rm x`,
+    `timeout abc rm x`,
+    `timeout $T rm x`,
+    `command -v rm`,
+    `nohup -x rm`,
+    `=rm x`,
+  ])("unsafe: %s", (cmd) => {
+    expect(unsafe(cmd)).toBe(true);
+  });
+
+  test.each([
+    "command -p rm x",
+    "command -- rm x",
+    "time -p rm x",
+    "exec -a foo rm x",
+    "exec -c rm x",
+    "exec -cl rm x",
+    "env -iu A rm x",
+    "env -u A rm x",
+    "env -uA rm x",
+    "env --unset A -- rm x",
+    "sudo -u root rm x",
+    "sudo -g wheel -n rm x",
+    "sudo -- rm x",
+    "doas -u root rm x",
+    "xargs -n 1 rm",
+    "xargs -0 -I{} rm {}",
+    "timeout 5 rm x",
+    "timeout -s KILL 5s rm x",
+    "nice -n 10 rm x",
+    "nice -10 rm x",
+    "ionice -c 3 rm x",
+    "stdbuf -oL rm x",
+    "setsid rm x",
+    "caffeinate -i rm x",
+    "unbuffer rm x",
+    "sudo nice -n 1 timeout 5 env A=1 rm x",
+  ])("modelled wrapper is safe and restrict-matches rm:*: %s", (cmd) => {
+    expect(unsafe(cmd)).toBe(false);
+    expect(bashPatternMatches("rm:*", cmd, r)).toBe(true);
+    expect(bashPatternMatches("rm:*", cmd)).toBe(false);
+  });
+
+  test.each([`"rm" x`, `'rm' x`, `r''m x`, `\\rm x`, `"command" "rm" x`, `sudo "rm" x`])(
+    "restrict strips quotes from the command word: %s",
+    (cmd) => {
+      expect(bashPatternMatches("rm:*", cmd, r)).toBe(true);
+      expect(bashPatternMatches("rm:*", cmd)).toBe(false);
+    },
+  );
+
+  test("wrappers do not over-match", () => {
+    expect(bashPatternMatches("rm:*", "sudo -u root rmdir x", r)).toBe(false);
+    expect(bashPatternMatches("rm:*", "timeout 5 echo rm", r)).toBe(false);
+    expect(bashPatternMatches("rm:*", "sudo -u rm echo x", r)).toBe(false);
+  });
+
+  test("regressions stay safe", () => {
+    for (const c of ["git status", "bun test 2>&1", "echo $HOME", "FOO=$BAR git status", "/bin/ls -la", "echo if", "echo '{x}'", "~/bin/tool a"]) {
+      expect(unsafe(c)).toBe(false);
+    }
+  });
+});

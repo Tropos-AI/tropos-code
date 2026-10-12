@@ -187,59 +187,212 @@ export function splitBashCommand(command: string): SplitCommand {
 
   if (quote) unsafe = true;
   push();
-  // A command word built from a variable or an escape is resolved by the shell, not by us.
-  if (parts.some(hasDynamicCommandWord)) unsafe = true;
+  // A command word built from a variable, quote, glob or reserved word is resolved by the shell, not by us.
+  if (parts.some(hasUnmodelledCommandWord)) unsafe = true;
   return { parts, unsafe };
 }
 
-/** True when the first word after leading `NAME=value` assignments contains `$` or a backslash. */
-function hasDynamicCommandWord(part: string): boolean {
+/** Characters that make a shell word something other than a literal string. */
+const DYNAMIC_WORD = /['"$`\\*?[\]{}]/;
+
+/** Like DYNAMIC_WORD for option words; a literal `{}` (xargs `-I{}`) is not expanded by the shell. */
+const isDynamicOption = (word: string): boolean => DYNAMIC_WORD.test(word.replaceAll("{}", ""));
+
+/** Shell reserved words: they change how the rest of the line is parsed, so rules cannot model them. */
+const RESERVED_WORDS = new Set([
+  "!", "{", "}", "if", "then", "else", "elif", "fi", "do", "done", "while", "until",
+  "for", "case", "esac", "function", "select", "coproc", "[[",
+]);
+
+/**
+ * Options of a wrapper command. `flags` and `args` list short option letters (args take a
+ * value, attached or as the next word); `long` and `longArgs` list long options.
+ */
+interface WrapperSpec {
+  flags?: string;
+  args?: string;
+  long?: readonly string[];
+  longArgs?: readonly string[];
+  /** A DURATION word follows the options (`timeout`). */
+  duration?: boolean;
+  /** Accepts the legacy `-N` form (`nice -10`). */
+  numeric?: boolean;
+}
+
+const WRAPPERS = new Map<string, WrapperSpec>([
+  ["command", { flags: "p" }],
+  ["builtin", {}],
+  ["exec", { flags: "cl", args: "a" }],
+  ["noglob", {}],
+  ["nohup", {}],
+  ["time", { flags: "p" }],
+  ["-", {}],
+  // `-S` / `--split-string` are deliberately absent: they run a string we cannot see.
+  ["env", { flags: "i0v", args: "uC", long: ["--ignore-environment", "--null"], longArgs: ["--unset", "--chdir"] }],
+  [
+    "sudo",
+    {
+      flags: "AbEHknPSB",
+      args: "ugCpDrtTU",
+      long: ["--non-interactive", "--stdin", "--set-home", "--preserve-env", "--background"],
+      longArgs: ["--user", "--group", "--chdir", "--prompt", "--role", "--type"],
+    },
+  ],
+  ["doas", { flags: "n", args: "uC" }],
+  [
+    "xargs",
+    {
+      flags: "0prtxoV",
+      args: "InPLsdEaJ",
+      long: ["--null", "--no-run-if-empty", "--verbose", "--interactive", "--exit", "--open-tty"],
+      longArgs: ["--max-args", "--max-procs", "--max-lines", "--max-chars", "--delimiter", "--arg-file", "--eof"],
+    },
+  ],
+  [
+    "timeout",
+    { flags: "v", args: "ks", long: ["--foreground", "--preserve-status", "--verbose"], longArgs: ["--kill-after", "--signal"], duration: true },
+  ],
+  ["nice", { args: "n", longArgs: ["--adjustment"], numeric: true }],
+  ["ionice", { flags: "t", args: "cn", long: ["--ignore"], longArgs: ["--class", "--classdata"] }],
+  ["stdbuf", { args: "ioe", longArgs: ["--input", "--output", "--error"] }],
+  ["setsid", { flags: "cfw", long: ["--ctty", "--fork", "--wait"] }],
+  ["caffeinate", { flags: "dimsu", args: "tw" }],
+  ["unbuffer", {}],
+]);
+
+interface StrippedCommand {
+  /** The command with leading assignments and wrappers removed (starts at the command word). */
+  rest: string;
+  /** A wrapper had an option, or an option value, that this code does not model. */
+  unmodelled: boolean;
+}
+
+/**
+ * Consumes the options of one wrapper starting at `start`. Returns the index after them, or
+ * `ok: false` (with the index of the offending word) when an option is not modelled.
+ */
+function skipWrapperOptions(command: string, start: number, spec: WrapperSpec): { i: number; ok: boolean } {
+  let i = start;
+  const nextWord = (from: number): { word: string; at: number; end: number } => {
+    let at = from;
+    while (at < command.length && /\s/.test(command[at]!)) at++;
+    const end = wordEnd(command, at);
+    return { word: command.slice(at, end), at, end };
+  };
+  for (;;) {
+    const { word, at, end } = nextWord(i);
+    if (word.length < 2 || word[0] !== "-") return { i: at, ok: true }; // not an option: the command follows
+    i = end;
+    if (word === "--") return { i, ok: true };
+    if (isDynamicOption(word)) return { i: at, ok: false };
+    if (spec.numeric && /^-\d+$/.test(word)) continue;
+
+    const takeValue = (): boolean => {
+      const value = nextWord(i);
+      if (!value.word || isDynamicOption(value.word)) return false;
+      i = value.end;
+      return true;
+    };
+
+    if (word.startsWith("--")) {
+      const eq = word.indexOf("=");
+      const name = eq === -1 ? word : word.slice(0, eq);
+      if (eq === -1 && spec.long?.includes(name)) continue;
+      if (spec.longArgs?.includes(name)) {
+        if (eq === -1 && !takeValue()) return { i: at, ok: false };
+        continue;
+      }
+      return { i: at, ok: false };
+    }
+
+    for (let k = 1; k < word.length; k++) {
+      const c = word[k]!;
+      if (spec.flags?.includes(c)) continue;
+      if (spec.args?.includes(c)) {
+        if (k === word.length - 1 && !takeValue()) return { i: at, ok: false };
+        break; // an attached value uses the rest of the word
+      }
+      return { i: at, ok: false };
+    }
+  }
+}
+
+/**
+ * Strips, from the front, the words that run a command without changing which command it
+ * is: variable assignments and known wrappers (`command`, `sudo`, `env`, `timeout` ...) with
+ * their options. A wrapper option that is not modelled sets `unmodelled` (never guess).
+ */
+function stripWrappers(command: string): StrippedCommand {
   let i = 0;
   for (;;) {
-    while (i < part.length && /\s/.test(part[i]!)) i++;
-    const end = wordEnd(part, i);
-    if (end === i) return false;
-    const word = part.slice(i, end);
+    while (i < command.length && /\s/.test(command[i]!)) i++;
+    const end = wordEnd(command, i);
+    if (end === i) return { rest: "", unmodelled: false };
+    const word = command.slice(i, end);
     if (ASSIGNMENT_WORD.test(word)) {
       i = end;
       continue;
     }
-    return /[$\\]/.test(word);
+    const spec = WRAPPERS.get(word);
+    if (!spec) return { rest: command.slice(i), unmodelled: false };
+
+    const opts = skipWrapperOptions(command, end, spec);
+    i = opts.i;
+    if (!opts.ok) return { rest: command.slice(i), unmodelled: true };
+    if (spec.duration) {
+      while (i < command.length && /\s/.test(command[i]!)) i++;
+      const durationEnd = wordEnd(command, i);
+      if (!/^\d+(\.\d+)?[smhd]?$/.test(command.slice(i, durationEnd))) {
+        return { rest: command.slice(i), unmodelled: true };
+      }
+      i = durationEnd;
+    }
   }
 }
 
-const COMMAND_WRAPPERS = new Set(["command", "builtin", "exec", "noglob", "nohup", "time", "-"]);
-/** `env` options that take a separate argument word. */
-const ENV_ARG_OPTIONS = new Set(["-u", "--unset", "-C", "--chdir"]);
+/** Removes quotes and backslash escapes from a single shell word. */
+function unquoteWord(word: string): string {
+  let out = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else out += ch;
+    } else if (ch === "\\" && i + 1 < word.length) {
+      out += word[++i];
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+      else out += ch;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else out += ch;
+  }
+  return out;
+}
+
+/** True when the command word left after assignments and wrappers is not a plain literal. */
+function hasUnmodelledCommandWord(part: string): boolean {
+  const { rest, unmodelled } = stripWrappers(part);
+  if (unmodelled) return true;
+  const word = rest.slice(0, wordEnd(rest, 0));
+  if (!word) return false;
+  return RESERVED_WORDS.has(word) || DYNAMIC_WORD.test(word) || word.startsWith("=");
+}
 
 /**
- * Strips, from the front, the words that run a command without changing which command it
- * is: variable assignments, wrappers like `command` / `exec` / `nohup`, and `env` with its
- * options. Used so deny/ask rules still see `rm` in `FOO=1 env -i rm x`.
+ * Normalizes a command for deny/ask matching: strips assignments and wrappers, and removes
+ * quotes from the command word (`"rm" x`, `r''m x`), repeating until nothing changes.
  */
-function stripCommandWrappers(command: string): string {
-  let i = 0;
-  let inEnv = false;
-  for (;;) {
-    while (i < command.length && /\s/.test(command[i]!)) i++;
-    const end = wordEnd(command, i);
-    if (end === i) return command.slice(i);
-    const word = command.slice(i, end);
-    if (ASSIGNMENT_WORD.test(word) || COMMAND_WRAPPERS.has(word)) {
-      i = end;
-    } else if (word === "env") {
-      inEnv = true;
-      i = end;
-    } else if (inEnv && word.startsWith("-")) {
-      i = end;
-      if (ENV_ARG_OPTIONS.has(word)) {
-        while (i < command.length && /\s/.test(command[i]!)) i++;
-        i = wordEnd(command, i);
-      }
-    } else {
-      return command.slice(i);
-    }
+function normalizeForRestrict(command: string): string {
+  let current = command;
+  for (let n = 0; n < 8; n++) {
+    const { rest } = stripWrappers(current);
+    const end = wordEnd(rest, 0);
+    const next = unquoteWord(rest.slice(0, end)) + rest.slice(end);
+    if (next === current) return next;
+    current = next;
   }
+  return current;
 }
 
 export interface BashPatternOptions {
@@ -265,7 +418,7 @@ function bashPatternMatchesExact(pattern: string, command: string): boolean {
  */
 export function bashPatternMatches(pattern: string, command: string, opts: BashPatternOptions = {}): boolean {
   if (bashPatternMatchesExact(pattern, command)) return true;
-  return opts.restrict === true && bashPatternMatchesExact(pattern, stripCommandWrappers(command));
+  return opts.restrict === true && bashPatternMatchesExact(pattern, normalizeForRestrict(command));
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
