@@ -38,6 +38,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 export interface SettingsPaths {
   user: string;
+  userProject: string;
   project: string;
   local: string;
 }
@@ -45,6 +46,7 @@ export interface SettingsPaths {
 export function settingsPaths(cwd: string, home: string): SettingsPaths {
   return {
     user: join(home, "settings.json"),
+    userProject: join(home, "projects", cwd.replace(/[/\\:]/g, "-"), "settings.json"),
     project: join(cwd, ".tropos", "settings.json"),
     local: join(cwd, ".tropos", "settings.local.json"),
   };
@@ -120,13 +122,53 @@ export async function readSettingsFile(path: string): Promise<PartialSettings | 
   return parsed.data;
 }
 
-export async function loadSettings(paths: SettingsPaths, overrides: PartialSettings = {}): Promise<Settings> {
+const REPO_RESTRICTION_HINT =
+  "repo settings may only set model, effort, theme, refusalFallback and ask/deny rules; put the rest in ~/.tropos";
+
+/**
+ * Repo-shipped files arrive with the code, so they cannot grant allow rules, env or extra
+ * directories. Keeps only the keys they may set and reports anything dropped.
+ */
+function restrictRepoLayer(path: string, layer: PartialSettings): { layer: PartialSettings; warning?: string } {
+  const ignored: string[] = [];
+  if (layer.permissions?.allow?.length) ignored.push("permissions.allow");
+  if (layer.env && Object.keys(layer.env).length > 0) ignored.push("env");
+  if (layer.additionalDirectories?.length) ignored.push("additionalDirectories");
+  const restricted: PartialSettings = {
+    model: layer.model,
+    effort: layer.effort,
+    theme: layer.theme,
+    refusalFallback: layer.refusalFallback,
+    permissions: { ask: layer.permissions?.ask, deny: layer.permissions?.deny },
+  };
+  if (ignored.length === 0) return { layer: restricted };
+  return { layer: restricted, warning: `${path}: ignored ${ignored.join(", ")} (${REPO_RESTRICTION_HINT})` };
+}
+
+export interface LoadedSettings {
+  settings: Settings;
+  /** Notices for the user, such as repo-shipped keys that were ignored. */
+  warnings: string[];
+}
+
+/** Merge order: user, userProject, project, local, then CLI overrides (trusted). */
+export async function loadSettings(paths: SettingsPaths, overrides: PartialSettings = {}): Promise<LoadedSettings> {
   let settings = DEFAULT_SETTINGS;
-  for (const path of [paths.user, paths.project, paths.local]) {
-    const layer = await readSettingsFile(path);
-    if (layer) settings = mergeSettings(settings, layer);
+  const warnings: string[] = [];
+  const layers: Array<[path: string, trusted: boolean]> = [
+    [paths.user, true],
+    [paths.userProject, true],
+    [paths.project, false],
+    [paths.local, false],
+  ];
+  for (const [path, trusted] of layers) {
+    const parsed = await readSettingsFile(path);
+    if (!parsed) continue;
+    const { layer, warning } = trusted ? { layer: parsed, warning: undefined } : restrictRepoLayer(path, parsed);
+    if (warning) warnings.push(warning);
+    settings = mergeSettings(settings, layer);
   }
-  return mergeSettings(settings, overrides);
+  return { settings: mergeSettings(settings, overrides), warnings };
 }
 
 /** Adds an allow rule to the project-local settings file, keeping every other key as-is. */
