@@ -33,6 +33,11 @@ test("missing credentials", () => {
   expect(d.message).toContain("ANTHROPIC_API_KEY");
 });
 
+test("missing credentials wrapped in an AnthropicError by the stream", () => {
+  const d = describeError(new Anthropic.AnthropicError("stream failed: Could not resolve authentication method. Expected one of apiKey…"));
+  expect(d.message).toContain("No API credentials found");
+});
+
 test("plain errors and values", () => {
   expect(describeError(new Error("x")).message).toBe("x");
   expect(describeError("weird").message).toBe("weird");

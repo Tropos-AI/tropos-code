@@ -33,7 +33,18 @@ async function readPipedStdin(): Promise<string | null> {
   return text.trim() ? text : null;
 }
 
+/** Runs the CLI. Any failure that isn't handled below becomes one `tropos: <message>` line and exit code 1. */
 export async function main(argv: string[], deps: MainDeps = {}): Promise<number> {
+  try {
+    return await run(argv, deps);
+  } catch (e) {
+    const err = deps.err ?? ((s: string) => void process.stderr.write(s));
+    err(`tropos: ${e instanceof Error ? e.message : String(e)}\n`);
+    return 1;
+  }
+}
+
+async function run(argv: string[], deps: MainDeps): Promise<number> {
   const out = deps.out ?? ((s: string) => void process.stdout.write(s));
   const err = deps.err ?? ((s: string) => void process.stderr.write(s));
 
@@ -90,6 +101,24 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
     localSettingsPath: paths.userProject,
   };
 
+  // Usage errors come before any session file is created.
+  if (opts.resume && !opts.resumeId && opts.print) {
+    err("tropos: --resume needs a session id in print mode.\n");
+    return EXIT_USAGE;
+  }
+  let printPrompt = "";
+  if (opts.print) {
+    const stdin = await (deps.readStdin ?? readPipedStdin)();
+    printPrompt = [opts.prompt, stdin?.trimEnd()].filter(Boolean).join("\n\n");
+    if (!printPrompt) {
+      err('tropos: print mode needs a prompt, e.g. tropos -p "explain this repo"\n');
+      return EXIT_USAGE;
+    }
+  } else if (!process.stdin.isTTY || deps.readStdin) {
+    err("tropos: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
+    return EXIT_USAGE;
+  }
+
   let session: SessionStore;
   let history: MessageParam[] = [];
   try {
@@ -103,10 +132,6 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
     } else if (opts.resumeId) {
       ({ store: session, messages: history } = await SessionStore.open(home, cwd, opts.resumeId));
     } else {
-      if (opts.resume && opts.print) {
-        err("tropos: --resume needs a session id in print mode.\n");
-        return EXIT_USAGE;
-      }
       session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION });
     }
   } catch (e) {
@@ -117,12 +142,6 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
   const mode: Mode = opts.dangerouslySkipPermissions ? "bypass" : (opts.permissionMode ?? "default");
 
   if (opts.print) {
-    const stdin = await (deps.readStdin ?? readPipedStdin)();
-    const prompt = [opts.prompt, stdin?.trimEnd()].filter(Boolean).join("\n\n");
-    if (!prompt) {
-      err('tropos: print mode needs a prompt, e.g. tropos -p "explain this repo"\n');
-      return EXIT_USAGE;
-    }
     const renderer = new PrintRenderer(opts.outputFormat, out, err, session.id);
     const state = { model: settings.model, effort: settings.effort, mode };
     const agent = makeAgent(ctx, {
@@ -137,16 +156,12 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<number>
     const onSigint = () => controller.abort();
     process.once("SIGINT", onSigint);
     try {
-      return await runPrint(agent, renderer, prompt, controller.signal);
+      return await runPrint(agent, renderer, printPrompt, controller.signal);
     } finally {
       process.off("SIGINT", onSigint);
     }
   }
 
-  if (!process.stdin.isTTY || deps.readStdin) {
-    err("tropos: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
-    return EXIT_USAGE;
-  }
   const runtime = await createRuntime(ctx, {
     session,
     history,

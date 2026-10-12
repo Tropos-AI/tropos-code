@@ -117,15 +117,15 @@ export async function createRuntime(
     state: () => state,
     setMode: (mode) => {
       state = { ...state, mode };
-      void session.appendEvent("mode", mode);
+      void session.appendEvent("mode", mode).catch(() => {});
     },
     setModel: (model) => {
       state = { ...state, model };
-      void session.appendEvent("model", model);
+      void session.appendEvent("model", model).catch(() => {});
     },
     setEffort: (effort) => {
       state = { ...state, effort };
-      void session.appendEvent("effort", effort);
+      void session.appendEvent("effort", effort).catch(() => {});
     },
     newAgent: (ui) => makeAgent(ctx, { session: () => session, history, state: () => state, ui, toolContext }),
     history: () => history,
@@ -142,9 +142,9 @@ export async function createRuntime(
     inputHistory: () => inputs,
     recordInput: (text) => {
       inputs.push(text);
-      void mkdir(ctx.home, { recursive: true }).then(() =>
-        appendFile(historyPath, `${JSON.stringify({ text, cwd: ctx.cwd, ts: new Date().toISOString() })}\n`),
-      );
+      void mkdir(ctx.home, { recursive: true })
+        .then(() => appendFile(historyPath, `${JSON.stringify({ text, cwd: ctx.cwd, ts: new Date().toISOString() })}\n`, { mode: 0o600 }))
+        .catch(() => {});
     },
   };
 }

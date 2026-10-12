@@ -10,6 +10,7 @@ import { PromptInput } from "./PromptInput";
 import { SessionPicker } from "./SessionPicker";
 import { StatusBar } from "./StatusBar";
 import { ToolRow } from "./ToolRow";
+import { TodoList } from "./TodoList";
 import { TranscriptRow } from "./TranscriptRow";
 
 const tick = () => Bun.sleep(30);
@@ -386,5 +387,22 @@ describe("TranscriptRow live text", () => {
     expect(frame).toContain("row 1");
     expect(frame).toContain("row 50");
     expect(frame).not.toContain("earlier lines");
+  });
+});
+
+describe("TodoList", () => {
+  test("shows an icon per status and the active form for the task in progress", () => {
+    const frame = render(
+      <TodoList
+        todos={[
+          { content: "write tests", status: "completed" },
+          { content: "fix the bug", activeForm: "Fixing the bug", status: "in_progress" },
+          { content: "ship it", status: "pending" },
+        ]}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain("☑ write tests");
+    expect(frame).toContain("◐ Fixing the bug");
+    expect(frame).toContain("☐ ship it");
   });
 });

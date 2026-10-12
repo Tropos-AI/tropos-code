@@ -21,6 +21,24 @@ const schema = z.object({
   description: z.string().optional().describe("A few words on what the command does, shown to the user."),
 });
 
+const SECRET_ENV = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_ADMIN_KEY",
+  "ANTHROPIC_IDENTITY_TOKEN",
+  "ANTHROPIC_IDENTITY_TOKEN_FILE",
+]);
+
+/** The environment shell commands run with: ours, minus Anthropic credentials and Tropos secrets. */
+function childEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (SECRET_ENV.has(name) || /^TROPOS_.*(KEY|TOKEN|SECRET)/i.test(name)) continue;
+    env[name] = value;
+  }
+  return env;
+}
+
 const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 export const bashTool = defineTool({
@@ -41,7 +59,7 @@ export const bashTool = defineTool({
 
     const child = spawn(ctx.shell, ["-c", script], {
       cwd: startDir,
-      env: process.env,
+      env: childEnv(),
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

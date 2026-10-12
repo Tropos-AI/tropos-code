@@ -273,6 +273,19 @@ describe("Agent", () => {
     expect(await run(fail)).toBe("error");
   });
 
+  test("a wrapped missing-credentials error ends the turn at once with the credentials notice", async () => {
+    const h = harness([
+      () => {
+        throw new Anthropic.AnthropicError("Could not resolve authentication method. Expected one of apiKey, authToken…");
+      },
+    ]);
+    expect(await run(h)).toBe("error");
+    expect(h.model.requests).toHaveLength(1);
+    const notices = h.events.filter((e) => e.type === "notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ level: "error", text: expect.stringContaining("No API credentials found") });
+  });
+
   test("other errors (e.g. missing credentials) end the turn without retrying", async () => {
     const h = harness([
       () => {

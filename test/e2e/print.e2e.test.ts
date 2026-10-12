@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readlink, writeFile } from "node:fs/promises";
+import { readFile, readlink, symlink, writeFile } from "node:fs/promises";
+import { Glob } from "bun";
 import { join } from "node:path";
 import { startMockApi, type MockResponse } from "../helpers/mock-api";
 import { makeTmpDir, removeDir } from "../helpers/tmp";
@@ -15,12 +16,12 @@ beforeAll(async () => {
 }, 120_000);
 afterAll(() => removeDir(dir));
 
-async function runBinary(args: string[], script: MockResponse[]) {
+async function runBinary(args: string[], script: MockResponse[], env: Record<string, string | undefined> = { ANTHROPIC_API_KEY: "test-key" }) {
   const api = startMockApi(script);
   try {
     const proc = Bun.spawn([bin, ...args], {
       cwd: dir,
-      env: { PATH: process.env.PATH, HOME: dir, TROPOS_HOME: join(dir, ".tropos-home"), ANTHROPIC_BASE_URL: api.url, ANTHROPIC_API_KEY: "test-key" },
+      env: { PATH: process.env.PATH, HOME: dir, TROPOS_HOME: join(dir, ".tropos-home"), ANTHROPIC_BASE_URL: api.url, ...env },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -94,6 +95,43 @@ describe("compiled binary", () => {
     const r = await runBinary(["-p", "hi"], []);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("mock: script exhausted");
+  });
+
+  test("the API key never reaches a Bash child, the session file or the API", async () => {
+    const secret = "sk-ant-SECRETKEY123";
+    const r = await runBinary(
+      ["-p", "show the key", "--allowed-tools", "Bash(echo:*)"],
+      [
+        { content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "echo [$ANTHROPIC_API_KEY]" } }], stop_reason: "tool_use" },
+        { content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" },
+      ],
+      { ANTHROPIC_API_KEY: secret },
+    );
+    expect(r.code).toBe(0);
+    expect(r.requests[1]!.body.messages[2].content[0].content).toBe("[]");
+    expect(r.stdout).not.toContain(secret);
+    expect(r.stderr).not.toContain(secret);
+    expect(JSON.stringify(r.requests.map((q) => q.body))).not.toContain(secret);
+    const files = await Array.fromAsync(new Glob("**/*").scan({ cwd: join(dir, ".tropos-home"), onlyFiles: true }));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) expect(await readFile(join(dir, ".tropos-home", file), "utf8")).not.toContain(secret);
+  });
+
+  test("a bad --add-dir prints one readable line", async () => {
+    await symlink(join(dir, "loop-b"), join(dir, "loop-a"));
+    await symlink(join(dir, "loop-a"), join(dir, "loop-b"));
+    const r = await runBinary(["-p", "hi", "--add-dir", join(dir, "loop-a")], []);
+    expect(r.code).toBe(1);
+    expect(r.stderr.startsWith("tropos:")).toBe(true);
+    expect(r.stderr.trim().split("\n")).toHaveLength(1);
+    expect(r.stderr).not.toMatch(/\n\s+at /);
+  });
+
+  test("missing credentials are reported as such", async () => {
+    const r = await runBinary(["-p", "hi"], [], {});
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("No API credentials found");
+    expect(r.stderr).not.toContain("malformed");
   });
 
   test("install.sh installs a versioned binary behind a symlink", async () => {

@@ -5,8 +5,13 @@ export interface DescribedError {
   retryable: boolean;
 }
 
-/** Turns SDK errors into one-line messages. Matches on error classes, never on message text. */
+/** Turns SDK errors into one-line messages. Matches on error classes, except for the SDK's missing-credentials error, which has no class of its own. */
 export function describeError(err: unknown): DescribedError {
+  // The SDK throws this when no credentials can be found; the stream may wrap it in an AnthropicError,
+  // which is why it is matched by message and before the class checks below.
+  if (err instanceof Error && err.message.includes("Could not resolve authentication method")) {
+    return { message: "No API credentials found. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again.", retryable: false };
+  }
   if (err instanceof Anthropic.AuthenticationError) {
     return { message: "Authentication failed. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again.", retryable: false };
   }
@@ -27,10 +32,6 @@ export function describeError(err: unknown): DescribedError {
   }
   if (err instanceof Anthropic.APIError) {
     return { message: `API error${err.status ? ` ${err.status}` : ""}: ${err.message}`, retryable: (err.status ?? 0) >= 500 };
-  }
-  // The SDK throws a plain Error (no class to match) when no credentials can be found.
-  if (err instanceof Error && err.message.startsWith("Could not resolve authentication method")) {
-    return { message: "No API credentials found. Set ANTHROPIC_API_KEY or run `ant auth login`, then try again.", retryable: false };
   }
   if (err instanceof Error) return { message: err.message, retryable: false };
   return { message: String(err), retryable: false };

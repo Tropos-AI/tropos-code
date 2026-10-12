@@ -51,6 +51,25 @@ async function waitUntilGone(pid: number, ms: number): Promise<boolean> {
 const ctx = () => makeToolContext({ root: dir });
 
 describe("Bash", () => {
+  test("credentials are scrubbed from the child environment", async () => {
+    const names = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_ADMIN_KEY", "ANTHROPIC_IDENTITY_TOKEN", "ANTHROPIC_IDENTITY_TOKEN_FILE", "TROPOS_PROXY_TOKEN", "tropos_x_secret"];
+    const saved = names.map((n) => [n, process.env[n]] as const);
+    for (const n of names) process.env[n] = "sk-secret";
+    process.env.TROPOS_PLAIN = "kept";
+    try {
+      const probe = names.map((n) => `[$${n}]`).join("") + "$TROPOS_PLAIN";
+      const out = await bashTool.run({ command: `echo "${probe}"` }, ctx());
+      expect(out.content).toBe("[][][][][][][]kept");
+      expect(out.content).not.toContain("sk-secret");
+    } finally {
+      for (const [n, v] of saved) {
+        if (v === undefined) delete process.env[n];
+        else process.env[n] = v;
+      }
+      delete process.env.TROPOS_PLAIN;
+    }
+  });
+
   test("returns stdout", async () => {
     const out = await bashTool.run({ command: "echo hello" }, ctx());
     expect(out.content).toBe("hello");
