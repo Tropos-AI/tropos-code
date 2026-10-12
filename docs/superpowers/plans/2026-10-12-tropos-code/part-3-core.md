@@ -1264,6 +1264,38 @@ describe("Agent", () => {
     expect(results.every((r) => r.is_error)).toBe(true);
   });
 
+  test("a tool whose subject() throws is refused, not run", async () => {
+    const throwing = defineTool({
+      name: "Boom",
+      kind: "read",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "",
+      subject: () => {
+        throw new Error("cannot resolve path");
+      },
+      run: async () => ({ content: "ran" }),
+    });
+    const model = new FakeModel([() => reply([toolUseBlock("b", "Boom", {})], "tool_use"), () => reply([textBlock("ok")])]);
+    const events: AgentEvent[] = [];
+    const agent = new Agent({
+      model,
+      tools: [throwing] as AnyTool[],
+      system: "s",
+      config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
+      permissions: () => ({ mode: "bypass", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+      askPermission: async () => ({ kind: "allow" }),
+      contextText: async () => "<context></context>",
+      persist: async () => {},
+      toolContext: makeToolContext({ root: "/work" }),
+      emit: (e) => events.push(e),
+    });
+    await agent.run("go", new AbortController().signal);
+    const result = (agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain("cannot resolve path");
+  });
+
   test("refusal: tools not run, history closed, reason refusal", async () => {
     sleeperRuns = 0;
     const h = harness([() => reply([toolUseBlock("s", "Sleep", { ms: 1 })], "refusal")]);
@@ -1611,7 +1643,13 @@ export class Agent {
     const summary = tool.summarize(input);
     emit({ type: "tool_start", id: block.id, name: tool.name, summary, input });
 
-    const subject = tool.subject(input, this.opts.toolContext.cwd());
+    let subject;
+    try {
+      subject = tool.subject(input, this.opts.toolContext.cwd());
+    } catch (err) {
+      // e.g. PathResolutionError: fail closed, never run the tool.
+      return this.finish(block, tool.name, { content: `${tool.name} refused: ${(err as Error).message}`, isError: true }, "error");
+    }
     const decision = decide({ toolName: tool.name, kind: tool.kind, ...subject }, this.opts.permissions());
     if (decision.behavior === "deny") {
       return this.finish(block, tool.name, { content: decision.reason, isError: true }, "denied");
@@ -1664,7 +1702,7 @@ Two notes for the implementer:
 - [ ] **Step 5: Run to verify pass**
 
 Run: `bun test src/agent && bun run typecheck`
-Expected: PASS (20 tests); typecheck exits 0.
+Expected: PASS (21 tests); typecheck exits 0.
 
 - [ ] **Step 6: Commit**
 
