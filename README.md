@@ -1,0 +1,96 @@
+<p align="center"><img src="docs/assets/tropos-logo.png" width="96" alt="Tropos Labs"></p>
+
+# Tropos Code
+
+An agentic coding assistant for your terminal, by Tropos Labs. Tropos Code reads, searches,
+edits and runs code in your project through Claude, and asks before it does anything risky.
+
+## Install
+
+Requires [Bun](https://bun.sh) 1.4+ to build.
+
+```bash
+bun install
+bun run build        # → dist/tropos (single self-contained binary)
+./install.sh         # → ~/.local/bin/tropos
+```
+
+Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.
+
+## Use
+
+```bash
+tropos                          # interactive session
+tropos "add a --json flag"      # interactive, starting with a prompt
+tropos -p "explain src/agent"   # print mode for scripts and CI
+git diff | tropos -p "review this diff" --output-format json
+tropos -c                       # continue the last session here
+tropos -r                       # pick a session to resume
+```
+
+In a session: `shift+tab` cycles permission modes (default → accept edits → plan), `esc`
+interrupts, `\` then enter adds a line, `@` + tab completes paths, `/help` lists commands.
+
+## Permissions
+
+| Mode | Reads | File edits | Shell commands |
+|---|---|---|---|
+| default | allowed | ask | ask |
+| accept edits | allowed | allowed inside the project | ask |
+| plan | allowed | refused | refused |
+| bypass (`--dangerously-skip-permissions`) | allowed | allowed | allowed |
+
+Anything outside the project (or `--add-dir` directories) always asks. Rules in settings
+refine this, e.g.:
+
+```json
+{ "permissions": { "allow": ["Bash(bun test:*)", "Edit(src/**)"], "deny": ["Read(.env)"] } }
+```
+
+Deny beats ask beats allow. A shell command auto-approves only when every part of it
+(`a && b | c`) matches an allow rule and it contains nothing the matcher can't model
+(command substitution, heredocs, file redirection, quoted or dynamic command words…).
+Deny rules see through wrappers like `command`, `env`, `sudo` and `timeout`, but treat
+Bash deny rules as a safety net, not a sandbox: outside bypass mode, anything that slips
+past one still asks first.
+
+A prefix rule approves every argument: `Bash(git:*)` also allows `git -c core.pager=…`, and
+`Bash(npm:*)` runs any package script. Prefer subcommand rules such as `Bash(git status:*)`.
+Wildcard and prefix rules never approve interpreters and shells (`python`, `node`, `sh`,
+`sudo`, …); for those, "don't ask again" offers an exact-command rule instead.
+
+## Configuration
+
+| File | Purpose |
+|---|---|
+| `~/.tropos/settings.json` | your defaults |
+| `.tropos/settings.json` | project settings (commit it) |
+| `.tropos/settings.local.json` | personal project overrides (same limits as `.tropos/settings.json`) |
+| `~/.tropos/projects/<project>/settings.json` | your per-project settings; "don't ask again" rules land here |
+| `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` works too) |
+
+Files inside the repo arrive with the code, so Tropos treats them as untrusted: they can set
+`model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules, `env`
+or extra directories. Put those in a file under `~/.tropos/`.
+
+Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
+`additionalDirectories`, `refusalFallback`, `env`.
+
+## How it works
+
+A UI-free agent loop streams `claude-opus-5-5` through the Messages API, validates each
+tool call, checks it against the permission engine, runs read-only tools in parallel and
+edits/commands in order, and sends every result back in one message until the model is
+done. Sessions are append-only JSONL under `~/.tropos/projects/`; long sessions use
+server-side compaction. The design, and the evidence on how Claude Code is built that it
+follows, are in `docs/superpowers/specs/2026-10-12-tropos-code-design.md`.
+
+## Develop
+
+```bash
+bun test             # unit, UI and end-to-end tests
+bun run test:coverage
+bun run typecheck
+bun run dev -- -p "hello"
+bun run build:all    # darwin/linux × arm64/x64 binaries
+```

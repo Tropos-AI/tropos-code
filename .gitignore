@@ -3,3 +3,4 @@ dist/
 coverage/
 .tropos/settings.local.json
 *.log
+.DS_Store
