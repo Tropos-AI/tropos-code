@@ -32,6 +32,8 @@ export function App({ runtime }: { runtime: Runtime }) {
   const [settings, setSettings] = useState(runtime.state());
   const [staticKey, setStaticKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Set synchronously (state would lag a same-tick second Enter) while a turn or a session switch is running.
+  const busyRef = useRef(false);
 
   const ui = useMemo<AgentUi>(
     () => ({
@@ -71,8 +73,28 @@ export function App({ runtime }: { runtime: Runtime }) {
     [stdout],
   );
 
+  /** Runs a non-turn operation (clear, resume) with input locked out. */
+  const exclusive = useCallback(
+    async (work: () => Promise<void>) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        await work();
+      } catch (err) {
+        notice("error", (err as Error).message);
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [notice],
+  );
+
   const runTurn = useCallback(
     async (prompt: string, display = prompt) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
       setTranscript((t) => addUser(t, display));
       setBusy(true);
       const controller = new AbortController();
@@ -83,6 +105,7 @@ export function App({ runtime }: { runtime: Runtime }) {
         notice("error", (err as Error).message);
       } finally {
         abortRef.current = null;
+        busyRef.current = false;
         setBusy(false);
       }
     },
@@ -92,7 +115,7 @@ export function App({ runtime }: { runtime: Runtime }) {
   const submit = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed || busyRef.current) return;
       runtime.recordInput(trimmed);
       const command = parseCommand(trimmed);
       switch (command.kind) {
@@ -105,10 +128,12 @@ export function App({ runtime }: { runtime: Runtime }) {
         case "exit":
           return exit();
         case "clear":
-          await runtime.clear();
-          agentRef.current = runtime.newAgent(ui);
-          setUsage({ contextTokens: 0, totalCostUsd: 0 });
-          return resetScreen(emptyTranscript);
+          return exclusive(async () => {
+            await runtime.clear();
+            agentRef.current = runtime.newAgent(ui);
+            setUsage({ contextTokens: 0, totalCostUsd: 0 });
+            resetScreen(emptyTranscript);
+          });
         case "resume": {
           const list = await runtime.sessions();
           if (list.length === 0) return notice("info", "No saved sessions for this directory.");
@@ -131,17 +156,20 @@ export function App({ runtime }: { runtime: Runtime }) {
           return notice("error", `Unknown command /${command.name}. Type /help for the list.`);
       }
     },
-    [runtime, runTurn, notice, exit, ui, resetScreen, usage.contextTokens],
+    [runtime, runTurn, notice, exit, ui, resetScreen, exclusive, usage.contextTokens],
   );
 
   const pickSession = useCallback(
     async (id: string) => {
       setPicker(null);
-      await runtime.resume(id);
-      agentRef.current = runtime.newAgent(ui);
-      resetScreen(historyToTranscript(runtime.history()));
+      await exclusive(async () => {
+        await runtime.resume(id);
+        agentRef.current = runtime.newAgent(ui);
+        setUsage({ contextTokens: 0, totalCostUsd: 0 });
+        resetScreen(historyToTranscript(runtime.history()));
+      });
     },
-    [runtime, ui, resetScreen],
+    [runtime, ui, resetScreen, exclusive],
   );
 
   useEffect(() => {
@@ -164,13 +192,18 @@ export function App({ runtime }: { runtime: Runtime }) {
         abortRef.current?.abort();
         return;
       }
-      if (key.ctrl && input === "c") {
-        if (busy) abortRef.current?.abort();
-        else exit();
-      }
     },
     { isActive: !permission && !picker },
   );
+
+  // Ctrl+C works everywhere: a running turn is aborted (which also declines an open permission dialog),
+  // otherwise it closes the session picker, otherwise it exits.
+  useInput((input, key) => {
+    if (!(key.ctrl && input === "c")) return;
+    if (abortRef.current) abortRef.current.abort();
+    else if (picker) setPicker(null);
+    else exit();
+  });
 
   const width = (stdout as { columns?: number }).columns ?? 80;
   const staticItems: StaticItem[] = [{ id: "header", kind: "header" }, ...transcript.done];

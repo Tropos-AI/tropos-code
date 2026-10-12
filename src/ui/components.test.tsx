@@ -362,3 +362,29 @@ describe("DiffView", () => {
     expect(frame).not.toContain("/w/q.sql");
   });
 });
+
+describe("TranscriptRow live text", () => {
+  const long = Array.from({ length: 100 }, (_, i) => `row ${i + 1}`).join("\n");
+  const item = { id: "a1", kind: "assistant" as const, text: long };
+
+  test("live text is clipped to its last 30 lines with an earlier-lines marker", () => {
+    const frame = render(<TranscriptRow item={item} live />).lastFrame()!;
+    expect(frame).toContain("70 earlier lines");
+    expect(frame).toContain("row 100");
+    expect(frame).toContain("row 71");
+    expect(frame).not.toContain("row 70\n");
+    expect(frame.split("\n").length).toBeLessThanOrEqual(33);
+  });
+
+  test("short live text has no marker", () => {
+    const frame = render(<TranscriptRow item={{ ...item, text: "a\nb" }} live />).lastFrame()!;
+    expect(frame).not.toContain("earlier lines");
+  });
+
+  test("finished text renders in full", () => {
+    const frame = render(<TranscriptRow item={item} />).lastFrame()!;
+    expect(frame).toContain("row 1");
+    expect(frame).toContain("row 50");
+    expect(frame).not.toContain("earlier lines");
+  });
+});

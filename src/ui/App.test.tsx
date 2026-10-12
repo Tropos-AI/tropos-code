@@ -1,8 +1,8 @@
 // src/ui/App.test.tsx
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
-import { fakeRuntime } from "../../test/helpers/fake-runtime";
+import { reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
+import { fakeRuntime, type SavedSession } from "../../test/helpers/fake-runtime";
 import { App } from "./App";
 import { ANSWER_GRACE_MS } from "./PermissionDialog";
 
@@ -80,4 +80,192 @@ describe("App", () => {
     await tick();
     expect(runtime.state().model).toBe("claude-sonnet-5-5");
   });
+
+  test("a same-tick double Enter starts exactly one turn", async () => {
+    const slow: Step = async () => {
+      await Bun.sleep(80);
+      return reply([textBlock("done once")]);
+    };
+    const runtime = fakeRuntime([slow, () => reply([textBlock("second?")])]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("hi");
+    await tick();
+    r.stdin.write("\r");
+    r.stdin.write("\r");
+    await tick(250);
+    expect(runtime.inputs).toEqual(["hi"]);
+    expect(runtime.model.requests).toHaveLength(1);
+    expect(runtime.history().filter((m) => m.role === "user")).toHaveLength(1);
+    expect(all(r)).toContain("done once");
+    expect(r.lastFrame()).toContain("Ask Tropos");
+  });
+
+  test("ctrl+c at a permission dialog denies it and ends the turn without running the tool", async () => {
+    const runtime = fakeRuntime([() => reply([toolUseBlock("t1", "Shell", { command: "make" })], "tool_use"), () => reply([textBlock("unexpected")])]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("build");
+    await tick();
+    r.stdin.write("\r");
+    await tick(150);
+    expect(r.lastFrame()).toContain("Run this command?");
+    await tick(ANSWER_GRACE_MS + 50);
+    r.stdin.write("\x03");
+    await tick(200);
+    expect(r.lastFrame()).not.toContain("Run this command?");
+    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(all(r)).not.toContain("ran make");
+    expect(runtime.model.requests).toHaveLength(1);
+  });
+
+  test("ctrl+c closes the session picker", async () => {
+    const runtime = fakeRuntime([], { sessions: [saved("s1", "old chat", [])] });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/resume");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(r.lastFrame()).toContain("Resume a session");
+    r.stdin.write("\x03");
+    await tick();
+    expect(r.lastFrame()).not.toContain("Resume a session");
+    expect(r.lastFrame()).toContain("Ask Tropos");
+  });
+
+  test("long live text is clipped to its tail; the finished text is shown in full", async () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    const runtime = fakeRuntime([
+      async (_req, handlers) => {
+        handlers.onText(lines.join("\n"));
+        await Bun.sleep(300);
+        return reply([textBlock("")]);
+      },
+    ]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("go");
+    await tick();
+    r.stdin.write("\r");
+    await tick(150);
+    const live = r.lastFrame()!;
+    expect(live).toContain("earlier lines");
+    expect(live).toContain("line 100");
+    expect(live).not.toContain("line 1\n");
+    expect(live.split("\n").filter((l) => /line \d+/.test(l)).length).toBeLessThanOrEqual(30);
+    await tick(400);
+    expect(all(r)).toContain("line 1");
+    expect(all(r)).toContain("line 50");
+  });
+
+  test("esc interrupts a running turn", async () => {
+    const hang: Step = (_req, _h, signal) =>
+      new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    const runtime = fakeRuntime([hang]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("work");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(r.lastFrame()).not.toContain("Ask Tropos");
+    r.stdin.write("\x1b");
+    await tick(200);
+    expect(r.lastFrame()).toContain("Ask Tropos");
+  });
+
+  test("/clear resets the transcript and the cost", async () => {
+    const runtime = fakeRuntime([costly("first answer")]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("hello");
+    await tick();
+    r.stdin.write("\r");
+    await tick(200);
+    expect(r.lastFrame()).not.toContain("ctx 0% · $0.00");
+    r.stdin.write("/clear");
+    await tick();
+    r.stdin.write("\r");
+    await tick(150);
+    expect(runtime.history()).toEqual([]);
+    expect(r.lastFrame()).toContain("ctx 0% · $0.00");
+    expect(r.lastFrame()).toContain("Ask Tropos");
+  });
+
+  test("/resume opens the picker and picking a session replays its history", async () => {
+    const history = [
+      { role: "user", content: "earlier question" },
+      { role: "assistant", content: [{ type: "text", text: "earlier answer" }] },
+    ] as SavedSession["history"];
+    const runtime = fakeRuntime([costly("first answer")], { sessions: [saved("s1", "earlier question", history)] });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("hello");
+    await tick();
+    r.stdin.write("\r");
+    await tick(200);
+    expect(r.lastFrame()).not.toContain("ctx 0% · $0.00");
+    r.stdin.write("/resume");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(r.lastFrame()).toContain("Resume a session");
+    expect(r.lastFrame()).not.toContain("Ask Tropos");
+    r.stdin.write("\r");
+    await tick(200);
+    expect(r.lastFrame()).toContain("earlier answer");
+    expect(r.lastFrame()).toContain("ctx 0% · $0.00");
+    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(runtime.history()).toEqual(history);
+  });
+
+  test("an initial prompt runs on mount", async () => {
+    const runtime = fakeRuntime([() => reply([textBlock("auto answer")])], { initialPrompt: "do it" });
+    const r = render(<App runtime={runtime} />);
+    await tick(200);
+    expect(all(r)).toContain("do it");
+    expect(all(r)).toContain("auto answer");
+    expect(runtime.model.requests).toHaveLength(1);
+  });
+
+  test("/exit exits the app", async () => {
+    const runtime = fakeRuntime([() => reply([textBlock("should not run")])]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/exit");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("more");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(runtime.inputs).toEqual(["/exit"]);
+  });
+
+  test("an unknown command shows an error notice and starts no turn", async () => {
+    const runtime = fakeRuntime([]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/bogus");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(all(r)).toContain("Unknown command /bogus");
+    expect(runtime.model.requests).toHaveLength(0);
+  });
 });
+
+/** A reply that reports a million input tokens, so context and cost are clearly non-zero. */
+function costly(text: string): Step {
+  return () => {
+    const message = reply([textBlock(text)]);
+    message.usage.input_tokens = 1_000_000;
+    return message;
+  };
+}
+
+function saved(id: string, title: string, history: SavedSession["history"]): SavedSession {
+  return { id, title, updatedAt: new Date(), messageCount: history.length, history };
+}

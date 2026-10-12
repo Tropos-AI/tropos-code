@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Agent } from "../../src/agent/agent";
 import type { Effort, Mode } from "../../src/config/constants";
 import { compileRules } from "../../src/permissions/engine";
-import type { MessageParam } from "../../src/session/store";
+import type { MessageParam, SessionSummary } from "../../src/session/store";
 import { defineTool, type AnyTool } from "../../src/tools/types";
 import { DARK } from "../../src/ui/theme";
 import type { Runtime } from "../../src/ui/runtime";
@@ -20,7 +20,12 @@ export const shellTool = defineTool({
   run: async (i) => ({ content: `ran ${i.command}`, summary: "ok" }),
 });
 
-export function fakeRuntime(steps: Step[], over: { mode?: Mode } = {}): Runtime & { model: FakeModel; inputs: string[] } {
+export type SavedSession = SessionSummary & { history: MessageParam[] };
+
+export function fakeRuntime(
+  steps: Step[],
+  over: { mode?: Mode; sessions?: SavedSession[]; initialPrompt?: string; startWithPicker?: boolean } = {},
+): Runtime & { model: FakeModel; inputs: string[] } {
   const model = new FakeModel(steps);
   let state = { model: "claude-opus-5-5", effort: "high" as Effort, mode: over.mode ?? ("default" as Mode) };
   let history: MessageParam[] = [];
@@ -31,6 +36,8 @@ export function fakeRuntime(steps: Step[], over: { mode?: Mode } = {}): Runtime 
     cwd: "/w",
     theme: DARK,
     modes: ["default", "acceptEdits", "plan"],
+    initialPrompt: over.initialPrompt,
+    startWithPicker: over.startWithPicker,
     model,
     inputs,
     state: () => state,
@@ -59,8 +66,12 @@ export function fakeRuntime(steps: Step[], over: { mode?: Mode } = {}): Runtime 
     clear: async () => {
       history = [];
     },
-    sessions: async () => [],
-    resume: async () => {},
+    sessions: async () => over.sessions ?? [],
+    resume: async (id) => {
+      const saved = over.sessions?.find((s) => s.id === id);
+      if (!saved) throw new Error(`no session ${id}`);
+      history = [...saved.history];
+    },
     inputHistory: () => inputs,
     recordInput: (t) => {
       inputs.push(t);
