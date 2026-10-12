@@ -65,7 +65,11 @@ export async function gitSummary(cwd: string): Promise<string> {
   const gitDir = await findGitDir(cwd);
   const head = ((gitDir && (await readSmallFile(join(gitDir, "HEAD")))) ?? "").trim();
   const branch = head.match(/^ref: refs\/heads\/(.+)$/);
-  if (branch) return `branch ${branch[1]}`;
+  if (branch) {
+    // The name is repo-controlled text that lands in the prompt, so only conventional names are shown.
+    const name = branch[1] ?? "";
+    return /^[A-Za-z0-9._\/-]{1,100}$/.test(name) ? `branch ${name}` : "branch (unusual name)";
+  }
   if (/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head)) return "detached HEAD";
   return "not a git repository";
 }
