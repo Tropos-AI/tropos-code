@@ -2,7 +2,7 @@
 
 Plan index: [../2026-10-12-tropos-code.md](../2026-10-12-tropos-code.md). Read its Global Constraints first.
 
-UI rules for every component: colors come only from the `Theme` (never hard-coded hex in components); finished transcript items render inside Ink `<Static>`; only the live turn re-renders. For `ink-testing-library` tests, key codes are: Enter `"\r"`, Esc `"\x1b"`, Up `"\x1b[A"`, Down `"\x1b[B"`, Shift+Tab `"\x1b[Z"`, Backspace `"\x7f"`, Tab `"\t"`. Wait ~30 ms between writes (`const tick = () => Bun.sleep(30)`), and assert on `frames.join("\n")` when the text may sit in `<Static>` output.
+UI rules for every component: every untrusted string (assistant/thinking text, tool summaries and results, notices, diff lines, todo text, session titles, permission previews, user input echo) passes through `sanitizeForTerminal` from `src/ui/terminal-safe.ts` before it is rendered (markdown is sanitized inside `renderMarkdown`); colors come only from the `Theme` (never hard-coded hex in components); finished transcript items render inside Ink `<Static>`; only the live turn re-renders. For `ink-testing-library` tests, key codes are: Enter `"\r"`, Esc `"\x1b"`, Up `"\x1b[A"`, Down `"\x1b[B"`, Shift+Tab `"\x1b[Z"`, Backspace `"\x7f"`, Tab `"\t"`. Wait ~30 ms between writes (`const tick = () => Bun.sleep(30)`), and assert on `frames.join("\n")` when the text may sit in `<Static>` output.
 
 ---
 
