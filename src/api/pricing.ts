@@ -39,8 +39,8 @@ interface IterationLike extends UsageLike {
 
 /**
  * Cost of a whole response. Compaction and refusal-fallback turns bill extra work under
- * `usage.iterations`; a fallback iteration bills at the model that served it, every other
- * iteration bills at the requested model.
+ * `usage.iterations`. Each iteration is priced at its own model when it carries one,
+ * otherwise at the requested model.
  */
 export function messageCostUsd(
   message: { model: string; usage: UsageLike & { iterations?: IterationLike[] | null } },
@@ -50,9 +50,7 @@ export function messageCostUsd(
   if (!iterations || iterations.length === 0) return costUsd(message.model, message.usage);
   let total = 0;
   for (const iteration of iterations) {
-    const model = iteration.type === "fallback_message" ? iteration.model : requestedModel;
-    if (!model) return undefined;
-    const cost = costUsd(model, iteration);
+    const cost = costUsd(iteration.model ?? requestedModel, iteration);
     if (cost === undefined) return undefined;
     total += cost;
   }

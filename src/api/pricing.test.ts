@@ -72,3 +72,39 @@ test("an iteration on an unknown model has no price", () => {
   expect(messageCostUsd(unknownFallback, "claude-opus-5-5")).toBeUndefined();
   expect(messageCostUsd({ model: "mystery", usage: { input_tokens: 1, output_tokens: 1, iterations: [{ type: "message", input_tokens: 1, output_tokens: 1 }] } }, "mystery")).toBeUndefined();
 });
+
+test("a message iteration with its own model is priced at that model", () => {
+  const message = {
+    model: "claude-opus-5-5",
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      iterations: [{ type: "message", model: "claude-sonnet-5-5", input_tokens: 1_000_000, output_tokens: 0 }],
+    },
+  };
+  expect(messageCostUsd(message, "claude-opus-5-5")).toBeCloseTo(2, 6);
+});
+
+test("an advisor_message iteration with its own model is priced at that model", () => {
+  const message = {
+    model: "claude-opus-5-5",
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      iterations: [{ type: "advisor_message", model: "claude-haiku-5-5", input_tokens: 1_000_000, output_tokens: 1_000_000 }],
+    },
+  };
+  expect(messageCostUsd(message, "claude-opus-5-5")).toBeCloseTo(0.1 + 0.5, 6);
+});
+
+test("a fallback_message with a null model is priced at the requested model", () => {
+  const message = {
+    model: "claude-sonnet-5-5",
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      iterations: [{ type: "fallback_message", model: null, input_tokens: 1_000_000, output_tokens: 0 }],
+    },
+  };
+  expect(messageCostUsd(message, "claude-opus-5-5")).toBeCloseTo(4, 6);
+});
