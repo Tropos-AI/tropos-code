@@ -150,3 +150,21 @@ describe("pathPatternMatches: hardening (fix round 1)", () => {
     expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(true);
   });
 });
+
+describe("splitBashCommand: heredocs and herestrings (fix round 2)", () => {
+  test("heredoc body with a quote cannot desync the scanner", () => {
+    expect(splitBashCommand("git status <<X\n'\nX\nrm -rf y\n'").unsafe).toBe(true);
+  });
+  test("heredoc is unsafe", () => {
+    expect(splitBashCommand("cat <<EOF\nhi\nEOF").unsafe).toBe(true);
+    expect(splitBashCommand("cat <<-EOF\nhi\nEOF").unsafe).toBe(true);
+    expect(splitBashCommand("cat <<<hello").unsafe).toBe(true);
+  });
+  test("single < input redirection stays safe", () => {
+    expect(splitBashCommand("bun test < input.txt").unsafe).toBe(false);
+  });
+  test("quoted << stays safe", () => {
+    expect(splitBashCommand(`echo "<<"`).unsafe).toBe(false);
+    expect(splitBashCommand("echo '<<'").unsafe).toBe(false);
+  });
+});

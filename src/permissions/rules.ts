@@ -103,6 +103,13 @@ export function splitBashCommand(command: string): SplitCommand {
       current += ch;
       continue;
     }
+    // Heredocs and herestrings (`<<`, `<<-`, `<<<`): the body is raw text that the shell
+    // delimits itself, so quotes inside it would desync this scanner.
+    if (ch === "<" && next === "<") {
+      unsafe = true;
+      current += ch;
+      continue;
+    }
     // Any unquoted parenthesis: subshells, zsh =(cmd) and glob qualifiers.
     if (ch === "(" || ch === ")") {
       unsafe = true;
