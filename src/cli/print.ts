@@ -28,6 +28,7 @@ export class PrintRenderer {
   private inputTokens = 0;
   private outputTokens = 0;
   private cost = 0;
+  private lastError: string | null = null;
 
   constructor(
     private readonly format: OutputFormat,
@@ -46,7 +47,8 @@ export class PrintRenderer {
       this.outputTokens += event.outputTokens;
       this.cost = event.totalCostUsd;
     }
-    if (event.type === "notice" && event.level !== "info" && this.format === "text") {
+    if (event.type === "notice" && event.level !== "info") {
+      if (event.level === "error") this.lastError = event.text;
       this.err(`${event.level}: ${event.text}\n`);
     }
     if (this.format === "stream-json") {
@@ -59,7 +61,9 @@ export class PrintRenderer {
   }
 
   finish(reason: TurnEndReason): number {
-    const result = finalText(this.lastAssistant);
+    // Only a completed or declined turn has an answer worth printing; anything else already explained itself on stderr.
+    const delivered = reason === "end_turn" || reason === "refusal";
+    const result = delivered ? finalText(this.lastAssistant) : "";
     if (this.format === "text") {
       if (result) this.out(`${result}\n`);
     } else {
@@ -72,6 +76,7 @@ export class PrintRenderer {
         num_turns: this.turns,
         usage: { input_tokens: this.inputTokens, output_tokens: this.outputTokens },
         cost_usd: this.cost,
+        error: this.lastError,
       };
       this.out(`${JSON.stringify(summary)}\n`);
     }

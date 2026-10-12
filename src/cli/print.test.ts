@@ -67,6 +67,7 @@ describe("print mode", () => {
       stop: "end_turn",
       num_turns: 1,
       usage: { input_tokens: 100, output_tokens: 20 },
+      error: null,
     });
   });
 
@@ -80,9 +81,48 @@ describe("print mode", () => {
   test("exit codes", async () => {
     expect((await print([() => reply([textBlock("no")], "refusal")], "text")).code).toBe(EXIT_CODES.refusal);
     const looping = () => reply([toolUseBlock("t", "Shell", { c: "ls" })], "tool_use");
-    expect((await print([looping], "text", 1)).code).toBe(EXIT_CODES.max_turns);
+    const capped = await print([looping], "text", 1);
+    expect(capped.code).toBe(EXIT_CODES.max_turns);
+    expect(capped.out).toBe("");
+    expect(capped.err).toContain("Stopped after 1 turn(s)");
     const err = await print([], "text");
     expect(err.code).toBe(EXIT_CODES.error);
     expect(err.err).toContain("no scripted response");
+  });
+
+  test("refusal still prints the text it received", async () => {
+    const r = await print([() => reply([textBlock("no")], "refusal")], "text");
+    expect(r.out).toBe("no\n");
+  });
+
+  test("text mode: a mid-run error prints nothing, not an earlier turn's text", async () => {
+    const r = await print([() => reply([textBlock("Checking…"), toolUseBlock("t", "Shell", { c: "ls" })], "tool_use")], "text");
+    expect(r.code).toBe(EXIT_CODES.error);
+    expect(r.out).toBe("");
+    expect(r.err).toContain("no scripted response");
+  });
+
+  test("json mode: a failing run prints one result object and the error to stderr", async () => {
+    const r = await print([], "json");
+    const lines = r.out.trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ type: "result", is_error: true, stop: "error", result: "" });
+    expect(JSON.parse(lines[0]!).error).toContain("no scripted response");
+    expect(r.err).toContain("no scripted response");
+  });
+
+  test("warnings reach stderr in json mode", async () => {
+    const r = await print([() => reply([toolUseBlock("t", "Shell", { c: "ls" })], "tool_use")], "json", 1);
+    expect(r.err).toContain("warn: Stopped after 1 turn(s)");
+    expect(JSON.parse(r.out)).toMatchObject({ stop: "max_turns", is_error: true });
+  });
+
+  test("stream-json: errors reach stderr and the notice event stays on stdout", async () => {
+    const r = await print([], "stream-json");
+    const lines = r.out.trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines).toContainEqual(expect.objectContaining({ type: "notice", level: "error" }));
+    expect(lines.at(-1)).toMatchObject({ type: "result", error: expect.stringContaining("no scripted response") });
+    expect(r.err).toContain("error: ");
+    expect(r.err).toContain("no scripted response");
   });
 });
