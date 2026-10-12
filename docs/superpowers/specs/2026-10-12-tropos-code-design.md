@@ -114,6 +114,14 @@ Bash input is split on `&&`, `||`, `;`, `|` and newlines; **every** subcommand m
 allowed for the whole command to auto-approve. Command substitution (`$(…)`, backticks)
 always asks.
 
+**Matching guarantees.** Allow rules match narrowly: anything the splitter cannot model
+(substitution, heredocs, ANSI-C quoting, comments, subshells, file redirections, dynamic or
+quoted command words, unknown wrapper options) marks the command unsafe, and an unsafe
+command never auto-approves. Deny and ask rules match broadly (case-insensitively on
+macOS/Windows, through wrappers such as `command`, `env`, `sudo`, `timeout`, and through
+leading `NAME=value` assignments). Bash deny rules are still best-effort against deliberate
+obfuscation; outside bypass mode a command that slips past a deny rule still asks.
+
 **Prompt options:** `Yes` · `Yes, and don't ask again for <rule>` (written to
 `~/.tropos/projects/<project>/settings.json`) · `No, tell Tropos what to do instead` (feedback text
 becomes the tool result).

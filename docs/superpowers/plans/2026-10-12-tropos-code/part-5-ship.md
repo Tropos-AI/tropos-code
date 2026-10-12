@@ -915,7 +915,11 @@ refine this, e.g.:
 ```
 
 Deny beats ask beats allow. A shell command auto-approves only when every part of it
-(`a && b | c`) matches an allow rule and it has no command substitution or file redirection.
+(`a && b | c`) matches an allow rule and it contains nothing the matcher can't model
+(command substitution, heredocs, file redirection, quoted or dynamic command words…).
+Deny rules see through wrappers like `command`, `env`, `sudo` and `timeout`, but treat
+Bash deny rules as a safety net, not a sandbox: outside bypass mode, anything that slips
+past one still asks first.
 
 ## Configuration
 
