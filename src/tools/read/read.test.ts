@@ -1,6 +1,6 @@
 // src/tools/read/read.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
@@ -79,6 +79,40 @@ describe("Read", () => {
     await run({ file_path: "three.txt" }, ctx);
     const path = join(dir, "three.txt");
     expect(ctx.readState.check(path, (await stat(path)).mtimeMs)).toBe("ok");
+  });
+
+  // Root ignores file modes, so the unreadable-file case can only be exercised as a normal user.
+  const unreadableTest = process.getuid?.() === 0 ? test.skip : test;
+  unreadableTest("a file that cannot be read returns an error result instead of throwing", async () => {
+    const path = join(dir, "locked.txt");
+    await writeFile(path, "secret");
+    await chmod(path, 0o000);
+    try {
+      const out = await run({ file_path: "locked.txt" });
+      expect(out.isError).toBe(true);
+      expect(out.content).toStartWith(`Cannot read ${path}: `);
+    } finally {
+      await chmod(path, 0o644);
+    }
+  });
+
+  test("a path that cannot be resolved returns an error result instead of throwing", async () => {
+    const out = await run({ file_path: "three.txt/child" });
+    expect(out.isError).toBe(true);
+    expect(String(out.content)).toStartWith("Cannot read ");
+  });
+
+  test("a missing file keeps the 'File not found' message", async () => {
+    const out = await run({ file_path: "nope.txt" });
+    expect(String(out.content)).toStartWith("File not found: ");
+  });
+
+  test("files over 10 MB are refused with a hint to search instead", async () => {
+    await writeFile(join(dir, "huge.txt"), Buffer.alloc(10 * 1024 * 1024 + 1, "a"));
+    const out = await run({ file_path: "huge.txt" });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain("over the 10 MB text limit");
+    expect(out.content).toContain("Grep");
   });
 
   test("subject and schema", () => {

@@ -2,11 +2,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { z } from "zod";
-import { resolveToolPath } from "../paths";
-import { defineTool } from "../types";
+import { PathResolutionError, resolveToolPath } from "../paths";
+import { defineTool, type ToolOutput } from "../types";
 
 const DEFAULT_LIMIT = 2000;
 const MAX_LINE_CHARS = 2000;
+const MAX_TEXT_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_PDF_BYTES = 32 * 1024 * 1024;
 const IMAGE_TYPES = {
@@ -27,6 +28,23 @@ function formatBytes(n: number): string {
   return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function cannotRead(path: string, error: unknown): ToolOutput {
+  return { content: `Cannot read ${path}: ${errorMessage(error)}`, isError: true };
+}
+
+/** Reads a file's bytes, or returns the error result for the caller to hand back. */
+async function readBytes(path: string): Promise<Buffer | ToolOutput> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    return cannotRead(path, error);
+  }
+}
+
 export const readTool = defineTool({
   name: "Read",
   kind: "read",
@@ -39,12 +57,21 @@ export const readTool = defineTool({
   summarize: (input) => input.file_path,
   subject: (input, cwd) => ({ paths: [resolveToolPath(input.file_path, cwd)] }),
   async run(input, ctx) {
-    const path = resolveToolPath(input.file_path, ctx.cwd());
+    let path: string;
+    try {
+      path = resolveToolPath(input.file_path, ctx.cwd());
+    } catch (error) {
+      if (error instanceof PathResolutionError) return cannotRead(input.file_path, error);
+      throw error;
+    }
     let info;
     try {
       info = await stat(path);
-    } catch {
-      return { content: `File not found: ${path}`, isError: true };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { content: `File not found: ${path}`, isError: true };
+      }
+      return cannotRead(path, error);
     }
     if (info.isDirectory()) {
       return { content: `${path} is a directory. Use Glob to list its files.`, isError: true };
@@ -55,7 +82,9 @@ export const readTool = defineTool({
       if (info.size > MAX_IMAGE_BYTES) {
         return { content: `${path} is ${formatBytes(info.size)}; images over 5 MB can't be read.`, isError: true };
       }
-      const data = (await readFile(path)).toString("base64");
+      const bytes = await readBytes(path);
+      if (!Buffer.isBuffer(bytes)) return bytes;
+      const data = bytes.toString("base64");
       ctx.readState.record(path, info.mtimeMs);
       const media_type = IMAGE_TYPES[ext as keyof typeof IMAGE_TYPES];
       return {
@@ -67,7 +96,9 @@ export const readTool = defineTool({
       if (info.size > MAX_PDF_BYTES) {
         return { content: `${path} is ${formatBytes(info.size)}; PDFs over 32 MB can't be read.`, isError: true };
       }
-      const data = (await readFile(path)).toString("base64");
+      const bytes = await readBytes(path);
+      if (!Buffer.isBuffer(bytes)) return bytes;
+      const data = bytes.toString("base64");
       ctx.readState.record(path, info.mtimeMs);
       return {
         content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data } }],
@@ -75,7 +106,14 @@ export const readTool = defineTool({
       };
     }
 
-    const buffer = await readFile(path);
+    if (info.size > MAX_TEXT_BYTES) {
+      return {
+        content: `${path} is ${formatBytes(info.size)}, over the 10 MB text limit. Search it with Grep instead of reading it whole.`,
+        isError: true,
+      };
+    }
+    const buffer = await readBytes(path);
+    if (!Buffer.isBuffer(buffer)) return buffer;
     if (buffer.subarray(0, 8192).includes(0)) {
       return { content: `${path} looks like a binary file and can't be shown as text.`, isError: true };
     }
