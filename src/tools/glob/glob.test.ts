@@ -56,3 +56,59 @@ describe("Glob", () => {
     }
   });
 });
+
+describe("Glob confinement", () => {
+  let root: string;
+  let proj: string;
+  beforeAll(async () => {
+    root = await makeTmpDir();
+    proj = join(root, "proj");
+    await mkdir(join(proj, "sub"), { recursive: true });
+    await mkdir(join(proj, "node_modules", "pkg"), { recursive: true });
+    await mkdir(join(proj, ".github"), { recursive: true });
+    await mkdir(join(root, "outside"), { recursive: true });
+    await writeFile(join(root, "outside", "secret.txt"), "SECRET\n");
+    await writeFile(join(proj, "app.ts"), "export {};\n");
+    await writeFile(join(proj, ".env"), "SECRET=1\n");
+    await writeFile(join(proj, ".gitignore"), "\n");
+    await writeFile(join(proj, ".github", "ci.yml"), "");
+    await writeFile(join(proj, "node_modules", "pkg", "index.ts"), "");
+    await symlink("../outside", join(proj, "linkdir"));
+    await symlink("../outside/secret.txt", join(proj, "linkfile"));
+  });
+  afterAll(() => removeDir(root));
+
+  const run = (input: Parameters<typeof globTool.run>[0], over: Parameters<typeof makeToolContext>[0] = {}) =>
+    globTool.run(input, makeToolContext({ root: proj, ...over }));
+
+  for (const pattern of ["../outside/*", "../outside/**/*", "sub/../../outside/*", "/etc/*", "~/x", "{../outside,sub}/*"]) {
+    test(`pattern ${pattern} that escapes the search directory is an error`, async () => {
+      expect((await run({ pattern })).isError).toBe(true);
+    });
+  }
+
+  test("a symlinked directory pointing outside is not searched", async () => {
+    expect((await run({ pattern: "linkdir/**" })).content).toBe("No files matched.");
+  });
+
+  test("a symlinked file pointing outside is not listed", async () => {
+    const content = String((await run({ pattern: "*" })).content);
+    expect(content).not.toContain("linkfile");
+    expect(content).not.toContain("secret.txt");
+  });
+
+  test("paths denied by isDenied are never returned", async () => {
+    const out = await run({ pattern: "*" }, { isDenied: (p) => p.endsWith(".env") });
+    const content = String(out.content);
+    expect(content).toContain("app.ts");
+    expect(content).not.toContain(".env");
+  });
+
+  test("node_modules stays skipped when the pattern names other dot-directories", async () => {
+    expect((await run({ pattern: ".github/**" })).content).toBe(join(proj, ".github", "ci.yml"));
+    const lines = String((await run({ pattern: "**/*{.ts,.gitignore}" })).content).split("\n");
+    expect(lines.some((line) => line.includes("node_modules"))).toBe(false);
+    expect(lines).toContain(join(proj, "app.ts"));
+    expect(lines).toContain(join(proj, ".gitignore"));
+  });
+});

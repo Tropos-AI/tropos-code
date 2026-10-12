@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool } from "../types";
-import { walkFiles } from "../walk";
+import { assertContainedPattern, walkFiles } from "../walk";
 
 const MAX_RESULTS = 100;
 const MAX_SCANNED = 20_000;
@@ -23,6 +23,8 @@ export const globTool = defineTool({
   summarize: (input) => (input.path ? `${input.pattern} in ${input.path}` : input.pattern),
   subject: (input, cwd) => ({ paths: [resolveToolPath(input.path ?? ".", cwd)] }),
   async run(input, ctx) {
+    const patternError = assertContainedPattern(input.pattern);
+    if (patternError) return { content: patternError, isError: true };
     let base: string;
     try {
       base = resolveToolPath(input.path ?? ".", ctx.cwd());
@@ -36,7 +38,7 @@ export const globTool = defineTool({
     if (!info?.isDirectory()) return { content: `Not a directory: ${base}`, isError: true };
 
     const found: Array<{ path: string; mtime: number }> = [];
-    for await (const rel of walkFiles(base, input.pattern)) {
+    for await (const rel of walkFiles(base, input.pattern, { isDenied: ctx.isDenied })) {
       const path = join(base, rel);
       const s = await stat(path).catch(() => null);
       if (s) found.push({ path, mtime: s.mtimeMs });

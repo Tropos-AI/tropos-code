@@ -70,3 +70,58 @@ test("invalid regex is an error in the fallback", async () => {
   const out = await createGrepTool({ rgPath: null }).run({ pattern: "(" }, makeToolContext({ root: dir }));
   expect(out.isError).toBe(true);
 });
+
+let escapeRoot: string;
+let proj: string;
+beforeAll(async () => {
+  escapeRoot = await makeTmpDir();
+  proj = join(escapeRoot, "proj");
+  await mkdir(join(proj, "node_modules"), { recursive: true });
+  await mkdir(join(escapeRoot, "outside"), { recursive: true });
+  await writeFile(join(escapeRoot, "outside", "secret.txt"), "SECRET\n");
+  await writeFile(join(proj, "app.ts"), "export const SECRET = 1;\n");
+  await writeFile(join(proj, ".env"), "SECRET=hunter2\n");
+  await writeFile(join(proj, "node_modules", "x.js"), "SECRET\n");
+  await symlink("../outside", join(proj, "linkdir"));
+  await symlink("../outside/secret.txt", join(proj, "linkfile"));
+});
+afterAll(() => removeDir(escapeRoot));
+
+for (const engine of engines) {
+  describe(`Grep confinement (${engine.name})`, () => {
+    const grep = createGrepTool({ rgPath: engine.rgPath });
+    const run = (input: Parameters<typeof grep.run>[0], over: Parameters<typeof makeToolContext>[0] = {}) =>
+      grep.run(input, makeToolContext({ root: proj, ...over }));
+
+    for (const glob of ["../outside/*", "/etc/*", "~/x"]) {
+      test(`glob ${glob} that escapes the search directory is an error`, async () => {
+        expect((await run({ pattern: "SECRET", glob })).isError).toBe(true);
+      });
+    }
+
+    test("a symlinked directory pointing outside is not searched", async () => {
+      expect((await run({ pattern: "SECRET", glob: "linkdir/*" })).content).toBe("No matches found.");
+    });
+
+    test("symlinks pointing outside are not followed during a directory search", async () => {
+      expect(String((await run({ pattern: "SECRET" })).content)).not.toContain("secret.txt");
+    });
+
+    test("paths denied by isDenied never appear, in content mode", async () => {
+      const out = await run(
+        { pattern: "SECRET", output_mode: "content" },
+        { isDenied: (p) => p.endsWith(".env") },
+      );
+      const content = String(out.content);
+      expect(content).toContain("app.ts");
+      expect(content).not.toContain(".env");
+      expect(content).not.toContain("hunter2");
+    });
+
+    test("an unknown type is an error", async () => {
+      const out = await run({ pattern: "SECRET", type: "nope" });
+      expect(out.isError).toBe(true);
+      expect(out.content).toContain("nope");
+    });
+  });
+}
