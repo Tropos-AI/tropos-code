@@ -42,24 +42,71 @@ function finish(lines: string[], limit: number): ToolOutput {
   };
 }
 
+interface RgText {
+  text?: string;
+  bytes?: string;
+}
+
+interface RgEvent {
+  type: string;
+  data?: { path?: RgText; lines?: RgText; line_number?: number | null };
+}
+
+/** Decodes a ripgrep JSON text-or-bytes field (bytes are base64 for non-UTF-8 data). */
+function rgField(field: RgText | undefined): string {
+  if (!field) return "";
+  return field.text ?? Buffer.from(field.bytes ?? "", "base64").toString("utf8");
+}
+
 /**
- * Turns `--null` ripgrep output back into the usual `path:line:text` lines, dropping
- * every record whose file is denied. Records are NUL-terminated after the path, so the
- * path is unambiguous even when it contains colons.
+ * Paths from `rg --null -l` output. NUL cannot occur in a path, so records are unambiguous;
+ * denied paths are dropped.
  */
-function ripgrepLines(out: string, mode: string, isDenied?: (path: string) => boolean): string[] {
-  if (mode === "files_with_matches") {
-    return out.split("\0").filter(Boolean).filter((file) => !isDenied?.(file));
+function ripgrepFiles(out: string, isDenied?: (path: string) => boolean): string[] {
+  return out.split("\0").filter(Boolean).filter((file) => !isDenied?.(file));
+}
+
+/**
+ * Output lines from `rg --json` content or count events. Each file's path comes from its own
+ * JSON field, so a newline in a directory name cannot split a record. A file is checked
+ * against isDenied before any of its lines are emitted.
+ */
+function ripgrepJsonLines(
+  out: string,
+  mode: "content" | "count",
+  context: number,
+  isDenied?: (path: string) => boolean,
+): string[] {
+  const deniedCache = new Map<string, boolean>();
+  const denied = (file: string): boolean => {
+    let hit = deniedCache.get(file);
+    if (hit === undefined) {
+      hit = isDenied?.(file) ?? false;
+      deniedCache.set(file, hit);
+    }
+    return hit;
+  };
+  const lines: string[] = [];
+  const counts = new Map<string, number>();
+  let last: { file: string; line: number } | null = null;
+  for (const raw of out.split("\n")) {
+    if (raw === "") continue;
+    const event = JSON.parse(raw) as RgEvent;
+    if ((event.type !== "match" && event.type !== "context") || !event.data) continue;
+    const file = rgField(event.data.path);
+    if (denied(file)) continue;
+    if (mode === "count") {
+      if (event.type === "match") counts.set(file, (counts.get(file) ?? 0) + 1);
+      continue;
+    }
+    const number = event.data.line_number ?? 0;
+    const text = rgField(event.data.lines).replace(/\n$/, "");
+    if (context > 0 && last && (last.file !== file || number > last.line + 1)) lines.push("--");
+    lines.push(event.type === "match" ? `${file}:${number}:${text}` : `${file}-${number}-${text}`);
+    last = { file, line: number };
   }
-  return out.split("\n").filter(Boolean).flatMap((line) => {
-    const nul = line.indexOf("\0");
-    if (nul < 0) return [line]; // group separator between context blocks
-    const file = line.slice(0, nul);
-    if (isDenied?.(file)) return [];
-    const rest = line.slice(nul + 1);
-    // Context lines are "N-text"; matches and counts are "N:text" or "N".
-    return [`${file}${/^\d+-/.test(rest) ? "-" : ":"}${rest}`];
-  });
+  for (const [file, n] of counts) lines.push(`${file}:${n}`);
+  return lines;
 }
 
 async function runRipgrep(
@@ -70,12 +117,14 @@ async function runRipgrep(
   isDenied?: (path: string) => boolean,
 ): Promise<ToolOutput> {
   const mode = input.output_mode ?? "files_with_matches";
-  const args = ["--color", "never", "--no-heading", "--with-filename", "--null", "--sort", "path"];
-  if (mode === "files_with_matches") args.push("--files-with-matches");
-  if (mode === "count") args.push("--count");
-  if (mode === "content") {
-    args.push("--line-number");
-    if (input.context) args.push("--context", String(input.context));
+  // --no-config keeps a RIPGREP_CONFIG_PATH from adding -L, --hidden or other search flags.
+  const args = ["--no-config"];
+  if (mode === "files_with_matches") {
+    args.push("--color", "never", "--no-heading", "--with-filename", "--null", "--sort", "path", "--files-with-matches");
+  } else {
+    // Parsed as JSON events so paths and lines are never split on separator characters.
+    args.push("--json", "--sort", "path");
+    if (mode === "content" && input.context) args.push("--context", String(input.context));
   }
   if (input.case_insensitive) args.push("--ignore-case");
   // rg only skips node_modules via .gitignore; skip it and .git everywhere unless the search names them.
@@ -96,7 +145,13 @@ async function runRipgrep(
     child.once("close", (c) => resolve(c ?? 2));
   });
   if (code === 2) return { content: `ripgrep failed: ${err.trim() || "unknown error"}`, isError: true };
-  return finish(ripgrepLines(out, mode, isDenied), input.head_limit ?? DEFAULT_HEAD_LIMIT);
+  const limit = input.head_limit ?? DEFAULT_HEAD_LIMIT;
+  if (mode === "files_with_matches") return finish(ripgrepFiles(out, isDenied), limit);
+  try {
+    return finish(ripgrepJsonLines(out, mode, input.context ?? 0, isDenied), limit);
+  } catch {
+    return { content: "ripgrep returned output that could not be parsed", isError: true };
+  }
 }
 
 async function runFallback(

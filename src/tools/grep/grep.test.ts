@@ -73,6 +73,7 @@ test("invalid regex is an error in the fallback", async () => {
 
 let escapeRoot: string;
 let proj: string;
+const newlineDirs = process.platform !== "win32";
 beforeAll(async () => {
   escapeRoot = await makeTmpDir();
   proj = join(escapeRoot, "proj");
@@ -80,12 +81,20 @@ beforeAll(async () => {
   await mkdir(join(escapeRoot, "outside"), { recursive: true });
   await writeFile(join(escapeRoot, "outside", "secret.txt"), "SECRET\n");
   await writeFile(join(proj, "app.ts"), "export const SECRET = 1;\n");
-  await writeFile(join(proj, ".env"), "SECRET=hunter2\n");
+  await writeFile(join(proj, "secret.key"), "SECRET-KEY hunter2\n");
   await writeFile(join(proj, "node_modules", "x.js"), "SECRET\n");
   await symlink("../outside", join(proj, "linkdir"));
   await symlink("../outside/secret.txt", join(proj, "linkfile"));
+  if (newlineDirs) {
+    await mkdir(join(proj, "dd\nx"));
+    await writeFile(join(proj, "dd\nx", "secret.key"), "PRIVATE-KEY-DATA\n");
+    await writeFile(join(proj, "dd\nx", "ok.txt"), "public PUBLIC-TOKEN\n");
+  }
 });
 afterAll(() => removeDir(escapeRoot));
+
+const denySecretKey = { isDenied: (p: string) => p.endsWith("secret.key") };
+const denyNewlineKey = { isDenied: (p: string) => p === join(proj, "dd\nx", "secret.key") };
 
 for (const engine of engines) {
   describe(`Grep confinement (${engine.name})`, () => {
@@ -107,15 +116,43 @@ for (const engine of engines) {
       expect(String((await run({ pattern: "SECRET" })).content)).not.toContain("secret.txt");
     });
 
-    test("paths denied by isDenied never appear, in content mode", async () => {
-      const out = await run(
-        { pattern: "SECRET", output_mode: "content" },
-        { isDenied: (p) => p.endsWith(".env") },
-      );
-      const content = String(out.content);
-      expect(content).toContain("app.ts");
-      expect(content).not.toContain(".env");
-      expect(content).not.toContain("hunter2");
+    test("control: without a deny rule the non-hidden secret.key is searched", async () => {
+      const content = String((await run({ pattern: "hunter2", output_mode: "content" })).content);
+      expect(content).toContain("secret.key:1:SECRET-KEY hunter2");
+    });
+
+    for (const output_mode of ["files_with_matches", "content", "count"] as const) {
+      test(`denied secret.key never appears in ${output_mode} mode`, async () => {
+        const content = String((await run({ pattern: "SECRET", output_mode }, denySecretKey)).content);
+        expect(content).toContain("app.ts");
+        expect(content).not.toContain("secret.key");
+        expect(content).not.toContain("hunter2");
+      });
+    }
+
+    for (const output_mode of ["files_with_matches", "content", "count"] as const) {
+      test.skipIf(!newlineDirs)(`denied file in a directory whose name has a newline never leaks (${output_mode})`, async () => {
+        const content = String(
+          (await run({ pattern: "KEY-DATA|PUBLIC-TOKEN", output_mode }, denyNewlineKey)).content,
+        );
+        expect(content).not.toContain("KEY-DATA");
+        expect(content).not.toContain("secret.key");
+        expect(content).toContain("ok.txt");
+      });
+    }
+
+    test.skipIf(engine.rgPath === null)("rg ignores RIPGREP_CONFIG_PATH (no -L or --hidden from the user config)", async () => {
+      const config = join(escapeRoot, "rgrc");
+      await writeFile(config, "--follow\n--hidden\n");
+      const previous = process.env.RIPGREP_CONFIG_PATH;
+      process.env.RIPGREP_CONFIG_PATH = config;
+      try {
+        const content = String((await run({ pattern: "SECRET" })).content);
+        expect(content).not.toContain("secret.txt");
+      } finally {
+        if (previous === undefined) delete process.env.RIPGREP_CONFIG_PATH;
+        else process.env.RIPGREP_CONFIG_PATH = previous;
+      }
     });
 
     test("an unknown type is an error", async () => {
