@@ -1,8 +1,13 @@
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { COMMANDS } from "./commands";
 
 const MAX_SUGGESTIONS = 50;
+
+function isOutside(base: string, target: string): boolean {
+  const rel = relative(base, target);
+  return rel === ".." || rel.startsWith("../") || isAbsolute(rel);
+}
 
 /** "@src/co" → ["@src/components/", "@src/config/"]. Hidden entries only when the prefix starts with ".". */
 export async function completeFile(token: string, cwd: string): Promise<string[]> {
@@ -10,7 +15,12 @@ export async function completeFile(token: string, cwd: string): Promise<string[]
   const slash = partial.lastIndexOf("/");
   const dir = slash === -1 ? "" : partial.slice(0, slash + 1);
   const base = partial.slice(dir.length);
-  const entries = await readdir(join(cwd, dir), { withFileTypes: true }).catch(() => []);
+  const abs = resolve(cwd, dir);
+  if (isOutside(cwd, abs)) return [];
+  // Lexical containment is not enough: a symlink inside cwd can point anywhere, so compare real paths.
+  const [realDir, realCwd] = await Promise.all([realpath(abs).catch(() => null), realpath(cwd).catch(() => null)]);
+  if (!realDir || !realCwd || isOutside(realCwd, realDir)) return [];
+  const entries = await readdir(realDir, { withFileTypes: true }).catch(() => []);
   return entries
     .filter((e) => e.name.startsWith(base) && e.name !== "node_modules" && (base.startsWith(".") || !e.name.startsWith(".")))
     .map((e) => `@${dir}${e.name}${e.isDirectory() ? "/" : ""}`)

@@ -94,16 +94,26 @@ function summarizeInput(input: unknown): string {
   return "";
 }
 
+/** Context and mode blocks are injected by the harness; they are not part of what the user typed. */
+function isInjected(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith("<context>") || trimmed.startsWith("<mode>");
+}
+
 /** Rebuilds a read-only transcript from a saved session. */
 export function historyToTranscript(messages: MessageParam[]): Transcript {
   let t = emptyTranscript;
   for (const m of messages) {
     if (typeof m.content === "string") {
-      t = m.role === "user" ? addUser(t, m.content) : pushDone(t, { kind: "assistant", text: m.content });
+      if (m.role === "user") {
+        if (!isInjected(m.content)) t = addUser(t, m.content);
+      } else {
+        t = pushDone(t, { kind: "assistant", text: m.content });
+      }
       continue;
     }
     for (const block of m.content) {
-      if (m.role === "user" && block.type === "text" && !block.text.startsWith("<context>") && !block.text.startsWith("<mode>")) {
+      if (m.role === "user" && block.type === "text" && !isInjected(block.text)) {
         t = addUser(t, block.text);
       } else if (m.role === "assistant" && block.type === "text") {
         t = pushDone(t, { kind: "assistant", text: block.text });

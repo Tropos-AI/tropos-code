@@ -20,19 +20,45 @@ export type InputAction =
   | { type: "historyNext"; history: string[] }
   | { type: "replaceRange"; start: number; end: number; text: string };
 
+const HIGH = /[\uD800-\uDBFF]/;
+const LOW = /[\uDC00-\uDFFF]/;
+
+/** Drops unpaired surrogates so no edit can leave one in the value. */
+function withoutLoneSurrogates(text: string): string {
+  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
+/** Code-point boundary before `i`: a surrogate pair counts as one character. */
+function prevBoundary(value: string, i: number): number {
+  if (i <= 0) return 0;
+  if (i >= 2 && LOW.test(value[i - 1]!) && HIGH.test(value[i - 2]!)) return i - 2;
+  return i - 1;
+}
+
+/** Code-point boundary after `i`: a surrogate pair counts as one character. */
+function nextBoundary(value: string, i: number): number {
+  if (i >= value.length) return value.length;
+  if (i + 1 < value.length && HIGH.test(value[i]!) && LOW.test(value[i + 1]!)) return i + 2;
+  return i + 1;
+}
+
 export function inputReducer(s: InputState, a: InputAction): InputState {
   switch (a.type) {
-    case "insert":
-      return { ...s, value: s.value.slice(0, s.cursor) + a.text + s.value.slice(s.cursor), cursor: s.cursor + a.text.length, historyIndex: null };
-    case "backspace":
+    case "insert": {
+      const text = withoutLoneSurrogates(a.text);
+      return { ...s, value: s.value.slice(0, s.cursor) + text + s.value.slice(s.cursor), cursor: s.cursor + text.length, historyIndex: null };
+    }
+    case "backspace": {
       if (s.cursor === 0) return s;
-      return { ...s, value: s.value.slice(0, s.cursor - 1) + s.value.slice(s.cursor), cursor: s.cursor - 1 };
+      const from = prevBoundary(s.value, s.cursor);
+      return { ...s, value: s.value.slice(0, from) + s.value.slice(s.cursor), cursor: from };
+    }
     case "left":
-      return { ...s, cursor: Math.max(0, s.cursor - 1) };
+      return { ...s, cursor: prevBoundary(s.value, s.cursor) };
     case "right":
-      return { ...s, cursor: Math.min(s.value.length, s.cursor + 1) };
+      return { ...s, cursor: nextBoundary(s.value, s.cursor) };
     case "home":
-      return { ...s, cursor: s.value.lastIndexOf("\n", s.cursor - 1) + 1 };
+      return { ...s, cursor: s.cursor === 0 ? 0 : s.value.lastIndexOf("\n", s.cursor - 1) + 1 };
     case "end": {
       const newline = s.value.indexOf("\n", s.cursor);
       return { ...s, cursor: newline === -1 ? s.value.length : newline };
@@ -57,8 +83,9 @@ export function inputReducer(s: InputState, a: InputAction): InputState {
       return { ...s, value, cursor: value.length, historyIndex: index };
     }
     case "replaceRange": {
-      const value = s.value.slice(0, a.start) + a.text + s.value.slice(a.end);
-      return { ...s, value, cursor: a.start + a.text.length };
+      const text = withoutLoneSurrogates(a.text);
+      const value = s.value.slice(0, a.start) + text + s.value.slice(a.end);
+      return { ...s, value, cursor: a.start + text.length };
     }
   }
 }

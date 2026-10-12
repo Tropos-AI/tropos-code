@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { commonPrefix, completeCommand, completeFile } from "./complete";
@@ -28,4 +28,25 @@ test("command completion", () => {
 test("common prefix", () => {
   expect(commonPrefix(["@src/components/", "@src/config/"])).toBe("@src/co");
   expect(commonPrefix([])).toBe("");
+});
+
+describe("completion stays inside cwd", () => {
+  let outside: string;
+  beforeAll(async () => {
+    outside = await makeTmpDir();
+    await writeFile(join(outside, "secret.txt"), "");
+    await symlink(outside, join(dir, "escape"));
+  });
+  afterAll(() => removeDir(outside));
+
+  test("paths that climb out of cwd list nothing", async () => {
+    expect(await completeFile("@../", dir)).toEqual([]);
+    expect(await completeFile("@src/../../", dir)).toEqual([]);
+    expect(await completeFile("@/", dir)).toEqual([]);
+  });
+
+  test("a symlinked directory that points outside cwd lists nothing", async () => {
+    expect(await completeFile("@escape/", dir)).toEqual([]);
+    expect(await completeFile("@escape/s", dir)).toEqual([]);
+  });
 });

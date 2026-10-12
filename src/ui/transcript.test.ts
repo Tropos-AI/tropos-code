@@ -62,3 +62,12 @@ describe("transcript reducer", () => {
     expect(t.done[2]).toMatchObject({ name: "Read", summary: "a.ts" });
   });
 });
+
+test("history replay filters context and mode blocks in string-content user messages", () => {
+  const t = historyToTranscript([
+    { role: "user", content: "<context>x</context>" },
+    { role: "user", content: "<mode>plan</mode>" },
+    { role: "user", content: "fix it" },
+  ]);
+  expect(t.done).toEqual([expect.objectContaining({ kind: "user", text: "fix it" })]);
+});
