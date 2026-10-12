@@ -1,6 +1,6 @@
 // src/paths.ts
 import { homedir } from "node:os";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, isAbsolute, sep } from "node:path";
 
 /** Root of Tropos user data: TROPOS_HOME, else ~/.tropos. */
 export function troposHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -17,5 +17,5 @@ export function expandHome(p: string, home: string = homedir()): string {
 /** True when `path` equals `dir` or is nested below it. Both must be absolute. */
 export function isInside(path: string, dir: string): boolean {
   const rel = relative(dir, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
 }

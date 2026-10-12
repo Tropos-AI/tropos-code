@@ -41,4 +41,7 @@ describe("isInside", () => {
   test("a parent is outside", () => {
     expect(isInside("/a", "/a/b")).toBe(false);
   });
+  test("a child whose name starts with .. is inside", () => {
+    expect(isInside("/a/b/..cache/x", "/a/b")).toBe(true);
+  });
 });
