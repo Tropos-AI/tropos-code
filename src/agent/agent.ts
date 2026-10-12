@@ -6,7 +6,7 @@ import { contextTokens, messageCostUsd } from "../api/pricing";
 import type { Effort, Mode } from "../config/constants";
 import { modeReminder } from "../context/system-prompt";
 import { decide, type PermissionContext } from "../permissions/engine";
-import type { MessageParam } from "../session/store";
+import { danglingToolResults, type MessageParam } from "../session/store";
 import type { AnyTool, ToolContext, ToolOutput } from "../tools/types";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, ToolStatus, TurnEndReason } from "./events";
 
@@ -47,6 +47,9 @@ export class Agent {
   }
 
   async run(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
+    // A previous run may have ended with tool_use blocks that never got results; close them first.
+    const repair = danglingToolResults(this.messages);
+    if (repair) await this.push(repair);
     const content: Anthropic.Beta.BetaTextBlockParam[] = [];
     if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
     const mode = this.opts.permissions().mode;
@@ -58,13 +61,27 @@ export class Agent {
     return this.loop(signal);
   }
 
+  /** Appends to the in-memory history first; a failing session write is reported, never thrown. */
   private async push(message: MessageParam): Promise<void> {
     this.messages.push(message);
-    await this.opts.persist(message);
+    try {
+      await this.opts.persist(message);
+    } catch (err) {
+      this.emit({ type: "notice", level: "error", text: `Could not save the session: ${(err as Error).message}` });
+    }
+  }
+
+  /** A misbehaving listener must never break the loop. */
+  private emit(event: AgentEvent): void {
+    try {
+      this.opts.emit(event);
+    } catch {
+      // ignored on purpose
+    }
   }
 
   private async loop(signal: AbortSignal): Promise<TurnEndReason> {
-    const { emit } = this.opts;
+    const emit = (event: AgentEvent) => this.emit(event);
     const end = (reason: TurnEndReason) => {
       emit({ type: "turn_end", reason });
       return reason;
@@ -118,7 +135,8 @@ export class Agent {
       }
 
       this.recordUsage(message, cfg.model);
-      await this.push({ role: "assistant", content: message.content });
+      // The API rejects an assistant message with no content, so an empty reply is not recorded.
+      if (message.content.length > 0) await this.push({ role: "assistant", content: message.content });
       emit({ type: "assistant", message });
       const toolUses = message.content.filter((b): b is ToolUse => b.type === "tool_use");
 
@@ -134,6 +152,16 @@ export class Agent {
         }
         return end("refusal");
       }
+      if (message.stop_reason === "model_context_window_exceeded") {
+        if (toolUses.length > 0) {
+          await this.push({
+            role: "user",
+            content: toolUses.map((t) => errorResult(t.id, "Not run: the conversation no longer fits in the model's context window.")),
+          });
+        }
+        emit({ type: "notice", level: "warn", text: "The conversation no longer fits in the model's context. Start a new one with /clear." });
+        return end("end_turn");
+      }
       if (message.stop_reason === "pause_turn" || message.stop_reason === "compaction") continue;
       if (message.stop_reason === "max_tokens") {
         if (toolUses.length > 0) {
@@ -148,12 +176,7 @@ export class Agent {
         emit({ type: "notice", level: "warn", text: "The response hit the output token limit and was cut off." });
         return end("end_turn");
       }
-      if (toolUses.length === 0) {
-        if (message.stop_reason === "model_context_window_exceeded") {
-          emit({ type: "notice", level: "warn", text: "The conversation no longer fits in the model's context. Start a new one with /clear." });
-        }
-        return end("end_turn");
-      }
+      if (toolUses.length === 0) return end("end_turn");
 
       const results = await this.runTools(toolUses, signal);
       await this.push({ role: "user", content: results });
@@ -183,22 +206,46 @@ export class Agent {
   }
 
   private finish(block: ToolUse, name: string, output: ToolOutput, status: ToolStatus): ToolResult {
-    this.opts.emit({ type: "tool_end", id: block.id, name, output, status });
+    this.emit({ type: "tool_end", id: block.id, name, output, status });
     return output.isError
       ? { type: "tool_result", tool_use_id: block.id, content: output.content, is_error: true }
       : { type: "tool_result", tool_use_id: block.id, content: output.content };
   }
 
+  /** Prompts are serialized. Aborting answers an open prompt with a denial so the queue never wedges. */
   private ask(prompt: PermissionPrompt, signal: AbortSignal): Promise<PermissionAnswer> {
-    const next = this.askQueue.then(() =>
-      signal.aborted ? ({ kind: "deny" } as PermissionAnswer) : this.opts.askPermission(prompt, signal),
+    const denied: PermissionAnswer = { kind: "deny" };
+    const next = this.askQueue.then(
+      () =>
+        new Promise<PermissionAnswer>((resolve) => {
+          if (signal.aborted) return resolve(denied);
+          const onAbort = () => resolve(denied);
+          signal.addEventListener("abort", onAbort, { once: true });
+          Promise.resolve()
+            .then(() => this.opts.askPermission(prompt, signal))
+            .catch(() => denied)
+            .then((answer) => {
+              signal.removeEventListener("abort", onAbort);
+              resolve(answer);
+            });
+        }),
     );
-    this.askQueue = next.catch(() => undefined);
-    return next.catch(() => ({ kind: "deny" }) as PermissionAnswer);
+    this.askQueue = next;
+    return next;
   }
 
+  /** Never throws: any failure becomes an error result so the tool_use is always answered. */
   private async runTool(block: ToolUse, signal: AbortSignal): Promise<ToolResult> {
-    const { emit } = this.opts;
+    try {
+      return await this.runToolUnsafe(block, signal);
+    } catch (err) {
+      const name = this.opts.tools.find((t) => t.name === block.name)?.name ?? block.name;
+      return this.finish(block, name, { content: `${name} failed: ${(err as Error).message}`, isError: true }, "error");
+    }
+  }
+
+  private async runToolUnsafe(block: ToolUse, signal: AbortSignal): Promise<ToolResult> {
+    const emit = (event: AgentEvent) => this.emit(event);
     if (signal.aborted) return errorResult(block.id, INTERRUPTED);
 
     const tool = this.opts.tools.find((t) => t.name === block.name);
@@ -250,7 +297,7 @@ export class Agent {
       const permissions = this.opts.permissions();
       // isDenied lets search tools drop files covered by deny rules when they scan a directory.
       const isDenied = (path: string) =>
-        decide({ toolName: tool.name, kind: tool.kind, paths: [path] }, permissions).behavior === "deny";
+        decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
       output = await tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied });
     } catch (err) {
       output = { content: `${tool.name} failed: ${(err as Error).message}`, isError: true };
@@ -262,7 +309,7 @@ export class Agent {
     // Sums compaction/fallback iterations and prices fallbacks at the model that served them.
     const cost = messageCostUsd(message, requestedModel);
     this.totalCostUsd += cost ?? 0;
-    this.opts.emit({
+    this.emit({
       type: "usage",
       inputTokens: message.usage.input_tokens,
       outputTokens: message.usage.output_tokens,

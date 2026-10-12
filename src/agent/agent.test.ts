@@ -50,7 +50,17 @@ interface Harness {
   allowedAlways: string[];
 }
 
-function harness(steps: Step[], over: { mode?: Mode; answer?: PermissionAnswer; deny?: string[]; maxTurns?: number; ask?: AgentOptions["askPermission"] } = {}): Harness {
+function harness(steps: Step[], over: {
+    mode?: Mode;
+    answer?: PermissionAnswer;
+    deny?: string[];
+    maxTurns?: number;
+    ask?: AgentOptions["askPermission"];
+    persist?: AgentOptions["persist"];
+    onAllowAlways?: AgentOptions["onAllowAlways"];
+    emit?: (e: AgentEvent) => void;
+    tools?: AnyTool[];
+  } = {}): Harness {
   const model = new FakeModel(steps);
   const events: AgentEvent[] = [];
   const prompts: PermissionPrompt[] = [];
@@ -59,7 +69,7 @@ function harness(steps: Step[], over: { mode?: Mode; answer?: PermissionAnswer; 
   const toolContext = makeToolContext({ root: "/work" });
   const agent = new Agent({
     model,
-    tools: [echo, sleeper] as AnyTool[],
+    tools: over.tools ?? ([echo, sleeper] as AnyTool[]),
     system: "sys",
     config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
     permissions: () => ({
@@ -75,16 +85,23 @@ function harness(steps: Step[], over: { mode?: Mode; answer?: PermissionAnswer; 
         prompts.push(p);
         return over.answer ?? { kind: "allow" };
       }),
-    onAllowAlways: (rule) => {
-      allowedAlways.push(rule);
-    },
+    onAllowAlways:
+      over.onAllowAlways ??
+      ((rule) => {
+        allowedAlways.push(rule);
+      }),
     contextText: async () => "<context>\nctx\n</context>",
-    persist: async (m) => {
-      persisted.push(m);
-    },
+    persist:
+      over.persist ??
+      (async (m) => {
+        persisted.push(m);
+      }),
     toolContext,
     maxTurns: over.maxTurns,
-    emit: (e) => events.push(e),
+    emit: (e) => {
+      events.push(e);
+      over.emit?.(e);
+    },
   });
   return { agent, model, events, prompts, persisted, allowedAlways };
 }
@@ -312,11 +329,23 @@ describe("Agent", () => {
   });
 
   test("permission prompts never overlap", async () => {
+    // Two parallel read tools whose paths fall outside allowedDirs: each one asks at the same time.
+    const outside = (name: string) =>
+      defineTool({
+        name,
+        kind: "read",
+        description: "x",
+        schema: z.object({}),
+        summarize: () => name,
+        subject: () => ({ paths: [`/elsewhere/${name}`] }),
+        run: async () => ({ content: name }),
+      });
     let open = 0;
     let maxOpen = 0;
     const h = harness(
-      [() => reply([toolUseBlock("s1", "Sleep", { ms: 1 }), toolUseBlock("s2", "Sleep", { ms: 1 })], "tool_use"), () => reply([textBlock("ok")])],
+      [() => reply([toolUseBlock("r1", "R1", {}), toolUseBlock("r2", "R2", {})], "tool_use"), () => reply([textBlock("ok")])],
       {
+        tools: [outside("R1"), outside("R2")] as AnyTool[],
         ask: async () => {
           open++;
           maxOpen = Math.max(maxOpen, open);
@@ -328,6 +357,8 @@ describe("Agent", () => {
     );
     await run(h);
     expect(maxOpen).toBe(1);
+    const results = h.agent.messages[2]!.content as Array<{ content: string }>;
+    expect(results.map((r) => r.content)).toEqual(["R1", "R2"]);
   });
 
   test("usage events accumulate cost", async () => {
@@ -336,5 +367,173 @@ describe("Agent", () => {
     const usage = h.events.find((e) => e.type === "usage");
     expect(usage).toMatchObject({ inputTokens: 100, outputTokens: 20, contextTokens: 100 });
     expect(h.agent.totalCostUsd).toBeCloseTo((100 * 4 + 20 * 20) / 1_000_000, 9);
+  });
+});
+
+describe("Agent failure paths keep history valid", () => {
+  const toolTurn = () => reply([toolUseBlock("s", "Sleep", { ms: 1 })], "tool_use");
+
+  test("persist rejecting does not escape run()", async () => {
+    const h = harness([toolTurn, () => reply([textBlock("ok")]), () => reply([textBlock("again")])], {
+      mode: "bypass",
+      persist: async (m) => {
+        if (m.role === "assistant") throw new Error("disk full");
+      },
+    });
+    expect(await run(h)).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    expect(h.events.some((e) => e.type === "notice" && e.level === "error" && e.text.startsWith("Could not save the session: disk full"))).toBe(true);
+    expect(await run(h, "next")).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    assertToolPairs(h.model.requests[2]!.messages);
+  });
+
+  test("a dangling tool_use at the start of run() is closed first", async () => {
+    const history = [
+      { role: "user" as const, content: [{ type: "text" as const, text: "hi" }] },
+      { role: "assistant" as const, content: [toolUseBlock("old", "Echo", { text: "x" })] },
+    ] as never;
+    const model = new FakeModel([() => reply([textBlock("ok")])]);
+    const agent = new Agent(
+      {
+        model,
+        tools: [echo] as AnyTool[],
+        system: "s",
+        config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
+        permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+        askPermission: async () => ({ kind: "allow" }),
+        contextText: async () => "c",
+        persist: async () => {},
+        toolContext: makeToolContext({ root: "/work" }),
+        emit: () => {},
+      },
+      history,
+    );
+    await agent.run("go", new AbortController().signal);
+    assertToolPairs(agent.messages);
+    expect(agent.messages[2]).toMatchObject({ role: "user", content: [{ type: "tool_result", tool_use_id: "old", is_error: true }] });
+  });
+
+  test("onAllowAlways rejecting becomes an error result", async () => {
+    sleeperRuns = 0;
+    const h = harness([toolTurn, () => reply([textBlock("ok")])], {
+      answer: { kind: "allow_always", rule: "Sleep(sleep:*)" },
+      onAllowAlways: async () => {
+        throw new Error("settings not writable");
+      },
+    });
+    expect(await run(h)).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    const result = (h.agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain("settings not writable");
+    expect(sleeperRuns).toBe(0);
+  });
+
+  test("emit throwing on tool_start does not break the loop", async () => {
+    const h = harness([() => reply([toolUseBlock("a", "Echo", { text: "1" })], "tool_use"), () => reply([textBlock("done")])], {
+      emit: (e) => {
+        if (e.type === "tool_start") throw new Error("listener bug");
+      },
+    });
+    expect(await run(h)).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    expect(h.agent.messages[2]).toEqual({ role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "echo:1" }] });
+  });
+
+  test("summarize throwing becomes an error result", async () => {
+    const bad = defineTool({
+      name: "Bad",
+      kind: "read",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => {
+        throw new Error("no summary");
+      },
+      subject: () => ({ paths: [] }),
+      run: async () => ({ content: "ran" }),
+    });
+    const h = harness([() => reply([toolUseBlock("b", "Bad", {})], "tool_use"), () => reply([textBlock("ok")])], { tools: [bad] as AnyTool[] });
+    expect(await run(h)).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    const result = (h.agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
+    expect(result).toMatchObject({ is_error: true });
+    expect(result.content).toContain("Bad failed: no summary");
+  });
+
+  test("abort unblocks an open permission prompt", async () => {
+    const controller = new AbortController();
+    const h = harness([toolTurn, () => reply([textBlock("ok")])], { ask: () => new Promise<PermissionAnswer>(() => {}) });
+    setTimeout(() => controller.abort(), 20);
+    const started = Date.now();
+    expect(await run(h, "go", controller.signal)).toBe("aborted");
+    expect(Date.now() - started).toBeLessThan(300);
+    assertToolPairs(h.agent.messages);
+
+  });
+
+  test("the same agent prompts again after an aborted prompt", async () => {
+    let calls = 0;
+    const h = harness([toolTurn, toolTurn, () => reply([textBlock("ok")])], {
+      ask: (_p, signal) => {
+        calls++;
+        if (calls === 1) return new Promise<PermissionAnswer>(() => {}); // never answers
+        expect(signal.aborted).toBe(false);
+        return Promise.resolve({ kind: "allow" });
+      },
+    });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+    expect(await run(h, "one", controller.signal)).toBe("aborted");
+    expect(await run(h, "two")).toBe("end_turn");
+    expect(calls).toBe(2);
+    assertToolPairs(h.agent.messages);
+  });
+
+  test("an empty assistant reply is not recorded", async () => {
+    for (const stop of ["refusal", "end_turn"]) {
+      const h = harness([() => reply([], stop), () => reply([textBlock("hi")])]);
+      await run(h);
+      expect(h.agent.messages.some((m) => m.role === "assistant" && m.content.length === 0)).toBe(false);
+      expect(await run(h, "again")).toBe("end_turn");
+      expect(h.model.requests[1]!.messages.every((m) => m.content.length > 0)).toBe(true);
+      assertToolPairs(h.agent.messages);
+    }
+  });
+
+  test("isDenied checks a read of the path", async () => {
+    let seen: ((p: string) => boolean) | undefined;
+    const probe = defineTool({
+      name: "Probe",
+      kind: "read",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "probe",
+      subject: () => ({ paths: [] }),
+      run: async (_i, ctx) => {
+        seen = ctx.isDenied;
+        return { content: "ok" };
+      },
+    });
+    const h = harness([() => reply([toolUseBlock("p", "Probe", {})], "tool_use"), () => reply([textBlock("ok")])], {
+      tools: [probe] as AnyTool[],
+      deny: ["Read(secret.txt)"],
+    });
+    await run(h);
+    expect(seen?.("/work/secret.txt")).toBe(true);
+    expect(seen?.("/work/other.txt")).toBe(false);
+  });
+
+  test("context window exceeded with tool calls: not run, turn ends", async () => {
+    sleeperRuns = 0;
+    const h = harness([() => reply([toolUseBlock("s", "Sleep", { ms: 1 })], "model_context_window_exceeded")], { mode: "bypass" });
+    expect(await run(h)).toBe("end_turn");
+    expect(sleeperRuns).toBe(0);
+    assertToolPairs(h.agent.messages);
+    const result = (h.agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
+    expect(result.is_error).toBe(true);
+    expect(result.content).toContain("no longer fits");
+    expect(h.events.some((e) => e.type === "notice" && e.level === "warn")).toBe(true);
+    expect(h.model.requests).toHaveLength(1);
   });
 });
