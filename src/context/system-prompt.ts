@@ -32,7 +32,7 @@ export const MEMORY_TOTAL_CHARS = 120_000;
 
 /** Stops text from closing or opening a context wrapper tag by inserting a backslash after "<". */
 function neutraliseTags(text: string): string {
-  return text.replace(/<(?=\/?(?:memory|context|environment|mode))/gi, "<\\");
+  return text.replace(/<(?=\s*\/?\s*(?:memory|context|environment|mode)\b)/gi, "<\\");
 }
 
 function escapeAttr(value: string): string {
@@ -51,7 +51,7 @@ export function buildContextText(memory: MemoryFile[], environment: string): str
     used += file.content.length;
     parts.push(`<memory source="${file.source}" path="${escapeAttr(file.path)}">\n${neutraliseTags(file.content)}\n</memory>`);
   }
-  if (skipped > 0) parts.push(`<memory-note>${skipped} more memory files skipped (size limit)</memory-note>`);
+  if (skipped > 0) parts.push(`<memory-note>${skipped} more memory ${skipped === 1 ? "file" : "files"} skipped (size limit)</memory-note>`);
   parts.push(`<environment>\n${neutraliseTags(environment)}\n</environment>`);
   parts.push("</context>");
   return parts.join("\n");

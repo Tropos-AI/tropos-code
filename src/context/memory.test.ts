@@ -100,6 +100,22 @@ describe("file safety", () => {
     expect(await loadMemory(repo, home)).toEqual([]);
   });
 
+  test("outside git, a symlink to a file in a sibling directory is skipped", async () => {
+    const plain = join(dir, "plain");
+    await mkdir(plain);
+    await mkdir(join(dir, "sibling"));
+    await writeFile(join(dir, "sibling", "secret.md"), "not for the model");
+    await symlink(join(dir, "sibling", "secret.md"), join(plain, "TROPOS.md"));
+    expect(await loadMemory(plain, home)).toEqual([]);
+  });
+
+  test("outside git, a regular TROPOS.md still loads", async () => {
+    const plain = join(dir, "plain");
+    await mkdir(plain);
+    await writeFile(join(plain, "TROPOS.md"), "plain rules");
+    expect((await loadMemory(plain, home)).map((f) => f.content)).toEqual(["plain rules"]);
+  });
+
   test("a directory named TROPOS.md does not block the AGENTS.md fallback", async () => {
     await mkdir(join(repo, "TROPOS.md"));
     await writeFile(join(repo, "AGENTS.md"), "agents");

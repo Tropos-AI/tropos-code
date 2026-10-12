@@ -39,17 +39,21 @@ function isInside(file: string, boundary: string): boolean {
 }
 
 /**
- * Reads one memory candidate. Returns its trimmed, capped content (possibly empty), or null when
- * the candidate is not usable: missing, not a regular file (directories, FIFOs, devices), or a
- * symlink whose target lies outside `boundary`. Reads at most MAX_READ_BYTES from the file.
+ * Reads one memory candidate and returns its trimmed, capped content (possibly empty), or null when
+ * the candidate is not usable. `scope` is the canonical directory the file must resolve inside, or
+ * null outside git: there, symlinks are refused outright and regular files are read as they are.
+ * Reads at most MAX_READ_BYTES from the file, so no file is read in full.
  */
-async function readMemoryFile(path: string, boundary: string | null): Promise<string | null> {
-  if (boundary === null) return null;
+async function readMemoryFile(path: string, scope: string | null): Promise<string | null> {
   try {
     const link = await lstat(path);
-    if (!link.isFile() && !link.isSymbolicLink()) return null;
+    if (link.isSymbolicLink()) {
+      if (scope === null) return null;
+    } else if (!link.isFile()) {
+      return null; // directories, FIFOs, devices, sockets
+    }
     const real = await realpath(path);
-    if (!isInside(real, boundary)) return null;
+    if (scope !== null && !isInside(real, scope)) return null;
     // O_NONBLOCK keeps a FIFO swapped in after the checks from blocking the open; fstat rejects it.
     const handle = await open(real, constants.O_RDONLY | constants.O_NONBLOCK);
     try {
@@ -78,14 +82,15 @@ async function readMemoryFile(path: string, boundary: string | null): Promise<st
 /**
  * Memory files in load order: ~/.tropos/TROPOS.md, then TROPOS.md (or AGENTS.md when TROPOS.md is
  * not a usable file) in each directory from the git root (filesystem root outside git) down to
- * cwd, then TROPOS.local.md. Symlinks are followed only when they resolve inside the directory
- * they belong to (the Tropos home, or the walk's top directory).
+ * cwd, then TROPOS.local.md. The user file may be a symlink only into the Tropos home. Project
+ * files may be symlinks only inside a git repository and only when they resolve inside its root;
+ * outside git no project symlink is followed.
  */
 export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[]> {
   const files: MemoryFile[] = [];
   const seen = new Set<string>();
-  const add = async (path: string, boundary: string | null, source: MemoryFile["source"]) => {
-    const content = await readMemoryFile(path, boundary);
+  const add = async (path: string, scope: string | null, source: MemoryFile["source"]) => {
+    const content = await readMemoryFile(path, scope);
     if (content === null) return false;
     const key = (await canonical(path)) ?? path;
     if (seen.has(key)) return true;
@@ -94,20 +99,22 @@ export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[
     return true;
   };
 
-  await add(join(home, "TROPOS.md"), await canonical(home), "user");
+  const homeRoot = await canonical(home);
+  if (homeRoot !== null) await add(join(home, "TROPOS.md"), homeRoot, "user");
 
-  const top = gitRoot(cwd) ?? parse(cwd).root;
-  const topBoundary = await canonical(top);
+  const gitTop = gitRoot(cwd);
+  const top = gitTop ?? parse(cwd).root;
+  const scope = gitTop === null ? null : await canonical(gitTop);
   const chain: string[] = [];
   for (let dir = cwd; ; dir = dirname(dir)) {
     chain.unshift(dir);
     if (dir === top || dirname(dir) === dir) break;
   }
   for (const dir of chain) {
-    if (!(await add(join(dir, "TROPOS.md"), topBoundary, "project"))) {
-      await add(join(dir, "AGENTS.md"), topBoundary, "project");
+    if (!(await add(join(dir, "TROPOS.md"), scope, "project"))) {
+      await add(join(dir, "AGENTS.md"), scope, "project");
     }
   }
-  await add(join(cwd, "TROPOS.local.md"), topBoundary, "project");
+  await add(join(cwd, "TROPOS.local.md"), scope, "project");
   return files;
 }

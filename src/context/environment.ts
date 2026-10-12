@@ -1,6 +1,9 @@
+import { constants } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import { release } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
-const GIT_TIMEOUT_MS = 3_000;
+const HEAD_MAX_BYTES = 4096;
 
 /** Keeps untrusted strings (paths, shell, git output) from forging extra lines in the block. */
 function oneLine(s: string): string {
@@ -8,40 +11,63 @@ function oneLine(s: string): string {
 }
 
 /**
- * Runs git with repo-configured hooks and optional locks neutralised, no credential prompts, and a
- * hard timeout. Returns stdout, or null on any failure (including the timeout).
+ * Reads a small regular file. O_NONBLOCK plus fstat keeps a FIFO or device from blocking the read.
+ * Returns null when the path is not a readable regular file.
  */
-async function git(cwd: string, args: string[]): Promise<string | null> {
-  const proc = Bun.spawn(
-    ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args],
-    { cwd, stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      resolve(null);
-    }, GIT_TIMEOUT_MS);
-  });
-  const result = (async () => {
-    const out = await new Response(proc.stdout).text();
-    return (await proc.exited) === 0 ? out : null;
-  })().catch(() => null);
+async function readSmallFile(path: string): Promise<string | null> {
   try {
-    return await Promise.race([result, timeout]);
-  } finally {
-    clearTimeout(timer);
+    const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) return null;
+      const buf = Buffer.alloc(Math.min(info.size, HEAD_MAX_BYTES));
+      const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+      return buf.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
   }
 }
 
+/**
+ * Finds the git directory by walking up from cwd, without running git. A `.git` directory is used
+ * as is; a `.git` file must contain `gitdir: <path>`, resolved against the file's own directory,
+ * and is used only when that target is a directory (linked worktrees and submodules).
+ */
+async function findGitDir(cwd: string): Promise<string | null> {
+  let dir = cwd;
+  while (true) {
+    const candidate = join(dir, ".git");
+    const info = await stat(candidate).catch(() => null);
+    if (info?.isDirectory()) return candidate;
+    if (info?.isFile()) {
+      const text = await readSmallFile(candidate);
+      const target = text?.match(/^gitdir:[ \t]*(.+)$/m)?.[1]?.trim();
+      if (!target) return null;
+      const resolved = resolve(dir, target);
+      const targetInfo = await stat(resolved).catch(() => null);
+      return targetInfo?.isDirectory() ? resolved : null;
+    }
+    if (info) return null;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * Describes the checkout from its HEAD file alone. Git itself is never run here: repo-configured
+ * hooks and filters (fsmonitor, clean/smudge) would otherwise execute on every launch.
+ */
 export async function gitSummary(cwd: string): Promise<string> {
-  // symbolic-ref works in a repo with no commits yet (rev-parse --abbrev-ref does not).
-  const branch = await git(cwd, ["symbolic-ref", "--short", "HEAD"]).catch(() => null);
-  const status = await git(cwd, ["status", "--porcelain"]).catch(() => null);
-  if (status === null) return "not a git repository";
-  const changed = status.split("\n").filter(Boolean).length;
-  const name = branch?.trim() || "(no branch)";
-  return `branch ${name}, ${changed === 0 ? "clean" : `${changed} changed file${changed === 1 ? "" : "s"}`}`;
+  const gitDir = await findGitDir(cwd);
+  const head = ((gitDir && (await readSmallFile(join(gitDir, "HEAD")))) ?? "").trim();
+  const branch = head.match(/^ref: refs\/heads\/(.+)$/);
+  if (branch) return `branch ${branch[1]}`;
+  if (/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head)) return "detached HEAD";
+  return "not a git repository";
 }
 
 export async function environmentBlock(cwd: string, opts: { now?: Date; shell?: string } = {}): Promise<string> {
