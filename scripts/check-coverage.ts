@@ -8,26 +8,51 @@ export interface CoverageReport {
   failures: string[];
 }
 
-/** Parses lcov text and checks every `src/` file, and the `src/` total, against `threshold` (0..1). */
-export function evaluate(lcovText: string, threshold: number): CoverageReport {
-  const files: Array<{ path: string; found: number; hit: number }> = [];
+/** Source files allowed to be absent from the coverage report (no test loads them), with the reason. */
+export const EXEMPT: Record<string, string> = {
+  "src/index.ts": "entry shim; exercised by the compiled-binary e2e tests",
+  "src/agent/events.ts": "type-only module",
+  "src/ui/runtime.ts": "type-only module",
+};
+
+/** Every non-test source file under src/, as repo-relative paths. */
+export async function listSourceFiles(root = "."): Promise<string[]> {
+  const files = await Array.fromAsync(new Bun.Glob("src/**/*.{ts,tsx}").scan({ cwd: root }));
+  return files.filter((f) => !/\.test\.tsx?$/.test(f) && !f.endsWith(".d.ts")).sort();
+}
+
+/**
+ * Parses lcov text and checks every `src/` file, and the `src/` total, against `threshold` (0..1).
+ * Files in `files` that the report never mentions (no test loads them) count as uncovered unless exempt.
+ */
+export function evaluate(
+  lcovText: string,
+  threshold: number,
+  files: string[] = [],
+  exempt: Record<string, string> = EXEMPT,
+): CoverageReport {
+  const records: Array<{ path: string; found: number; hit: number }> = [];
   let current: { path: string; found: number; hit: number } | undefined;
   for (const line of lcovText.split("\n")) {
     if (line.startsWith("SF:")) current = { path: line.slice(3).trim(), found: 0, hit: 0 };
     else if (current && line.startsWith("LF:")) current.found = Number(line.slice(3));
     else if (current && line.startsWith("LH:")) current.hit = Number(line.slice(3));
     else if (line.trim() === "end_of_record" && current) {
-      files.push(current);
+      records.push(current);
       current = undefined;
     }
   }
-  const source = files.filter((f) => /(^|\/)src\//.test(f.path.replace(/\\/g, "/")));
+  const source = records.filter((f) => /(^|\/)src\//.test(f.path.replace(/\\/g, "/")));
   const pct = (hit: number, found: number) => (found === 0 ? 1 : hit / found);
   const fmt = (n: number) => `${(n * 100).toFixed(1)}%`;
 
   const failures = source
     .filter((f) => pct(f.hit, f.found) < threshold)
     .map((f) => `${f.path}: ${fmt(pct(f.hit, f.found))} of lines covered (need ${fmt(threshold)})`);
+  const reported = new Set(records.map((f) => f.path.replace(/\\/g, "/").replace(/^\.\//, "")));
+  for (const file of files) {
+    if (!reported.has(file) && !(file in exempt)) failures.push(`${file}: not loaded by any test, so 0% covered`);
+  }
   const found = source.reduce((n, f) => n + f.found, 0);
   const hit = source.reduce((n, f) => n + f.hit, 0);
   const overall = pct(hit, found);
@@ -43,7 +68,7 @@ if (import.meta.main) {
     stderr: "inherit",
   });
   if ((await proc.exited) !== 0) process.exit(1);
-  const report = evaluate(await readFile("coverage/lcov.info", "utf8"), THRESHOLD);
+  const report = evaluate(await readFile("coverage/lcov.info", "utf8"), THRESHOLD, await listSourceFiles());
   if (!report.ok) {
     console.error("\nCoverage below threshold:");
     for (const failure of report.failures) console.error(`  ${failure}`);
