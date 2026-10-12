@@ -317,10 +317,31 @@ function skipWrapperOptions(command: string, start: number, spec: WrapperSpec): 
   }
 }
 
+const LEADING_REDIRECT = /^(?:\d*|&)(>>?|<)(.*)$/s;
+
+/**
+ * Classifies a word at the front of a command as a redirect: "safe" (only an fd or /dev/null),
+ * "target" (a bare operator whose target is the next word), "unsafe" (any other redirect), or
+ * undefined when the word is not a redirect at all.
+ */
+function leadingRedirect(word: string): "safe" | "target" | "unsafe" | undefined {
+  const match = LEADING_REDIRECT.exec(word);
+  if (!match) return undefined;
+  const target = match[2]!;
+  if (target === "") return "target";
+  if (target === "/dev/null") return "safe";
+  if (target.startsWith("&") && !word.includes(">>") && /^(\d+|-)$/.test(target.slice(1))) return "safe";
+  return "unsafe";
+}
+
+/** The final path component of a command word (`/usr/bin/sudo` -> `sudo`). */
+const baseName = (word: string): string => word.slice(word.lastIndexOf("/") + 1);
+
 /**
  * Strips, from the front, the words that run a command without changing which command it
- * is: variable assignments and known wrappers (`command`, `sudo`, `env`, `timeout` ...) with
- * their options. A wrapper option that is not modelled sets `unmodelled` (never guess).
+ * is: variable assignments, safe redirects (`2>&1`, `>/dev/null`) and known wrappers
+ * (`command`, `sudo`, `env`, `timeout` ...) with their options, however they are path-qualified.
+ * A wrapper option or redirect that is not modelled sets `unmodelled` (never guess).
  */
 function stripWrappers(command: string): StrippedCommand {
   let i = 0;
@@ -333,7 +354,21 @@ function stripWrappers(command: string): StrippedCommand {
       i = end;
       continue;
     }
-    const spec = WRAPPERS.get(word);
+    const redirect = leadingRedirect(word);
+    if (redirect === "safe") {
+      i = end;
+      continue;
+    }
+    if (redirect === "target") {
+      let at = end;
+      while (at < command.length && /\s/.test(command[at]!)) at++;
+      const targetEnd = wordEnd(command, at);
+      if (command.slice(at, targetEnd) !== "/dev/null") return { rest: command.slice(i), unmodelled: true };
+      i = targetEnd;
+      continue;
+    }
+    if (redirect === "unsafe") return { rest: command.slice(i), unmodelled: true };
+    const spec = WRAPPERS.get(word) ?? (word.includes("/") ? WRAPPERS.get(baseName(word)) : undefined);
     if (!spec) return { rest: command.slice(i), unmodelled: false };
 
     const opts = skipWrapperOptions(command, end, spec);
@@ -370,13 +405,33 @@ function unquoteWord(word: string): string {
   return out;
 }
 
+/** Commands that run text we cannot see: `eval`, `source` and `.`. */
+const CODE_RUNNERS = new Set(["eval", "source", "."]);
+
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
+
+/** True when a shell invocation passes a command string (`-c`, `-lc`, `-xc`, fish `--command`). */
+function runsShellString(rest: string): boolean {
+  let i = wordEnd(rest, 0);
+  while (i < rest.length) {
+    while (i < rest.length && /\s/.test(rest[i]!)) i++;
+    const end = wordEnd(rest, i);
+    const word = unquoteWord(rest.slice(i, end));
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(word) || word === "--command" || word.startsWith("--command=")) return true;
+    i = end;
+  }
+  return false;
+}
+
 /** True when the command word left after assignments and wrappers is not a plain literal. */
 function hasUnmodelledCommandWord(part: string): boolean {
   const { rest, unmodelled } = stripWrappers(part);
   if (unmodelled) return true;
   const word = rest.slice(0, wordEnd(rest, 0));
   if (!word) return false;
-  return RESERVED_WORDS.has(word) || DYNAMIC_WORD.test(word) || word.startsWith("=");
+  if (RESERVED_WORDS.has(word) || DYNAMIC_WORD.test(word) || word.startsWith("=")) return true;
+  if (CODE_RUNNERS.has(word)) return true;
+  return SHELLS.has(baseName(word)) && runsShellString(rest);
 }
 
 /**

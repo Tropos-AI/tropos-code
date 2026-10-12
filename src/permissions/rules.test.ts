@@ -383,3 +383,71 @@ describe("wrappers, reserved words and unmodelled command words (fix round 5)", 
     }
   });
 });
+
+describe("leading redirects, eval/shell -c and path-qualified wrappers (carry-over fix)", () => {
+  const r = { restrict: true };
+  const unsafe = (c: string) => splitBashCommand(c).unsafe;
+
+  test.each([
+    "2>&1 rm x",
+    ">/dev/null rm x",
+    "</dev/null rm x",
+    "FOO=1 2>&1 rm x",
+    "sudo 2>&1 rm x",
+    "> /dev/null rm x",
+    "&>/dev/null rm x",
+    "2>&1 >/dev/null FOO=1 rm x",
+  ])("safe leading redirects are skipped: rm:* restrict-matches %s", (cmd) => {
+    expect(unsafe(cmd)).toBe(false);
+    expect(bashPatternMatches("rm:*", cmd, r)).toBe(true);
+    expect(bashPatternMatches("rm:*", cmd)).toBe(false);
+  });
+
+  test.each([">file rm x", "> file rm x", "<file rm x", "2>err.log rm x", "sudo >file rm x"])(
+    "unsafe leading redirect stays unsafe: %s",
+    (cmd) => {
+      expect(unsafe(cmd)).toBe(true);
+    },
+  );
+
+  test("leading safe redirects do not over-match", () => {
+    expect(bashPatternMatches("rm:*", "2>&1 echo rm x", r)).toBe(false);
+    expect(bashPatternMatches("rm:*", ">/dev/null rmdir x", r)).toBe(false);
+  });
+
+  test.each([
+    "eval rm x",
+    "source x.sh",
+    ". ./x.sh",
+    "sh -c 'rm x'",
+    `bash -c "rm x"`,
+    "/bin/zsh -c 'rm x'",
+    "dash -c 'rm x'",
+    "ksh -c 'rm x'",
+    "fish -c 'rm x'",
+    "bash -lc 'rm x'",
+    "bash -x -c 'rm x'",
+    "sudo bash -c 'rm x'",
+    "FOO=1 eval rm x",
+    "command eval rm x",
+  ])("unsafe: %s", (cmd) => {
+    expect(unsafe(cmd)).toBe(true);
+  });
+
+  test.each(["bash script.sh", "sh ./build.sh --verbose", "/bin/bash script.sh arg", "./x.sh", "echo eval", "echo source x", "ls ."])(
+    "stays safe: %s",
+    (cmd) => {
+      expect(unsafe(cmd)).toBe(false);
+    },
+  );
+
+  test("path-qualified wrappers are recognised by basename", () => {
+    expect(unsafe("/usr/bin/sudo rm x")).toBe(false);
+    expect(bashPatternMatches("rm:*", "/usr/bin/sudo rm x", r)).toBe(true);
+    expect(unsafe("/usr/bin/env FOO=1 rm x")).toBe(false);
+    expect(bashPatternMatches("rm:*", "/usr/bin/env FOO=1 rm x", r)).toBe(true);
+    expect(unsafe("/usr/bin/env -S 'rm x'")).toBe(true);
+    expect(unsafe("/usr/bin/sudo --weird rm x")).toBe(true);
+    expect(bashPatternMatches("rm:*", "/usr/bin/sudo rm x")).toBe(false);
+  });
+});
