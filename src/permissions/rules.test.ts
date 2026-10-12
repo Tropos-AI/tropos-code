@@ -193,9 +193,103 @@ describe("pathPatternMatches: relative rules stay in cwd and folding is opt-in (
   test("relative patterns still match inside cwd", () => {
     expect(pathPatternMatches("**", "/work/app/x", cwd, home)).toBe(true);
   });
-  test("case folding is opt-in", () => {
+});
+
+describe("pathPatternMatches: restrict mode (fix round 4)", () => {
+  const cwd = "/work/app";
+  const home = "/home/u";
+  const folds = process.platform === "darwin" || process.platform === "win32";
+  test("allow rules never match a climbing relative pattern outside cwd", () => {
+    expect(pathPatternMatches("../secrets/**", "/work/secrets/a", cwd, home)).toBe(false);
+    expect(pathPatternMatches("../secrets/**", "/work/secrets/a", cwd, home, { restrict: false })).toBe(false);
+  });
+  test("restrict rules match a climbing relative pattern outside cwd", () => {
+    expect(pathPatternMatches("../secrets/**", "/work/secrets/a", cwd, home, { restrict: true })).toBe(true);
+    expect(pathPatternMatches("../secrets", "/work/secrets/a", cwd, home, { restrict: true })).toBe(true);
+    expect(pathPatternMatches("../secrets/**", "/work/other/a", cwd, home, { restrict: true })).toBe(false);
+  });
+  test("restrict still matches inside cwd", () => {
+    expect(pathPatternMatches("src/**", "/work/app/src/a", cwd, home, { restrict: true })).toBe(true);
+    expect(pathPatternMatches(".env", "/work/app/.env", cwd, home, { restrict: true })).toBe(true);
+  });
+  test("restrict folds case on darwin/win32 only, on both sides including cwd scope", () => {
+    expect(pathPatternMatches(".env", "/WORK/APP/.env", cwd, home, { restrict: true })).toBe(folds);
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home, { restrict: true })).toBe(folds);
+    expect(pathPatternMatches("src/**", "/work/APP/src/a", cwd, home, { restrict: true })).toBe(folds);
+    expect(pathPatternMatches("/Work/App/src/**", "/work/app/SRC/a", cwd, home, { restrict: true })).toBe(folds);
+  });
+  test("default (allow) never folds case", () => {
     expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home)).toBe(false);
-    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home, { foldCase: true })).toBe(true);
-    expect(pathPatternMatches("src/**", "/work/app/SRC/a.ts", cwd, home, { foldCase: true })).toBe(true);
+    expect(pathPatternMatches(".env", "/WORK/APP/.env", cwd, home)).toBe(false);
+    expect(pathPatternMatches("src/**", "/work/app/SRC/a.ts", cwd, home)).toBe(false);
+    expect(pathPatternMatches(".env", "/work/app/.ENV", cwd, home, { restrict: false })).toBe(false);
+  });
+});
+
+describe("bashPatternMatches: restrict mode strips wrappers (fix round 4)", () => {
+  const r = { restrict: true };
+  test.each([
+    "command rm -rf x",
+    "x= rm -rf x",
+    'FOO=1 BAR="a b" rm x',
+    "env -i FOO=1 rm x",
+    "- rm x",
+    "nohup rm x",
+    "exec rm x",
+    "builtin rm x",
+    "noglob rm x",
+    "time rm x",
+    "env -u HOME -- rm x",
+    "command exec nohup env FOO=1 rm x",
+    "rm x",
+  ])("restrict: rm:* matches %s", (cmd) => {
+    expect(bashPatternMatches("rm:*", cmd, r)).toBe(true);
+  });
+  test("without restrict wrappers are not stripped", () => {
+    expect(bashPatternMatches("rm:*", "command rm -rf x")).toBe(false);
+    expect(bashPatternMatches("rm:*", "FOO=1 rm x", { restrict: false })).toBe(false);
+    expect(bashPatternMatches("rm:*", "env -i FOO=1 rm x")).toBe(false);
+  });
+  test("restrict does not over-match unrelated commands", () => {
+    expect(bashPatternMatches("rm:*", "command rmdir x", r)).toBe(false);
+    expect(bashPatternMatches("rm:*", "FOO=rm echo x", r)).toBe(false);
+    expect(bashPatternMatches("rm:*", "echo rm x", r)).toBe(false);
+  });
+  test("exact patterns also see through wrappers in restrict mode", () => {
+    expect(bashPatternMatches("git push", "env GIT_X=1 git push", r)).toBe(true);
+  });
+});
+
+describe("splitBashCommand: fd duplication, continuations, dynamic first words (fix round 4)", () => {
+  test("<& is an fd duplication, not a background operator", () => {
+    expect(splitBashCommand("git status <&0")).toEqual({ parts: ["git status <&0"], unsafe: false });
+    expect(splitBashCommand("git status <&-")).toEqual({ parts: ["git status <&-"], unsafe: false });
+  });
+  test("<&WORD with a non-fd word is unsafe", () => {
+    expect(splitBashCommand("git status <&file").unsafe).toBe(true);
+    expect(splitBashCommand("git status <&2x").unsafe).toBe(true);
+  });
+  test("a word hidden behind &<& is never silently safe", () => {
+    const { parts, unsafe } = splitBashCommand("git status &<&-zz2");
+    expect(unsafe || parts.some((p) => p.split(/\s+/)[0] === "zz2")).toBe(true);
+  });
+  test("backslash-newline continuation is unsafe", () => {
+    expect(splitBashCommand("git status \\\nzz1").unsafe).toBe(true);
+    expect(splitBashCommand("r\\\nm x").unsafe).toBe(true);
+  });
+  test("escaped backslash before newline is not a continuation", () => {
+    expect(splitBashCommand("echo a\\\\\nls").unsafe).toBe(false);
+  });
+  test("a first word containing $ or a backslash is unsafe", () => {
+    expect(splitBashCommand("$2zz1").unsafe).toBe(true);
+    expect(splitBashCommand("$CMD arg").unsafe).toBe(true);
+    expect(splitBashCommand("\\rm x").unsafe).toBe(true);
+    expect(splitBashCommand("FOO=1 $CMD x").unsafe).toBe(true);
+    expect(splitBashCommand("ls && $CMD x").unsafe).toBe(true);
+  });
+  test("$ or backslash outside the first word stays safe", () => {
+    expect(splitBashCommand("echo $HOME").unsafe).toBe(false);
+    expect(splitBashCommand("FOO=$BAR git status").unsafe).toBe(false);
+    expect(splitBashCommand("echo a\\ b").unsafe).toBe(false);
   });
 });

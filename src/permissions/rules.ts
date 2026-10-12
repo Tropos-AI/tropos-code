@@ -35,16 +35,42 @@ function isSafeRedirect(command: string, i: number): boolean {
   const append = command[j] === ">";
   if (append) j++;
   if (command[j] === "&" && !append) {
-    j++;
-    let word = "";
-    while (j < command.length && !/[\s;|&]/.test(command[j]!)) word += command[j++];
-    return /^(\d+|-)$/.test(word);
+    return /^(\d+|-)$/.test(readRedirectWord(command, j + 1));
   }
   while (command[j] === " " || command[j] === "\t") j++;
-  let target = "";
-  while (j < command.length && !/[\s;|&]/.test(command[j]!)) target += command[j++];
-  return target === "/dev/null";
+  return readRedirectWord(command, j) === "/dev/null";
 }
+
+/** Reads the redirect target word starting at `j`: everything up to whitespace or a control operator. */
+function readRedirectWord(command: string, j: number): string {
+  let word = "";
+  while (j < command.length && !/[\s;|&]/.test(command[j]!)) word += command[j++];
+  return word;
+}
+
+/**
+ * End index (exclusive) of the shell word starting at `start`: stops at unquoted whitespace,
+ * and treats quoted spans and backslash escapes as part of the word.
+ */
+function wordEnd(text: string, start: number): number {
+  let i = start;
+  let quote: "'" | '"' | null = null;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (quote === '"') {
+      if (ch === "\\") i++;
+      else if (ch === '"') quote = null;
+    } else if (ch === "\\") i++;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (/\s/.test(ch)) break;
+    i++;
+  }
+  return Math.min(i, text.length);
+}
+
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
 /**
  * Splits a shell command into its simple commands (on && || ; | & and newlines),
@@ -76,6 +102,7 @@ export function splitBashCommand(command: string): SplitCommand {
     }
     if (quote === '"') {
       if (ch === "\\") {
+        if (next === "\n") unsafe = true;
         current += ch + (next ?? "");
         i++;
         continue;
@@ -87,6 +114,7 @@ export function splitBashCommand(command: string): SplitCommand {
     }
 
     if (ch === "\\") {
+      if (next === "\n") unsafe = true; // line continuation joins words invisibly
       current += ch + (next ?? "");
       i++;
       continue;
@@ -112,6 +140,13 @@ export function splitBashCommand(command: string): SplitCommand {
     if (ch === "<" && next === "<") {
       unsafe = true;
       current += ch;
+      continue;
+    }
+    // `<&N` / `<&-` duplicate a file descriptor (like `>&`); it is not a background operator.
+    if (ch === "<" && next === "&") {
+      if (!/^(\d+|-)$/.test(readRedirectWord(command, i + 2))) unsafe = true;
+      current += "<&";
+      i++;
       continue;
     }
     // Any unquoted parenthesis: subshells, zsh =(cmd) and glob qualifiers.
@@ -152,10 +187,67 @@ export function splitBashCommand(command: string): SplitCommand {
 
   if (quote) unsafe = true;
   push();
+  // A command word built from a variable or an escape is resolved by the shell, not by us.
+  if (parts.some(hasDynamicCommandWord)) unsafe = true;
   return { parts, unsafe };
 }
 
-export function bashPatternMatches(pattern: string, command: string): boolean {
+/** True when the first word after leading `NAME=value` assignments contains `$` or a backslash. */
+function hasDynamicCommandWord(part: string): boolean {
+  let i = 0;
+  for (;;) {
+    while (i < part.length && /\s/.test(part[i]!)) i++;
+    const end = wordEnd(part, i);
+    if (end === i) return false;
+    const word = part.slice(i, end);
+    if (ASSIGNMENT_WORD.test(word)) {
+      i = end;
+      continue;
+    }
+    return /[$\\]/.test(word);
+  }
+}
+
+const COMMAND_WRAPPERS = new Set(["command", "builtin", "exec", "noglob", "nohup", "time", "-"]);
+/** `env` options that take a separate argument word. */
+const ENV_ARG_OPTIONS = new Set(["-u", "--unset", "-C", "--chdir"]);
+
+/**
+ * Strips, from the front, the words that run a command without changing which command it
+ * is: variable assignments, wrappers like `command` / `exec` / `nohup`, and `env` with its
+ * options. Used so deny/ask rules still see `rm` in `FOO=1 env -i rm x`.
+ */
+function stripCommandWrappers(command: string): string {
+  let i = 0;
+  let inEnv = false;
+  for (;;) {
+    while (i < command.length && /\s/.test(command[i]!)) i++;
+    const end = wordEnd(command, i);
+    if (end === i) return command.slice(i);
+    const word = command.slice(i, end);
+    if (ASSIGNMENT_WORD.test(word) || COMMAND_WRAPPERS.has(word)) {
+      i = end;
+    } else if (word === "env") {
+      inEnv = true;
+      i = end;
+    } else if (inEnv && word.startsWith("-")) {
+      i = end;
+      if (ENV_ARG_OPTIONS.has(word)) {
+        while (i < command.length && /\s/.test(command[i]!)) i++;
+        i = wordEnd(command, i);
+      }
+    } else {
+      return command.slice(i);
+    }
+  }
+}
+
+export interface BashPatternOptions {
+  /** True for deny/ask rules: broaden matching so wrappers cannot hide the command. */
+  restrict?: boolean;
+}
+
+function bashPatternMatchesExact(pattern: string, command: string): boolean {
   const normalized = command.trim().replace(/\s+/g, " ");
   const p = pattern.trim();
   if (p === "*") return true;
@@ -166,12 +258,28 @@ export function bashPatternMatches(pattern: string, command: string): boolean {
   return normalized === p.replace(/\s+/g, " ");
 }
 
+/**
+ * Whether a single simple command matches a Bash rule pattern. Allow rules (default) match
+ * the command as written. With `restrict` (deny/ask rules) leading assignments and wrapper
+ * words are also stripped, and the rule matches if either form matches.
+ */
+export function bashPatternMatches(pattern: string, command: string, opts: BashPatternOptions = {}): boolean {
+  if (bashPatternMatchesExact(pattern, command)) return true;
+  return opts.restrict === true && bashPatternMatchesExact(pattern, stripCommandWrappers(command));
+}
+
 const GLOB_CHARS = /[*?[\]{}]/;
 
 export interface PathPatternOptions {
-  /** Compare case-insensitively. Callers enable this only for deny/ask rules on case-insensitive filesystems. */
-  foldCase?: boolean;
+  /**
+   * True for deny/ask rules: broaden matching. Case is folded on case-insensitive platforms
+   * (darwin, win32) and relative patterns that climb out of cwd may match outside it.
+   * Allow rules (default) match exact case and only inside cwd.
+   */
+  restrict?: boolean;
 }
+
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 
 /** Glob matching uses "/" separators; Windows paths are converted before matching. */
 const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") : s);
@@ -179,8 +287,10 @@ const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") :
 /**
  * Whether `absPath` is covered by a path rule pattern. The pattern is home-expanded and
  * resolved against `cwd`; `absPath` is resolved first so `..` segments cannot escape it.
- * A relative pattern only ever matches paths inside `cwd`. A pattern with no glob
- * characters covers the path itself and everything below it.
+ * For allow rules a relative pattern only ever matches paths inside `cwd`; with
+ * `restrict` (deny/ask) it may match outside, and case is folded on darwin/win32 (pattern,
+ * path and cwd alike). A pattern with no glob characters covers the path itself and
+ * everything below it.
  */
 export function pathPatternMatches(
   pattern: string,
@@ -189,28 +299,27 @@ export function pathPatternMatches(
   home: string,
   opts: PathPatternOptions = {},
 ): boolean {
-  const fold = (s: string): string => (opts.foldCase ? s.toLowerCase() : s);
-  const globMatch = (glob: string, subject: string): boolean =>
-    new Bun.Glob(fold(glob)).match(fold(subject));
+  const restrict = opts.restrict === true;
+  const fold = (s: string): string => (restrict && CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
 
-  const target = resolve(absPath);
-  const expanded = expandHome(pattern.trim(), home);
-  const root = resolve(cwd);
+  const target = fold(resolve(absPath));
+  const expanded = fold(expandHome(pattern.trim(), home));
+  const root = fold(resolve(cwd));
 
-  if (!isAbsolute(expanded)) {
-    // Relative patterns are scoped to cwd: anything outside it, or on another drive, is out.
+  if (!restrict && !isAbsolute(expanded)) {
+    // Allow rules with relative patterns are scoped to cwd: anything outside it, or on
+    // another drive, is out.
     const rel = relative(root, target);
     if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) return false;
   }
 
   if (!GLOB_CHARS.test(expanded)) {
-    const base = fold(resolve(root, expanded));
-    const subject = fold(target);
-    return subject === base || subject.startsWith(base.endsWith(sep) ? base : base + sep);
+    const base = resolve(root, expanded);
+    return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep);
   }
-  if (isAbsolute(expanded)) return globMatch(normalize(expanded), target);
+  if (isAbsolute(expanded)) return new Bun.Glob(normalize(expanded)).match(target);
 
   // Relative glob: match against the path relative to cwd, so cwd never reaches the glob
   // (it may contain glob characters).
-  return globMatch(toGlobSep(normalize(expanded)), toGlobSep(relative(root, target)));
+  return new Bun.Glob(toGlobSep(normalize(expanded))).match(toGlobSep(relative(root, target)));
 }
