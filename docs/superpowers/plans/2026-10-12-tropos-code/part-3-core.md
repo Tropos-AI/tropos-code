@@ -1673,7 +1673,8 @@ export class Agent {
 
     let output: ToolOutput;
     try {
-      output = await tool.run(input, { ...this.opts.toolContext, signal });
+      // approvedPaths lets file tools refuse if the path resolves differently at write time (TOCTOU).
+      output = await tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths });
     } catch (err) {
       output = { content: `${tool.name} failed: ${(err as Error).message}`, isError: true };
     }
