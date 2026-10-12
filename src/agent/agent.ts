@@ -31,6 +31,16 @@ export interface AgentOptions {
   emit(event: AgentEvent): void;
 }
 
+/** Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left behind). */
+function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolOutput> {
+  return new Promise<ToolOutput>((resolve, reject) => {
+    const interrupted = () => resolve({ content: INTERRUPTED, isError: true });
+    if (signal.aborted) return interrupted();
+    signal.addEventListener("abort", interrupted, { once: true });
+    run.then(resolve, reject).finally(() => signal.removeEventListener("abort", interrupted));
+  });
+}
+
 const errorResult = (id: string, content: string): ToolResult => ({ type: "tool_result", tool_use_id: id, content, is_error: true });
 
 export class Agent {
@@ -46,19 +56,26 @@ export class Agent {
     this.messages = [...history];
   }
 
+  /** Never rejects: a failure while preparing or running the turn ends it with reason "error". */
   async run(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
-    // A previous run may have ended with tool_use blocks that never got results; close them first.
-    const repair = danglingToolResults(this.messages);
-    if (repair) await this.push(repair);
-    const content: Anthropic.Beta.BetaTextBlockParam[] = [];
-    if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
-    const mode = this.opts.permissions().mode;
-    const reminder = modeReminder(this.lastMode, mode);
-    this.lastMode = mode;
-    if (reminder) content.push({ type: "text", text: reminder });
-    content.push({ type: "text", text: prompt });
-    await this.push({ role: "user", content });
-    return this.loop(signal);
+    try {
+      // A previous run may have ended with tool_use blocks that never got results; close them first.
+      const repair = danglingToolResults(this.messages);
+      if (repair) await this.push(repair);
+      const content: Anthropic.Beta.BetaTextBlockParam[] = [];
+      if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
+      const mode = this.opts.permissions().mode;
+      const reminder = modeReminder(this.lastMode, mode);
+      this.lastMode = mode;
+      if (reminder) content.push({ type: "text", text: reminder });
+      content.push({ type: "text", text: prompt });
+      await this.push({ role: "user", content });
+      return await this.loop(signal);
+    } catch (err) {
+      this.emit({ type: "notice", level: "error", text: `Tropos could not complete this turn: ${(err as Error).message}` });
+      this.emit({ type: "turn_end", reason: "error" });
+      return "error";
+    }
   }
 
   /** Appends to the in-memory history first; a failing session write is reported, never thrown. */
@@ -297,8 +314,9 @@ export class Agent {
       const permissions = this.opts.permissions();
       // isDenied lets search tools drop files covered by deny rules when they scan a directory.
       const isDenied = (path: string) =>
+        decide({ toolName: tool.name, kind: tool.kind, paths: [path] }, permissions).behavior === "deny" ||
         decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
-      output = await tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied });
+      output = await raceAbort(tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied }), signal);
     } catch (err) {
       output = { content: `${tool.name} failed: ${(err as Error).message}`, isError: true };
     }

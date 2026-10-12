@@ -536,4 +536,95 @@ describe("Agent failure paths keep history valid", () => {
     expect(h.events.some((e) => e.type === "notice" && e.level === "warn")).toBe(true);
     expect(h.model.requests).toHaveLength(1);
   });
+
+  test("isDenied honours tool-specific and Read deny rules", async () => {
+    let seen: ((p: string) => boolean) | undefined;
+    const grep = defineTool({
+      name: "Grep",
+      kind: "read",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "grep",
+      subject: () => ({ paths: [] }),
+      run: async (_i, ctx) => {
+        seen = ctx.isDenied;
+        return { content: "ok" };
+      },
+    });
+    const h = harness([() => reply([toolUseBlock("g", "Grep", {})], "tool_use"), () => reply([textBlock("ok")])], {
+      tools: [grep] as AnyTool[],
+      deny: ["Grep(secrets/**)", "Read(x.txt)"],
+    });
+    await run(h);
+    expect(seen?.("/work/secrets/a")).toBe(true);
+    expect(seen?.("/work/x.txt")).toBe(true);
+    expect(seen?.("/work/other.txt")).toBe(false);
+  });
+
+  test("contextText throwing ends the turn with an error instead of rejecting", async () => {
+    const h = harness([() => reply([textBlock("never")])]);
+    const broken = new Agent({
+      model: h.model,
+      tools: [],
+      system: "s",
+      config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+      askPermission: async () => ({ kind: "allow" }),
+      contextText: async () => {
+        throw new Error("no git");
+      },
+      persist: async () => {},
+      toolContext: makeToolContext({ root: "/work" }),
+      emit: (e) => h.events.push(e),
+    });
+    expect(await broken.run("go", new AbortController().signal)).toBe("error");
+    expect(h.events.find((e) => e.type === "notice")).toMatchObject({ level: "error", text: expect.stringContaining("no git") });
+    expect(h.events.at(-1)).toEqual({ type: "turn_end", reason: "error" });
+    expect(h.model.requests).toHaveLength(0);
+  });
+
+  test("config throwing after tool results were pushed keeps history valid", async () => {
+    let calls = 0;
+    const events: AgentEvent[] = [];
+    const model = new FakeModel([() => reply([toolUseBlock("a", "Echo", { text: "1" })], "tool_use")]);
+    const agent = new Agent({
+      model,
+      tools: [echo] as AnyTool[],
+      system: "s",
+      config: () => {
+        if (++calls === 2) throw new Error("bad settings");
+        return { model: "claude-opus-5-5", effort: "high", refusalFallback: true };
+      },
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+      askPermission: async () => ({ kind: "allow" }),
+      contextText: async () => "c",
+      persist: async () => {},
+      toolContext: makeToolContext({ root: "/work" }),
+      emit: (e) => events.push(e),
+    });
+    expect(await agent.run("go", new AbortController().signal)).toBe("error");
+    assertToolPairs(agent.messages);
+    expect(events.find((e) => e.type === "notice")).toMatchObject({ level: "error", text: expect.stringContaining("bad settings") });
+    expect(events.at(-1)).toEqual({ type: "turn_end", reason: "error" });
+  });
+
+  test("a stuck tool does not hang an aborted turn", async () => {
+    const stuck = defineTool({
+      name: "Stuck",
+      kind: "exec",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "stuck",
+      subject: () => ({ command: "stuck", paths: [] }),
+      run: () => new Promise<never>(() => {}),
+    });
+    const controller = new AbortController();
+    const h = harness([() => reply([toolUseBlock("k", "Stuck", {})], "tool_use")], { mode: "bypass", tools: [stuck] as AnyTool[] });
+    setTimeout(() => controller.abort(), 30);
+    const started = Date.now();
+    expect(await run(h, "go", controller.signal)).toBe("aborted");
+    expect(Date.now() - started).toBeLessThan(300);
+    assertToolPairs(h.agent.messages);
+    expect((h.agent.messages.at(-1)!.content as Array<{ content: string }>)[0]!.content).toBe("[interrupted by user]");
+  });
 });
