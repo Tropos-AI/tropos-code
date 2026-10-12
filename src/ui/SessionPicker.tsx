@@ -6,6 +6,12 @@ import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
 
 const VISIBLE = 10;
+const TITLE_MAX = 60;
+
+const title = (raw: string) => {
+  const text = sanitizeForTerminal(raw).replace(/\s+/g, " ").trim();
+  return text.length > TITLE_MAX ? `${text.slice(0, TITLE_MAX - 1)}…` : text;
+};
 
 export function age(date: Date, now = Date.now()): string {
   const seconds = Math.max(0, (now - date.getTime()) / 1000);
@@ -35,7 +41,7 @@ export function SessionPicker({ sessions, onPick, onCancel }: { sessions: Sessio
         return (
           <Text key={s.id} color={index === selected ? theme.accent : undefined}>
             {index === selected ? "› " : "  "}
-            {sanitizeForTerminal(s.title)}
+            {title(s.title)}
             <Text color={theme.muted}>
               {"  "}
               {age(s.updatedAt)} · {s.messageCount} messages

@@ -20,6 +20,7 @@ export function PromptInput({ onSubmit, history, cwd }: { onSubmit(text: string)
     if (token.text.startsWith("@")) items = await completeFile(token.text, cwd);
     else if (token.start === 0 && token.text.startsWith("/")) items = completeCommand(token.text);
     if (items.length === 0) return;
+    items = items.map(sanitizeForTerminal);
     const replacement = items.length === 1 ? `${items[0]}${items[0]!.endsWith("/") ? "" : " "}` : commonPrefix(items);
     if (replacement.length > token.text.length) dispatch({ type: "replaceRange", start: token.start, end: token.end, text: replacement });
     setSuggestions(items.length > 1 ? items.slice(0, 8) : []);
@@ -50,7 +51,7 @@ export function PromptInput({ onSubmit, history, cwd }: { onSubmit(text: string)
     if (key.ctrl && input === "w") return dispatch({ type: "deleteWordBack" });
     if (key.ctrl || key.meta || key.escape || key.tab) return;
     if (input) {
-      dispatch({ type: "insert", text: sanitizeForTerminal(input).replace(/\r\n?/g, "\n") });
+      dispatch({ type: "insert", text: sanitizeForTerminal(input.replace(/\r\n?/g, "\n")) });
       setSuggestions([]);
     }
   });

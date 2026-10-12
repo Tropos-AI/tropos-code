@@ -1,13 +1,12 @@
 // src/ui/DiffView.tsx
 import { Box, Text } from "ink";
+import { patchBody } from "../tools/diff";
 import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
 
-const HEADER = /^(Index:|===|---|\+\+\+|\\ No newline)/;
-
 export function DiffView({ patch, maxLines = 40 }: { patch: string; maxLines?: number }) {
   const theme = useTheme();
-  const lines = sanitizeForTerminal(patch).split("\n").filter((l) => l.length > 0 && !HEADER.test(l));
+  const lines = patchBody(sanitizeForTerminal(patch));
   const shown = lines.slice(0, maxLines);
   return (
     <Box flexDirection="column" paddingLeft={4}>

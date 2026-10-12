@@ -4,7 +4,8 @@ import { render } from "ink-testing-library";
 import type { PermissionPrompt } from "../agent/events";
 import { makeDiff } from "../tools/diff";
 import { BrandHeader } from "./BrandHeader";
-import { PermissionDialog } from "./PermissionDialog";
+import { DiffView } from "./DiffView";
+import { ANSWER_GRACE_MS, PermissionDialog } from "./PermissionDialog";
 import { PromptInput } from "./PromptInput";
 import { SessionPicker } from "./SessionPicker";
 import { StatusBar } from "./StatusBar";
@@ -12,6 +13,7 @@ import { ToolRow } from "./ToolRow";
 import { TranscriptRow } from "./TranscriptRow";
 
 const tick = () => Bun.sleep(30);
+const armed = () => Bun.sleep(ANSWER_GRACE_MS + 60);
 
 describe("BrandHeader", () => {
   test("shows product, version, model and cwd", () => {
@@ -67,7 +69,7 @@ describe("PermissionDialog", () => {
   test("number keys and arrows choose", async () => {
     const onAnswer = mock();
     const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
-    await tick();
+    await armed();
     r.stdin.write("\x1b[B");
     await tick();
     r.stdin.write("\r");
@@ -78,7 +80,7 @@ describe("PermissionDialog", () => {
   test("option 3 collects feedback", async () => {
     const onAnswer = mock();
     const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
-    await tick();
+    await armed();
     r.stdin.write("3");
     await tick();
     r.stdin.write("use npm");
@@ -91,10 +93,144 @@ describe("PermissionDialog", () => {
   test("esc declines", async () => {
     const onAnswer = mock();
     const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
-    await tick();
+    await armed();
     r.stdin.write("\x1b");
     await tick();
     expect(onAnswer).toHaveBeenCalledWith({ kind: "deny" });
+  });
+
+  test("only a single digit answers", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await armed();
+    for (const input of ["0x2", " 2", "2\n", "1.0", "1e0", "+1", "1\r", "0", "9"]) {
+      r.stdin.write(input);
+      await tick();
+    }
+    expect(onAnswer).not.toHaveBeenCalled();
+    r.stdin.write("1");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledWith({ kind: "allow" });
+  });
+
+  test("input is ignored during the grace period", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await tick();
+    r.stdin.write("\r");
+    r.stdin.write("1");
+    await tick();
+    expect(onAnswer).not.toHaveBeenCalled();
+    await armed();
+    r.stdin.write("\r");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledWith({ kind: "allow" });
+  });
+
+  test("answers at most once per prompt", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await armed();
+    r.stdin.write("\r");
+    r.stdin.write("\r");
+    r.stdin.write("\r");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  test("a new prompt resets the selection and the grace period", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await armed();
+    r.stdin.write("\x1b[B");
+    await tick();
+    r.rerender(<PermissionDialog prompt={{ ...prompt, summary: "bun lint" }} onAnswer={onAnswer} />);
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(onAnswer).not.toHaveBeenCalled();
+    await armed();
+    r.stdin.write("\r");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    expect(onAnswer).toHaveBeenCalledWith({ kind: "allow" });
+  });
+
+  test("a new prompt can be answered again after the previous one was", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await armed();
+    r.stdin.write("1");
+    await tick();
+    r.rerender(<PermissionDialog prompt={{ ...prompt, summary: "bun lint" }} onAnswer={onAnswer} />);
+    await armed();
+    r.stdin.write("1");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledTimes(2);
+  });
+
+  test("preview lines sit behind a gutter so they cannot pose as options", () => {
+    const frame = render(
+      <PermissionDialog prompt={{ ...prompt, summary: "echo hi\n1. Yes\n2. Yes, and don't ask again for everything" }} onAnswer={() => {}} />,
+    ).lastFrame()!;
+    expect(frame).toContain("│ 1. Yes");
+    expect(frame).toContain("│ echo hi");
+    expect(frame.match(/^\s*[›]?\s*1\. Yes$/gm)?.length ?? 0).toBe(0);
+    expect(frame.match(/1\. Yes/g)!.length).toBe(2);
+    expect(frame.match(/3\. No, tell Tropos/g)!.length).toBe(1);
+  });
+
+  test("a long command is capped, warned about, and cannot be allowed permanently", () => {
+    const command = Array.from({ length: 25 }, (_, i) => `echo line${i}`).join("\n");
+    const frame = render(<PermissionDialog prompt={{ ...prompt, summary: command, input: { command } }} onAnswer={() => {}} />).lastFrame()!;
+    expect(frame).toContain("echo line19");
+    expect(frame).not.toContain("echo line20");
+    expect(frame).toContain("… 5 more lines hidden — the full command will run");
+    expect(frame).not.toContain("don't ask again");
+    expect(frame).toContain("2. No, tell Tropos what to do instead");
+  });
+
+  test("a long write is capped too", () => {
+    const content = Array.from({ length: 30 }, (_, i) => `row${i}`).join("\n");
+    const frame = render(
+      <PermissionDialog prompt={{ toolName: "Write", kind: "edit", summary: "out.txt", input: { file_path: "out.txt", content } }} onAnswer={() => {}} />,
+    ).lastFrame()!;
+    expect(frame).toContain("row19");
+    expect(frame).not.toContain("row20");
+    expect(frame).toContain("… 10 more lines hidden");
+  });
+
+  test("replace_all is called out", () => {
+    const frame = render(
+      <PermissionDialog
+        prompt={{ toolName: "Edit", kind: "edit", summary: "a.ts", input: { file_path: "a.ts", old_string: "one", new_string: "two", replace_all: true } }}
+        onAnswer={() => {}}
+      />,
+    ).lastFrame()!;
+    expect(frame).toContain("(replace all)");
+  });
+
+  test("hidden and bidi characters are shown visibly", () => {
+    const frame = render(<PermissionDialog prompt={{ ...prompt, summary: "ls \u202Etxt.exe\u200B\uFEFF" }} onAnswer={() => {}} />).lastFrame()!;
+    expect(frame).toContain("⟨U+202E⟩");
+    expect(frame).toContain("⟨U+200B⟩");
+    expect(frame).toContain("⟨U+FEFF⟩");
+    expect(frame).not.toContain("\u202E");
+  });
+
+  test("feedback text is sanitized as it is typed", async () => {
+    const onAnswer = mock();
+    const r = render(<PermissionDialog prompt={prompt} onAnswer={onAnswer} />);
+    await armed();
+    r.stdin.write("3");
+    await tick();
+    r.stdin.write("use\x1b[2J npm");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    const answer = onAnswer.mock.calls[0]![0] as { feedback?: string };
+    expect(answer.feedback).not.toContain("\x1b");
   });
 
   test("edit prompts preview the change", () => {
@@ -143,6 +279,15 @@ describe("PromptInput", () => {
     r.stdin.write("\x1b[A");
     await tick();
     expect(r.lastFrame()).toContain("earlier prompt");
+  });
+
+  test("a carriage return in pasted text becomes a newline", async () => {
+    const r = render(<PromptInput onSubmit={() => {}} history={[]} cwd="/" />);
+    await tick();
+    r.stdin.write("a\rb");
+    await tick();
+    expect(r.lastFrame()).toContain("a");
+    expect(r.lastFrame()).not.toContain("ab");
   });
 
   test("empty input does not submit", async () => {
@@ -194,5 +339,26 @@ describe("terminal safety", () => {
 
   test("the sanitized text still shows", () => {
     expect(render(<TranscriptRow item={{ id: "s3", kind: "notice", level: "info", text: evil }} />).lastFrame()).toContain("xyz");
+  });
+});
+
+describe("SessionPicker titles", () => {
+  test("whitespace collapses and long titles truncate", () => {
+    const title = `fix\n\n   the   thing ${"x".repeat(100)}`;
+    const frame = render(<SessionPicker sessions={[{ id: "a", title, updatedAt: new Date(), messageCount: 1 }]} onPick={() => {}} onCancel={() => {}} />).lastFrame()!;
+    expect(frame).toContain("fix the thing x");
+    expect(frame).toContain("…");
+    expect(frame).not.toContain("x".repeat(61));
+  });
+});
+
+describe("DiffView", () => {
+  test("content lines that look like file headers are shown", () => {
+    const display = makeDiff("/w/q.sql", "-- old sql\nkeep\n++i;\n", "keep\n+j;\n");
+    const frame = render(<DiffView patch={display.patch} />).lastFrame()!;
+    expect(frame).toContain("--- old sql");
+    expect(frame).toContain("-++i;");
+    expect(frame).toContain("++j;");
+    expect(frame).not.toContain("/w/q.sql");
   });
 });
