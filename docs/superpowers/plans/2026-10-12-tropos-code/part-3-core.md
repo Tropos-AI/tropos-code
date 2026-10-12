@@ -1674,7 +1674,11 @@ export class Agent {
     let output: ToolOutput;
     try {
       // approvedPaths lets file tools refuse if the path resolves differently at write time (TOCTOU).
-      output = await tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths });
+      const permissions = this.opts.permissions();
+      // isDenied lets search tools drop files covered by deny rules when they scan a directory.
+      const isDenied = (path: string) =>
+        decide({ toolName: tool.name, kind: tool.kind, paths: [path] }, permissions).behavior === "deny";
+      output = await tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied });
     } catch (err) {
       output = { content: `${tool.name} failed: ${(err as Error).message}`, isError: true };
     }

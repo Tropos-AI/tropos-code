@@ -80,6 +80,8 @@ export interface ToolContext {
   signal: AbortSignal;
   /** Canonical paths the permission engine approved for this call (set by the agent). */
   approvedPaths?: string[];
+  /** True for paths a deny rule covers; search tools drop them (set by the agent). */
+  isDenied?: (absPath: string) => boolean;
 }
 
 export interface PermissionSubject {
