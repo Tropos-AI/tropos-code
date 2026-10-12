@@ -76,6 +76,18 @@ or extra directories. Put those in a file under `~/.tropos/`.
 Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
 `additionalDirectories`, `refusalFallback`, `env`.
 
+## Security notes
+
+- Shell commands run by the Bash tool never inherit API credentials (`ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN` and similar are removed from their environment), so a model-written
+  `echo $ANTHROPIC_API_KEY` prints nothing.
+- Other processes running as you can still read Tropos's own startup environment, for example
+  with `ps eww -p <pid>`. Reading another process's environment goes through the normal Bash
+  permission prompt, so avoid broad rules such as `Bash(ps:*)`, and avoid bypass mode in
+  untrusted repositories. Prefer `ant auth login` over exporting the key.
+- `tropos -p` reads piped stdin until EOF. In scripts and CI that have no input, pass
+  `</dev/null` so it doesn't wait.
+
 ## How it works
 
 A UI-free agent loop streams `claude-opus-5-5` through the Messages API, validates each

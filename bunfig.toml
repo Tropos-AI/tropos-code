@@ -1,3 +1,2 @@
 [test]
-coverageThreshold = { line = 0.8 }
 coverageSkipTestFiles = true

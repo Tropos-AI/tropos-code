@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "bun src/index.ts",
     "test": "bun test",
-    "test:coverage": "bun test --coverage",
+    "test:coverage": "bun scripts/check-coverage.ts",
     "typecheck": "tsc --noEmit",
     "build": "bun build.ts",
     "build:all": "bun build.ts --all"
