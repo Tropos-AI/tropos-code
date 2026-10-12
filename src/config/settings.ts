@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
+import { projectKey } from "../paths";
 import { DEFAULT_MODEL, EFFORTS, type Effort } from "./constants";
 
 export type ThemeSetting = "auto" | "dark" | "light";
@@ -46,7 +47,7 @@ export interface SettingsPaths {
 export function settingsPaths(cwd: string, home: string): SettingsPaths {
   return {
     user: join(home, "settings.json"),
-    userProject: join(home, "projects", cwd.replace(/[/\\:]/g, "-"), "settings.json"),
+    userProject: join(home, "projects", projectKey(cwd), "settings.json"),
     project: join(cwd, ".tropos", "settings.json"),
     local: join(cwd, ".tropos", "settings.local.json"),
   };

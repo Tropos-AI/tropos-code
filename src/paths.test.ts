@@ -2,7 +2,22 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { expandHome, isInside, troposHome } from "./paths";
+import { expandHome, isInside, projectKey, troposHome } from "./paths";
+
+describe("projectKey", () => {
+  test("starts with a readable, sanitized form of the path", () => {
+    expect(projectKey("/work/my app").startsWith("-work-my-app-")).toBe(true);
+  });
+  test("ends with 12 hex characters of a sha256 hash", () => {
+    expect(projectKey("/work/my app")).toMatch(/-[0-9a-f]{12}$/);
+  });
+  test("is deterministic", () => {
+    expect(projectKey("/work/my app")).toBe(projectKey("/work/my app"));
+  });
+  test("paths that flatten to the same prefix do not collide", () => {
+    expect(projectKey("/a/b-c")).not.toBe(projectKey("/a-b/c"));
+  });
+});
 
 describe("troposHome", () => {
   test("uses TROPOS_HOME when set", () => {

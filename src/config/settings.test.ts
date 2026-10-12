@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { projectKey } from "../paths";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import {
   DEFAULT_SETTINGS,
@@ -30,7 +31,7 @@ describe("settingsPaths", () => {
   test("user, userProject, project and local locations", () => {
     expect(paths).toEqual({
       user: join(dir, "home", "settings.json"),
-      userProject: join(dir, "home", "projects", join(dir, "project").replace(/[/\\:]/g, "-"), "settings.json"),
+      userProject: join(dir, "home", "projects", projectKey(join(dir, "project")), "settings.json"),
       project: join(dir, "project", ".tropos", "settings.json"),
       local: join(dir, "project", ".tropos", "settings.local.json"),
     });
