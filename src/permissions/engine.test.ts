@@ -106,6 +106,41 @@ describe("decide — rules", () => {
   });
 });
 
+describe("decide — fix round 1", () => {
+  const holes = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
+  test("redirect and path-qualified wrapper forms of a denied command are denied", () => {
+    expect(decide(bash("2>&1 rm x"), holes).behavior).toBe("deny");
+    expect(decide(bash("/usr/bin/sudo rm x"), holes).behavior).toBe("deny");
+  });
+  test("eval and shell -c are never auto-approved", () => {
+    expect(decide(bash("eval rm x"), holes).behavior).toBe("ask");
+    expect(decide(bash("sh -c 'rm x'"), holes).behavior).toBe("ask");
+    expect(decide(bash("bash -c'rm x'"), holes).behavior).toBe("ask");
+  });
+  test("the wildcard does not approve a piped interpreter", () => {
+    expect(decide(bash("echo 'rm x' | sh"), holes).behavior).toBe("ask");
+    expect(decide(bash("python3 x.py"), holes).behavior).toBe("ask");
+    expect(decide(bash("ls -la"), holes)).toEqual({ behavior: "allow" });
+  });
+  test("an exact rule approves one specific interpreter command", () => {
+    expect(decide(bash("python3 x.py"), ctx({ allow: ["Bash(python3 x.py)"] }))).toEqual({ behavior: "allow" });
+    expect(decide(bash("python3 y.py"), ctx({ allow: ["Bash(python3 x.py)"] })).behavior).toBe("ask");
+  });
+  test("bypass beats ask rules", () => {
+    expect(decide(bash("git push"), ctx({ mode: "bypass", ask: ["Bash(git push:*)"] }))).toEqual({ behavior: "allow" });
+  });
+  test("a bare allow rule never approves a path outside the project", () => {
+    expect(decide(read("/etc/hosts"), ctx({ allow: ["Read"] }))).toEqual({ behavior: "ask", reason: "outside the project: /etc/hosts" });
+    expect(decide(read("/etc/hosts"), ctx({ allow: ["Read(/etc/**)"] }))).toEqual({ behavior: "allow" });
+    expect(decide(read("/work/app/a.ts"), ctx({ allow: ["Read"] }))).toEqual({ behavior: "allow" });
+    expect(decide(edit("/work/app/a.ts"), ctx({ allow: ["Edit"] }))).toEqual({ behavior: "allow" });
+    expect(decide(edit("/etc/hosts"), ctx({ allow: ["Edit"] })).behavior).toBe("ask");
+  });
+  test("a bare deny rule still applies everywhere", () => {
+    expect(decide(read("/etc/hosts"), ctx({ deny: ["Read"] })).behavior).toBe("deny");
+  });
+});
+
 describe("decide — symlinks", () => {
   let dir: string;
   beforeAll(async () => {
@@ -134,6 +169,24 @@ describe("suggestRule", () => {
   test("no suggestion for compound or unsafe commands", () => {
     expect(suggestRule(bash("a && b"), cwd)).toBeUndefined();
     expect(suggestRule(bash("echo x > f"), cwd)).toBeUndefined();
+  });
+  test("interpreters and code runners get an exact rule, never a prefix", () => {
+    expect(suggestRule(bash("python3 evil.py"), cwd)).toBe("Bash(python3 evil.py)");
+    expect(suggestRule(bash("bash script.sh"), cwd)).toBe("Bash(bash script.sh)");
+    expect(suggestRule(bash("/bin/bash  script.sh"), cwd)).toBe("Bash(/bin/bash script.sh)");
+    expect(suggestRule(bash("node"), cwd)).toBe("Bash(node)");
+  });
+  test("no exact rule for a very long interpreter command", () => {
+    expect(suggestRule(bash(`python3 ${"a".repeat(200)}`), cwd)).toBeUndefined();
+  });
+  test("no suggestion when assignments, redirects or wrappers lead the command", () => {
+    expect(suggestRule(bash("sudo -u root ls"), cwd)).toBeUndefined();
+    expect(suggestRule(bash("FOO=1 git status"), cwd)).toBeUndefined();
+    expect(suggestRule(bash("2>&1 rm x"), cwd)).toBeUndefined();
+    expect(suggestRule(bash("env FOO=1 ls"), cwd)).toBeUndefined();
+  });
+  test("ordinary commands keep the prefix rule", () => {
+    expect(suggestRule(bash("git status"), cwd)).toBe("Bash(git status:*)");
   });
   test("edit at project root", () => {
     expect(suggestRule(edit("/work/app/a.ts"), cwd)).toBe("Edit(**)");

@@ -1,6 +1,6 @@
 // src/permissions/rules.test.ts
 import { describe, expect, test } from "bun:test";
-import { bashPatternMatches, formatRule, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
+import { CODE_RUNNERS, bashPatternMatches, formatRule, hasLeadingPrefix, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
 
 describe("parseRule / formatRule", () => {
   test("bare tool name", () => {
@@ -449,5 +449,61 @@ describe("leading redirects, eval/shell -c and path-qualified wrappers (carry-ov
     expect(unsafe("/usr/bin/env -S 'rm x'")).toBe(true);
     expect(unsafe("/usr/bin/sudo --weird rm x")).toBe(true);
     expect(bashPatternMatches("rm:*", "/usr/bin/sudo rm x")).toBe(false);
+  });
+});
+
+describe("shell -c attached values and code runners (fix round 1)", () => {
+  const unsafe = (c: string) => splitBashCommand(c).unsafe;
+
+  test.each([`bash -c'rm x'`, `bash -c"rm x"`, `sh -ec'x'`, `bash -c rm`, `zsh -xc 'rm x'`])("attached -c value is unsafe: %s", (cmd) => {
+    expect(unsafe(cmd)).toBe(true);
+  });
+
+  test("CODE_RUNNERS lists interpreters and wrappers", () => {
+    for (const w of ["sh", "bash", "zsh", "dash", "ksh", "fish", "eval", "source", ".", "python", "python3", "node", "deno", "perl", "ruby", "php", "npx", "bunx", "pnpx", "uvx", "sudo", "doas", "env", "timeout", "nohup", "nice", "ionice", "stdbuf", "setsid", "caffeinate", "unbuffer", "command", "builtin", "exec", "xargs", "time"]) {
+      expect(CODE_RUNNERS.has(w)).toBe(true);
+    }
+    expect(CODE_RUNNERS.has("git")).toBe(false);
+  });
+
+  test.each(["sh", "bash script.sh", "python3 x.py", "sudo ls", "/usr/bin/python3 x.py", "FOO=1 node x.js", "2>&1 perl x.pl", "env FOO=1 ls", "xargs rm", "npx tool"])(
+    "the wildcard does not allow-match %s",
+    (cmd) => {
+      expect(bashPatternMatches("*", cmd)).toBe(false);
+    },
+  );
+
+  test("prefix patterns do not allow-match code runners", () => {
+    expect(bashPatternMatches("python:*", "python x.py")).toBe(false);
+    expect(bashPatternMatches("python:*", "python")).toBe(false);
+    expect(bashPatternMatches("bash:*", "bash script.sh")).toBe(false);
+    expect(bashPatternMatches("sudo:*", "sudo ls")).toBe(false);
+  });
+
+  test("exact patterns still match code runners", () => {
+    expect(bashPatternMatches("python x.py", "python x.py")).toBe(true);
+    expect(bashPatternMatches("bash script.sh", "bash  script.sh")).toBe(true);
+  });
+
+  test("ordinary commands still match the wildcard and prefixes", () => {
+    expect(bashPatternMatches("*", "ls -la")).toBe(true);
+    expect(bashPatternMatches("*", "2>&1 ls")).toBe(true);
+    expect(bashPatternMatches("git:*", "git status")).toBe(true);
+  });
+
+  test("restrict (deny/ask) matching is unaffected", () => {
+    const r = { restrict: true };
+    expect(bashPatternMatches("*", "sh", r)).toBe(true);
+    expect(bashPatternMatches("python:*", "python x.py", r)).toBe(true);
+    expect(bashPatternMatches("sudo:*", "sudo ls", r)).toBe(true);
+    expect(bashPatternMatches("rm:*", "sudo rm x", r)).toBe(true);
+  });
+
+  test("hasLeadingPrefix detects assignments, redirects and wrappers", () => {
+    expect(hasLeadingPrefix("FOO=1 git status")).toBe(true);
+    expect(hasLeadingPrefix("2>&1 rm x")).toBe(true);
+    expect(hasLeadingPrefix("sudo -u root ls")).toBe(true);
+    expect(hasLeadingPrefix("git status")).toBe(false);
+    expect(hasLeadingPrefix("python3 x.py")).toBe(false);
   });
 });

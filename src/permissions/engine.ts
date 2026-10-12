@@ -2,7 +2,16 @@
 import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
 import { isInside } from "../paths";
-import { bashPatternMatches, formatRule, parseRule, pathPatternMatches, splitBashCommand, type Rule } from "./rules";
+import {
+  CODE_RUNNERS,
+  bashPatternMatches,
+  formatRule,
+  hasLeadingPrefix,
+  parseRule,
+  pathPatternMatches,
+  splitBashCommand,
+  type Rule,
+} from "./rules";
 
 export interface PermissionRequest {
   toolName: string;
@@ -84,7 +93,9 @@ function isAllowed(req: PermissionRequest, ctx: PermissionContext): boolean {
       ctx.rules.allow.some((rule) => ruleHits(rule, { ...req, command: part }, ctx, "all")),
     );
   }
-  return ctx.rules.allow.some((rule) => ruleHits(rule, req, ctx, "all"));
+  // A bare rule (`Read`) is not a path scope: it never approves a path outside the project.
+  const inside = req.paths.every((p) => ctx.allowedDirs.some((dir) => isInside(p, dir)));
+  return ctx.rules.allow.some((rule) => (rule.pattern !== undefined || inside) && ruleHits(rule, req, ctx, "all"));
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
@@ -120,7 +131,16 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
   if (req.command !== undefined) {
     const { parts, unsafe } = splitBashCommand(req.command);
     if (unsafe || parts.length !== 1) return undefined;
-    return `${req.toolName}(${commandPrefix(parts[0]!)}:*)`;
+    const part = parts[0]!;
+    // A prefix rule cannot describe a command that starts with assignments, redirects or a wrapper.
+    if (hasLeadingPrefix(part)) return undefined;
+    const word = part.split(/\s+/)[0]!;
+    if (CODE_RUNNERS.has(word.slice(word.lastIndexOf("/") + 1))) {
+      // Interpreters run arbitrary code: only ever offer the exact command.
+      const exact = part.replace(/\s+/g, " ");
+      return exact.length > 200 || exact.endsWith(":*") ? undefined : `${req.toolName}(${exact})`;
+    }
+    return `${req.toolName}(${commandPrefix(part)}:*)`;
   }
   if (req.kind === "edit" && req.paths.length > 0) {
     const dir = dirname(req.paths[0]!);

@@ -343,7 +343,7 @@ const baseName = (word: string): string => word.slice(word.lastIndexOf("/") + 1)
  * (`command`, `sudo`, `env`, `timeout` ...) with their options, however they are path-qualified.
  * A wrapper option or redirect that is not modelled sets `unmodelled` (never guess).
  */
-function stripWrappers(command: string): StrippedCommand {
+function stripWrappers(command: string, stripWrapperWords = true): StrippedCommand {
   let i = 0;
   for (;;) {
     while (i < command.length && /\s/.test(command[i]!)) i++;
@@ -368,6 +368,7 @@ function stripWrappers(command: string): StrippedCommand {
       continue;
     }
     if (redirect === "unsafe") return { rest: command.slice(i), unmodelled: true };
+    if (!stripWrapperWords) return { rest: command.slice(i), unmodelled: false };
     const spec = WRAPPERS.get(word) ?? (word.includes("/") ? WRAPPERS.get(baseName(word)) : undefined);
     if (!spec) return { rest: command.slice(i), unmodelled: false };
 
@@ -406,18 +407,18 @@ function unquoteWord(word: string): string {
 }
 
 /** Commands that run text we cannot see: `eval`, `source` and `.`. */
-const CODE_RUNNERS = new Set(["eval", "source", "."]);
+const EVAL_WORDS = new Set(["eval", "source", "."]);
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 
-/** True when a shell invocation passes a command string (`-c`, `-lc`, `-xc`, fish `--command`). */
+/** True when a shell invocation passes a command string (`-c`, `-lc`, `-c'cmd'`, fish `--command`). */
 function runsShellString(rest: string): boolean {
   let i = wordEnd(rest, 0);
   while (i < rest.length) {
     while (i < rest.length && /\s/.test(rest[i]!)) i++;
     const end = wordEnd(rest, i);
     const word = unquoteWord(rest.slice(i, end));
-    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(word) || word === "--command" || word.startsWith("--command=")) return true;
+    if (/^-[A-Za-z]*c/.test(word) || word === "--command" || word.startsWith("--command=")) return true;
     i = end;
   }
   return false;
@@ -430,7 +431,7 @@ function hasUnmodelledCommandWord(part: string): boolean {
   const word = rest.slice(0, wordEnd(rest, 0));
   if (!word) return false;
   if (RESERVED_WORDS.has(word) || DYNAMIC_WORD.test(word) || word.startsWith("=")) return true;
-  if (CODE_RUNNERS.has(word)) return true;
+  if (EVAL_WORDS.has(word)) return true;
   return SHELLS.has(baseName(word)) && runsShellString(rest);
 }
 
@@ -448,6 +449,30 @@ function normalizeForRestrict(command: string): string {
     current = next;
   }
   return current;
+}
+
+/**
+ * Command words that run other code: shells, interpreters, package runners and wrappers.
+ * A prefix or wildcard allow rule never approves them (only an exact rule can); deny/ask
+ * matching is unaffected.
+ */
+export const CODE_RUNNERS: ReadonlySet<string> = new Set([
+  "sh", "bash", "zsh", "dash", "ksh", "fish", "eval", "source", ".",
+  "python", "python3", "node", "deno", "perl", "ruby", "php", "npx", "bunx", "pnpx", "uvx",
+  "sudo", "doas", "env", "timeout", "nohup", "nice", "ionice", "stdbuf", "setsid", "caffeinate",
+  "unbuffer", "command", "builtin", "exec", "xargs", "time",
+]);
+
+/** True when the simple command begins (after assignments and safe redirects) with a code runner. */
+function startsWithCodeRunner(command: string): boolean {
+  const { rest } = stripWrappers(command, false);
+  const word = rest.slice(0, wordEnd(rest, 0));
+  return CODE_RUNNERS.has(baseName(word));
+}
+
+/** True when assignments, safe redirects or wrapper words lead the simple command. */
+export function hasLeadingPrefix(part: string): boolean {
+  return stripWrappers(part).rest !== part.trim();
 }
 
 export interface BashPatternOptions {
@@ -472,6 +497,9 @@ function bashPatternMatchesExact(pattern: string, command: string): boolean {
  * words are also stripped, and the rule matches if either form matches.
  */
 export function bashPatternMatches(pattern: string, command: string, opts: BashPatternOptions = {}): boolean {
+  const p = pattern.trim();
+  const broad = p === "*" || p.endsWith(":*");
+  if (broad && opts.restrict !== true && startsWithCodeRunner(command)) return false;
   if (bashPatternMatchesExact(pattern, command)) return true;
   return opts.restrict === true && bashPatternMatchesExact(pattern, normalizeForRestrict(command));
 }
