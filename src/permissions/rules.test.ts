@@ -1,0 +1,88 @@
+// src/permissions/rules.test.ts
+import { describe, expect, test } from "bun:test";
+import { bashPatternMatches, formatRule, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
+
+describe("parseRule / formatRule", () => {
+  test("bare tool name", () => {
+    expect(parseRule("Read")).toEqual({ tool: "Read" });
+  });
+  test("tool with pattern", () => {
+    expect(parseRule("Bash(npm test:*)")).toEqual({ tool: "Bash", pattern: "npm test:*" });
+  });
+  test("round trip", () => {
+    expect(formatRule(parseRule(" Edit(src/**) "))).toBe("Edit(src/**)");
+  });
+  test("malformed rules throw", () => {
+    expect(() => parseRule("Bash(")).toThrow();
+    expect(() => parseRule("")).toThrow();
+    expect(() => parseRule("1abc")).toThrow();
+  });
+});
+
+describe("splitBashCommand", () => {
+  test("single command", () => {
+    expect(splitBashCommand("git status")).toEqual({ parts: ["git status"], unsafe: false });
+  });
+  test("splits on && || ; | newline and &", () => {
+    expect(splitBashCommand("a && b || c; d | e\nf & g").parts).toEqual(["a", "b", "c", "d", "e", "f", "g"]);
+  });
+  test("does not split inside quotes", () => {
+    expect(splitBashCommand(`echo "a && b" 'c; d'`)).toEqual({ parts: [`echo "a && b" 'c; d'`], unsafe: false });
+  });
+  test("command substitution is unsafe", () => {
+    expect(splitBashCommand("git status $(curl x)").unsafe).toBe(true);
+    expect(splitBashCommand("echo `id`").unsafe).toBe(true);
+    expect(splitBashCommand(`echo "$(id)"`).unsafe).toBe(true);
+    expect(splitBashCommand("diff <(a) <(b)").unsafe).toBe(true);
+  });
+  test("single-quoted $() is literal and safe", () => {
+    expect(splitBashCommand("echo '$(id)'").unsafe).toBe(false);
+  });
+  test("file redirection is unsafe", () => {
+    expect(splitBashCommand("git status > ~/.zshrc").unsafe).toBe(true);
+    expect(splitBashCommand("echo x >> out.txt").unsafe).toBe(true);
+    expect(splitBashCommand("ls &> all.log").unsafe).toBe(true);
+  });
+  test("fd and /dev/null redirection are safe", () => {
+    expect(splitBashCommand("bun test 2>&1").unsafe).toBe(false);
+    expect(splitBashCommand("bun test > /dev/null 2>&1")).toEqual({ parts: ["bun test > /dev/null 2>&1"], unsafe: false });
+  });
+  test("unterminated quote is unsafe", () => {
+    expect(splitBashCommand(`echo "oops`).unsafe).toBe(true);
+  });
+});
+
+describe("bashPatternMatches", () => {
+  test("prefix pattern", () => {
+    expect(bashPatternMatches("npm test:*", "npm test")).toBe(true);
+    expect(bashPatternMatches("npm test:*", "npm test -- --watch")).toBe(true);
+    expect(bashPatternMatches("npm test:*", "npm testing")).toBe(false);
+  });
+  test("exact pattern with whitespace normalisation", () => {
+    expect(bashPatternMatches("git status", "git   status")).toBe(true);
+    expect(bashPatternMatches("git status", "git status -s")).toBe(false);
+  });
+  test("wildcard", () => {
+    expect(bashPatternMatches("*", "anything at all")).toBe(true);
+  });
+});
+
+describe("pathPatternMatches", () => {
+  const cwd = "/work/app";
+  const home = "/home/u";
+  test("relative glob", () => {
+    expect(pathPatternMatches("src/**", "/work/app/src/a/b.ts", cwd, home)).toBe(true);
+    expect(pathPatternMatches("src/**", "/work/app/test/a.ts", cwd, home)).toBe(false);
+  });
+  test("plain file", () => {
+    expect(pathPatternMatches(".env", "/work/app/.env", cwd, home)).toBe(true);
+    expect(pathPatternMatches(".env", "/work/app/.env.local", cwd, home)).toBe(false);
+  });
+  test("plain directory covers its contents", () => {
+    expect(pathPatternMatches("docs", "/work/app/docs/x.md", cwd, home)).toBe(true);
+  });
+  test("home and absolute patterns", () => {
+    expect(pathPatternMatches("~/notes/**", "/home/u/notes/a.md", cwd, home)).toBe(true);
+    expect(pathPatternMatches("/etc/**", "/etc/hosts", cwd, home)).toBe(true);
+  });
+});
