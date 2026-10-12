@@ -13,6 +13,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 5_000;
 const DRAIN_MS = 200;
+const STREAM_LIMIT = 15_000; // stdout and stderr each; about 30k characters combined
 
 const schema = z.object({
   command: z.string().min(1).describe("The shell command to run."),
@@ -44,14 +45,27 @@ export const bashTool = defineTool({
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout = new OutputBuffer();
-    const stderr = new OutputBuffer();
-    child.stdout.setEncoding("utf8").on("data", (d: string) => stdout.push(d));
-    child.stderr.setEncoding("utf8").on("data", (d: string) => stderr.push(d));
+    const stdout = new OutputBuffer(STREAM_LIMIT);
+    const stderr = new OutputBuffer(STREAM_LIMIT);
+    const collectOut = (d: string) => stdout.push(d);
+    const collectErr = (d: string) => stderr.push(d);
+    child.stdout.setEncoding("utf8").on("data", collectOut);
+    child.stderr.setEncoding("utf8").on("data", collectErr);
+    // Registered now, not after exit: in Bun "exit" and "close" can fire in the same tick.
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
     let timedOut = false;
     let aborted = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const groupAlive = (): boolean => {
+      try {
+        if (!child.pid) return false;
+        process.kill(-child.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const signalGroup = (sig: NodeJS.Signals) => {
       try {
         if (child.pid) process.kill(-child.pid, sig);
@@ -61,7 +75,9 @@ export const bashTool = defineTool({
     };
     const terminate = () => {
       signalGroup("SIGTERM");
-      killTimer ??= setTimeout(() => signalGroup("SIGKILL"), KILL_GRACE_MS);
+      killTimer ??= setTimeout(() => {
+        if (groupAlive()) signalGroup("SIGKILL");
+      }, KILL_GRACE_MS);
     };
     const timeoutMs = input.timeout_ms ?? DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
@@ -86,21 +102,36 @@ export const bashTool = defineTool({
       ctx.signal.removeEventListener("abort", onAbort);
       return { content: `Could not start ${ctx.shell}: ${(err as Error).message}`, isError: true };
     }
-    await Promise.race([new Promise((r) => child.once("close", r)), Bun.sleep(DRAIN_MS)]);
-    child.stdout.destroy();
-    child.stderr.destroy();
     clearTimeout(timer);
-    if (killTimer && !timedOut && !aborted) clearTimeout(killTimer);
     ctx.signal.removeEventListener("abort", onAbort);
+    if (killTimer) {
+      // Group already gone: nothing left to kill. Otherwise keep the escalation, but never let it hold the process open.
+      if (!groupAlive()) clearTimeout(killTimer);
+      else killTimer.unref();
+    }
+
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([closed, new Promise<void>((r) => (drainTimer = setTimeout(r, DRAIN_MS)))]);
+    clearTimeout(drainTimer);
+    // Leave the pipes open but drained, so a background job that writes later doesn't die on a broken pipe.
+    for (const [stream, collect] of [[child.stdout, collectOut], [child.stderr, collectErr]] as const) {
+      stream.off("data", collect);
+      stream.on("data", () => {});
+      (stream as unknown as { unref?: () => void }).unref?.();
+    }
+    child.unref();
 
     const notes: string[] = [];
-    if (existsSync(cwdFile)) {
-      const next = readFileSync(cwdFile, "utf8").trim();
-      rmSync(cwdFile, { force: true });
-      if (next && next !== startDir && existsSync(next) && statSync(next).isDirectory()) {
-        if (ctx.allowedDirs.some((d) => isInside(next, d))) ctx.setCwd(next);
-        else notes.push(`[working directory stays at ${startDir}: ${next} is outside the project]`);
+    try {
+      if (existsSync(cwdFile)) {
+        const next = readFileSync(cwdFile, "utf8").trim();
+        if (next && next !== startDir && existsSync(next) && statSync(next).isDirectory()) {
+          if (ctx.allowedDirs.some((d) => isInside(next, d))) ctx.setCwd(next);
+          else notes.push(`[working directory stays at ${startDir}: ${next} is outside the project]`);
+        }
       }
+    } finally {
+      rmSync(cwdFile, { force: true });
     }
 
     const sections: string[] = [];

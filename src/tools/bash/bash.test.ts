@@ -1,5 +1,6 @@
 // src/tools/bash/bash.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
@@ -33,6 +34,19 @@ afterAll(async () => {
   killLeftoverJobs();
   await removeDir(dir);
 });
+
+async function waitUntilGone(pid: number, ms: number): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await Bun.sleep(25);
+  }
+  return false;
+}
 
 const ctx = () => makeToolContext({ root: dir });
 
@@ -76,9 +90,40 @@ describe("Bash", () => {
   });
 
   test("timeout kills the whole process group", async () => {
+    const pidFile = join(dir, "bg.pid");
+    await bashTool.run({ command: `sleep 20 & echo $! > ${pidFile}; sleep 20`, timeout_ms: 1000 }, ctx());
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    expect(pid).toBeGreaterThan(0);
+    expect(await waitUntilGone(pid, 2000)).toBe(true);
+  });
+
+  test("a command that ignores SIGTERM is still killed", async () => {
+    const pidFile = join(dir, "term.pid");
     const started = Date.now();
-    await bashTool.run({ command: "sleep 20 & sleep 20", timeout_ms: 1000 }, ctx());
-    expect(Date.now() - started).toBeLessThan(4000);
+    await bashTool.run({ command: `trap '' TERM; sleep 40 & echo $! > ${pidFile}; wait`, timeout_ms: 1000 }, ctx());
+    expect(Date.now() - started).toBeLessThan(7000);
+    expect(await waitUntilGone(Number(readFileSync(pidFile, "utf8").trim()), 2000)).toBe(true);
+ }, 10_000); // needs the 5 s SIGKILL grace period
+
+
+  test("a finished call does not wait for the drain delay", async () => {
+    const times: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const t = performance.now();
+      await bashTool.run({ command: "true" }, ctx());
+      times.push(performance.now() - t);
+    }
+    times.sort((a, b) => a - b);
+    expect(times[1]).toBeLessThan(150);
+  });
+
+  test("background jobs can still write after the call returns", async () => {
+    const marker = join(dir, "late-marker");
+    const out = await bashTool.run({ command: `(sleep 1; echo late && touch ${marker}) & echo started` }, ctx());
+    expect(out.content).toBe("started");
+    expect(existsSync(marker)).toBe(false);
+    await Bun.sleep(1600);
+    expect(existsSync(marker)).toBe(true);
   });
 
   test("a background job doesn't keep the call open", async () => {
@@ -91,14 +136,16 @@ describe("Bash", () => {
   test("abort interrupts the command", async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 200);
+    const t = Date.now();
     const out = await bashTool.run({ command: "sleep 20" }, makeToolContext({ root: dir, signal: controller.signal }));
+    expect(Date.now() - t).toBeLessThan(2000);
     expect(out.content).toContain("[interrupted by user]");
     expect(out.isError).toBe(true);
   });
 
   test("long output is truncated in the middle", async () => {
     const out = await bashTool.run({ command: "head -c 100000 /dev/zero | tr '\\0' 'a'" }, ctx());
-    expect(String(out.content).length).toBeLessThan(31_000);
+    expect(String(out.content).length).toBeLessThan(16_000);
     expect(out.content).toContain("characters truncated");
   });
 
