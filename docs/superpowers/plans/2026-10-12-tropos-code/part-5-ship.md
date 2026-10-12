@@ -921,6 +921,11 @@ Deny rules see through wrappers like `command`, `env`, `sudo` and `timeout`, but
 Bash deny rules as a safety net, not a sandbox: outside bypass mode, anything that slips
 past one still asks first.
 
+A prefix rule approves every argument: `Bash(git:*)` also allows `git -c core.pager=…`, and
+`Bash(npm:*)` runs any package script. Prefer subcommand rules such as `Bash(git status:*)`.
+Wildcard and prefix rules never approve interpreters and shells (`python`, `node`, `sh`,
+`sudo`, …); for those, "don't ask again" offers an exact-command rule instead.
+
 ## Configuration
 
 | File | Purpose |
