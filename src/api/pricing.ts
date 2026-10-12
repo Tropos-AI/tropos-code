@@ -32,6 +32,33 @@ export function costUsd(model: string, usage: UsageLike): number | undefined {
   );
 }
 
+interface IterationLike extends UsageLike {
+  type: string;
+  model?: string | null;
+}
+
+/**
+ * Cost of a whole response. Compaction and refusal-fallback turns bill extra work under
+ * `usage.iterations`; a fallback iteration bills at the model that served it, every other
+ * iteration bills at the requested model.
+ */
+export function messageCostUsd(
+  message: { model: string; usage: UsageLike & { iterations?: IterationLike[] | null } },
+  requestedModel: string,
+): number | undefined {
+  const iterations = message.usage.iterations;
+  if (!iterations || iterations.length === 0) return costUsd(message.model, message.usage);
+  let total = 0;
+  for (const iteration of iterations) {
+    const model = iteration.type === "fallback_message" ? iteration.model : requestedModel;
+    if (!model) return undefined;
+    const cost = costUsd(model, iteration);
+    if (cost === undefined) return undefined;
+    total += cost;
+  }
+  return total;
+}
+
 /** Tokens of prompt the model saw on this request. */
 export function contextTokens(usage: UsageLike): number {
   return usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
