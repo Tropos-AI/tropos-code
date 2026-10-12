@@ -1141,6 +1141,9 @@ describe("decide — rules", () => {
     expect(decide(read("/work/app/.ENV"), ctx({ deny: ["Read(.env)"] })).behavior).toBe(folding ? "deny" : "allow");
     expect(decide(edit("/work/app/SRC/a.ts"), ctx({ allow: ["Edit(src/**)"] })).behavior).toBe("ask");
   });
+  test("deny rules see through command wrappers", () => {
+    expect(decide(bash("command rm -rf x"), ctx({ mode: "bypass", deny: ["Bash(rm:*)"] })).behavior).toBe("deny");
+  });
   test("relative allow rules never reach outside the project", () => {
     expect(decide(edit("/etc/hosts"), ctx({ allow: ["Edit(**)"] })).behavior).toBe("ask");
   });
@@ -1255,20 +1258,21 @@ function toolMatches(rule: Rule, req: PermissionRequest): boolean {
   return false;
 }
 
-/** Case-insensitive filesystems: deny/ask rules match regardless of case; allow rules never widen. */
-const FOLD_RESTRICTIONS = process.platform === "darwin" || process.platform === "win32";
-
-/** Does the rule match this request? `mode` "any" = some path/command part hits; "all" = every one does. */
-function ruleHits(rule: Rule, req: PermissionRequest, ctx: PermissionContext, mode: "any" | "all", foldCase = false): boolean {
+/**
+ * Does the rule match this request? `mode` "any" = some path/command part hits; "all" = every one does.
+ * `restrict` = deny/ask matching (broad: case-insensitive where the filesystem is, wrapper-insensitive
+ * for commands, relative patterns may climb out of cwd); allow matching is always narrow.
+ */
+function ruleHits(rule: Rule, req: PermissionRequest, ctx: PermissionContext, mode: "any" | "all", restrict = false): boolean {
   if (!toolMatches(rule, req)) return false;
   if (!rule.pattern) return true;
   if (req.command !== undefined) {
     const { parts } = splitBashCommand(req.command);
-    const hit = (p: string) => bashPatternMatches(rule.pattern!, p);
+    const hit = (p: string) => bashPatternMatches(rule.pattern!, p, { restrict });
     return mode === "any" ? parts.some(hit) : parts.length > 0 && parts.every(hit);
   }
   if (req.paths.length === 0) return false;
-  const hit = (p: string) => pathPatternMatches(rule.pattern!, p, ctx.cwd, ctx.home, { foldCase });
+  const hit = (p: string) => pathPatternMatches(rule.pattern!, p, ctx.cwd, ctx.home, { restrict });
   return mode === "any" ? req.paths.some(hit) : req.paths.every(hit);
 }
 
@@ -1285,13 +1289,13 @@ function isAllowed(req: PermissionRequest, ctx: PermissionContext): boolean {
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
-  const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", FOLD_RESTRICTIONS));
+  const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true));
   if (denied) return { behavior: "deny", reason: `Blocked by the deny rule ${formatRule(denied)}.` };
   if (ctx.mode === "bypass") return { behavior: "allow" };
   if (ctx.mode === "plan" && (req.kind === "edit" || req.kind === "exec")) {
     return { behavior: "deny", reason: PLAN_MODE_REASON };
   }
-  if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", FOLD_RESTRICTIONS))) return { behavior: "ask" };
+  if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true))) return { behavior: "ask" };
   if (isAllowed(req, ctx)) return { behavior: "allow" };
 
   const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));
