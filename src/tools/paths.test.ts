@@ -16,6 +16,11 @@ beforeAll(async () => {
   await symlink(join(dir, "outside"), join(dir, "proj", "link"));
   await symlink(join(dir, "outside", "secret.txt"), join(dir, "proj", "file-link"));
   await symlink(join(dir, "outside", "missing.txt"), join(dir, "proj", "dangling"));
+  // A fake home whose link climbs out and comes back in through a sibling of the project.
+  await mkdir(join(dir, "home", "proj"), { recursive: true });
+  await symlink("../outside/deep", join(dir, "home", "link"));
+  await mkdir(join(dir, "outside", "deep"), { recursive: true });
+  await mkdir(join(dir, "outside", "proj"));
   // Relative links: a dir link into outside/, and a dangling link whose relative target only makes sense from outside/.
   await symlink("../outside", join(dir, "proj", "dirlink"));
   await symlink("../rel-ghost", join(dir, "outside", "relghost"));
@@ -65,5 +70,19 @@ describe("resolveToolPath", () => {
   });
   test("~ expands to the home directory", () => {
     expect(resolveToolPath("~/x", "/")).toBe(join(homedir(), "x"));
+  });
+  test("~ alone resolves to the canonical home", () => {
+    expect(resolveToolPath("~", "/", join(dir, "home"))).toBe(join(dir, "home"));
+  });
+  test("'..' after a link under ~ climbs from the link's target, as the OS does", () => {
+    expect(resolveToolPath("~/link/../proj/file.txt", join(dir, "home", "proj"), join(dir, "home"))).toBe(
+      join(dir, "outside", "proj", "file.txt"),
+    );
+  });
+  test("'..' under ~ is lexical only where no link is involved", () => {
+    expect(resolveToolPath("~/../x", "/", join(dir, "home"))).toBe(join(dir, "x"));
+  });
+  test("a link after a missing component is still followed", () => {
+    expect(resolveToolPath("missing/../link/x", join(dir, "proj"))).toBe(join(dir, "outside", "x"));
   });
 });

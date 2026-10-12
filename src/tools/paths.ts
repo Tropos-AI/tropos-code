@@ -1,7 +1,7 @@
 // src/tools/paths.ts
 import { lstatSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { expandHome } from "../paths";
 
 /** Raised whenever a path cannot be resolved faithfully. Callers must treat it as a refusal. */
 export class PathResolutionError extends Error {
@@ -35,15 +35,22 @@ function readLinkOrThrow(path: string): string {
   }
 }
 
+function canonicalDir(path: string, what: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    throw new PathResolutionError(`cannot resolve ${what} ${path}: ${(error as Error).message}`);
+  }
+}
+
 /**
  * Walks `parts` from `real` (always a canonical directory) the way the OS does: each
  * component is looked up on disk, symlinks are followed by walking their target, and
- * `..` climbs from the canonical parent. Once a component does not exist, nothing below
- * it can be a link, so the rest of the path is appended lexically.
+ * `..` climbs from the canonical parent. A missing component is kept as a plain path
+ * segment and the walk continues, so a later `..` or link is still handled on disk.
  */
 function walk(real: string, parts: string[], budget: Budget): string {
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]!;
+  for (const part of parts) {
     if (part === "" || part === ".") continue;
     if (part === "..") {
       real = dirname(real);
@@ -52,7 +59,8 @@ function walk(real: string, parts: string[], budget: Budget): string {
     const candidate = join(real, part);
     const info = lstatOrNull(candidate);
     if (info === null) {
-      return appendLexical(candidate, parts.slice(i + 1));
+      real = candidate;
+      continue;
     }
     if (info.isSymbolicLink()) {
       if (budget.hops === 0) {
@@ -68,33 +76,21 @@ function walk(real: string, parts: string[], budget: Budget): string {
   return real;
 }
 
-function appendLexical(base: string, rest: string[]): string {
-  let out = base;
-  for (const part of rest) {
-    if (part === "" || part === ".") continue;
-    out = part === ".." ? dirname(out) : join(out, part);
-  }
-  return out;
-}
-
 /**
  * Resolves a model-supplied path to the location the OS would actually touch, as an
  * absolute canonical path. Symlinks are followed in order, so `link/../x` climbs from the
- * link's target, and dangling links resolve from their real parent. Throws
- * PathResolutionError rather than returning an unresolved path.
+ * link's target, and dangling links resolve from their real parent. `~` and `~/...` start
+ * from the canonical home (`home` is injectable for tests). Throws PathResolutionError
+ * rather than returning an unresolved path.
  */
-export function resolveToolPath(input: string, cwd: string): string {
-  const expanded = expandHome(input);
+export function resolveToolPath(input: string, cwd: string, home: string = homedir()): string {
   const budget: Budget = { hops: MAX_HOPS };
-  let start: string;
-  if (isAbsolute(expanded)) {
-    start = "/";
-  } else {
-    try {
-      start = realpathSync.native(cwd);
-    } catch (error) {
-      throw new PathResolutionError(`cannot resolve working directory ${cwd}: ${(error as Error).message}`);
-    }
+  if (input === "~" || input.startsWith("~/")) {
+    // Walk the raw remainder: joining it onto home first would collapse `..` before links.
+    return walk(canonicalDir(home, "home directory"), input.slice(1).split("/"), budget);
   }
-  return walk(start, expanded.split("/"), budget);
+  if (isAbsolute(input)) {
+    return walk("/", input.split("/"), budget);
+  }
+  return walk(canonicalDir(cwd, "working directory"), input.split("/"), budget);
 }
