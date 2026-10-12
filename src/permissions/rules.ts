@@ -224,6 +224,7 @@ const WRAPPERS = new Map<string, WrapperSpec>([
   ["builtin", {}],
   ["exec", { flags: "cl", args: "a" }],
   ["noglob", {}],
+  ["nocorrect", {}],
   ["nohup", {}],
   ["time", { flags: "p" }],
   ["-", {}],
@@ -437,14 +438,18 @@ function hasUnmodelledCommandWord(part: string): boolean {
 
 /**
  * Normalizes a command for deny/ask matching: strips assignments and wrappers, and removes
- * quotes from the command word (`"rm" x`, `r''m x`), repeating until nothing changes.
+ * quotes from the command word (`"rm" x`, `r''m x`) and reduces a path-qualified command word
+ * to its basename (`/bin/rm`), repeating until nothing changes.
  */
 function normalizeForRestrict(command: string): string {
   let current = command;
   for (let n = 0; n < 8; n++) {
     const { rest } = stripWrappers(current);
     const end = wordEnd(rest, 0);
-    const next = unquoteWord(rest.slice(0, end)) + rest.slice(end);
+    // A path-qualified command word (`/bin/rm`, `./rm`) names the same command as its basename.
+    let word = unquoteWord(rest.slice(0, end));
+    if (word.includes("/") && baseName(word) !== "") word = baseName(word);
+    const next = word + rest.slice(end);
     if (next === current) return next;
     current = next;
   }
@@ -460,7 +465,7 @@ export const CODE_RUNNERS: ReadonlySet<string> = new Set([
   "sh", "bash", "zsh", "dash", "ksh", "fish", "eval", "source", ".",
   "python", "python3", "node", "deno", "perl", "ruby", "php", "npx", "bunx", "pnpx", "uvx",
   "sudo", "doas", "env", "timeout", "nohup", "nice", "ionice", "stdbuf", "setsid", "caffeinate",
-  "unbuffer", "command", "builtin", "exec", "xargs", "time",
+  "unbuffer", "command", "builtin", "exec", "xargs", "time", "noglob", "nocorrect",
   "awk", "gawk", "mawk", "nawk", "python2", "pypy", "pypy3", "ipython", "pwsh", "powershell",
   "osascript", "lua", "luajit", "tclsh", "wish", "Rscript", "irb", "jshell", "expect", "ssh",
   "script", "nodejs", "tsx", "ts-node",
@@ -496,15 +501,18 @@ export interface BashPatternOptions {
   restrict?: boolean;
 }
 
+/** Collapses runs of shell whitespace (space, tab, newline) only: Unicode spaces are ordinary characters to the shell. */
+const squashShellSpace = (s: string): string => s.replace(/^[ \t\n]+|[ \t\n]+$/g, "").replace(/[ \t\n]+/g, " ");
+
 function bashPatternMatchesExact(pattern: string, command: string): boolean {
-  const normalized = command.trim().replace(/\s+/g, " ");
+  const normalized = squashShellSpace(command);
   const p = pattern.trim();
   if (p === "*") return true;
   if (p.endsWith(":*")) {
-    const prefix = p.slice(0, -2).trim().replace(/\s+/g, " ");
+    const prefix = squashShellSpace(p.slice(0, -2));
     return normalized === prefix || normalized.startsWith(`${prefix} `);
   }
-  return normalized === p.replace(/\s+/g, " ");
+  return normalized === squashShellSpace(p);
 }
 
 /**

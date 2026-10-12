@@ -116,14 +116,25 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   if (outside) return { behavior: "ask", reason: `outside the project: ${outside}` };
 
   if (req.kind === "read" || req.kind === "meta") return { behavior: "allow" };
-  if (req.kind === "edit" && ctx.mode === "acceptEdits") return { behavior: "allow" };
-
   const suggestion = suggestRule(req, ctx.cwd);
+  if (req.kind === "edit" && ctx.mode === "acceptEdits") {
+    if (!req.paths.some(inGitControlDir)) return { behavior: "allow" };
+    // Hooks and config under .git/.husky run code on a later git command: never auto-approved.
+    const reason = "writes to git hooks/config run code later";
+    return suggestion ? { behavior: "ask", reason, suggestion } : { behavior: "ask", reason };
+  }
   return suggestion ? { behavior: "ask", suggestion } : { behavior: "ask" };
 }
 
+/** True when any segment of the path is `.git` or `.husky`. */
+function inGitControlDir(path: string): boolean {
+  return path.split(/[\\/]/).some((segment) => segment === ".git" || segment === ".husky");
+}
+
+const SHELL_SPACE = /[ \t\n]+/;
+
 function commandPrefix(command: string): string {
-  const words = command.trim().split(/\s+/);
+  const words = command.trim().split(SHELL_SPACE);
   const prefix = [words[0]!];
   const second = words[1];
   if (second && /^[a-z][a-z0-9-]*$/.test(second)) prefix.push(second);
@@ -138,10 +149,11 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
     const part = parts[0]!;
     // A prefix rule cannot describe a command that starts with assignments, redirects or a wrapper.
     if (hasLeadingPrefix(part)) return undefined;
-    const word = part.split(/\s+/)[0]!;
-    if (isCodeRunner(word)) {
-      // Interpreters run arbitrary code: only ever offer the exact command.
-      const exact = part.replace(/\s+/g, " ");
+    const [word = "", second = ""] = part.split(SHELL_SPACE);
+    if (isCodeRunner(word) || second.startsWith("-")) {
+      // Interpreters run arbitrary code, and a leading option (`git -c core.pager=...`) can change
+      // what the subcommand does: only ever offer the exact command.
+      const exact = part.replace(/[ \t\n]+/g, " ");
       return exact.length > 200 || exact.endsWith(":*") ? undefined : `${req.toolName}(${exact})`;
     }
     return `${req.toolName}(${commandPrefix(part)}:*)`;

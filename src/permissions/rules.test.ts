@@ -551,3 +551,21 @@ describe("code-runner detection: more interpreters, versions and case (fix round
     expect(bashPatternMatches("*", "python3.12 x.py", { restrict: true })).toBe(true);
   });
 });
+
+describe("final review fixes", () => {
+  test("restrict mode reduces a path-qualified command word to its basename; allow mode does not", () => {
+    for (const cmd of ["/bin/rm -rf x", "./rm -rf x", "sudo /bin/rm -rf x", "'/bin/rm' x"]) {
+      expect(bashPatternMatches("rm:*", cmd, { restrict: true })).toBe(true);
+      expect(bashPatternMatches("rm:*", cmd)).toBe(false);
+    }
+  });
+  test("noglob and nocorrect are code runners and wrappers", () => {
+    expect(bashPatternMatches("*", "noglob python3 -c x")).toBe(false);
+    expect(bashPatternMatches("*", "nocorrect sh s.sh")).toBe(false);
+    expect(bashPatternMatches("rm:*", "nocorrect rm x", { restrict: true })).toBe(true);
+  });
+  test("only shell whitespace is normalised before matching", () => {
+    expect(bashPatternMatches("git status:*", "git status")).toBe(false);
+    expect(bashPatternMatches("git status:*", "git \t status -s")).toBe(true);
+  });
+});

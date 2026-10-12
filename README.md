@@ -52,7 +52,10 @@ Deny beats ask beats allow. A shell command auto-approves only when every part o
 (command substitution, heredocs, file redirection, quoted or dynamic command words…).
 Deny rules see through wrappers like `command`, `env`, `sudo` and `timeout`, but treat
 Bash deny rules as a safety net, not a sandbox: outside bypass mode, anything that slips
-past one still asks first.
+past one still asks first. Deny rules are tool-scoped: a `Read(.env)` deny limits Read, Glob and
+Grep, not a Bash `cat .env` that you allow. Relative path patterns are anchored at the project
+root (`Read(.env)` means `./.env`; use `Read(**/.env)` for every `.env`). Accept-edits mode still
+asks before writing inside `.git/` or `.husky/`, since hooks and git config run code later.
 
 A prefix rule approves every argument: `Bash(git:*)` also allows `git -c core.pager=…`, and
 `Bash(npm:*)` runs any package script. Prefer subcommand rules such as `Bash(git status:*)`.

@@ -159,6 +159,44 @@ describe("decide — fix round 1", () => {
   });
 });
 
+describe("decide — final review fixes", () => {
+  const deny = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
+  test("deny rules see through path-qualified command words", () => {
+    expect(decide(bash("/bin/rm -rf x"), deny).behavior).toBe("deny");
+    expect(decide(bash("./rm -rf x"), deny).behavior).toBe("deny");
+    expect(decide(bash("sudo /bin/rm -rf x"), deny).behavior).toBe("deny");
+    expect(decide(bash("/bin/rm -rf x"), ctx({ mode: "bypass", deny: ["Bash(rm:*)"] })).behavior).toBe("deny");
+    expect(decide(bash('"/bin/rm" -rf x'), deny).behavior).toBe("deny");
+  });
+  test("an allow rule for rm does not approve a path-qualified rm", () => {
+    expect(decide(bash("/bin/rm x"), ctx({ allow: ["Bash(rm:*)"] })).behavior).toBe("ask");
+    expect(decide(bash("rm x"), ctx({ allow: ["Bash(rm:*)"] }))).toEqual({ behavior: "allow" });
+  });
+  test("the wildcard does not approve zsh precommand modifiers wrapping a code runner", () => {
+    expect(decide(bash("noglob python3 -c x"), ctx({ allow: ["Bash(*)"] })).behavior).toBe("ask");
+    expect(decide(bash("nocorrect sh s.sh"), ctx({ allow: ["Bash(*)"] })).behavior).toBe("ask");
+  });
+  test("a deny rule sees through nocorrect", () => {
+    expect(decide(bash("nocorrect rm x"), deny).behavior).toBe("deny");
+  });
+  test("a non-breaking space does not match a plain-space rule", () => {
+    expect(decide(bash("git\u00a0status"), ctx({ allow: ["Bash(git status:*)"] })).behavior).toBe("ask");
+    expect(decide(bash("git  status"), ctx({ allow: ["Bash(git status:*)"] }))).toEqual({ behavior: "allow" });
+  });
+  test("acceptEdits asks before writing inside .git or .husky", () => {
+    const c = ctx({ mode: "acceptEdits" });
+    for (const p of ["/work/app/.git/hooks/pre-commit", "/work/app/.git/config", "/work/app/.husky/pre-commit", "/work/app/pkg/.git/config"]) {
+      expect(decide(write(p), c)).toEqual({ behavior: "ask", reason: "writes to git hooks/config run code later", suggestion: expect.any(String) });
+    }
+    expect(decide(write("/work/app/.gitignore"), c)).toEqual({ behavior: "allow" });
+    expect(decide(write("/work/app/.github/ci.yml"), c)).toEqual({ behavior: "allow" });
+  });
+  test("an explicit allow rule still approves a write inside .git", () => {
+    const c = ctx({ mode: "acceptEdits", allow: ["Edit(.husky/**)"] });
+    expect(decide(write("/work/app/.husky/pre-commit"), c)).toEqual({ behavior: "allow" });
+  });
+});
+
 describe("decide — symlinks", () => {
   let dir: string;
   beforeAll(async () => {
@@ -179,7 +217,7 @@ describe("decide — symlinks", () => {
 
 describe("suggestRule", () => {
   test("bash prefixes", () => {
-    expect(suggestRule(bash("ls -la"), cwd)).toBe("Bash(ls:*)");
+    expect(suggestRule(bash("ls"), cwd)).toBe("Bash(ls:*)");
     expect(suggestRule(bash("cat notes.txt"), cwd)).toBe("Bash(cat:*)");
     expect(suggestRule(bash("git commit -m x"), cwd)).toBe("Bash(git commit:*)");
   });
@@ -204,6 +242,13 @@ describe("suggestRule", () => {
   });
   test("ordinary commands keep the prefix rule", () => {
     expect(suggestRule(bash("git status"), cwd)).toBe("Bash(git status:*)");
+  });
+  test("a dash-led second word gets the exact command rule, not a one-word prefix", () => {
+    expect(suggestRule(bash("git -c core.pager=id log"), cwd)).toBe("Bash(git -c core.pager=id log)");
+    expect(suggestRule(bash("git  -C  /tmp status"), cwd)).toBe("Bash(git -C /tmp status)");
+    expect(suggestRule(bash(`git -c ${"a".repeat(200)}`), cwd)).toBeUndefined();
+    expect(suggestRule(bash("git status"), cwd)).toBe("Bash(git status:*)");
+    expect(suggestRule(bash("ls -la"), cwd)).toBe("Bash(ls -la)");
   });
   test("edit at project root", () => {
     expect(suggestRule(edit("/work/app/a.ts"), cwd)).toBe("Edit(**)");
