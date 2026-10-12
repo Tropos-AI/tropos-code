@@ -640,4 +640,70 @@ describe("Agent failure paths keep history valid", () => {
     assertToolPairs(h.agent.messages);
     expect((h.agent.messages.at(-1)!.content as Array<{ content: string }>)[0]!.content).toBe("[interrupted by user]");
   });
+  test("a tool that rejects after an abort during onAllowAlways causes no unhandled rejection", async () => {
+    const late = defineTool({
+      name: "Late",
+      kind: "exec",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "late",
+      subject: () => ({ command: "late", paths: [] }),
+      run: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        throw new Error("late failure");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      const controller = new AbortController();
+      const h = harness([() => reply([toolUseBlock("l", "Late", {})], "tool_use")], {
+        tools: [late] as AnyTool[],
+        answer: { kind: "allow_always", rule: "Late(x)" },
+        onAllowAlways: () => controller.abort(),
+      });
+      expect(await run(h, "go", controller.signal)).toBe("aborted");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+    }
+  });
+
+  test("a failure that throws a non-Error value ends the turn with an error instead of rejecting", async () => {
+    const events: AgentEvent[] = [];
+    const agent = new Agent({
+      model: new FakeModel([() => reply([textBlock("never")])]),
+      tools: [echo] as AnyTool[],
+      system: "s",
+      config: () => {
+        throw null;
+      },
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+      askPermission: async () => ({ kind: "allow" }),
+      contextText: async () => "c",
+      persist: async () => {},
+      toolContext: makeToolContext({ root: "/work" }),
+      emit: (e) => events.push(e),
+    });
+    expect(await agent.run("go", new AbortController().signal)).toBe("error");
+    expect(events.find((e) => e.type === "notice")).toMatchObject({ level: "error", text: expect.stringContaining("null") });
+  });
+
+  test("a tool that rejects with a non-Error value becomes an error result", async () => {
+    const odd = defineTool({
+      name: "Odd",
+      kind: "read",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "odd",
+      subject: () => ({ paths: [] }),
+      run: () => Promise.reject("plain string"),
+    });
+    const h = harness([() => reply([toolUseBlock("o", "Odd", {})], "tool_use"), () => reply([textBlock("ok")])], { tools: [odd] as AnyTool[] });
+    expect(await run(h)).toBe("end_turn");
+    const result = (h.agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
+    expect(result).toMatchObject({ is_error: true, content: "Odd failed: plain string" });
+  });
 });
