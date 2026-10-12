@@ -318,7 +318,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Test: `src/session/store.test.ts`
 
 **Interfaces:**
-- Consumes: `makeTmpDir`, `removeDir` (Task 1).
+- Consumes: `makeTmpDir`, `removeDir` (Task 1); `projectKey` (src/paths.ts, added in Task 2's fix round).
 - Produces:
   - `MessageParam = Anthropic.Beta.BetaMessageParam`
   - `SessionMeta { sessionId; cwd; model; version; createdAt; title? }`
@@ -339,6 +339,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { projectKey } from "../paths";
 import { SessionStore, danglingToolResults, listSessions, projectDir, readSessionFile, type MessageParam } from "./store";
 
 let home: string;
@@ -352,8 +353,9 @@ const user = (text: string): MessageParam => ({ role: "user", content: [{ type: 
 const assistantText = (text: string): MessageParam => ({ role: "assistant", content: [{ type: "text", text }] });
 
 describe("projectDir", () => {
-  test("flattens the cwd into one directory name", () => {
-    expect(projectDir("/h", "/work/my app")).toBe("/h/projects/-work-my app");
+  test("uses the collision-free project key", () => {
+    expect(projectDir("/h", "/work/my app")).toBe(`/h/projects/${projectKey("/work/my app")}`);
+    expect(projectDir("/h", "/a/b-c")).not.toBe(projectDir("/h", "/a-b/c"));
   });
 });
 
@@ -457,6 +459,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { projectKey } from "../paths";
 
 export type MessageParam = Anthropic.Beta.BetaMessageParam;
 
@@ -474,8 +477,9 @@ type SessionLine =
   | { type: "message"; message: MessageParam; ts: string }
   | { type: "event"; name: string; value: unknown; ts: string };
 
+/** Sessions for one project live under <home>/projects/<projectKey(cwd)> (see src/paths.ts). */
 export function projectDir(home: string, cwd: string): string {
-  return join(home, "projects", cwd.replace(/[/\\:]/g, "-"));
+  return join(home, "projects", projectKey(cwd));
 }
 
 const TITLE_MAX = 60;
