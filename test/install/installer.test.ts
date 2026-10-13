@@ -274,7 +274,8 @@ describe("transient health-check failures are not verdicts (I1)", () => {
     expect(e.kind).toBe("busy");
     expect(e.message).toContain("the health check of 1.1.0 could not be run");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
-    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.0.0" });
+    expect((await f.state()).skip).toEqual({});
   });
 
   test("a post-switch check that cannot run switches back without a skip", async () => {
@@ -286,7 +287,8 @@ describe("transient health-check failures are not verdicts (I1)", () => {
     expect(e.kind).toBe("busy");
     expect(e.message).toContain("could not be run");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
-    expect(await f.state()).toMatchObject({ current: "1.0.0", pending: null, skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.0.0", pending: null });
+    expect((await f.state()).skip).toEqual({});
   });
 
   test("a definite failure after switching still records the skip (existing behaviour)", async () => {

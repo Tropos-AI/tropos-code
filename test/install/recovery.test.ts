@@ -260,7 +260,8 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     const r = await recoverWith({ ...f.deps, health });
     expect(r).toEqual({ actions: ["the health check of 1.1.0 could not be run; left it in place and changed nothing"], fatal: null });
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
-    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null, skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
+    expect((await f.state()).skip).toEqual({});
   });
 
   test("a health check that times out never removes the link or reports a fatal condition", async () => {
@@ -270,7 +271,8 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     const r = await recoverWith({ ...f.deps, health: (b, v) => defaultHealthCheck(b, v, process.env, 100) });
     expect(r.fatal).toBeNull();
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
-    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.0.0" });
+    expect((await f.state()).skip).toEqual({});
   });
 
   test("a health check that fails to spawn (EAGAIN) with the link missing: nothing removed, nothing fatal", async () => {
@@ -279,7 +281,8 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     const r = await recoverWith({ ...f.deps, health: (b, v) => defaultHealthCheck(b, v, process.env, 1000, eagain) });
     expect(r.fatal).toBeNull();
     expect(r.actions).toEqual([`${f.layout.binLink} was missing; the health check of 1.0.0 could not be run, so nothing was changed`]);
-    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.0.0" });
+    expect((await f.state()).skip).toEqual({});
   });
 
   test("an interrupted switch whose target cannot be checked stays pending for a later run", async () => {

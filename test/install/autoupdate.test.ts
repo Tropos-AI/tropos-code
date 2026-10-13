@@ -170,7 +170,8 @@ describe("background updates never act on what they must not touch (I1, I3, A11)
     f.srv.put("channels", "latest", "1.1.0\n");
     await runBackgroundUpdate({ ...f.deps, health: async (b, v) => (v === "1.1.0" ? "unknown" : f.deps.health(b, v)) }, "latest");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
-    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+    expect(await f.state()).toMatchObject({ current: "1.0.0" });
+    expect((await f.state()).skip).toEqual({});
     expect((await f.state()).autoUpdate.failures).toBe(1);
   });
 });
