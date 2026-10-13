@@ -22,6 +22,7 @@ main() {
   TROPOS_CHANNELS='https://github.com/Tropos-AI/tropos-code-channels/releases/download/channels'
   TROPOS_PROTO='=https'
   # <<< release-urls
+  # shellcheck disable=SC2016 # awk program text, expanded by awk, not the shell
   # >>> manifest-awk (identical to scripts/release/manifest.awk; checked by test/install/parity.test.ts)
   MANIFEST_AWK='# scripts/release/manifest.awk — validates a canonical Tropos manifest (spec §5.3) and prints the fields of one platform.
 # Usage: awk -v want=<platform> -f manifest.awk manifest.json
@@ -176,6 +177,7 @@ END {
   }
   size_of() {
     size_out=$(wc -c <"$1")
+    # shellcheck disable=SC2086 # unquoted on purpose: strips the padding some wc builds add
     printf '%s\n' $size_out
   }
   matches() { [ -f "$1" ] && [ "$(size_of "$1")" = "$2" ] && [ "$(sha256_of "$1")" = "$3" ]; }
@@ -195,7 +197,7 @@ END {
       if retry read_pointer "$target"; then version=$resolved
       elif sleep 4 && retry read_pointer "$target.bak"; then version=$resolved
       elif [ "$target" = latest ]; then from_latest_release=yes
-      else fail 69 "cannot resolve the stable channel (no release has been published yet); try again, or install an explicit version"
+      else fail 69 "cannot resolve the stable channel: no release has been published yet, or the release server could not be reached. Try again later, or install an explicit version"
       fi
       ;;
     *) version=$target ;;
@@ -213,7 +215,7 @@ END {
   }
 
   if ! get_asset manifest.json "$tmp/manifest.json" 65536 30; then
-    if [ "$from_latest_release" = yes ]; then fail 69 "cannot resolve the latest release (no release has been published yet); try again, or install an explicit version"; fi
+    if [ "$from_latest_release" = yes ]; then fail 69 "cannot resolve the latest release: no release has been published yet, or the release server could not be reached. Try again later, or install an explicit version"; fi
     fail 69 "could not download the release manifest"
   fi
   get_asset manifest.json.sig "$tmp/manifest.json.sig" 4096 30 || fail 69 "could not download the manifest signature"
@@ -229,7 +231,7 @@ END {
   [ ! -s "$tmp/manifest.bad" ] || fail 65 "the release manifest is malformed"
   [ "$(tail -c 1 "$tmp/manifest.json" | od -An -c | tr -d ' ')" = '\n' ] || fail 65 "the release manifest is malformed"
   fields=$(awk -v want="$platform" "$MANIFEST_AWK" "$tmp/manifest.json") || fail 65 "the release manifest is malformed"
-  m_version= m_sha= m_size= m_zsha= m_zsize=
+  m_version='' m_sha='' m_size='' m_zsha='' m_zsize=''
   for field in $fields; do
     case $field in
       version=*) m_version=${field#version=} ;;
@@ -283,6 +285,7 @@ END {
     *)
       shell_name=${SHELL:-sh}
       shell_name=${shell_name##*/}
+      # shellcheck disable=SC2088 # display text for the user, not a path
       case $shell_name in
         zsh) rc='~/.zshrc' ;;
         bash) rc='~/.bashrc' ;;

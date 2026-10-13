@@ -29,7 +29,9 @@ beforeEach(async () => {
 
 const sandbox = (extra: Partial<Parameters<typeof makeSandbox>[0]> = {}) => makeSandbox({ signers: allowedSignersText(key), base: srv.base, ...extra });
 // macOS mktemp ignores $TMPDIR; this shim makes it behave like GNU mktemp -d so the TMPDIR tests mean the same everywhere.
+const darwin = process.platform === "darwin";
 const tmpdirMktemp = "#!/bin/sh\nd=\"${TMPDIR:-/tmp}/work.$$\"\n/bin/mkdir -p \"$d\" && echo \"$d\"\n";
+const mktempShim: Record<string, string> = darwin ? { mktemp: tmpdirMktemp } : {};
 const nothingInstalled = async (home: string) => expect(await Bun.file(join(home, "handoff")).exists()).toBe(false);
 
 describe("signature and manifest (fail closed)", () => {
@@ -120,7 +122,7 @@ describe("network and channels", () => {
     srv.put("channels", "latest", "1.0.0\n");
     srv.failNext("channels", "latest", 500, 2);
     expect((await (await sandbox()).run()).code).toBe(0);
-  });
+  }, 30_000);
 
   test("server down → 69", async () => {
     srv.stop();
@@ -140,7 +142,16 @@ describe("network and channels", () => {
     const r = await sb.run();
     expect(r.code).toBe(69);
     expect(r.stderr).toContain("no release has been published yet");
+    expect(srv.requests).toContain("/t/r/releases/latest/download/manifest.json");
+    expect(srv.requests.some((p) => p.includes("/download/v"))).toBe(false);
     await nothingInstalled(sb.home);
+  }, 60_000);
+
+  test("latest with the server down says the server could not be reached (R7.3)", async () => {
+    srv.stop();
+    const r = await (await sandbox()).run();
+    expect(r.code).toBe(69);
+    expect(r.stderr).toContain("could not be reached");
   }, 60_000);
 
   test("an explicit version works before any promotion (R7.3)", async () => {
@@ -210,7 +221,7 @@ describe("dependencies and platform", () => {
   });
 
   test("the temporary folder is removed on every exit", async () => {
-    const sb = await sandbox({ shims: { mktemp: tmpdirMktemp } });
+    const sb = await sandbox({ shims: mktempShim });
     await Bun.$`mkdir -p ${join(sb.dir, "t")}`;
     await sb.run(["1.0.0"], { env: { TMPDIR: join(sb.dir, "t") } });
     await sb.run(["9.9.9"], { env: { TMPDIR: join(sb.dir, "t") } });
@@ -221,9 +232,11 @@ describe("dependencies and platform", () => {
 describe("hardening", () => {
   test("a TMPDIR containing a backslash does not break checksum comparison", async () => {
     // GNU sha256sum prefixes the hash with a backslash when the FILE NAME contains one; hashing stdin never does.
-    const real = Bun.which("shasum")!;
-    const sha256sum = `#!/bin/sh\nif [ $# -gt 0 ]; then case $1 in *\\\\*) printf '\\\\' ;; esac; fi\nexec ${real} -a 256 "$@"\n`;
-    const sb = await sandbox({ shims: { sha256sum, mktemp: tmpdirMktemp } });
+    // On macOS there is no GNU sha256sum, so a shim emulates it on top of shasum; on Linux the real tool is used.
+    const shasum = Bun.which("shasum");
+    const shims: Record<string, string> = { ...mktempShim };
+    if (darwin && shasum) shims.sha256sum = `#!/bin/sh\nif [ $# -gt 0 ]; then case $1 in *\\\\*) printf '\\\\' ;; esac; fi\nexec ${shasum} -a 256 "$@"\n`;
+    const sb = await sandbox({ shims });
     const tmpdir = join(sb.dir, "t\\x");
     await Bun.$`mkdir -p ${tmpdir}`;
     const r = await sb.run(["1.0.0"], { env: { TMPDIR: tmpdir } });
@@ -244,10 +257,11 @@ describe("hardening", () => {
   });
 
   test("the temporary folder is removed even when chmod fails", async () => {
-    const sb = await sandbox({ shims: { chmod: "#!/bin/sh\nexit 1\n", mktemp: tmpdirMktemp } });
+    const sb = await sandbox({ shims: { chmod: "#!/bin/sh\nexit 1\n", ...mktempShim } });
     await Bun.$`mkdir -p ${join(sb.dir, "t")}`;
     const r = await sb.run(["1.0.0"], { env: { TMPDIR: join(sb.dir, "t") } });
     expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("cannot secure the temporary directory");
     expect(await readdir(join(sb.dir, "t"))).toEqual([]);
     await nothingInstalled(sb.home);
   });

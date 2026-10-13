@@ -7,11 +7,12 @@ set -eu
 version=$1 commit=$2 build_date=$3 dir=$4
 
 sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum "$1"); else sum=$(shasum -a 256 "$1"); fi
+  if command -v sha256sum >/dev/null 2>&1; then sum=$(sha256sum <"$1"); else sum=$(shasum -a 256 <"$1"); fi
   printf '%s\n' "${sum%% *}"
 }
 size_of() {
   n=$(wc -c < "$1")
+  # shellcheck disable=SC2086 # unquoted on purpose: strips the padding some wc builds add
   printf '%s\n' $n
 }
 
