@@ -28,6 +28,11 @@ tropos -c                       # continue the last session here
 tropos -r                       # pick a session to resume
 ```
 
+Print mode exits 0 only when the answer is complete: 1 error, 2 refusal, 3 `--max-turns` reached,
+4 answer cut off at the output limit (what arrived is still printed), 5 conversation too long for
+the context window, 130 interrupted. With `--output-format json`, `cost_usd` is `null` when a
+model without a known price answered.
+
 In a session: `shift+tab` cycles permission modes (default → accept edits → plan), `esc`
 interrupts, `\` then enter adds a line, `@` + tab completes paths, `/help` lists commands.
 
@@ -73,7 +78,7 @@ Wildcard and prefix rules never approve interpreters and shells (`python`, `node
 | `.tropos/settings.json` | project settings (commit it) |
 | `.tropos/settings.local.json` | personal project overrides (same limits as `.tropos/settings.json`) |
 | `~/.tropos/projects/<project>/settings.json` | your per-project settings; "don't ask again" rules land here |
-| `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` works too) |
+| `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` or `CLAUDE.md` work too) |
 
 Files inside the repo arrive with the code, so Tropos treats them as untrusted: they can set
 `model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules, `env`
@@ -84,9 +89,13 @@ Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`
 
 ## Security notes
 
-- Shell commands run by the Bash tool never inherit API credentials (`ANTHROPIC_API_KEY`,
-  `ANTHROPIC_AUTH_TOKEN` and similar are removed from their environment), so a model-written
-  `echo $ANTHROPIC_API_KEY` prints nothing.
+- Shell commands run by the Bash tool never inherit credentials: `ANTHROPIC_API_KEY` and any
+  variable whose name looks like one (`GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `NPM_TOKEN`,
+  `*_API_KEY`, `*PASSWORD*` …) are removed from their environment, so a model-written
+  `echo $GITHUB_TOKEN` prints nothing. Tools that need them, such as `gh` or the AWS CLI, fall back
+  to their own stored logins.
+- Background jobs (dev servers, watchers) run in their own process group and are stopped when
+  Tropos exits.
 - Other processes running as you can still read Tropos's own startup environment, for example
   with `ps eww -p <pid>`. Reading another process's environment goes through the normal Bash
   permission prompt, so avoid broad rules such as `Bash(ps:*)`, and avoid bypass mode in
@@ -112,3 +121,7 @@ bun run typecheck
 bun run dev -- -p "hello"
 bun run build:all    # darwin/linux × arm64/x64 binaries
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
