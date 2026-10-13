@@ -12,6 +12,7 @@ import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
 import { VERSION } from "../version";
 import { runInstallCommand, type CommandContext } from "../install/commands";
+import type { Channel } from "../install/channels";
 import { CliError, parseInvocation, type CliOptions } from "./args";
 import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
 import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
@@ -74,15 +75,21 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     if (invocation.kind === "subcommand") {
       const env = deps.env ?? process.env;
       const cwd = resolveToolPath(".", deps.cwd ?? process.cwd());
-      let settings: Settings;
-      try {
-        settings = (await loadSettings(settingsPaths(cwd, troposHome(env)))).settings;
-      } catch (e) {
-        if (e instanceof SettingsError) {
-          err(`tropos: ${e.message}\n`);
-          return 1;
+      const cmd = invocation.command;
+      let settings: { autoUpdates: boolean; autoUpdatesChannel: Channel } = { autoUpdates: true, autoUpdatesChannel: "latest" };
+      // Only install and update read settings; help, install --self and rollback must work with a corrupt file.
+      if (cmd.kind === "install" || cmd.kind === "update") {
+        try {
+          const loaded = (await loadSettings(settingsPaths(cwd, troposHome(env)))).settings;
+          settings = { autoUpdates: loaded.autoUpdates, autoUpdatesChannel: loaded.autoUpdatesChannel };
+        } catch (e) {
+          // A background update never fails loudly (spec 11): it falls back to defaults.
+          if (!(e instanceof SettingsError)) throw e;
+          if (!(cmd.kind === "update" && cmd.background)) {
+            err(`tropos: ${e.message}\n`);
+            return 1;
+          }
         }
-        throw e;
       }
       return await runInstallCommand(invocation.command, {
         out,
@@ -90,7 +97,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         env,
         execPath: deps.execPath ?? process.execPath,
         version: VERSION,
-        settings: { autoUpdates: settings.autoUpdates, autoUpdatesChannel: settings.autoUpdatesChannel },
+        settings,
         engine: deps.engine,
       });
     }

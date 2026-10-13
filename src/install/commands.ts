@@ -46,6 +46,14 @@ export function oneTimeInstallNotice(target: string, settings: CommandContext["s
   return `${lead} To stay on ${target}, set "autoUpdates": false in ~/.tropos/settings.json.`;
 }
 
+function describe(e: unknown): string {
+  try {
+    return e instanceof Error ? e.message : String(e);
+  } catch {
+    return "unknown error";
+  }
+}
+
 const HELP = { install: INSTALL_HELP, update: UPDATE_HELP, upgrade: UPDATE_HELP, rollback: ROLLBACK_HELP } as const;
 const SKIP_TEXT = { "rolled-back": "you rolled back from it", "health-check": "it failed its health check on this machine" } as const;
 
@@ -58,7 +66,6 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
   const log = (line: string) => {
     if (background) ctx.out(`${new Date().toISOString()} ${line}\n`);
   };
-  const deps = (ctx.engine ?? ((l) => productionEngineDeps(ctx.env, ctx.version, l)))(log);
   const report = (r: RecoveryReport) => {
     for (const a of r.actions) ctx.err(`tropos: ${a}\n`);
   };
@@ -66,6 +73,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
     ctx.err(`tropos: waiting for another Tropos install to finish${holder ? ` (pid ${holder.pid})` : ""}…\n`);
 
   try {
+    const deps = (ctx.engine ?? ((l) => productionEngineDeps(ctx.env, ctx.version, l)))(log);
     if (cmd.kind === "install-self") {
       const run = await installSelf(deps, { kind: "self", execPath: ctx.execPath, manifestPath: cmd.manifest, signaturePath: cmd.signature, compiledVersion: ctx.version });
       report(run.recovery);
@@ -103,10 +111,10 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
     return 0;
   } catch (e) {
     if (background) {
-      log(`failed: ${(e as Error).message}`);
+      log(`failed: ${describe(e)}`);
       return 0;
     }
-    ctx.err(`tropos: ${(e as Error).message}\n`);
+    ctx.err(`tropos: ${describe(e)}\n`);
     return exitCodeFor(e);
   }
 }

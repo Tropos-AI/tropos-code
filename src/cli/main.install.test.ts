@@ -59,3 +59,39 @@ describe("main dispatches install subcommands (spec §12)", () => {
     expect(r.out).toStartWith("Usage: tropos install");
   });
 });
+
+describe("corrupt settings.json", () => {
+  async function corrupt() {
+    f = await makeEngineFixture();
+    await mkdir(join(f.home, ".tropos"), { recursive: true });
+    await writeFile(join(f.home, ".tropos", "settings.json"), "{ not json");
+  }
+
+  test("install --help still works", async () => {
+    await corrupt();
+    expect((await run(["install", "--help"], "/usr/local/bin/bun")).code).toBe(0);
+  });
+
+  test("install --self reaches the command, not a settings error", async () => {
+    await corrupt();
+    const r = await run(["install", "--self", "--manifest", "/nope/m.json", "--signature", "/nope/m.sig"], "/usr/local/bin/bun");
+    expect(r.err).not.toContain("settings");
+  });
+
+  test("rollback does not read settings", async () => {
+    await corrupt();
+    expect((await run(["rollback"], "/usr/local/bin/bun")).code).toBe(73);
+  });
+
+  test("update --background exits 0", async () => {
+    await corrupt();
+    expect((await run(["update", "--background"], "/usr/local/bin/bun")).code).toBe(0);
+  });
+
+  test("foreground update reports the settings error with exit 1", async () => {
+    await corrupt();
+    const r = await run(["update"], versionPath(f.layout, "1.0.0"));
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("settings");
+  });
+});

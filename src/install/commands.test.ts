@@ -4,7 +4,9 @@ import { writeFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { makeEngineFixture, type EngineFixture } from "../../test/install/helpers/engine";
 import { runInstallCommand, oneTimeInstallNotice, type CommandContext } from "./commands";
+import { makeTestKey } from "../../test/install/helpers/keys";
 import { versionPath } from "./layout";
+import { acquireInstallLock } from "./locks";
 
 let f: EngineFixture;
 afterEach(() => f?.close());
@@ -86,5 +88,81 @@ describe("runInstallCommand", () => {
     f.srv.put("channels", "latest.bak", "<html>");
     expect(await runInstallCommand({ kind: "install", target: "latest", force: false }, c)).toBe(69);
     expect(err.join("")).toContain("cannot resolve the latest channel");
+  });
+});
+
+describe("runInstallCommand fix round 1", () => {
+  const bg = { kind: "update", background: true, alias: "update" } as const;
+  const fg = { kind: "update", background: false, alias: "update" } as const;
+
+  test("background update exits 0 and logs a timestamped line when the update fails", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await f.direct("1.0.0");
+    f.srv.put("channels", "latest", "<html>");
+    f.srv.put("channels", "latest.bak", "<html>");
+    const { c, out, err } = ctx();
+    expect(await runInstallCommand(bg, c)).toBe(0);
+    expect(out.join("")).toMatch(/^\d{4}-\d\d-\d\dT[\d:.]+Z /m);
+    expect(err.join("")).toBe("");
+  });
+
+  test("background update exits 0 when the engine factory throws", async () => {
+    f = await makeEngineFixture();
+    const { c, out } = ctx({ engine: () => { throw new Error("no layout"); } });
+    expect(await runInstallCommand(bg, c)).toBe(0);
+    expect(out.join("")).toMatch(/^\d{4}-.* failed: no layout/m);
+  });
+
+  test("integrity failure maps to 65", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    const other = await makeTestKey(f.root, "other");
+    const { c, err } = ctx({ engine: (log) => ({ ...f.deps, log, trusted: other.trusted }) });
+    expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(65);
+    expect(err.join("")).toStartWith("tropos: ");
+  });
+
+  test("a held install lock maps to 75", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    const held = await acquireInstallLock(f.layout, { wait: false, version: "x" });
+    try {
+      const { c } = ctx({ engine: (log) => ({ ...f.deps, log, lockTimeoutMs: 50 }) });
+      expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(75);
+    } finally {
+      held?.release();
+    }
+  });
+
+  test("non-InstallError exits 1 with a clean message; a thrown string is shown as is", async () => {
+    f = await makeEngineFixture();
+    const a = ctx({ engine: () => { throw new TypeError("boom"); } });
+    expect(await runInstallCommand({ kind: "rollback" }, a.c)).toBe(1);
+    expect(a.err.join("")).toBe("tropos: boom\n");
+    const b = ctx({ engine: () => { throw "plain failure"; } });
+    expect(await runInstallCommand({ kind: "rollback" }, b.c)).toBe(1);
+    expect(b.err.join("")).toBe("tropos: plain failure\n");
+  });
+
+  test("upgrade alias behaves like update", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await f.direct("1.0.0");
+    const { c, out } = ctx();
+    await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c);
+    f.srv.put("channels", "latest", "1.0.0\n");
+    expect(await runInstallCommand({ ...fg, alias: "upgrade" }, c)).toBe(0);
+    expect(out.join("")).toContain("Tropos Code 1.0.0 is up to date (latest: 1.0.0).");
+  });
+
+  test("reinstalling the current version reports already installed", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await f.direct("1.0.0");
+    const { c, out } = ctx();
+    expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(0);
+    expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(0);
+    expect(out.join("")).toContain("Tropos Code 1.0.0 is already installed.");
   });
 });
