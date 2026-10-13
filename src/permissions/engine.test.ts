@@ -323,3 +323,19 @@ describe("suggestRule", () => {
     expect(suggestRule(edit("/work/app/a.ts"), cwd)).toBe("Edit(**)");
   });
 });
+
+describe("decide — bounded work", () => {
+  test("a pathological command is decided quickly, and deny/ask rules fail closed", () => {
+    const c = ctx({ allow: ["Bash(*)"], deny: ["Bash(nice:*)", "Bash(rm:*)"] });
+    for (const cmd of ["(" + "nice ".repeat(20000) + "ls)", "sudo -u root ".repeat(20000) + "ls", "ls " + ">".repeat(20000)]) {
+      const start = performance.now();
+      expect(decide(bash(cmd), c).behavior).toBe("deny");
+      expect(performance.now() - start).toBeLessThan(2000);
+    }
+  });
+  test("everyday commands are unaffected by the work allowance", () => {
+    const c = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
+    expect(decide(bash("git status && ls -la | wc -l"), c)).toEqual({ behavior: "allow" });
+    expect(decide(bash("sudo rm -rf build"), c).behavior).toBe("deny");
+  });
+});

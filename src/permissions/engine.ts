@@ -4,6 +4,7 @@ import type { Mode, ToolKind } from "../config/constants";
 import { isInside } from "../paths";
 import {
   bashPatternMatches,
+  createRestrictBudget,
   foldName,
   formatRule,
   hasLeadingPrefix,
@@ -12,6 +13,7 @@ import {
   pathPatternMatches,
   splitBashCommand,
   squashShellSpace,
+  type RestrictBudget,
   type Rule,
 } from "./rules";
 
@@ -73,7 +75,14 @@ function toolMatches(rule: Rule, req: PermissionRequest): boolean {
  * `restrict` = deny/ask matching (broad: case-insensitive where the filesystem is, wrapper-insensitive
  * for commands, relative patterns may climb out of cwd); allow matching is always narrow.
  */
-function ruleHits(rule: Rule, req: PermissionRequest, ctx: PermissionContext, mode: "any" | "all", restrict = false): boolean {
+function ruleHits(
+  rule: Rule,
+  req: PermissionRequest,
+  ctx: PermissionContext,
+  mode: "any" | "all",
+  restrict = false,
+  budget?: RestrictBudget,
+): boolean {
   if (!toolMatches(rule, req)) return false;
   if (!rule.pattern) {
     // A bare allow rule for a command tool is `Bash(*)`: it never approves a code runner.
@@ -82,7 +91,7 @@ function ruleHits(rule: Rule, req: PermissionRequest, ctx: PermissionContext, mo
   }
   if (req.command !== undefined) {
     const { parts } = splitBashCommand(req.command);
-    const hit = (p: string) => bashPatternMatches(rule.pattern!, p, { restrict });
+    const hit = (p: string) => bashPatternMatches(rule.pattern!, p, { restrict, budget });
     return mode === "any" ? parts.some(hit) : parts.length > 0 && parts.every(hit);
   }
   if (req.paths.length === 0) return false;
@@ -113,13 +122,15 @@ function isAllowed(req: PermissionRequest, ctx: PermissionContext): boolean {
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
-  const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true));
+  // One work allowance covers every deny and ask rule, so many rules cannot multiply the cost.
+  const budget = createRestrictBudget();
+  const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true, budget));
   if (denied) return { behavior: "deny", reason: `Blocked by the deny rule ${formatRule(denied)}.` };
   if (ctx.mode === "bypass") return { behavior: "allow" };
   if (ctx.mode === "plan" && (req.kind === "edit" || req.kind === "exec")) {
     return { behavior: "deny", reason: PLAN_MODE_REASON };
   }
-  if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true))) return { behavior: "ask" };
+  if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
   if (isAllowed(req, ctx)) return { behavior: "allow" };
 
   const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));

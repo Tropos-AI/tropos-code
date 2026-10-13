@@ -54,11 +54,17 @@ function isSafeRedirect(command: string, i: number): boolean {
   return readRedirectWord(command, j) === "/dev/null";
 }
 
-/** Reads the redirect target word starting at `j`: everything up to whitespace or a control operator. */
+/** Longest redirect target compared (`/dev/null`, a descriptor number); longer ones are never safe. */
+const REDIRECT_WORD_MAX = 16;
+
+/**
+ * Reads the redirect target word starting at `j`: everything up to whitespace or a control
+ * operator, but at most REDIRECT_WORD_MAX + 1 characters, so a run of `>` stays linear.
+ */
 function readRedirectWord(command: string, j: number): string {
-  let word = "";
-  while (j < command.length && !/[\s;|&]/.test(command[j]!)) word += command[j++];
-  return word;
+  let end = j;
+  while (end < command.length && end - j <= REDIRECT_WORD_MAX && !/[\s;|&]/.test(command[end]!)) end++;
+  return command.slice(j, end);
 }
 
 /**
@@ -474,12 +480,13 @@ function canonicalCommandWord(command: string): string {
  * of what is left each time leading wrappers are stripped (`/usr/bin/ſudo rm x` gives
  * `sudo rm x` and `rm x`), so rules for wrappers and for wrapped commands both match.
  */
-function restrictForms(command: string): string[] {
+function restrictForms(command: string, budget: Budget): string[] {
   const forms: string[] = [];
   let current = command;
   // Each pass strips at least one wrapper word, so the command's length bounds the passes;
   // the bound only guards against a loop, it never cuts a real chain of wrappers short.
   for (let n = 0; n <= command.length; n++) {
+    spend(budget, 3 * current.length);
     const canonical = canonicalCommandWord(current);
     forms.push(canonical);
     const { rest } = stripWrappers(canonical, 1);
@@ -536,6 +543,8 @@ export function hasLeadingPrefix(part: string): boolean {
 export interface BashPatternOptions {
   /** True for deny/ask rules: broaden matching so wrappers cannot hide the command. */
   restrict?: boolean;
+  /** Work allowance for restrict matching, shared across the rules checked for one request. */
+  budget?: RestrictBudget;
 }
 
 /**
@@ -597,15 +606,48 @@ export function bashPatternMatches(pattern: string, command: string, opts: BashP
   if (bashPatternMatchesExact(pattern, command, true)) return true;
   const folded = foldRuleWords(pattern);
   const hit = (form: string): boolean => bashPatternMatchesExact(folded, form, true);
-  if (restrictForms(command).some(hit)) return true;
-  // An unsafe command may run the denied one anywhere inside it: `(rm x)`, `$(rm x)`, `>f rm x`.
-  return splitBashCommand(command).unsafe && embeddedForms(command, folded).some(hit);
+  const budget = opts.budget ?? createRestrictBudget();
+  try {
+    if (restrictForms(command, budget).some(hit)) return true;
+    // An unsafe command may run the denied one anywhere inside it: `(rm x)`, `$(rm x)`, `>f rm x`.
+    return splitBashCommand(command).unsafe && embeddedForms(command, folded, budget).some(hit);
+  } catch (err) {
+    // A command too convoluted to analyse within the budget matches: deny/ask fail closed.
+    if (err instanceof BudgetExceeded) return true;
+    throw err;
+  }
+}
+
+/**
+ * Characters the deny/ask matching for one request may scan. Matching re-reads the command once per wrapper
+ * and per embedded candidate, so a pathological command (thousands of nested wrappers) could
+ * otherwise take minutes; everyday commands use a tiny fraction of this.
+ */
+export const RESTRICT_BUDGET = 4_000_000;
+
+export interface RestrictBudget {
+  left: number;
+}
+
+type Budget = RestrictBudget;
+
+/** A fresh allowance of RESTRICT_BUDGET characters for one request's deny/ask matching. */
+export function createRestrictBudget(): RestrictBudget {
+  return { left: RESTRICT_BUDGET };
+}
+
+class BudgetExceeded extends Error {}
+
+function spend(budget: Budget, chars: number): void {
+  budget.left -= chars;
+  if (budget.left < 0) throw new BudgetExceeded();
 }
 
 /** Characters after which a word may be a command when the shell parses an unsafe command. */
 const COMMAND_BOUNDARY = /[\s(){};!|&`'"<>$=]/;
 /** Characters that end an embedded command's text. */
 const EMBEDDED_END = /[)};|&`<>\n]/;
+const EMBEDDED_END_FROM = /[)};|&`<>\n]/g;
 
 /**
  * Deny/ask forms for an unsafe command: every word that follows a boundary character and names
@@ -613,7 +655,7 @@ const EMBEDDED_END = /[)};|&`<>\n]/;
  * This over-matches on purpose: unsafe commands are never auto-approved, so the only cost of
  * a false hit is a deny where an ask would do.
  */
-function embeddedForms(command: string, foldedPattern: string): string[] {
+function embeddedForms(command: string, foldedPattern: string, budget: Budget): string[] {
   const ruleWord = foldedPattern.split(/[ \t\n]+/)[0]!.replace(/:\*$/, "");
   if (ruleWord === "" || ruleWord === "*") return [];
   const text = command.replace(/\\\n/g, "");
@@ -621,14 +663,19 @@ function embeddedForms(command: string, foldedPattern: string): string[] {
   for (let i = 0; i < text.length; i++) {
     if (i > 0 && !COMMAND_BOUNDARY.test(text[i - 1]!)) continue;
     if (/\s/.test(text[i]!)) continue;
-    let word = unquoteWord(text.slice(i, wordEnd(text, i)).split(EMBEDDED_END)[0]!);
+    const end = wordEnd(text, i);
+    spend(budget, end - i + 1);
+    let word = unquoteWord(text.slice(i, end).split(EMBEDDED_END)[0]!);
     if (word.includes("/") && baseName(word) !== "") word = baseName(word);
     if (foldName(word) !== ruleWord) continue;
-    let tail = text.slice(i).split(EMBEDDED_END)[0]!;
+    EMBEDDED_END_FROM.lastIndex = i;
+    const stop = EMBEDDED_END_FROM.exec(text)?.index ?? text.length;
+    spend(budget, stop - i + 1);
+    let tail = text.slice(i, stop);
     // Text that began right after a quote ends at the matching quote.
     const opener = text[i - 1];
     if (opener === "'" || opener === '"') tail = tail.split(opener)[0]!;
-    forms.push(...restrictForms(tail));
+    for (const form of restrictForms(tail, budget)) forms.push(form);
   }
   return forms;
 }
