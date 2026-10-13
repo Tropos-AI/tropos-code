@@ -1,6 +1,7 @@
 // src/agent/agent.ts
 import Anthropic from "@anthropic-ai/sdk";
 import { describeError } from "../api/errors";
+import { errorText } from "../error-text";
 import type { Message, Model } from "../api/model";
 import { contextTokens, messageCostUsd } from "../api/pricing";
 import type { Effort, Mode } from "../config/constants";
@@ -46,10 +47,6 @@ function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolO
 }
 
 /** The message of a caught value: anything can be thrown, not only Error. */
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 const errorResult = (id: string, content: string): ToolResult => ({ type: "tool_result", tool_use_id: id, content, is_error: true });
 
 export class Agent {
@@ -81,7 +78,7 @@ export class Agent {
       await this.push({ role: "user", content });
       return await this.loop(signal);
     } catch (err) {
-      this.emit({ type: "notice", level: "error", text: `Tropos could not complete this turn: ${errorMessage(err)}` });
+      this.emit({ type: "notice", level: "error", text: `Tropos could not complete this turn: ${errorText(err)}` });
       this.emit({ type: "turn_end", reason: "error" });
       return "error";
     }
@@ -93,7 +90,7 @@ export class Agent {
     try {
       await this.opts.persist(message);
     } catch (err) {
-      this.emit({ type: "notice", level: "error", text: `Could not save the session: ${errorMessage(err)}` });
+      this.emit({ type: "notice", level: "error", text: `Could not save the session: ${errorText(err)}` });
     }
   }
 
@@ -271,7 +268,7 @@ export class Agent {
       return await this.runToolUnsafe(block, signal);
     } catch (err) {
       const name = this.opts.tools.find((t) => t.name === block.name)?.name ?? block.name;
-      return this.finish(block, name, { content: `${name} failed: ${errorMessage(err)}`, isError: true }, "error");
+      return this.finish(block, name, { content: `${name} failed: ${errorText(err)}`, isError: true }, "error");
     }
   }
 
@@ -299,7 +296,7 @@ export class Agent {
       subject = tool.subject(input, this.opts.toolContext.cwd());
     } catch (err) {
       // e.g. PathResolutionError: fail closed, never run the tool.
-      return this.finish(block, tool.name, { content: `${tool.name} refused: ${errorMessage(err)}`, isError: true }, "error");
+      return this.finish(block, tool.name, { content: `${tool.name} refused: ${errorText(err)}`, isError: true }, "error");
     }
     const decision = decide({ toolName: tool.name, kind: tool.kind, ...subject }, this.opts.permissions());
     if (decision.behavior === "deny") {
@@ -332,7 +329,7 @@ export class Agent {
         decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
       output = await raceAbort(tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied }), signal);
     } catch (err) {
-      output = { content: `${tool.name} failed: ${errorMessage(err)}`, isError: true };
+      output = { content: `${tool.name} failed: ${errorText(err)}`, isError: true };
     }
     return this.finish(block, tool.name, output, output.isError ? "error" : "done");
   }

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { describeError } from "./errors";
 
 const apiError = (status: number) =>
@@ -41,4 +41,13 @@ test("missing credentials wrapped in an AnthropicError by the stream", () => {
 test("plain errors and values", () => {
   expect(describeError(new Error("x")).message).toBe("x");
   expect(describeError("weird").message).toBe("weird");
+});
+
+describe("describeError never throws", () => {
+  test("on values that cannot be stringified or whose message is not a string", () => {
+    expect(describeError(Object.create(null))).toEqual({ message: "[object Object]", retryable: false });
+    const err = new Error("x");
+    (err as { message: unknown }).message = { toString: () => "odd" };
+    expect(describeError(err)).toEqual({ message: "odd", retryable: false });
+  });
 });

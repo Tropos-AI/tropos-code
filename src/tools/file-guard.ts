@@ -1,6 +1,7 @@
 // src/tools/file-guard.ts
 import { constants } from "node:fs";
 import { open, stat } from "node:fs/promises";
+import { errorText } from "../error-text";
 import type { ToolContext, ToolOutput } from "./types";
 
 /**
@@ -41,6 +42,5 @@ export async function checkFreshness(path: string, ctx: ToolContext): Promise<Fr
 
 /** Error result for a write that failed on disk or in path resolution. */
 export function cannotWrite(path: string, error: unknown): ToolOutput {
-  const message = error instanceof Error ? error.message : String(error);
-  return { content: `Cannot write ${path}: ${message}`, isError: true };
+  return { content: `Cannot write ${path}: ${errorText(error)}`, isError: true };
 }

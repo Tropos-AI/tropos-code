@@ -96,7 +96,8 @@ export function splitBashCommand(command: string): SplitCommand {
   // True when the previous character was an unquoted, unescaped `>` (a redirect operator).
   let afterRedirect = false;
   const push = () => {
-    const trimmed = current.trim();
+    // Only shell whitespace separates words: a trailing no-break space belongs to the last word.
+    const trimmed = current.replace(/^[ \t\n]+|[ \t\n]+$/g, "");
     if (trimmed) parts.push(trimmed);
     current = "";
   };
@@ -473,11 +474,13 @@ function canonicalCommandWord(command: string): string {
 function restrictForms(command: string): string[] {
   const forms: string[] = [];
   let current = command;
-  for (let n = 0; n < 8; n++) {
+  // Each pass strips at least one wrapper word, so the command's length bounds the passes;
+  // the bound only guards against a loop, it never cuts a real chain of wrappers short.
+  for (let n = 0; n <= command.length; n++) {
     const canonical = canonicalCommandWord(current);
     forms.push(canonical);
     const { rest } = stripWrappers(canonical, 1);
-    if (rest === canonical) break;
+    if (rest === canonical || rest === "") return forms;
     current = rest;
   }
   return forms;
@@ -520,7 +523,7 @@ function startsWithCodeRunner(command: string): boolean {
 
 /** True when assignments, safe redirects or wrapper words lead the simple command. */
 export function hasLeadingPrefix(part: string): boolean {
-  return stripWrappers(part).rest !== part.trim();
+  return stripWrappers(part).rest !== part.replace(/^[ \t\n]+|[ \t\n]+$/g, "");
 }
 
 export interface BashPatternOptions {
@@ -528,18 +531,50 @@ export interface BashPatternOptions {
   restrict?: boolean;
 }
 
-/** Collapses runs of shell whitespace (space, tab, newline) only: Unicode spaces are ordinary characters to the shell. */
-const squashShellSpace = (s: string): string => s.replace(/^[ \t\n]+|[ \t\n]+$/g, "").replace(/[ \t\n]+/g, " ");
+/**
+ * Collapses runs of unquoted shell whitespace (space, tab, newline) to one space and trims them.
+ * Whitespace inside quotes or after a backslash is part of a word and kept as written, and
+ * Unicode spaces are ordinary characters to the shell.
+ */
+export function squashShellSpace(s: string): string {
+  let out = "";
+  let quote: "'" | '"' | null = null;
+  let space = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (quote === null && (ch === " " || ch === "\t" || ch === "\n")) {
+      space = out !== "";
+      continue;
+    }
+    if (space) out += " ";
+    space = false;
+    out += ch;
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (ch === "\\" && i + 1 < s.length) {
+      out += s[++i];
+    } else if (quote === '"') {
+      if (ch === '"') quote = null;
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+    }
+  }
+  return out;
+}
 
-function bashPatternMatchesExact(pattern: string, command: string): boolean {
-  const normalized = squashShellSpace(command);
+/** Collapses every run of shell whitespace, quoted or not: deny/ask rules match broadly. */
+const squashAllShellSpace = (s: string): string => s.replace(/^[ \t\n]+|[ \t\n]+$/g, "").replace(/[ \t\n]+/g, " ");
+
+function bashPatternMatchesExact(pattern: string, command: string, restrict = false): boolean {
+  const squash = restrict ? squashAllShellSpace : squashShellSpace;
+  const normalized = squash(command);
   const p = pattern.trim();
   if (p === "*") return true;
   if (p.endsWith(":*")) {
-    const prefix = squashShellSpace(p.slice(0, -2));
+    const prefix = squash(p.slice(0, -2));
     return normalized === prefix || normalized.startsWith(`${prefix} `);
   }
-  return normalized === squashShellSpace(p);
+  return normalized === squash(p);
 }
 
 /**
@@ -551,10 +586,10 @@ export function bashPatternMatches(pattern: string, command: string, opts: BashP
   const p = pattern.trim();
   const broad = p === "*" || p.endsWith(":*");
   if (broad && opts.restrict !== true && startsWithCodeRunner(command)) return false;
-  if (bashPatternMatchesExact(pattern, command)) return true;
-  if (opts.restrict !== true) return false;
+  if (opts.restrict !== true) return bashPatternMatchesExact(pattern, command);
+  if (bashPatternMatchesExact(pattern, command, true)) return true;
   const folded = foldRuleWord(pattern);
-  return restrictForms(command).some((form) => bashPatternMatchesExact(folded, form));
+  return restrictForms(command).some((form) => bashPatternMatchesExact(folded, form, true));
 }
 
 /** Folds a rule's first word on case-insensitive platforms, to meet the folded command word. */

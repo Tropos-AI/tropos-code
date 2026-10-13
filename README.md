@@ -55,9 +55,10 @@ Windows, compare names the way the filesystem does, so `Bash(rm:*)` also stops `
 `Bash(sh:*)` stops `ſh`), but treat Bash deny rules as a safety net, not a sandbox: outside
 bypass mode, anything that slips past one still asks first. Deny rules are tool-scoped: a `Read(.env)` deny limits Read, Glob and
 Grep, not a Bash `cat .env` that you allow. Relative path patterns are anchored at the project
-root (`Read(.env)` means `./.env`; use `Read(**/.env)` for every `.env`). Accept-edits mode still
-asks before writing inside `.git/` or `.husky/` (under any spelling the filesystem treats as the
-same name, such as `.GIT` or `.huſky`), since hooks and git config run code later.
+root (`Read(.env)` means `./.env`; use `Read(**/.env)` for every `.env`). Writes inside `.git/` or
+`.husky/` (under any spelling the filesystem treats as the same name, such as `.GIT` or `.huſky`)
+always ask, since hooks and git config run code later: accept-edits mode and broad rules like
+`Edit(**)` don't cover them, only a rule that names the folder, such as `Edit(.husky/**)`.
 
 A prefix rule approves every argument: `Bash(git:*)` also allows `git -c core.pager=…`, and
 `Bash(npm:*)` runs any package script. Prefer subcommand rules such as `Bash(git status:*)`.

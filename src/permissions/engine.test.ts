@@ -221,6 +221,31 @@ describe("decide — final review fixes", () => {
       expect(decide(bash(cmd), ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] })).behavior).toBe(folding ? "deny" : "allow");
     }
   });
+  test("a trailing non-breaking space defeats an exact allow rule", () => {
+    expect(decide(bash("rm build.log\u00a0"), ctx({ allow: ["Bash(rm build.log)"] })).behavior).toBe("ask");
+    expect(decide(bash("rm build.log "), ctx({ allow: ["Bash(rm build.log)"] }))).toEqual({ behavior: "allow" });
+  });
+  test("the exact rule suggested for a quoted command matches that command", () => {
+    const suggestion = suggestRule(bash("python3 -c 'print(1)   '"), "/work/app");
+    expect(suggestion).toBe("Bash(python3 -c 'print(1)   ')");
+    expect(decide(bash("python3 -c 'print(1)   '"), ctx({ allow: [suggestion!] }))).toEqual({ behavior: "allow" });
+  });
+  test("broad Edit rules never approve writes inside .git or .husky, in any mode", () => {
+    for (const mode of ["default", "acceptEdits"] as const) {
+      for (const rule of ["Edit(**)", "Edit", "Edit(/work/app/**)", "Write(**)"]) {
+        for (const p of ["/work/app/.git/hooks/pre-commit", "/work/app/.HUSKY/pre-commit", "/work/app/sub/.git/config"]) {
+          expect(decide(write(p), ctx({ mode, allow: [rule] })).behavior).toBe("ask");
+        }
+        expect(decide(write("/work/app/src/a.ts"), ctx({ mode, allow: [rule] }))).toEqual({ behavior: "allow" });
+      }
+    }
+  });
+  test("a rule that names .git or .husky still approves writes there", () => {
+    for (const rule of ["Edit(.git/hooks/**)", "Edit(**/.husky/**)", "Edit(/work/app/.git/**)"]) {
+      const target = rule.includes("husky") ? "/work/app/.husky/pre-commit" : "/work/app/.git/hooks/pre-commit";
+      expect(decide(write(target), ctx({ allow: [rule] }))).toEqual({ behavior: "allow" });
+    }
+  });
   test("an explicit allow rule still approves a write inside .git", () => {
     const c = ctx({ mode: "acceptEdits", allow: ["Edit(.husky/**)"] });
     expect(decide(write("/work/app/.husky/pre-commit"), c)).toEqual({ behavior: "allow" });

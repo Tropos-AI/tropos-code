@@ -1,6 +1,6 @@
 // src/permissions/rules.test.ts
 import { describe, expect, test } from "bun:test";
-import { CODE_RUNNERS, bashPatternMatches, foldName, formatRule, hasLeadingPrefix, isCodeRunner, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
+import { CODE_RUNNERS, bashPatternMatches, foldName, squashShellSpace, formatRule, hasLeadingPrefix, isCodeRunner, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
 
 describe("parseRule / formatRule", () => {
   test("bare tool name", () => {
@@ -629,5 +629,34 @@ describe("deny rules for wrapper commands", () => {
   test("the wrapped command is still caught", () => {
     expect(bashPatternMatches("ls:*", "/usr/bin/sudo -u root ls -la", { restrict: true })).toBe(true);
     expect(bashPatternMatches("ls:*", "sudo ls", {})).toBe(false);
+  });
+});
+
+describe("exact rules keep quoted and Unicode whitespace", () => {
+  test("whitespace inside quotes or escaped is part of the word", () => {
+    expect(squashShellSpace("  printf  'a   b'  \"c  d\"  e\\  f  ")).toBe("printf 'a   b' \"c  d\" e\\  f");
+    expect(squashShellSpace("echo 'it''s  x'")).toBe("echo 'it''s  x'");
+    expect(squashShellSpace("echo \"a \\\"  b\"")).toBe("echo \"a \\\"  b\"");
+  });
+  test("an allow rule does not match different quoted spacing", () => {
+    expect(bashPatternMatches("printf 'a b'", "printf 'a   b'")).toBe(false);
+    expect(bashPatternMatches("printf 'a b'", "printf   'a b'")).toBe(true);
+    expect(bashPatternMatches("git commit -m 'a b':*", "git commit -m 'a  b' -q")).toBe(false);
+  });
+  test("deny rules stay broad about quoted spacing", () => {
+    expect(bashPatternMatches("printf 'a b'", "printf 'a   b'", { restrict: true })).toBe(true);
+  });
+  test("a trailing non-breaking space is part of the last word", () => {
+    expect(splitBashCommand("rm build.log\u00a0").parts).toEqual(["rm build.log\u00a0"]);
+    expect(splitBashCommand(" \t ls \n").parts).toEqual(["ls"]);
+    expect(bashPatternMatches("rm build.log", "rm build.log\u00a0")).toBe(false);
+  });
+});
+
+describe("deny rules see through any number of wrappers", () => {
+  test.each([8, 9, 40, 200])("%i nested wrappers", (n) => {
+    expect(bashPatternMatches("rm:*", `${"nice ".repeat(n)}rm -rf x`, { restrict: true })).toBe(true);
+    expect(bashPatternMatches("rm:*", `${"sudo env nice ".repeat(n)}/bin/RM -rf x`, { restrict: true })).toBe(process.platform === "darwin" || process.platform === "win32");
+    expect(bashPatternMatches("rm:*", `${"sudo env nice ".repeat(n)}/bin/rm -rf x`, { restrict: true })).toBe(true);
   });
 });

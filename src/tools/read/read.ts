@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { z } from "zod";
 import { PathResolutionError, resolveToolPath } from "../paths";
+import { errorText } from "../../error-text";
 import { defineTool, type ToolOutput } from "../types";
 
 const DEFAULT_LIMIT = 2000;
@@ -29,12 +30,8 @@ function formatBytes(n: number): string {
   return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function cannotRead(path: string, error: unknown): ToolOutput {
-  return { content: `Cannot read ${path}: ${errorMessage(error)}`, isError: true };
+  return { content: `Cannot read ${path}: ${errorText(error)}`, isError: true };
 }
 
 /** Reads a file's bytes, or returns the error result for the caller to hand back. */

@@ -11,6 +11,7 @@ import {
   parseRule,
   pathPatternMatches,
   splitBashCommand,
+  squashShellSpace,
   type Rule,
 } from "./rules";
 
@@ -100,7 +101,15 @@ function isAllowed(req: PermissionRequest, ctx: PermissionContext): boolean {
   }
   // A bare rule (`Read`) is not a path scope: it never approves a path outside the project.
   const inside = req.paths.every((p) => ctx.allowedDirs.some((dir) => isInside(p, dir)));
-  return ctx.rules.allow.some((rule) => (rule.pattern !== undefined || inside) && ruleHits(rule, req, ctx, "all"));
+  // Writes inside .git/.husky run code on a later git command: only a rule whose pattern names
+  // the folder (`Edit(.husky/**)`) approves them, never a broad one like `Edit(**)`.
+  const gitControl = req.kind === "edit" && req.paths.some((p) => inGitControlDir(p));
+  return ctx.rules.allow.some(
+    (rule) =>
+      (rule.pattern !== undefined || inside) &&
+      (!gitControl || (rule.pattern !== undefined && inGitControlDir(rule.pattern))) &&
+      ruleHits(rule, req, ctx, "all"),
+  );
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
@@ -152,7 +161,7 @@ export function inGitControlDir(path: string, platform: NodeJS.Platform = proces
 const SHELL_SPACE = /[ \t\n]+/;
 
 function commandPrefix(command: string): string {
-  const words = command.trim().split(SHELL_SPACE);
+  const words = squashShellSpace(command).split(" ");
   const prefix = [words[0]!];
   const second = words[1];
   if (second && /^[a-z][a-z0-9-]*$/.test(second)) prefix.push(second);
@@ -171,7 +180,7 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
     if (isCodeRunner(word) || second.startsWith("-")) {
       // Interpreters run arbitrary code, and a leading option (`git -c core.pager=...`) can change
       // what the subcommand does: only ever offer the exact command.
-      const exact = part.replace(/[ \t\n]+/g, " ");
+      const exact = squashShellSpace(part);
       return exact.length > 200 || exact.endsWith(":*") ? undefined : `${req.toolName}(${exact})`;
     }
     return `${req.toolName}(${commandPrefix(part)}:*)`;

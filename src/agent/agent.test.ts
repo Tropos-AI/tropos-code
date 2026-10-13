@@ -691,6 +691,26 @@ describe("Agent failure paths keep history valid", () => {
     expect(events.find((e) => e.type === "notice")).toMatchObject({ level: "error", text: expect.stringContaining("null") });
   });
 
+  test("a failure that throws an unprintable value still ends the turn with an error", async () => {
+    const events: AgentEvent[] = [];
+    const agent = new Agent({
+      model: new FakeModel([() => reply([textBlock("never")])]),
+      tools: [echo] as AnyTool[],
+      system: "s",
+      config: () => {
+        throw Object.create(null);
+      },
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd: "/work", home: "/h", allowedDirs: ["/work"] }),
+      askPermission: async () => ({ kind: "allow" }),
+      contextText: async () => "c",
+      persist: async () => {},
+      toolContext: makeToolContext({ root: "/work" }),
+      emit: (e) => events.push(e),
+    });
+    expect(await agent.run("go", new AbortController().signal)).toBe("error");
+    expect(events.find((e) => e.type === "notice")).toMatchObject({ level: "error", text: expect.stringContaining("[object Object]") });
+  });
+
   test("a tool that rejects with a non-Error value becomes an error result", async () => {
     const odd = defineTool({
       name: "Odd",
