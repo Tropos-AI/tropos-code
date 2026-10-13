@@ -12,10 +12,21 @@ if [ ! -x "$bin" ]; then
   exit 1
 fi
 
-dest="$HOME/.local/share/tropos/versions/$version"
+data="$HOME/.local/share/tropos"
+dest="$data/versions/$version"
+if [ -e "$data/manifests/$version/manifest.json" ]; then
+  echo "Tropos Code $version is a released version managed by the updater; refusing to replace it with a local build." >&2
+  echo "Bump the version in package.json, or use: tropos install $version --force" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$dest")" "$HOME/.local/bin"
-cp "$bin" "$dest"
-chmod +x "$dest"
+# Copy beside the target, then rename over it: a running tropos keeps its own (old) file.
+tmp="$data/versions/.local-build-$version.$$"
+trap 'rm -f "$tmp"' EXIT
+cp "$bin" "$tmp"
+chmod 755 "$tmp"
+mv -f "$tmp" "$dest"
+trap - EXIT
 ln -sf "$dest" "$HOME/.local/bin/tropos"
 echo "Installed Tropos Code $version at $HOME/.local/bin/tropos"
 case ":$PATH:" in
