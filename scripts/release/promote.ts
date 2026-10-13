@@ -50,14 +50,6 @@ function parseRecord(bytes: Uint8Array | null): VerifiedRecord | null {
   }
 }
 
-/** Decision D1-A: `verified.json` on the version release itself (tests only; tropos-code releases are immutable). */
-export function recordsOnVersionRelease(main: GitHubClient): VerificationRecords {
-  return {
-    read: async (v) => parseRecord(await main.readAsset(`v${v}`, "verified.json")),
-    write: (v, r) => main.uploadAsset(`v${v}`, "verified.json", enc(`${JSON.stringify(r)}\n`)),
-  };
-}
-
 /** Decision D1-B: `verified-<x>.json` on the mutable channels release. */
 export function recordsOnChannelsRelease(channels: GitHubClient): VerificationRecords {
   return {

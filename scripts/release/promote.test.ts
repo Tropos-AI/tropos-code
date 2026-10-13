@@ -1,9 +1,20 @@
 // scripts/release/promote.test.ts
 import { beforeEach, describe, expect, test } from "bun:test";
-import { checkChannels, previousRelease, promoteLatest, promoteStable, recordsOnChannelsRelease, recordsOnVersionRelease, type GitHubClient, type PromoteDeps, type ReleaseInfo } from "./promote";
+import { checkChannels, previousRelease, promoteLatest, promoteStable, recordsOnChannelsRelease, type GitHubClient, type PromoteDeps, type ReleaseInfo, type VerificationRecords } from "./promote";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array | null) => (b ? new TextDecoder().decode(b) : null);
+
+/** Decision D1-A, kept for these tests only: `verified.json` on the version release (tropos-code releases are immutable, so production uses D1-B). */
+function recordsOnVersionRelease(main: GitHubClient): VerificationRecords {
+  return {
+    read: async (v) => {
+      const text = dec(await main.readAsset(`v${v}`, "verified.json"));
+      return text === null ? null : JSON.parse(text);
+    },
+    write: (v, r) => main.uploadAsset(`v${v}`, "verified.json", enc(`${JSON.stringify(r)}\n`)),
+  };
+}
 
 /** In-memory GitHub with --clobber semantics (delete, then upload) and fault injection. */
 class FakeGitHub implements GitHubClient {
