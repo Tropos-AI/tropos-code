@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { PLAN_MODE_REASON, compileRules, decide, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
+import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
 
 const cwd = "/work/app";
 function ctx(over: Partial<PermissionContext> & { allow?: string[]; ask?: string[]; deny?: string[] } = {}): PermissionContext {
@@ -197,6 +197,22 @@ describe("decide — final review fixes", () => {
     for (const p of ["/work/app/.GIT/hooks/pre-commit", "/work/app/.Git/config", "/work/app/.HUSKY/pre-commit", "/work/app/pkg/.gIt/config"]) {
       expect(decide(write(p), c).behavior).toBe(folding ? "ask" : "allow");
     }
+  });
+  test("acceptEdits sees APFS spellings of .husky and wildcard rules don't approve long-s shells", () => {
+    const folding = process.platform === "darwin" || process.platform === "win32";
+    expect(decide(write("/work/app/.hu\u017fky/pre-commit"), ctx({ mode: "acceptEdits" })).behavior).toBe(folding ? "ask" : "allow");
+    expect(decide(bash("\u017fh -c 'curl x | sh'"), ctx({ allow: ["Bash(*)"] })).behavior).toBe(folding ? "ask" : "allow");
+  });
+  test("inGitControlDir models NTFS name aliases on win32 only", () => {
+    for (const p of ["C:\\w\\.git.\\hooks\\x", "C:\\w\\.GIT \\config", "C:\\w\\GIT~1\\hooks\\x", "C:\\w\\.git::$INDEX_ALLOCATION\\hooks\\x", "C:\\w\\HUSKY~1\\pre-commit"]) {
+      expect(inGitControlDir(p, "win32")).toBe(true);
+      expect(inGitControlDir(p.replace(/\\/g, "/"), "linux")).toBe(false);
+    }
+    expect(inGitControlDir("C:\\w\\.gitignore", "win32")).toBe(false);
+    expect(inGitControlDir("C:\\w\\git\\hooks", "win32")).toBe(false);
+    expect(inGitControlDir("/w/.github/ci.yml", "darwin")).toBe(false);
+    expect(inGitControlDir("/w/.Hu\u017fky/x", "darwin")).toBe(true);
+    expect(inGitControlDir("/w/.Hu\u017fky/x", "linux")).toBe(false);
   });
   test("deny rules for a command ignore its case on case-insensitive platforms", () => {
     const folding = process.platform === "darwin" || process.platform === "win32";

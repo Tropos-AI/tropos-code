@@ -3,8 +3,8 @@ import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
 import { isInside } from "../paths";
 import {
-  CASE_INSENSITIVE_FS,
   bashPatternMatches,
+  foldName,
   formatRule,
   hasLeadingPrefix,
   isCodeRunner,
@@ -119,7 +119,7 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   if (req.kind === "read" || req.kind === "meta") return { behavior: "allow" };
   const suggestion = suggestRule(req, ctx.cwd);
   if (req.kind === "edit" && ctx.mode === "acceptEdits") {
-    if (!req.paths.some(inGitControlDir)) return { behavior: "allow" };
+    if (!req.paths.some((p) => inGitControlDir(p))) return { behavior: "allow" };
     // Hooks and config under .git/.husky run code on a later git command: never auto-approved.
     const reason = "writes to git hooks/config run code later";
     return suggestion ? { behavior: "ask", reason, suggestion } : { behavior: "ask", reason };
@@ -127,11 +127,25 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   return suggestion ? { behavior: "ask", suggestion } : { behavior: "ask" };
 }
 
-/** True when any segment of the path is `.git` or `.husky` (any case on case-insensitive platforms). */
-function inGitControlDir(path: string): boolean {
-  return path.split(/[\\/]/).some((segment) => {
-    const name = CASE_INSENSITIVE_FS ? segment.toLowerCase() : segment;
-    return name === ".git" || name === ".husky";
+const GIT_CONTROL_NAMES = new Set([".git", ".husky"]);
+/** 8.3 short names NTFS gives `.git` and `.husky`. */
+const NTFS_SHORT_NAMES = new Set(["git~1", "husky~1"]);
+
+/**
+ * True when any segment of the path names `.git` or `.husky` on this platform: folded the way
+ * APFS and NTFS compare names, and on win32 also with NTFS's trailing dots and spaces, alternate
+ * stream suffix (`.git::$INDEX_ALLOCATION`) and 8.3 short names (`GIT~1`).
+ */
+export function inGitControlDir(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  const insensitive = platform === "darwin" || platform === "win32";
+  const segments = platform === "win32" ? path.split(/[\\/]/) : path.split("/");
+  return segments.some((segment) => {
+    let name = foldName(segment, insensitive);
+    if (platform === "win32") {
+      name = name.replace(/:.*$/s, "").replace(/[. ]+$/, "");
+      if (NTFS_SHORT_NAMES.has(name)) return true;
+    }
+    return GIT_CONTROL_NAMES.has(name);
   });
 }
 

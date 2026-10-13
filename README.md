@@ -51,13 +51,13 @@ Deny beats ask beats allow. A shell command auto-approves only when every part o
 (`a && b | c`) matches an allow rule and it contains nothing the matcher can't model
 (command substitution, heredocs, file redirection, quoted or dynamic command words…).
 Deny rules see through wrappers like `command`, `env`, `sudo` and `timeout` (and, on macOS and
-Windows, ignore the command's case and path, so `Bash(rm:*)` also stops `/BIN/RM`), but treat
-Bash deny rules as a safety net, not a sandbox: outside bypass mode, anything that slips
-past one still asks first. Deny rules are tool-scoped: a `Read(.env)` deny limits Read, Glob and
+Windows, compare names the way the filesystem does, so `Bash(rm:*)` also stops `/BIN/RM` and
+`Bash(sh:*)` stops `ſh`), but treat Bash deny rules as a safety net, not a sandbox: outside
+bypass mode, anything that slips past one still asks first. Deny rules are tool-scoped: a `Read(.env)` deny limits Read, Glob and
 Grep, not a Bash `cat .env` that you allow. Relative path patterns are anchored at the project
 root (`Read(.env)` means `./.env`; use `Read(**/.env)` for every `.env`). Accept-edits mode still
-asks before writing inside `.git/` or `.husky/` (in any letter case on macOS and Windows), since
-hooks and git config run code later.
+asks before writing inside `.git/` or `.husky/` (under any spelling the filesystem treats as the
+same name, such as `.GIT` or `.huſky`), since hooks and git config run code later.
 
 A prefix rule approves every argument: `Bash(git:*)` also allows `git -c core.pager=…`, and
 `Bash(npm:*)` runs any package script. Prefer subcommand rules such as `Bash(git status:*)`.

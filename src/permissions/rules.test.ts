@@ -1,6 +1,6 @@
 // src/permissions/rules.test.ts
 import { describe, expect, test } from "bun:test";
-import { CODE_RUNNERS, bashPatternMatches, formatRule, hasLeadingPrefix, isCodeRunner, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
+import { CODE_RUNNERS, bashPatternMatches, foldName, formatRule, hasLeadingPrefix, isCodeRunner, parseRule, pathPatternMatches, splitBashCommand } from "./rules";
 
 describe("parseRule / formatRule", () => {
   test("bare tool name", () => {
@@ -583,5 +583,51 @@ describe("restrict matching folds the command word's case", () => {
     expect(bashPatternMatches("git push --force", "GIT push --force", { restrict: true })).toBe(folding);
     expect(bashPatternMatches("git push --force", "git push --FORCE", { restrict: true })).toBe(false);
     expect(bashPatternMatches("rm:*", "RM x")).toBe(false);
+  });
+});
+
+describe("names fold the way APFS compares them", () => {
+  const folding = process.platform === "darwin" || process.platform === "win32";
+  test("foldName applies full Unicode case folding on case-insensitive platforms", () => {
+    expect(foldName("\u017fh")).toBe(folding ? "sh" : "\u017fh");
+    expect(foldName("\u212aill")).toBe(folding ? "kill" : "\u212aill");
+    expect(foldName("\ufb06race")).toBe(folding ? "strace" : "\ufb06race");
+    expect(foldName("RM")).toBe(folding ? "rm" : "RM");
+    expect(foldName("\u017fh", false)).toBe("\u017fh");
+    expect(foldName("\u017fh", true)).toBe("sh");
+  });
+  test("deny rules catch long-s, Kelvin-sign and ligature spellings", () => {
+    expect(bashPatternMatches("sh:*", "\u017fh x", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("kill:*", "\u212aill 1", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("sudo:*", "\u017fudo ls", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("rm:*", "\u017fudo rm x", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("strace:*", "\ufb06race ls", { restrict: true })).toBe(folding);
+  });
+  test("the wildcard allow rule never approves a folded spelling of a code runner", () => {
+    for (const cmd of ["\u017fh -c x", "ba\u017fh x.sh", "\u017fudo ls", "BASH x.sh"]) {
+      expect(bashPatternMatches("*", cmd)).toBe(!folding);
+    }
+  });
+  test("deny path rules catch folded spellings", () => {
+    expect(pathPatternMatches("secrets/**", "/w/\u017fecrets/a", "/w", "/h", { restrict: true })).toBe(folding);
+    expect(pathPatternMatches("secrets/**", "/w/\u017fecrets/a", "/w", "/h")).toBe(false);
+  });
+});
+
+describe("deny rules for wrapper commands", () => {
+  const folding = process.platform === "darwin" || process.platform === "win32";
+  test.each(["sudo ls", "/usr/bin/sudo ls", "FOO=1 sudo ls", "env sudo ls", "'sudo' ls", "nice /usr/bin/sudo -u root ls"])(
+    "Bash(sudo:*) catches %s",
+    (cmd) => {
+      expect(bashPatternMatches("sudo:*", cmd, { restrict: true })).toBe(true);
+    },
+  );
+  test("folded spellings of a wrapper are caught on case-insensitive platforms", () => {
+    expect(bashPatternMatches("sudo:*", "SUDO ls", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("env:*", "nice ENV ls", { restrict: true })).toBe(folding);
+  });
+  test("the wrapped command is still caught", () => {
+    expect(bashPatternMatches("ls:*", "/usr/bin/sudo -u root ls -la", { restrict: true })).toBe(true);
+    expect(bashPatternMatches("ls:*", "sudo ls", {})).toBe(false);
   });
 });

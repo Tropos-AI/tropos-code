@@ -2,6 +2,18 @@
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { expandHome } from "../paths";
 
+/** True on platforms whose filesystems ignore case by default (darwin, win32). */
+export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+/**
+ * Folds a file or command name the way a case-insensitive filesystem compares names. APFS
+ * applies full Unicode case folding, so `ſh` runs `sh`, `K` (Kelvin sign) is `k` and `ﬆ`
+ * is `st`; upper- then lower-casing after NFC reproduces that. Elsewhere names are unchanged.
+ */
+export function foldName(name: string, insensitive: boolean = CASE_INSENSITIVE_FS): string {
+  return insensitive ? name.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC") : name;
+}
+
 export interface Rule {
   tool: string;
   pattern?: string;
@@ -342,10 +354,12 @@ const baseName = (word: string): string => word.slice(word.lastIndexOf("/") + 1)
  * Strips, from the front, the words that run a command without changing which command it
  * is: variable assignments, safe redirects (`2>&1`, `>/dev/null`) and known wrappers
  * (`command`, `sudo`, `env`, `timeout` ...) with their options, however they are path-qualified.
+ * At most `maxWrappers` wrapper words are stripped (0 strips only assignments and redirects).
  * A wrapper option or redirect that is not modelled sets `unmodelled` (never guess).
  */
-function stripWrappers(command: string, stripWrapperWords = true): StrippedCommand {
+function stripWrappers(command: string, maxWrappers = Number.POSITIVE_INFINITY): StrippedCommand {
   let i = 0;
+  let wrappers = 0;
   for (;;) {
     while (i < command.length && /\s/.test(command[i]!)) i++;
     const end = wordEnd(command, i);
@@ -369,10 +383,11 @@ function stripWrappers(command: string, stripWrapperWords = true): StrippedComma
       continue;
     }
     if (redirect === "unsafe") return { rest: command.slice(i), unmodelled: true };
-    if (!stripWrapperWords) return { rest: command.slice(i), unmodelled: false };
-    const spec = WRAPPERS.get(word) ?? (word.includes("/") ? WRAPPERS.get(baseName(word)) : undefined);
+    if (wrappers >= maxWrappers) return { rest: command.slice(i), unmodelled: false };
+    const spec = WRAPPERS.get(foldName(word)) ?? (word.includes("/") ? WRAPPERS.get(foldName(baseName(word))) : undefined);
     if (!spec) return { rest: command.slice(i), unmodelled: false };
 
+    wrappers++;
     const opts = skipWrapperOptions(command, end, spec);
     i = opts.i;
     if (!opts.ok) return { rest: command.slice(i), unmodelled: true };
@@ -432,31 +447,40 @@ function hasUnmodelledCommandWord(part: string): boolean {
   const word = rest.slice(0, wordEnd(rest, 0));
   if (!word) return false;
   if (RESERVED_WORDS.has(word) || DYNAMIC_WORD.test(word) || word.startsWith("=")) return true;
-  if (EVAL_WORDS.has(word)) return true;
-  return SHELLS.has(baseName(word)) && runsShellString(rest);
+  if (EVAL_WORDS.has(foldName(word))) return true;
+  return SHELLS.has(foldName(baseName(word))) && runsShellString(rest);
 }
 
 /**
- * Normalizes a command for deny/ask matching: strips assignments and wrappers, and removes
- * quotes from the command word (`"rm" x`, `r''m x`), reduces a path-qualified command word
- * to its basename (`/bin/rm`) and, on case-insensitive platforms, lower-cases it (`RM`),
- * repeating until nothing changes.
+ * Spells a command's word canonically for deny/ask matching: past leading assignments and
+ * redirects, without quotes (`"rm" x`, `r''m x`), as its basename (`/bin/rm`) and folded the
+ * way the filesystem compares names (`RM`, `ſudo`).
  */
-function normalizeForRestrict(command: string): string {
+function canonicalCommandWord(command: string): string {
+  const { rest } = stripWrappers(command, 0);
+  const end = wordEnd(rest, 0);
+  let word = unquoteWord(rest.slice(0, end));
+  // A path-qualified command word (`/bin/rm`, `./rm`) names the same command as its basename.
+  if (word.includes("/") && baseName(word) !== "") word = baseName(word);
+  return foldName(word) + rest.slice(end);
+}
+
+/**
+ * Every form a deny/ask rule is checked against: the canonical spelling of the command, then
+ * of what is left each time leading wrappers are stripped (`/usr/bin/ſudo rm x` gives
+ * `sudo rm x` and `rm x`), so rules for wrappers and for wrapped commands both match.
+ */
+function restrictForms(command: string): string[] {
+  const forms: string[] = [];
   let current = command;
   for (let n = 0; n < 8; n++) {
-    const { rest } = stripWrappers(current);
-    const end = wordEnd(rest, 0);
-    // A path-qualified command word (`/bin/rm`, `./rm`) names the same command as its basename.
-    let word = unquoteWord(rest.slice(0, end));
-    if (word.includes("/") && baseName(word) !== "") word = baseName(word);
-    // On a case-insensitive filesystem `RM` and `SUDO` run the same files as `rm` and `sudo`.
-    if (CASE_INSENSITIVE_FS) word = word.toLowerCase();
-    const next = word + rest.slice(end);
-    if (next === current) return next;
-    current = next;
+    const canonical = canonicalCommandWord(current);
+    forms.push(canonical);
+    const { rest } = stripWrappers(canonical, 1);
+    if (rest === canonical) break;
+    current = rest;
   }
-  return current;
+  return forms;
 }
 
 /**
@@ -474,7 +498,7 @@ export const CODE_RUNNERS: ReadonlySet<string> = new Set([
   "script", "nodejs", "tsx", "ts-node",
 ]);
 
-const CODE_RUNNERS_FOLDED: ReadonlySet<string> = new Set([...CODE_RUNNERS].map((w) => w.toLowerCase()));
+const CODE_RUNNERS_FOLDED: ReadonlySet<string> = new Set([...CODE_RUNNERS].map((w) => foldName(w, true)));
 
 /**
  * Whether a command word names a code runner: compared by basename, ignoring a trailing
@@ -483,13 +507,13 @@ const CODE_RUNNERS_FOLDED: ReadonlySet<string> = new Set([...CODE_RUNNERS].map((
 export function isCodeRunner(word: string): boolean {
   const base = baseName(word);
   const known = (w: string): boolean =>
-    CODE_RUNNERS.has(w) || (CASE_INSENSITIVE_FS && CODE_RUNNERS_FOLDED.has(w.toLowerCase()));
+    CODE_RUNNERS.has(w) || (CASE_INSENSITIVE_FS && CODE_RUNNERS_FOLDED.has(foldName(w)));
   return known(base) || known(base.replace(/[0-9][0-9.]*$/, ""));
 }
 
 /** True when the simple command begins (after assignments and safe redirects) with a code runner. */
 function startsWithCodeRunner(command: string): boolean {
-  const { rest } = stripWrappers(command, false);
+  const { rest } = stripWrappers(command, 0);
   const word = rest.slice(0, wordEnd(rest, 0));
   return isCodeRunner(word);
 }
@@ -528,12 +552,14 @@ export function bashPatternMatches(pattern: string, command: string, opts: BashP
   const broad = p === "*" || p.endsWith(":*");
   if (broad && opts.restrict !== true && startsWithCodeRunner(command)) return false;
   if (bashPatternMatchesExact(pattern, command)) return true;
-  return opts.restrict === true && bashPatternMatchesExact(foldRuleWord(pattern), normalizeForRestrict(command));
+  if (opts.restrict !== true) return false;
+  const folded = foldRuleWord(pattern);
+  return restrictForms(command).some((form) => bashPatternMatchesExact(folded, form));
 }
 
-/** Lower-cases a rule's first word on case-insensitive platforms, to meet the folded command word. */
+/** Folds a rule's first word on case-insensitive platforms, to meet the folded command word. */
 function foldRuleWord(pattern: string): string {
-  return CASE_INSENSITIVE_FS ? pattern.trimStart().replace(/^[^ \t\n]+/, (w) => w.toLowerCase()) : pattern;
+  return CASE_INSENSITIVE_FS ? pattern.trimStart().replace(/^[^ \t\n]+/, (w) => foldName(w)) : pattern;
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
@@ -547,8 +573,6 @@ export interface PathPatternOptions {
   restrict?: boolean;
 }
 
-/** True on platforms whose filesystems ignore case by default (darwin, win32). */
-export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 
 /** Glob matching uses "/" separators; Windows paths are converted before matching. */
 const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") : s);
@@ -569,7 +593,7 @@ export function pathPatternMatches(
   opts: PathPatternOptions = {},
 ): boolean {
   const restrict = opts.restrict === true;
-  const fold = (s: string): string => (restrict && CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
+  const fold = (s: string): string => (restrict ? foldName(s) : s);
 
   const target = fold(resolve(absPath));
   const expanded = fold(expandHome(pattern.trim(), home));
