@@ -1,0 +1,3 @@
+# release/allowed_signers — trusted Tropos Code release signing keys (spec §4.2, §6).
+# One line per key: tropos-release ssh-ed25519 <base64-key> <comment>
+# Intentionally empty until the key ceremony (plan Task 29): with no key, every signature check fails closed.
