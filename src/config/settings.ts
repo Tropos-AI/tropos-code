@@ -23,6 +23,9 @@ export interface Settings {
   env: Record<string, string>;
   /** Base URL overrides for built-in providers, and extra OpenAI-compatible endpoints. */
   providers: Record<string, ProviderSetting>;
+  /** Background updates (spec §11). Only the user's own layers may set these. */
+  autoUpdates: boolean;
+  autoUpdatesChannel: "latest" | "stable";
 }
 
 export interface ProviderSetting {
@@ -44,6 +47,8 @@ export const DEFAULT_SETTINGS: Settings = {
   refusalFallback: true,
   env: {},
   providers: {},
+  autoUpdates: true,
+  autoUpdatesChannel: "latest",
 };
 
 export interface SettingsPaths {
@@ -91,6 +96,8 @@ const layerSchema = z.object({
       z.object({ baseURL: z.string().url().optional(), name: z.string().min(1).optional() }),
     )
     .optional(),
+  autoUpdates: z.boolean().optional(),
+  autoUpdatesChannel: z.enum(["latest", "stable"]).optional(),
 });
 
 function union(a: string[], b: string[] = []): string[] {
@@ -111,6 +118,8 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     refusalFallback: layer.refusalFallback ?? base.refusalFallback,
     env: { ...base.env, ...layer.env },
     providers: { ...base.providers, ...layer.providers },
+    autoUpdates: layer.autoUpdates ?? base.autoUpdates,
+    autoUpdatesChannel: layer.autoUpdatesChannel ?? base.autoUpdatesChannel,
   };
 }
 
@@ -158,6 +167,9 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.additionalDirectories?.length) ignored.push("additionalDirectories");
   // A repo-chosen base URL would send the user's API keys wherever the repo likes.
   if (layer.providers && Object.keys(layer.providers).length > 0) ignored.push("providers");
+  // A repo that turns updates off or picks the channel could keep its users on an old version.
+  if (layer.autoUpdates !== undefined) ignored.push("autoUpdates");
+  if (layer.autoUpdatesChannel !== undefined) ignored.push("autoUpdatesChannel");
   // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic
   // models, but not send the session, and the user's key, to another provider or a local server.
   const model = layer.model !== undefined && !isAnthropicModelId(layer.model) ? undefined : layer.model;
