@@ -1,0 +1,61 @@
+# .github/workflows/spike.yml — spike only (deleted at the end of Task 2)
+name: spike
+on:
+  workflow_dispatch:
+  push:
+    branches: [spike/install-infra]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: sh scripts/spike/shell-probe.sh
+      - run: bun scripts/spike/flock-probe.ts "$RUNNER_TEMP/a.lock"
+      - name: flock contention across processes
+        run: |
+          bun scripts/spike/flock-probe.ts "$RUNNER_TEMP/b.lock" hold-ex 4000 & sleep 1
+          bun scripts/spike/flock-probe.ts "$RUNNER_TEMP/b.lock"   # expect exNb -1
+          wait
+          bun scripts/spike/flock-probe.ts "$RUNNER_TEMP/b.lock"   # expect exNb 0
+      - name: flock from a compiled binary
+        run: |
+          bun build scripts/spike/flock-probe.ts --compile --outfile "$RUNNER_TEMP/probe"
+          "$RUNNER_TEMP/probe" "$RUNNER_TEMP/c.lock"
+  alpine:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, bunzip: bun-linux-x64-musl }
+          - { runner: ubuntu-24.04-arm, bunzip: bun-linux-aarch64-musl }
+    runs-on: ${{ matrix.runner }}
+    container: alpine:3.22
+    steps:
+      - run: apk add --no-cache git openssh-keygen zstd curl unzip libstdc++ libgcc
+      - uses: actions/checkout@v5
+      - name: setup-bun inside Alpine (record whether it works)
+        id: setupbun
+        continue-on-error: true
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Bun musl build fallback
+        if: steps.setupbun.outcome != 'success'
+        run: |
+          curl -fsSLo bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/${{ matrix.bunzip }}.zip"
+          unzip -q bun.zip && install -m 0755 ${{ matrix.bunzip }}/bun /usr/local/bin/bun
+      - run: bun --version
+      - run: sh scripts/spike/shell-probe.sh
+      - run: bun scripts/spike/flock-probe.ts /tmp/a.lock
+      - run: |
+          bun build scripts/spike/flock-probe.ts --compile --outfile /tmp/probe
+          /tmp/probe /tmp/c.lock
