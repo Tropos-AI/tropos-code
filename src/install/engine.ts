@@ -1,6 +1,6 @@
 // src/install/engine.ts
 import type { FlockFn } from "./flock";
-import { checkSafeDir, ensureLayout, type DirOwner, type Layout } from "./layout";
+import { checkSafeDir, currentUser, ensureLayout, type DirOwner, type Layout } from "./layout";
 import { acquireInstallLock, type LockInfo } from "./locks";
 import type { Platform } from "./platform";
 import { recover, type RecoveryReport } from "./recovery";
@@ -17,6 +17,8 @@ export interface EngineDeps extends RemoteDeps {
   health: HealthCheck;
   /** The running binary's version; recorded in the install lock for "who holds it" messages. */
   selfVersion: string;
+  /** The native version this process runs from and holds the in-use lock of (spec §10.1); unset for `install --self` and dev runs. */
+  runningVersion?: string;
   user?: DirOwner;
   flock?: FlockFn;
   lockTimeoutMs?: number;
@@ -35,6 +37,8 @@ export class EngineSession {
   constructor(
     readonly deps: EngineDeps,
     public state: InstallState,
+    /** A detached `update --background` run: it never removes ~/.local/bin/tropos and stops on a fatal recovery. */
+    readonly background = false,
   ) {
     this.ctx = verifyContext(deps);
   }
@@ -62,12 +66,22 @@ export interface LockedRun<T> {
 }
 
 /** Every engine operation: safe directories, install lock, state, recovery — then `fn` (spec §10.3 step 1). */
+export interface LockOptions {
+  wait: boolean;
+  onWait?: (holder: LockInfo | null) => void;
+  /** Called as soon as recovery has run, so its actions are reported even when the operation then fails. */
+  onRecovery?: (r: RecoveryReport) => void;
+  background?: boolean;
+}
+
 export async function withInstallLock<T>(
-  deps: EngineDeps,
-  opts: { wait: boolean; onWait?: (holder: LockInfo | null) => void },
+  given: EngineDeps,
+  opts: LockOptions,
   fn: (s: EngineSession, recovery: RecoveryReport) => Promise<T>,
 ): Promise<LockedRun<T> | null> {
-  await ensureLayout(deps.layout);
+  // Who we are is looked up once per operation (it spawns `id`) and passed to every ownership check.
+  const deps: EngineDeps = given.user ? given : { ...given, user: currentUser() };
+  await ensureLayout(deps.layout, deps.user);
   await checkSafeDir(deps.layout.data, deps.user);
   await checkSafeDir(deps.layout.state, deps.user);
   const lock = await acquireInstallLock(deps.layout, {
@@ -81,8 +95,9 @@ export async function withInstallLock<T>(
   if (!lock) return null;
   try {
     const read = await readState(deps.layout);
-    const session = new EngineSession(deps, read.kind === "ok" ? read.state : emptyState());
+    const session = new EngineSession(deps, read.kind === "ok" ? read.state : emptyState(), opts.background ?? false);
     const recovery = await recover(session, read);
+    opts.onRecovery?.(recovery);
     return { value: await fn(session, recovery), recovery };
   } finally {
     lock.release();

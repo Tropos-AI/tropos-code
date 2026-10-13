@@ -9,7 +9,12 @@ import type { Platform } from "./platform";
 import type { TrustedKey } from "./sshsig";
 import { isVersion, newestFirst } from "./version";
 
-export type HealthCheck = (bin: string, version: string) => Promise<boolean>;
+/**
+ * "ok": ran and answered correctly; "bad": ran and failed (non-zero exit, wrong output) or cannot be executed at all;
+ * "unknown": could not be run to a conclusion (resource exhaustion at spawn, timeout) — a transient error, never a verdict.
+ */
+export type HealthResult = "ok" | "bad" | "unknown";
+export type HealthCheck = (bin: string, version: string) => Promise<HealthResult>;
 
 export interface VerifyContext {
   layout: Layout;
@@ -20,34 +25,46 @@ export interface VerifyContext {
 }
 
 export type Check = { ok: true } | { ok: false; reason: string };
+/** `transient` is true only when the version is Verified but its health check could not be run to a conclusion. */
+export type Health = { ok: true } | { ok: false; reason: string; transient: boolean };
 
 export const HEALTH_TIMEOUT_MS = 10_000;
+/** Spawn failures that say nothing about the binary: the machine is short of processes, memory or descriptors. */
+const TRANSIENT_SPAWN_CODES = new Set(["EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
 
-/** `<bin> --version` must exit 0 printing exactly "<v> (Tropos Code)\n" within the timeout (spec §10.2). */
-export async function defaultHealthCheck(bin: string, version: string, env: NodeJS.ProcessEnv = process.env, timeoutMs = HEALTH_TIMEOUT_MS): Promise<boolean> {
+async function healthCheckOnce(bin: string, version: string, env: NodeJS.ProcessEnv, timeoutMs: number, spawn: typeof Bun.spawn): Promise<HealthResult> {
   let proc;
   try {
-    proc = Bun.spawn([bin, "--version"], { env: minimalEnv(env), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-  } catch {
-    return false;
+    proc = spawn([bin, "--version"], { env: minimalEnv(env), stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  } catch (e) {
+    return TRANSIENT_SPAWN_CODES.has((e as NodeJS.ErrnoException | undefined)?.code ?? "") ? "unknown" : "bad";
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<false>((resolve) => {
+  const timedOut = new Promise<HealthResult>((resolve) => {
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
-      resolve(false);
+      resolve("unknown");
     }, timeoutMs);
   });
-  const run = Promise.all([new Response(proc.stdout).text(), proc.exited]).then(([out, code]) => code === 0 && out === `${version} (Tropos Code)\n`);
+  const run = Promise.all([new Response(proc.stdout).text(), proc.exited]).then(([out, code]): HealthResult => (code === 0 && out === `${version} (Tropos Code)\n` ? "ok" : "bad"));
   try {
     // A killed shell's children can keep stdout open, so never wait on the pipe past the timeout.
     return await Promise.race([run, timedOut]);
   } catch {
-    return false;
+    return "unknown";
   } finally {
     clearTimeout(timer);
     run.catch(() => {});
   }
+}
+
+/**
+ * `<bin> --version` must exit 0 printing exactly "<v> (Tropos Code)\n" within the timeout (spec §10.2).
+ * A run that cannot reach a verdict is retried once before it is reported as "unknown".
+ */
+export async function defaultHealthCheck(bin: string, version: string, env: NodeJS.ProcessEnv = process.env, timeoutMs = HEALTH_TIMEOUT_MS, spawn: typeof Bun.spawn = Bun.spawn): Promise<HealthResult> {
+  const first = await healthCheckOnce(bin, version, env, timeoutMs, spawn);
+  return first === "unknown" ? healthCheckOnce(bin, version, env, timeoutMs, spawn) : first;
 }
 
 /** manifest.json is written last: its presence is what makes a version "managed". */
@@ -98,10 +115,12 @@ export async function checkVerified(ctx: VerifyContext, version: string): Promis
   return checkFileAgainst(versionPath(ctx.layout, version), vm.manifest.platforms[ctx.platform], ctx.user);
 }
 
-export async function checkHealthy(ctx: VerifyContext, version: string): Promise<Check> {
+export async function checkHealthy(ctx: VerifyContext, version: string): Promise<Health> {
   const verified = await checkVerified(ctx, version);
-  if (!verified.ok) return verified;
-  return (await ctx.health(versionPath(ctx.layout, version), version)) ? { ok: true } : { ok: false, reason: "failed its health check" };
+  if (!verified.ok) return { ...verified, transient: false };
+  const result = await ctx.health(versionPath(ctx.layout, version), version);
+  if (result === "ok") return { ok: true };
+  return result === "unknown" ? { ok: false, reason: "its health check could not be run", transient: true } : { ok: false, reason: "failed its health check", transient: false };
 }
 
 async function versionEntries(dir: string): Promise<string[]> {
@@ -113,7 +132,6 @@ async function versionEntries(dir: string): Promise<string[]> {
   }
 }
 
-export const listVersionFiles = (l: Layout) => versionEntries(l.versions);
 /** Versions with a stored manifest.json (their binary may be missing); a half-written manifests/<v>/ does not count. */
 export async function listManagedVersions(l: Layout): Promise<string[]> {
   const found = await versionEntries(l.manifests);

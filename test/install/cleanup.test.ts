@@ -1,6 +1,6 @@
 // test/install/cleanup.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { readdir, utimes, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { cleanup } from "../../src/install/cleanup";
 import { withInstallLock } from "../../src/install/engine";
@@ -29,6 +29,18 @@ describe("cleanup (spec §10.5)", () => {
     expect(await runCleanup()).toEqual(["1.1.0"]);
     session.release();
     expect(await runCleanup()).toEqual(["1.0.0"]);
+  });
+
+  test("an entry it cannot remove (a directory at versions/<v>) is logged and skipped; the rest is still cleaned", async () => {
+    const lines: string[] = [];
+    f = await makeEngineFixture({ log: (line) => void lines.push(line) });
+    await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"], current: "1.4.0", previous: "1.3.0", link: "1.4.0" });
+    await rm(versionPath(f.layout, "1.0.0"));
+    await mkdir(versionPath(f.layout, "1.0.0"));
+    await writeFile(join(versionPath(f.layout, "1.0.0"), "inside"), "x");
+    expect(await runCleanup()).toEqual(["1.1.0"]);
+    expect(lines.some((l) => l.startsWith("cleanup: could not remove 1.0.0:"))).toBe(true);
+    expect(await readdir(versionPath(f.layout, "1.0.0"))).toEqual(["inside"]);
   });
 
   test("never deletes unmanaged versions (Review Focus 3)", async () => {

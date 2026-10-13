@@ -5,7 +5,9 @@ import { versionPath } from "../../src/install/layout";
 import { readLink, switchLink } from "../../src/install/link";
 import { lockVersionShared } from "../../src/install/locks";
 import { emptyState, writeState } from "../../src/install/state";
-import { withInstallLock } from "../../src/install/engine";
+import { withInstallLock, type EngineDeps } from "../../src/install/engine";
+import { defaultHealthCheck, type HealthResult } from "../../src/install/verify";
+import { fakeBinary } from "./helpers/fixture-release";
 import { makeEngineFixture, type EngineFixture } from "./helpers/engine";
 
 let f: EngineFixture;
@@ -242,5 +244,71 @@ describe("withInstallLock", () => {
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0", link: "1.1.0" });
     const seen = await withInstallLock(f.deps, { wait: true }, async (s) => s.state.current);
     expect(seen!.value).toBe("1.1.0");
+  });
+});
+
+describe("recovery: a health check that cannot run is not a broken release (I1)", () => {
+  const recoverWith = async (deps: EngineDeps, background = false) => (await withInstallLock(deps, { wait: true, background }, async () => undefined))!.recovery;
+  const eagain = (() => {
+    throw Object.assign(new Error("EAGAIN: resource temporarily unavailable, posix_spawn"), { code: "EAGAIN" });
+  }) as unknown as typeof Bun.spawn;
+
+  test("an inconclusive check of the active version leaves it, the link and the state alone", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0", link: "1.1.0" });
+    const health = (b: string, v: string): Promise<HealthResult> => (v === "1.1.0" ? Promise.resolve("unknown") : f.deps.health(b, v));
+    const r = await recoverWith({ ...f.deps, health });
+    expect(r).toEqual({ actions: ["the health check of 1.1.0 could not be run; left it in place and changed nothing"], fatal: null });
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null, skip: {} });
+  });
+
+  test("a health check that times out never removes the link or reports a fatal condition", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0", fakeBinary("1.0.0", "sleep 5"));
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
+    const r = await recoverWith({ ...f.deps, health: (b, v) => defaultHealthCheck(b, v, process.env, 100) });
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+  });
+
+  test("a health check that fails to spawn (EAGAIN) with the link missing: nothing removed, nothing fatal", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0" });
+    const r = await recoverWith({ ...f.deps, health: (b, v) => defaultHealthCheck(b, v, process.env, 1000, eagain) });
+    expect(r.fatal).toBeNull();
+    expect(r.actions).toEqual([`${f.layout.binLink} was missing; the health check of 1.0.0 could not be run, so nothing was changed`]);
+    expect(await f.state()).toMatchObject({ current: "1.0.0", skip: {} });
+  });
+
+  test("an interrupted switch whose target cannot be checked stays pending for a later run", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], link: "1.1.0" });
+    await writeState(f.layout, { ...emptyState(), current: "1.0.0", pending: { op: "switch", from: "1.0.0", to: "1.1.0" } });
+    const r = await recoverWith({ ...f.deps, health: async () => "unknown" });
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.0.0", pending: { op: "switch", from: "1.0.0", to: "1.1.0" } });
+  });
+
+  test("a definite failure still switches to a healthy fallback", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0", link: "1.1.0" });
+    const health = (b: string, v: string): Promise<HealthResult> => (v === "1.1.0" ? Promise.resolve("bad") : f.deps.health(b, v));
+    await recoverWith({ ...f.deps, health });
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+    expect((await f.state()).current).toBe("1.0.0");
+  });
+
+  test("a background run never removes ~/.local/bin/tropos, even with no healthy candidate; it logs what it did", async () => {
+    const lines: string[] = [];
+    f = await makeEngineFixture({ log: (line) => void lines.push(line) });
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
+    await appendFile(versionPath(f.layout, "1.0.0"), "damage");
+    const r = await recoverWith(f.deps, true);
+    expect(r.fatal).toBe("no verified Tropos version is installed; reinstall with install.sh");
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+    expect(lines).toContain(`recovery: 1.0.0 could not be verified; no verified version to switch to, left ${f.layout.binLink} in place`);
   });
 });

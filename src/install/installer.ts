@@ -6,19 +6,19 @@ import { join } from "node:path";
 import { isChannel, resolveChannel, type Channel } from "./channels";
 import { cleanup } from "./cleanup";
 import { decompressZstdFile } from "./decompress";
-import { withInstallLock, type EngineDeps, type EngineSession, type LockedRun } from "./engine";
+import { withInstallLock, type EngineDeps, type EngineSession, type LockedRun, type LockOptions } from "./engine";
 import { InstallError } from "./errors";
 import { downloadToFile } from "./fetch";
 import { fsyncDir, fsyncFile, sha256File } from "./files";
 import { checkSafeDir, versionPath } from "./layout";
-import { linkResolvesTo, readLink, removeOurLink, switchLink, type LinkState } from "./link";
-import type { LockInfo, LockHandle } from "./locks";
+import { linkResolvesTo, readLink, switchLink, type LinkState } from "./link";
+import type { LockHandle } from "./locks";
 import { tryLockVersionExclusive } from "./locks";
 import { expectVersion, verifyManifest, type PlatformEntry, type VerifiedManifest } from "./manifest";
-import { selectFallback } from "./recovery";
+import { dropLink, selectFallback } from "./recovery";
 import { SMALL_TIMEOUT_MS, fetchVersionManifest, withRetries } from "./remote";
 import type { SkipReason } from "./state";
-import { checkFileAgainst, checkHealthy, isManaged, storeManifest } from "./verify";
+import { checkFileAgainst, checkHealthy, isManaged, storeManifest, type HealthResult } from "./verify";
 import { compareVersions, isVersion } from "./version";
 
 export type InstallSource =
@@ -51,13 +51,26 @@ async function obtainManifest(s: EngineSession, version: string, source: Install
   return vm;
 }
 
-export async function preSwitchChecks(s: EngineSession, link: LinkState, force: boolean): Promise<void> {
+/** What the user can do about a foreign ~/.local/bin/tropos; only `tropos install` has a --force. */
+export type ForeignRemedy = "force" | "install.sh" | "move";
+const FOREIGN_REMEDY: Record<ForeignRemedy, string> = {
+  force: "move it away or rerun with --force",
+  "install.sh": "move it away (or remove it) and run install.sh again",
+  move: "move it away and try again",
+};
+
+export async function preSwitchChecks(s: EngineSession, link: LinkState, force: boolean, remedy: ForeignRemedy): Promise<void> {
   const l = s.deps.layout;
   await checkSafeDir(l.data, s.deps.user);
   await checkSafeDir(l.binDir, s.deps.user);
   if (link.kind === "foreign" && !force) {
-    throw new InstallError("local", `${l.binLink} exists and is not managed by Tropos; move it away or rerun with --force`);
+    throw new InstallError("local", `${l.binLink} exists and is not managed by Tropos; ${FOREIGN_REMEDY[remedy]}`);
   }
+}
+
+/** A health check that could not be run is a transient failure (exit 75): nothing is skipped, nothing is activated. */
+export function healthNotRun(version: string, detail: string): InstallError {
+  return new InstallError("busy", `the health check of ${version} could not be run (the system may be short of processes or memory); ${detail}; try again later`);
 }
 
 /** zst first (verified before decompression), raw as fallback; a raw mismatch is retried twice (spec §10.3 step 4). */
@@ -120,7 +133,7 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   }
 
   const vm = await obtainManifest(s, version, opts.source);
-  await preSwitchChecks(s, link, opts.force);
+  await preSwitchChecks(s, link, opts.force, opts.source.kind === "self" ? "install.sh" : "force");
   const entry = vm.manifest.platforms[d.platform];
   const target = versionPath(l, version);
 
@@ -131,12 +144,17 @@ export async function installVersion(s: EngineSession, version: string, opts: In
       // Immutability rule (spec §10.2): replace a damaged file only while no process runs it.
       exclusive = tryLockVersionExclusive(l, version, d.flock);
       if (!exclusive) {
+        let fallback: string | null = null;
         if (s.state.current === version) {
-          const fallback = await selectFallback(s, new Set([version]));
+          fallback = await selectFallback(s, new Set([version]));
           if (fallback) {
             await switchLink(l, fallback);
             await s.save({ current: fallback, previous: s.state.previous === fallback ? null : s.state.previous });
           }
+        }
+        if (d.runningVersion === version) {
+          // This very process holds the in-use lock, so rerunning it can never succeed.
+          throw new InstallError("busy", `version ${version} is damaged and this tropos is running from it${fallback ? ` (now using ${fallback})` : ""}; reinstall it with install.sh`);
         }
         throw new InstallError("busy", `version ${version} is damaged and in use by running sessions; close them and run \`tropos install ${version} --force\` again`);
       }
@@ -155,7 +173,12 @@ export async function installVersion(s: EngineSession, version: string, opts: In
         await rm(staged, { force: true });
         throw e;
       }
-      await rename(staged, target);
+      try {
+        await rename(staged, target);
+      } catch (e) {
+        await rm(staged, { force: true });
+        throw new InstallError("local", `installing ${target}: ${(e as Error).message}`, { cause: e });
+      }
       await fsyncDir(l.versions);
       s.crash("after-rename");
     }
@@ -163,7 +186,10 @@ export async function installVersion(s: EngineSession, version: string, opts: In
     exclusive?.release();
   }
 
-  if (!(await checkHealthy(s.ctx, version)).ok) {
+  const healthy = await checkHealthy(s.ctx, version);
+  if (!healthy.ok) {
+    // Only a check that ran and failed is a verdict on the release; a transient failure records nothing.
+    if (healthy.transient) throw healthNotRun(version, `${version} was not activated`);
     await s.save({ skip: { ...s.state.skip, [version]: "health-check" } });
     throw new InstallError("integrity", `release ${version} does not run on this machine`);
   }
@@ -174,12 +200,18 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   await switchLink(l, version);
   s.crash("after-swap");
 
-  if (!(await linkResolvesTo(l, version)) || !(await d.health(l.binLink, version))) {
+  const post: HealthResult = (await linkResolvesTo(l, version)) ? await d.health(l.binLink, version) : "bad";
+  if (post !== "ok") {
     const restored = from !== null && (await checkHealthy(s.ctx, from)).ok ? from : await selectFallback(s, new Set([version]));
     if (restored) await switchLink(l, restored);
-    else await removeOurLink(l);
+    else await dropLink(s);
+    const using = restored ? `still using ${restored}` : "no verified version is active";
+    if (post === "unknown") {
+      await s.save({ current: restored, pending: null });
+      throw healthNotRun(version, `after switching; ${using}`);
+    }
     await s.save({ current: restored, pending: null, skip: { ...s.state.skip, [version]: "health-check" } });
-    throw new InstallError("integrity", `release ${version} failed its check after switching; ${restored ? `still using ${restored}` : "no verified version is active"}`);
+    throw new InstallError("integrity", `release ${version} failed its check after switching; ${using}`);
   }
 
   const skip = { ...s.state.skip };
@@ -194,9 +226,12 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   return { version, previous: from, changed: from !== version };
 }
 
+/** Progress callbacks of the foreground commands: who holds the install lock, and recovery's report as soon as it exists. */
+export type Hooks = Pick<LockOptions, "onWait" | "onRecovery">;
+
 /** `tropos install [stable|latest|<version>] [--force]`. An explicit install clears the version's skip entry. */
-export async function installTarget(deps: EngineDeps, target: string, force: boolean, onWait?: (holder: LockInfo | null) => void): Promise<LockedRun<InstallOutcome>> {
-  const run = await withInstallLock(deps, { wait: true, onWait }, async (s) => {
+export async function installTarget(deps: EngineDeps, target: string, force: boolean, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
+  const run = await withInstallLock(deps, { wait: true, ...hooks }, async (s) => {
     const version = isChannel(target) ? (await resolveChannel(target, deps)).version : target;
     if (!isVersion(version)) throw new InstallError("usage", `not a version or channel: ${target}`);
     if (s.state.skip[version]) {
@@ -210,8 +245,8 @@ export async function installTarget(deps: EngineDeps, target: string, force: boo
 }
 
 /** `tropos install --self …`, run by install.sh from its temporary folder (spec §10.3). */
-export async function installSelf(deps: EngineDeps, source: Extract<InstallSource, { kind: "self" }>): Promise<LockedRun<InstallOutcome>> {
-  const run = await withInstallLock(deps, { wait: true }, (s) => installVersion(s, source.compiledVersion, { force: false, source }));
+export async function installSelf(deps: EngineDeps, source: Extract<InstallSource, { kind: "self" }>, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
+  const run = await withInstallLock(deps, { wait: true, ...hooks }, (s) => installVersion(s, source.compiledVersion, { force: false, source }));
   return run!;
 }
 
@@ -220,12 +255,25 @@ export type UpdateResult =
   | { kind: "up-to-date"; current: string | null; available: string }
   | { kind: "skipped"; version: string; reason: SkipReason };
 
+/**
+ * The lowest version an update may move to. Normally `current`; with no managed current version, the version this
+ * process runs from or ~/.local/bin/tropos points to (an unmanaged local build), so an update never goes below it.
+ */
+async function updateFloor(s: EngineSession): Promise<string | null> {
+  if (s.state.current !== null) return s.state.current;
+  const link = await readLink(s.deps.layout);
+  const candidates = [s.deps.runningVersion ?? null, link.kind === "ours" ? link.version : null].filter((v): v is string => v !== null && isVersion(v));
+  return candidates.sort(compareVersions).at(-1) ?? null;
+}
+
 /** `tropos update` and background updates: only ever moves forward, never to a skipped version (spec §11). */
-export async function updateChannel(deps: EngineDeps, channel: Channel, opts: { wait: boolean; onWait?: (holder: LockInfo | null) => void }): Promise<LockedRun<UpdateResult> | null> {
-  return withInstallLock(deps, opts, async (s): Promise<UpdateResult> => {
+export async function updateChannel(deps: EngineDeps, channel: Channel, opts: Hooks & { wait: boolean; background?: boolean }): Promise<LockedRun<UpdateResult> | null> {
+  return withInstallLock(deps, opts, async (s, recovery): Promise<UpdateResult> => {
+    // Amendment A11: with no verified version active, a background run stops; installing is the user's call.
+    if (opts.background && recovery.fatal) throw new InstallError("integrity", recovery.fatal);
     const available = (await resolveChannel(channel, deps)).version;
-    const current = s.state.current;
-    if (current !== null && compareVersions(available, current) <= 0) return { kind: "up-to-date", current, available };
+    const floor = await updateFloor(s);
+    if (floor !== null && compareVersions(available, floor) <= 0) return { kind: "up-to-date", current: floor, available };
     const reason = s.state.skip[available];
     if (reason) return { kind: "skipped", version: available, reason };
     return { kind: "updated", outcome: await installVersion(s, available, { force: false, source: { kind: "remote" } }) };

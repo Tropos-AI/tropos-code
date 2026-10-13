@@ -1,6 +1,6 @@
 // src/install/session.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { rm, symlink, writeFile } from "node:fs/promises";
 import { makeEngineFixture, type EngineFixture } from "../../test/install/helpers/engine";
 import { versionPath } from "./layout";
 import { tryLockVersionExclusive } from "./locks";
@@ -79,5 +79,15 @@ describe("startNativeSession", () => {
     await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
     const r = await startNativeSession(deps({ print: true }));
     expect(r).toMatchObject({ kind: "native", holdsLock: true, announcement: null, updateSpawned: false });
+  });
+
+  test("an unmanaged local build never spawns a background update, even when one is due (I3)", async () => {
+    f = await makeEngineFixture();
+    await writeFile(versionPath(f.layout, "1.0.0"), "local build");
+    await symlink(versionPath(f.layout, "1.0.0"), f.layout.binLink);
+    const spawned: string[][] = [];
+    const spawn = ((cmd: string[]) => (spawned.push(cmd), { unref() {} })) as unknown as typeof Bun.spawn;
+    expect(await startNativeSession(deps({ spawn }))).toMatchObject({ kind: "native", version: "1.0.0", updateSpawned: false });
+    expect(spawned).toEqual([]);
   });
 });

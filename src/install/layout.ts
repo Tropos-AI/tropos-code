@@ -53,7 +53,7 @@ export const manifestDir = (l: Layout, v: string) => join(l.manifests, checked(v
 export const versionLockPath = (l: Layout, v: string) => join(l.locks, `${checked(v)}.lock`);
 export const installLockPath = (l: Layout) => join(l.locks, "install.lock");
 
-export async function ensureLayout(l: Layout): Promise<void> {
+export async function ensureLayout(l: Layout, user: DirOwner = currentUser()): Promise<void> {
   try {
     for (const d of [l.data, l.versions, l.manifests, l.staging, l.state, l.locks]) {
       await mkdir(dirname(d), { recursive: true });
@@ -64,7 +64,7 @@ export async function ensureLayout(l: Layout): Promise<void> {
     throw fromFsError(e, "creating the install directories");
   }
   // Pre-existing directories keep their mode, so check every one we rely on (binDir is checked by the installer).
-  for (const d of [l.data, l.versions, l.manifests, l.staging, l.state, l.locks]) await checkSafeDir(d);
+  for (const d of [l.data, l.versions, l.manifests, l.staging, l.state, l.locks]) await checkSafeDir(d, user);
 }
 
 export interface DirOwner {
@@ -115,18 +115,19 @@ export async function checkSafeDir(path: string, user: DirOwner = currentUser())
   if (st.mode & 0o020 && !userPrivateGroup) throw new InstallError("local", `${path} is writable by group ${st.gid}; fix it with: chmod g-w "${path}"`);
 }
 
-const real = (p: string) => {
+/** realpath, or the path itself when it cannot be resolved (missing, a loop, no permission). */
+export function realOrSelf(p: string): string {
   try {
     return realpathSync(p);
   } catch {
     return p;
   }
-};
+}
 
 /** The version of a native install running from `execPath` (resolving ~/.local/bin/tropos), or null for dev runs. */
 export function nativeVersionOf(l: Layout, execPath: string): string | null {
-  const resolved = real(execPath);
+  const resolved = realOrSelf(execPath);
   const name = basename(resolved);
   if (!isVersion(name)) return null;
-  return real(dirname(resolved)) === real(l.versions) ? name : null;
+  return realOrSelf(dirname(resolved)) === realOrSelf(l.versions) ? name : null;
 }

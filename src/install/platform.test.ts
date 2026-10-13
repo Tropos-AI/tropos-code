@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { InstallError } from "./errors";
-import { PLATFORMS, detectPlatform, isPlatform, platformFromProbe, probeHost } from "./platform";
+import { PLATFORMS, detectPlatform, platformFromProbe, probeHost } from "./platform";
 
 const probe = (os: string, machine: string, extra: Partial<{ rosetta: boolean; musl: boolean }> = {}) => ({ os, machine, rosetta: false, musl: false, ...extra });
 
@@ -54,7 +54,5 @@ describe("probeHost", () => {
 
   test("this machine maps to a supported platform", () => {
     expect(PLATFORMS).toContain(detectPlatform());
-    expect(isPlatform("linux-x64")).toBe(true);
-    expect(isPlatform("win32-x64")).toBe(false);
   });
 });

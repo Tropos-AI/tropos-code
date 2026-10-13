@@ -4,12 +4,10 @@ import { lstat, readlink, realpath, rename, rm, symlink } from "node:fs/promises
 import { basename, dirname, join, resolve } from "node:path";
 import { fromFsError } from "./errors";
 import { fsyncDir } from "./files";
-import { versionPath, type Layout } from "./layout";
+import { realOrSelf, versionPath, type Layout } from "./layout";
 import { isVersion } from "./version";
 
 export type LinkState = { kind: "missing" } | { kind: "ours"; version: string } | { kind: "dangling-ours"; version: string } | { kind: "foreign"; target: string | null };
-
-const real = (p: string) => realpath(p).catch(() => p);
 
 /** "ours" means a symlink straight into versions/ — managed or not (the old local-build installer made those too). */
 export async function readLink(l: Layout): Promise<LinkState> {
@@ -24,7 +22,7 @@ export async function readLink(l: Layout): Promise<LinkState> {
   const raw = await readlink(l.binLink);
   const target = resolve(l.binDir, raw);
   const name = basename(target);
-  const inVersions = dirname(target) === l.versions || (await real(dirname(target))) === (await real(l.versions));
+  const inVersions = dirname(target) === l.versions || realOrSelf(dirname(target)) === realOrSelf(l.versions);
   if (!inVersions || !isVersion(name)) return { kind: "foreign", target: raw };
   const exists = await lstat(target).then(
     () => true,

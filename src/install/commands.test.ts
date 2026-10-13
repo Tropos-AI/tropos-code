@@ -1,11 +1,12 @@
 // src/install/commands.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFile, chmod } from "node:fs/promises";
+import { appendFile, chmod, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeEngineFixture, type EngineFixture } from "../../test/install/helpers/engine";
 import { runInstallCommand, oneTimeInstallNotice, type CommandContext } from "./commands";
 import { makeTestKey } from "../../test/install/helpers/keys";
 import { versionPath } from "./layout";
+import { readLink } from "./link";
 import { acquireInstallLock } from "./locks";
 
 let f: EngineFixture;
@@ -164,5 +165,91 @@ describe("runInstallCommand fix round 1", () => {
     expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(0);
     expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(0);
     expect(out.join("")).toContain("Tropos Code 1.0.0 is already installed.");
+  });
+});
+
+describe("commands hold the in-use lock of the version they run from (I2, spec §10.1)", () => {
+  test("install <current> --force on a damaged current, run from it: busy, file untouched, points to install.sh", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["0.9.0", "1.0.0"], current: "1.0.0", previous: "0.9.0", link: "1.0.0" });
+    await appendFile(versionPath(f.layout, "1.0.0"), "damage");
+    const damaged = await readFile(versionPath(f.layout, "1.0.0"));
+    const { c, err } = ctx();
+    expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: true }, c)).toBe(75);
+    expect(err.join("")).toContain("version 1.0.0 is damaged and this tropos is running from it");
+    expect(err.join("")).toContain("reinstall it with install.sh");
+    expect(await readFile(versionPath(f.layout, "1.0.0"))).toEqual(damaged);
+    expect((await readdir(f.layout.versions)).filter((n) => n.startsWith("."))).toEqual([]);
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "0.9.0" });
+  });
+
+  test("update run from a local build of the version it would install: busy, the running file stays", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["0.9.0"], current: "0.9.0", link: "0.9.0" });
+    await f.release("1.0.0");
+    await writeFile(versionPath(f.layout, "1.0.0"), "#!/bin/sh\necho local\n");
+    await chmod(versionPath(f.layout, "1.0.0"), 0o755);
+    f.srv.put("channels", "latest", "1.0.0\n");
+    const { c, err } = ctx();
+    expect(await runInstallCommand({ kind: "update", background: false, alias: "update" }, c)).toBe(75);
+    expect(err.join("")).toContain("reinstall it with install.sh");
+    expect(await readFile(versionPath(f.layout, "1.0.0"), "utf8")).toBe("#!/bin/sh\necho local\n");
+    expect((await readdir(f.layout.versions)).filter((n) => n.startsWith("."))).toEqual([]);
+  });
+
+  test("a detached update --background never deletes the version it runs from in its cleanup", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"], current: "1.3.0", previous: "1.2.0", link: "1.3.0" });
+    await f.release("1.4.0");
+    f.srv.put("channels", "latest", "1.4.0\n");
+    const { c } = ctx();
+    expect(await runInstallCommand({ kind: "update", background: true, alias: "update" }, c)).toBe(0);
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.4.0" });
+    expect((await readdir(f.layout.versions)).filter((n) => !n.startsWith(".")).sort()).toEqual(["1.0.0", "1.2.0", "1.3.0", "1.4.0"]);
+  });
+});
+
+describe("recovery reporting (D2, M5)", () => {
+  test("recovery actions are printed even when the command then fails", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0", link: "1.1.0" });
+    f.srv.put("channels", "latest", "<html>");
+    f.srv.put("channels", "latest.bak", "<html>");
+    const { c, err } = ctx();
+    expect(await runInstallCommand({ kind: "install", target: "latest", force: false }, c)).toBe(69);
+    expect(err.join("")).toContain(`tropos: adopted 1.1.0, which ${f.layout.binLink} points to\n`);
+  });
+
+  test("install and update print the fatal recovery condition and carry on (A11)", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
+    await appendFile(versionPath(f.layout, "1.0.0"), "damage");
+    await f.release("1.1.0");
+    f.srv.put("channels", "latest", "1.1.0\n");
+    const { c, out, err } = ctx();
+    expect(await runInstallCommand({ kind: "update", background: false, alias: "update" }, c)).toBe(0);
+    expect(err.join("")).toContain("tropos: no verified Tropos version is installed; reinstall with install.sh\n");
+    expect(out.join("")).toContain("to 1.1.0.");
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+  });
+
+  test.each([
+    ["rollback", { kind: "rollback" } as const],
+    ["install --self", null],
+  ])("%s says it is waiting for the install lock", async (_name, cmd) => {
+    f = await makeEngineFixture();
+    const r = await f.release("1.0.0");
+    await f.direct("1.0.0");
+    await writeFile(join(f.root, "m.json"), r.verified.bytes);
+    await writeFile(join(f.root, "m.sig"), r.verified.signature);
+    const held = (await acquireInstallLock(f.layout, { wait: false, version: "x" }))!;
+    try {
+      const { c, err } = ctx({ engine: (log) => ({ ...f.deps, log, lockTimeoutMs: 50 }) });
+      const command = cmd ?? ({ kind: "install-self", manifest: join(f.root, "m.json"), signature: join(f.root, "m.sig") } as const);
+      expect(await runInstallCommand(command, c)).toBe(75);
+      expect(err.join("")).toContain("tropos: waiting for another Tropos install to finish");
+    } finally {
+      held.release();
+    }
   });
 });

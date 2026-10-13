@@ -75,7 +75,7 @@ describe("rollback (spec §10.7)", () => {
 
   test("a failed post-switch check restores the current version and skips the target", async () => {
     await twoVersions();
-    const deps = { ...f.deps, health: async (b: string, v: string) => (b === f.layout.binLink ? false : f.deps.health(b, v)) };
+    const deps = { ...f.deps, health: async (b: string, v: string) => (b === f.layout.binLink ? ("bad" as const) : f.deps.health(b, v)) };
     const e = (await rollback(deps).catch((x) => x)) as InstallError;
     expect(e.kind).toBe("integrity");
     expect(e.message).toBe("version 1.0.0 failed its check; still using 1.1.0");

@@ -4,6 +4,7 @@ import { announcement, markAnnounced, shouldCheck, spawnBackgroundUpdate } from 
 import { nativeVersionOf, resolveLayout } from "./layout";
 import { lockVersionShared } from "./locks";
 import { readState } from "./state";
+import { isManaged } from "./verify";
 
 export interface NativeSessionDeps {
   env: NodeJS.ProcessEnv;
@@ -45,6 +46,7 @@ export async function startNativeSession(d: NativeSessionDeps): Promise<NativeSe
   const message = interactive && state ? announcement(state) : null;
   if (message) await markAnnounced({ layout, selfVersion: d.version }).catch(() => {});
   const decision = shouldCheck({ env: d.env, native: true, print: d.print, stdinTTY: d.stdinTTY, stdoutTTY: d.stdoutTTY, autoUpdates: d.autoUpdates, state, now: d.now?.() ?? new Date() });
-  const updateSpawned = decision.check ? spawnBackgroundUpdate(d.execPath, layout, d.env, d.spawn) : false;
+  // An unmanaged local build never starts background updates (they would replace it with a release).
+  const updateSpawned = decision.check && (await isManaged(layout, version)) ? spawnBackgroundUpdate(d.execPath, layout, d.env, d.spawn) : false;
   return { kind: "native", version, holdsLock: lock !== null, announcement: message, updateSpawned };
 }

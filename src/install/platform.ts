@@ -5,10 +5,6 @@ import { InstallError } from "./errors";
 export const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "linux-x64-musl", "linux-arm64-musl"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
-export function isPlatform(value: string): value is Platform {
-  return (PLATFORMS as readonly string[]).includes(value);
-}
-
 /** What `uname -s`, `uname -m`, the Rosetta sysctl and musl detection report; install.sh applies the same rules. */
 export interface PlatformProbe {
   os: string;

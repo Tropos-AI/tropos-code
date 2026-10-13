@@ -3,10 +3,12 @@ import { closeSync, openSync, renameSync, statSync } from "node:fs";
 import type { Channel } from "./channels";
 import type { EngineDeps } from "./engine";
 import { minimalEnv } from "./env";
+import { describeError } from "./errors";
 import { updateChannel } from "./installer";
 import type { Layout } from "./layout";
 import { acquireInstallLock } from "./locks";
 import { readState, writeState, type InstallState } from "./state";
+import { isManaged } from "./verify";
 
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const MAX_INTERVAL_MS = 48 * 60 * 60 * 1000;
@@ -103,14 +105,6 @@ export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): P
   }
 }
 
-function describe(e: unknown): string {
-  try {
-    return e instanceof Error ? e.message : String(e);
-  } catch {
-    return "unknown error";
-  }
-}
-
 async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
   const log = (line: string): void => {
     try {
@@ -128,22 +122,27 @@ async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<voi
   let ok = true;
   let updatedTo: string | null = null;
   try {
-    const run = await updateChannel(deps, channel, { wait: false });
+    // A local build the user installed is theirs to replace: no background update ever touches it (spec §9).
+    if (deps.runningVersion !== undefined && !(await isManaged(deps.layout, deps.runningVersion))) {
+      log(`running ${deps.runningVersion}, an unmanaged local build; background updates are off for it`);
+      return;
+    }
+    // Recovery logs its actions through deps.log; a fatal recovery stops the run before anything is installed (A11).
+    const run = await updateChannel(deps, channel, { wait: false, background: true });
     if (!run) {
       log("another Tropos install is running; skipping this check");
       return;
     }
-    if (run.recovery.fatal) log(run.recovery.fatal);
     if (run.value.kind === "updated" && run.value.outcome.changed) updatedTo = run.value.outcome.version;
     log(`background check: ${run.value.kind}`);
   } catch (e) {
     ok = false;
-    log(`background update failed: ${describe(e)}`);
+    log(`background update failed: ${describeError(e)}`);
   }
   try {
     await recordCheck(deps, now, ok, updatedTo);
   } catch (e) {
-    log(`could not record the update check: ${describe(e)}`);
+    log(`could not record the update check: ${describeError(e)}`);
   }
 }
 
