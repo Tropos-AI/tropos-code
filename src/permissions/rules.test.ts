@@ -660,3 +660,47 @@ describe("deny rules see through any number of wrappers", () => {
     expect(bashPatternMatches("rm:*", `${"sudo env nice ".repeat(n)}/bin/rm -rf x`, { restrict: true })).toBe(true);
   });
 });
+
+describe("audit of 5b590c8", () => {
+  const folding = process.platform === "darwin" || process.platform === "win32";
+  test("capital sharp s folds to ss, as APFS compares it", () => {
+    expect(foldName("ẞh")).toBe(folding ? "ssh" : "ẞh");
+    expect(foldName("ſh")).toBe(folding ? "sh" : "ſh");
+    expect(foldName("Kill")).toBe(folding ? "kill" : "Kill");
+    expect(bashPatternMatches("*", "ẞh host id")).toBe(!folding);
+    expect(bashPatternMatches("ssh:*", "ẞh host id", { restrict: true })).toBe(folding);
+  });
+  test("every wrapper is a code runner, including zsh's - modifier", () => {
+    expect(isCodeRunner("-")).toBe(true);
+    expect(bashPatternMatches("*", "- python3 -c 'x'")).toBe(false);
+    expect(bashPatternMatches("*", "- node -e x")).toBe(false);
+  });
+  test("repeat, foreach, trap and emulate are never modelled as plain commands", () => {
+    for (const cmd of ["repeat 1 rm -rf x", "repeat 1 python3 -c 'print(1)'", "foreach f (a) rm $f; end", "trap 'rm -rf x' EXIT", "emulate zsh -c 'rm -rf x'"]) {
+      expect(splitBashCommand(cmd).unsafe).toBe(true);
+    }
+    expect(isCodeRunner("trap")).toBe(true);
+  });
+  test.each([
+    ">out rm -rf x", "2>err.log rm -rf x", "</dev/zero rm -rf x", "sudo -i rm -rf x", "sudo --preserve-env=HOME rm -rf x",
+    "env -P /bin rm -rf x", "{ rm -rf x", "(rm -rf x)", "if true; then rm -rf x", "! rm -rf x", "echo $(rm -rf x)", "echo `rm -rf x`",
+    "trap 'rm -rf x' EXIT", "repeat 1 rm -rf x", "sh -c 'cd /; /bin/rm -rf x'", "echo $(r''m -rf x)", "x=$(\"rm\" -rf y)",
+  ])("deny rules look inside the unsafe command %s", (cmd) => {
+    expect(bashPatternMatches("rm:*", cmd, { restrict: true })).toBe(true);
+  });
+  test("the deep scan only runs for unsafe commands", () => {
+    expect(bashPatternMatches("rm:*", "git commit -m 'fix rm bug'", { restrict: true })).toBe(false);
+    expect(bashPatternMatches("rm:*", "echo rm", { restrict: true })).toBe(false);
+  });
+  test.each(["sudo /bin/rm -rf x", "sudo 'rm' -rf x", "sudo -u root rm -rf x", "/usr/bin/sudo rm -rf x"])(
+    "a deny rule naming a wrapper matches %s",
+    (cmd) => {
+      expect(bashPatternMatches("sudo rm:*", cmd, { restrict: true })).toBe(true);
+    },
+  );
+  test("wrapper-named rules fold on case-insensitive platforms", () => {
+    expect(bashPatternMatches("sudo rm:*", "sudo RM -rf x", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("SUDO RM:*", "sudo rm -rf x", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("xargs rm:*", "xargs /bin/rm -rf", { restrict: true })).toBe(true);
+  });
+});

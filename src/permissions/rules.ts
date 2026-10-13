@@ -7,11 +7,12 @@ export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.plat
 
 /**
  * Folds a file or command name the way a case-insensitive filesystem compares names. APFS
- * applies full Unicode case folding, so `ſh` runs `sh`, `K` (Kelvin sign) is `k` and `ﬆ`
- * is `st`; upper- then lower-casing after NFC reproduces that. Elsewhere names are unchanged.
+ * applies full Unicode case folding, so `ſh` runs `sh`, `K` (Kelvin sign) is `k`, `ﬆ` is `st`
+ * and `ẞ` is `ss`; lower-, upper- then lower-casing after NFC reproduces that (`ẞ` lower-cases
+ * to `ß`, which only upper-casing expands). Elsewhere names are unchanged.
  */
 export function foldName(name: string, insensitive: boolean = CASE_INSENSITIVE_FS): string {
-  return insensitive ? name.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC") : name;
+  return insensitive ? name.normalize("NFC").toLowerCase().toUpperCase().toLowerCase().normalize("NFC") : name;
 }
 
 export interface Rule {
@@ -215,6 +216,8 @@ const isDynamicOption = (word: string): boolean => DYNAMIC_WORD.test(word.replac
 const RESERVED_WORDS = new Set([
   "!", "{", "}", "if", "then", "else", "elif", "fi", "do", "done", "while", "until",
   "for", "case", "esac", "function", "select", "coproc", "[[",
+  // zsh loops: `repeat N cmd` and `foreach x (list) ...`.
+  "repeat", "foreach",
 ]);
 
 /**
@@ -423,8 +426,8 @@ function unquoteWord(word: string): string {
   return out;
 }
 
-/** Commands that run text we cannot see: `eval`, `source` and `.`. */
-const EVAL_WORDS = new Set(["eval", "source", "."]);
+/** Commands that run text we cannot see: `eval`, `source`, `.`, `trap` and zsh `emulate -c`. */
+const EVAL_WORDS = new Set(["eval", "source", ".", "trap", "emulate"]);
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 
@@ -481,6 +484,8 @@ function restrictForms(command: string): string[] {
     forms.push(canonical);
     const { rest } = stripWrappers(canonical, 1);
     if (rest === canonical || rest === "") return forms;
+    // The wrapper with its options dropped, before the canonical inner command (`sudo rm x`).
+    forms.push(`${canonical.slice(0, wordEnd(canonical, 0))} ${canonicalCommandWord(rest)}`);
     current = rest;
   }
   return forms;
@@ -498,7 +503,9 @@ export const CODE_RUNNERS: ReadonlySet<string> = new Set([
   "unbuffer", "command", "builtin", "exec", "xargs", "time", "noglob", "nocorrect",
   "awk", "gawk", "mawk", "nawk", "python2", "pypy", "pypy3", "ipython", "pwsh", "powershell",
   "osascript", "lua", "luajit", "tclsh", "wish", "Rscript", "irb", "jshell", "expect", "ssh",
-  "script", "nodejs", "tsx", "ts-node",
+  "script", "nodejs", "tsx", "ts-node", "trap", "emulate",
+  // Every wrapper runs the command after it (zsh's `-` among them).
+  ...WRAPPERS.keys(),
 ]);
 
 const CODE_RUNNERS_FOLDED: ReadonlySet<string> = new Set([...CODE_RUNNERS].map((w) => foldName(w, true)));
@@ -588,13 +595,56 @@ export function bashPatternMatches(pattern: string, command: string, opts: BashP
   if (broad && opts.restrict !== true && startsWithCodeRunner(command)) return false;
   if (opts.restrict !== true) return bashPatternMatchesExact(pattern, command);
   if (bashPatternMatchesExact(pattern, command, true)) return true;
-  const folded = foldRuleWord(pattern);
-  return restrictForms(command).some((form) => bashPatternMatchesExact(folded, form, true));
+  const folded = foldRuleWords(pattern);
+  const hit = (form: string): boolean => bashPatternMatchesExact(folded, form, true);
+  if (restrictForms(command).some(hit)) return true;
+  // An unsafe command may run the denied one anywhere inside it: `(rm x)`, `$(rm x)`, `>f rm x`.
+  return splitBashCommand(command).unsafe && embeddedForms(command, folded).some(hit);
 }
 
-/** Folds a rule's first word on case-insensitive platforms, to meet the folded command word. */
-function foldRuleWord(pattern: string): string {
-  return CASE_INSENSITIVE_FS ? pattern.trimStart().replace(/^[^ \t\n]+/, (w) => foldName(w)) : pattern;
+/** Characters after which a word may be a command when the shell parses an unsafe command. */
+const COMMAND_BOUNDARY = /[\s(){};!|&`'"<>$=]/;
+/** Characters that end an embedded command's text. */
+const EMBEDDED_END = /[)};|&`<>\n]/;
+
+/**
+ * Deny/ask forms for an unsafe command: every word that follows a boundary character and names
+ * the rule's command (canonically spelled) starts a form, cut where its simple command ends.
+ * This over-matches on purpose: unsafe commands are never auto-approved, so the only cost of
+ * a false hit is a deny where an ask would do.
+ */
+function embeddedForms(command: string, foldedPattern: string): string[] {
+  const ruleWord = foldedPattern.split(/[ \t\n]+/)[0]!.replace(/:\*$/, "");
+  if (ruleWord === "" || ruleWord === "*") return [];
+  const text = command.replace(/\\\n/g, "");
+  const forms: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (i > 0 && !COMMAND_BOUNDARY.test(text[i - 1]!)) continue;
+    if (/\s/.test(text[i]!)) continue;
+    let word = unquoteWord(text.slice(i, wordEnd(text, i)).split(EMBEDDED_END)[0]!);
+    if (word.includes("/") && baseName(word) !== "") word = baseName(word);
+    if (foldName(word) !== ruleWord) continue;
+    let tail = text.slice(i).split(EMBEDDED_END)[0]!;
+    // Text that began right after a quote ends at the matching quote.
+    const opener = text[i - 1];
+    if (opener === "'" || opener === '"') tail = tail.split(opener)[0]!;
+    forms.push(...restrictForms(tail));
+  }
+  return forms;
+}
+
+/**
+ * Folds a rule's command word on case-insensitive platforms, to meet the folded command word,
+ * and for a rule naming wrappers (`sudo rm:*`) each wrapper and the command after them.
+ */
+function foldRuleWords(pattern: string): string {
+  if (!CASE_INSENSITIVE_FS) return pattern;
+  const words = pattern.trim().split(/[ \t\n]+/);
+  for (let k = 0; k < words.length; k++) {
+    words[k] = foldName(words[k]!);
+    if (!WRAPPERS.has(words[k]!.replace(/:\*$/, ""))) break;
+  }
+  return words.join(" ");
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;

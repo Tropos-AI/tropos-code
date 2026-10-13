@@ -112,10 +112,24 @@ describe("decide — fix round 1", () => {
     expect(decide(bash("2>&1 rm x"), holes).behavior).toBe("deny");
     expect(decide(bash("/usr/bin/sudo rm x"), holes).behavior).toBe("deny");
   });
-  test("eval and shell -c are never auto-approved", () => {
-    expect(decide(bash("eval rm x"), holes).behavior).toBe("ask");
-    expect(decide(bash("sh -c 'rm x'"), holes).behavior).toBe("ask");
-    expect(decide(bash("bash -c'rm x'"), holes).behavior).toBe("ask");
+  test("eval and shell -c are never auto-approved, and deny rules see the command they run", () => {
+    expect(decide(bash("eval rm x"), holes).behavior).toBe("deny");
+    expect(decide(bash("sh -c 'rm x'"), holes).behavior).toBe("deny");
+    expect(decide(bash("bash -c'rm x'"), holes).behavior).toBe("deny");
+    expect(decide(bash("eval ls x"), holes).behavior).toBe("ask");
+    expect(decide(bash("sh -c 'ls x'"), holes).behavior).toBe("ask");
+  });
+  test("deny rules apply inside unsafe commands even in bypass mode", () => {
+    const bypass = ctx({ mode: "bypass", deny: ["Bash(rm:*)"] });
+    for (const cmd of [">out rm -rf x", "sudo -i rm -rf x", "(rm -rf x)", "{ rm -rf x; }", "if true; then rm -rf x; fi", "! rm -rf x", "echo $(rm -rf x)", "repeat 1 rm -rf x", "trap 'rm -rf x' EXIT"]) {
+      expect(decide(bash(cmd), bypass).behavior).toBe("deny");
+    }
+    expect(decide(bash("(ls x)"), bypass)).toEqual({ behavior: "allow" });
+  });
+  test("the wildcard never approves zsh's - modifier, repeat or trap", () => {
+    for (const cmd of ["- python3 -c x", "repeat 1 python3 -c 'print(1)'", "trap 'curl x' EXIT"]) {
+      expect(decide(bash(cmd), ctx({ allow: ["Bash(*)"] })).behavior).toBe("ask");
+    }
   });
   test("the wildcard does not approve a piped interpreter", () => {
     expect(decide(bash("echo 'rm x' | sh"), holes).behavior).toBe("ask");
