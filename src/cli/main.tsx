@@ -11,7 +11,8 @@ import { createTools } from "../tools/registry";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
 import { VERSION } from "../version";
-import { CliError, parseCli, type CliOptions } from "./args";
+import { runInstallCommand, type CommandContext } from "../install/commands";
+import { CliError, parseInvocation, type CliOptions } from "./args";
 import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
 import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
 import { USAGE } from "./usage";
@@ -26,6 +27,9 @@ export interface MainDeps {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   readStdin?: () => Promise<string | null>;
+  /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
+  execPath?: string;
+  engine?: CommandContext["engine"];
 }
 
 const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
@@ -66,7 +70,31 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
 
   let opts: CliOptions;
   try {
-    opts = parseCli(argv);
+    const invocation = parseInvocation(argv);
+    if (invocation.kind === "subcommand") {
+      const env = deps.env ?? process.env;
+      const cwd = resolveToolPath(".", deps.cwd ?? process.cwd());
+      let settings: Settings;
+      try {
+        settings = (await loadSettings(settingsPaths(cwd, troposHome(env)))).settings;
+      } catch (e) {
+        if (e instanceof SettingsError) {
+          err(`tropos: ${e.message}\n`);
+          return 1;
+        }
+        throw e;
+      }
+      return await runInstallCommand(invocation.command, {
+        out,
+        err,
+        env,
+        execPath: deps.execPath ?? process.execPath,
+        version: VERSION,
+        settings: { autoUpdates: settings.autoUpdates, autoUpdatesChannel: settings.autoUpdatesChannel },
+        engine: deps.engine,
+      });
+    }
+    opts = invocation.options;
   } catch (e) {
     if (e instanceof CliError) {
       err(`tropos: ${e.message}\nRun tropos --help for usage.\n`);
