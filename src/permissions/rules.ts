@@ -438,8 +438,9 @@ function hasUnmodelledCommandWord(part: string): boolean {
 
 /**
  * Normalizes a command for deny/ask matching: strips assignments and wrappers, and removes
- * quotes from the command word (`"rm" x`, `r''m x`) and reduces a path-qualified command word
- * to its basename (`/bin/rm`), repeating until nothing changes.
+ * quotes from the command word (`"rm" x`, `r''m x`), reduces a path-qualified command word
+ * to its basename (`/bin/rm`) and, on case-insensitive platforms, lower-cases it (`RM`),
+ * repeating until nothing changes.
  */
 function normalizeForRestrict(command: string): string {
   let current = command;
@@ -449,6 +450,8 @@ function normalizeForRestrict(command: string): string {
     // A path-qualified command word (`/bin/rm`, `./rm`) names the same command as its basename.
     let word = unquoteWord(rest.slice(0, end));
     if (word.includes("/") && baseName(word) !== "") word = baseName(word);
+    // On a case-insensitive filesystem `RM` and `SUDO` run the same files as `rm` and `sudo`.
+    if (CASE_INSENSITIVE_FS) word = word.toLowerCase();
     const next = word + rest.slice(end);
     if (next === current) return next;
     current = next;
@@ -525,7 +528,12 @@ export function bashPatternMatches(pattern: string, command: string, opts: BashP
   const broad = p === "*" || p.endsWith(":*");
   if (broad && opts.restrict !== true && startsWithCodeRunner(command)) return false;
   if (bashPatternMatchesExact(pattern, command)) return true;
-  return opts.restrict === true && bashPatternMatchesExact(pattern, normalizeForRestrict(command));
+  return opts.restrict === true && bashPatternMatchesExact(foldRuleWord(pattern), normalizeForRestrict(command));
+}
+
+/** Lower-cases a rule's first word on case-insensitive platforms, to meet the folded command word. */
+function foldRuleWord(pattern: string): string {
+  return CASE_INSENSITIVE_FS ? pattern.trimStart().replace(/^[^ \t\n]+/, (w) => w.toLowerCase()) : pattern;
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
@@ -539,7 +547,8 @@ export interface PathPatternOptions {
   restrict?: boolean;
 }
 
-const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+/** True on platforms whose filesystems ignore case by default (darwin, win32). */
+export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 
 /** Glob matching uses "/" separators; Windows paths are converted before matching. */
 const toGlobSep = (s: string): string => (sep === "\\" ? s.replace(/\\/g, "/") : s);

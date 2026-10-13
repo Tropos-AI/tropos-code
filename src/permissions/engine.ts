@@ -3,6 +3,7 @@ import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
 import { isInside } from "../paths";
 import {
+  CASE_INSENSITIVE_FS,
   bashPatternMatches,
   formatRule,
   hasLeadingPrefix,
@@ -126,9 +127,12 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   return suggestion ? { behavior: "ask", suggestion } : { behavior: "ask" };
 }
 
-/** True when any segment of the path is `.git` or `.husky`. */
+/** True when any segment of the path is `.git` or `.husky` (any case on case-insensitive platforms). */
 function inGitControlDir(path: string): boolean {
-  return path.split(/[\\/]/).some((segment) => segment === ".git" || segment === ".husky");
+  return path.split(/[\\/]/).some((segment) => {
+    const name = CASE_INSENSITIVE_FS ? segment.toLowerCase() : segment;
+    return name === ".git" || name === ".husky";
+  });
 }
 
 const SHELL_SPACE = /[ \t\n]+/;

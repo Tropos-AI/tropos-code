@@ -569,3 +569,19 @@ describe("final review fixes", () => {
     expect(bashPatternMatches("git status:*", "git \t status -s")).toBe(true);
   });
 });
+
+describe("restrict matching folds the command word's case", () => {
+  const folding = process.platform === "darwin" || process.platform === "win32";
+  test.each(["RM x", "Rm -rf x", "/BIN/RM x", "/bin/Rm x", "sudo RM x", "'RM' x", "SUDO rm x", "Command RM x"])("a deny rule for rm catches %s on case-insensitive platforms", (cmd) => {
+    expect(bashPatternMatches("rm:*", cmd, { restrict: true })).toBe(folding);
+  });
+  test("an upper-case rule word matches a lower-case command on case-insensitive platforms", () => {
+    expect(bashPatternMatches("Rscript:*", "rscript x.R", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("RM -rf x", "rm -rf x", { restrict: true })).toBe(folding);
+  });
+  test("only the command word is folded, and allow rules never fold", () => {
+    expect(bashPatternMatches("git push --force", "GIT push --force", { restrict: true })).toBe(folding);
+    expect(bashPatternMatches("git push --force", "git push --FORCE", { restrict: true })).toBe(false);
+    expect(bashPatternMatches("rm:*", "RM x")).toBe(false);
+  });
+});

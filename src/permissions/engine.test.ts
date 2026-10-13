@@ -191,6 +191,20 @@ describe("decide — final review fixes", () => {
     expect(decide(write("/work/app/.gitignore"), c)).toEqual({ behavior: "allow" });
     expect(decide(write("/work/app/.github/ci.yml"), c)).toEqual({ behavior: "allow" });
   });
+  test("acceptEdits folds the case of .git and .husky on case-insensitive platforms", () => {
+    const folding = process.platform === "darwin" || process.platform === "win32";
+    const c = ctx({ mode: "acceptEdits" });
+    for (const p of ["/work/app/.GIT/hooks/pre-commit", "/work/app/.Git/config", "/work/app/.HUSKY/pre-commit", "/work/app/pkg/.gIt/config"]) {
+      expect(decide(write(p), c).behavior).toBe(folding ? "ask" : "allow");
+    }
+  });
+  test("deny rules for a command ignore its case on case-insensitive platforms", () => {
+    const folding = process.platform === "darwin" || process.platform === "win32";
+    for (const cmd of ["RM x", "/BIN/RM x", "ls; Rm -rf x"]) {
+      expect(decide(bash(cmd), ctx({ mode: "bypass", deny: ["Bash(rm:*)"] })).behavior).toBe(folding ? "deny" : "allow");
+      expect(decide(bash(cmd), ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] })).behavior).toBe(folding ? "deny" : "allow");
+    }
+  });
   test("an explicit allow rule still approves a write inside .git", () => {
     const c = ctx({ mode: "acceptEdits", allow: ["Edit(.husky/**)"] });
     expect(decide(write("/work/app/.husky/pre-commit"), c)).toEqual({ behavior: "allow" });
