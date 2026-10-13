@@ -247,9 +247,12 @@ describe("decide — final review fixes", () => {
   test("broad Edit rules never approve writes inside .git or .husky, in any mode", () => {
     for (const mode of ["default", "acceptEdits"] as const) {
       for (const rule of ["Edit(**)", "Edit", "Edit(/work/app/**)", "Write(**)"]) {
-        for (const p of ["/work/app/.git/hooks/pre-commit", "/work/app/.HUSKY/pre-commit", "/work/app/sub/.git/config"]) {
+        for (const p of ["/work/app/.git/hooks/pre-commit", "/work/app/.husky/pre-commit", "/work/app/sub/.git/config"]) {
           expect(decide(write(p), ctx({ mode, allow: [rule] })).behavior).toBe("ask");
         }
+        // .HUSKY is the same folder only where the filesystem folds case; on Linux it is an ordinary one.
+        const folding = process.platform === "darwin" || process.platform === "win32";
+        expect(decide(write("/work/app/.HUSKY/pre-commit"), ctx({ mode, allow: [rule] })).behavior).toBe(folding ? "ask" : "allow");
         expect(decide(write("/work/app/src/a.ts"), ctx({ mode, allow: [rule] }))).toEqual({ behavior: "allow" });
       }
     }
