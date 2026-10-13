@@ -1,0 +1,116 @@
+# .github/workflows/release-build.yml — unprivileged: runs at the tag, no secrets, read-only token (spec §7.2).
+name: release-build
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  verify-tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag matches package.json and is on main
+        run: |
+          version=$(jq -r .version package.json)
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "tag $GITHUB_REF_NAME does not match package.json $version"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { echo "the tagged commit is not on main"; exit 1; }
+
+  build:
+    needs: verify-tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+          no-cache: true
+          token: ""
+      - run: bun install --frozen-lockfile
+      - run: bun run build:all
+      - name: Collect release inputs into a fresh directory (ruling 3)
+        run: |
+          mkdir release-inputs
+          sh scripts/release/collect-assets.sh dist "${GITHUB_REF_NAME#v}" release-inputs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-inputs
+          path: release-inputs/
+          if-no-files-found: error
+
+  test-native:
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { runner: macos-15, platform: darwin-arm64 }
+          - { runner: macos-15-intel, platform: darwin-x64 }
+          - { runner: ubuntu-24.04, platform: linux-x64 }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+          no-cache: true
+          token: ""
+      - name: Tools
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install zstd shellcheck; else sudo apt-get install -y zstd shellcheck dash busybox; fi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      - run: bun install --frozen-lockfile
+      - run: chmod +x release-inputs/tropos-*
+      - env:
+          PLATFORM: ${{ matrix.platform }}
+        run: TROPOS_TEST_BINARY="$PWD/release-inputs/tropos-$PLATFORM" bun test test/install
+
+  # Decision D2: no job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
+  test-musl:
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux-x64-musl, bunzip: bun-linux-x64-musl, bunsha: 83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64-musl, bunzip: bun-linux-aarch64-musl, bunsha: 576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      - name: Bun for musl (decision D2)
+        env:
+          BUNZIP: ${{ matrix.bunzip }}
+          BUNSHA: ${{ matrix.bunsha }}
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUNZIP.zip"
+          printf '%s  %s\n' "$BUNSHA" "$RUNNER_TEMP/bun.zip" | sha256sum -c -
+          unzip -q -d "$RUNNER_TEMP" "$RUNNER_TEMP/bun.zip"
+          mkdir -p "$RUNNER_TEMP/musl-bun" && install -m 0755 "$RUNNER_TEMP/$BUNZIP/bun" "$RUNNER_TEMP/musl-bun/bun"
+      - name: Installer tests in alpine:3.22, as an unprivileged user
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          chmod +x release-inputs/tropos-*
+          docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/musl-bun:/opt/bun:ro" -w /w -e HOST_UID="$(id -u)" -e TROPOS_TEST_BINARY="/w/release-inputs/tropos-$PLATFORM" alpine:3.22 sh -euc '
+              apk add --no-cache bash git curl unzip zstd openssh-keygen shellcheck libstdc++ libgcc >/dev/null
+              install -m 0755 /opt/bun/bun /usr/local/bin/bun
+              adduser -D -u "$HOST_UID" tester
+              su tester -c "bun install --frozen-lockfile && bun test test/install"
+            '

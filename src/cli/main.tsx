@@ -11,7 +11,10 @@ import { createTools } from "../tools/registry";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
 import { VERSION } from "../version";
-import { CliError, parseCli, type CliOptions } from "./args";
+import { startNativeSession } from "../install/session";
+import { runInstallCommand, type CommandContext } from "../install/commands";
+import type { Channel } from "../install/channels";
+import { CliError, parseInvocation, type CliOptions } from "./args";
 import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
 import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
 import { USAGE } from "./usage";
@@ -26,6 +29,11 @@ export interface MainDeps {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   readStdin?: () => Promise<string | null>;
+  /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
+  execPath?: string;
+  engine?: CommandContext["engine"];
+  /** Tests override terminal detection for the native-session announcement. */
+  tty?: { stdin: boolean; stdout: boolean };
 }
 
 const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
@@ -66,7 +74,37 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
 
   let opts: CliOptions;
   try {
-    opts = parseCli(argv);
+    const invocation = parseInvocation(argv);
+    if (invocation.kind === "subcommand") {
+      const env = deps.env ?? process.env;
+      const cwd = resolveToolPath(".", deps.cwd ?? process.cwd());
+      const cmd = invocation.command;
+      let settings: { autoUpdates: boolean; autoUpdatesChannel: Channel } = { autoUpdates: true, autoUpdatesChannel: "latest" };
+      // Only install and update read settings; help, install --self and rollback must work with a corrupt file.
+      if (cmd.kind === "install" || cmd.kind === "update") {
+        try {
+          const loaded = (await loadSettings(settingsPaths(cwd, troposHome(env)))).settings;
+          settings = { autoUpdates: loaded.autoUpdates, autoUpdatesChannel: loaded.autoUpdatesChannel };
+        } catch (e) {
+          // A background update never fails loudly (spec 11): it falls back to defaults.
+          if (!(e instanceof SettingsError)) throw e;
+          if (!(cmd.kind === "update" && cmd.background)) {
+            err(`tropos: ${e.message}\n`);
+            return 1;
+          }
+        }
+      }
+      return await runInstallCommand(invocation.command, {
+        out,
+        err,
+        env,
+        execPath: deps.execPath ?? process.execPath,
+        version: VERSION,
+        settings,
+        engine: deps.engine,
+      });
+    }
+    opts = invocation.options;
   } catch (e) {
     if (e instanceof CliError) {
       err(`tropos: ${e.message}\nRun tropos --help for usage.\n`);
@@ -101,6 +139,25 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     throw e;
   }
   Object.assign(env, settings.env);
+  const native = await startNativeSession({
+    env,
+    execPath: deps.execPath ?? process.execPath,
+    print: opts.print,
+    stdinTTY: deps.tty?.stdin ?? (Boolean(process.stdin.isTTY) && !deps.readStdin),
+    stdoutTTY: deps.tty?.stdout ?? Boolean(process.stdout.isTTY),
+    autoUpdates: settings.autoUpdates,
+    version: VERSION,
+  });
+  if (native.kind === "reexec") {
+    // Starting must never fail loudly because of re-exec: if the target cannot run, carry on in this process.
+    try {
+      const proc = Bun.spawn([native.via, ...argv], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, TROPOS_REEXEC: "1" } });
+      return await proc.exited;
+    } catch {
+      // fall through to a native session without the in-use lock
+    }
+  }
+  if (native.kind === "native" && native.announcement) err(`${native.announcement}\n`);
   const { rules, invalid } = compileRules(settings.permissions);
   for (const rule of invalid) err(`tropos: ignoring invalid permission rule "${rule}"\n`);
 

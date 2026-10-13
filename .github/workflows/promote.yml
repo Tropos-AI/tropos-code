@@ -1,0 +1,37 @@
+# .github/workflows/promote.yml — manual: move the stable channel to a verified version (spec §7.4).
+# Writes only to Tropos-AI/tropos-code-channels (CHANNELS_WRITE_TOKEN, environment channels-write; decision D1-B);
+# on Tropos-AI/tropos-code it only reads, so the workflow token is contents: read.
+name: promote
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote to stable (X.Y.Z)"
+        required: true
+permissions: {}
+concurrency:
+  group: channels
+  cancel-in-progress: false
+jobs:
+  promote-stable:
+    runs-on: ubuntu-24.04
+    environment: channels-write
+    permissions:
+      contents: read
+    steps:
+      - name: Only from main
+        run: '[ "$GITHUB_REF" = "refs/heads/main" ] || { echo "promote.yml runs only from main"; exit 1; }'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+          no-cache: true
+          token: ""
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNELS_REPOSITORY: Tropos-AI/tropos-code-channels
+          CHANNELS_WRITE_TOKEN: ${{ secrets.CHANNELS_WRITE_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: bun scripts/release/promote.ts stable "$VERSION"

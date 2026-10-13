@@ -14,7 +14,8 @@
     "test:coverage": "bun scripts/check-coverage.ts",
     "typecheck": "tsc --noEmit",
     "build": "bun build.ts",
-    "build:all": "bun build.ts --all"
+    "build:all": "bun build.ts --all",
+    "install:local": "sh scripts/install-local.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",

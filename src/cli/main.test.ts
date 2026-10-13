@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { Glob } from "bun";
 import { join } from "node:path";
+import pkg from "../../package.json";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { listSessions } from "../session/store";
@@ -36,7 +37,7 @@ async function cli(argv: string[], steps: Step[] = [], stdin: string | null = nu
 
 describe("main", () => {
   test("--version and --help", async () => {
-    expect((await cli(["--version"])).out).toBe("0.1.0 (Tropos Code)\n");
+    expect((await cli(["--version"])).out).toBe(`${pkg.version} (Tropos Code)\n`);
     const help = await cli(["--help"]);
     expect(help.code).toBe(0);
     expect(help.out).toContain("Usage:");

@@ -7,12 +7,20 @@ edits and runs code in your project through Claude, and asks before it does anyt
 
 ## Install
 
-Requires [Bun](https://bun.sh) 1.4+ to build.
+```bash
+curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh
+```
+
+Other channels, verifying the installer first, updates and uninstalling: [docs/install.md](docs/install.md).
+
+Release key fingerprint: SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
+
+To build from source you need [Bun](https://bun.sh) 1.4+:
 
 ```bash
 bun install
 bun run build        # → dist/tropos (single self-contained binary)
-./install.sh         # → ~/.local/bin/tropos
+bun run install:local  # → ~/.local/bin/tropos (local build)
 ```
 
 Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.

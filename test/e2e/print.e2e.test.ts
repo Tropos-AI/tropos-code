@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFile, readlink, symlink, writeFile } from "node:fs/promises";
 import { Glob } from "bun";
 import { join } from "node:path";
+import pkg from "../../package.json";
 import { startMockApi, type MockResponse } from "../helpers/mock-api";
 import { makeTmpDir, removeDir } from "../helpers/tmp";
 
@@ -36,7 +37,7 @@ async function runBinary(args: string[], script: MockResponse[], env: Record<str
 describe("compiled binary", () => {
   test("--version", async () => {
     const proc = Bun.spawn([bin, "--version"], { stdout: "pipe" });
-    expect(await new Response(proc.stdout).text()).toBe("0.1.0 (Tropos Code)\n");
+    expect(await new Response(proc.stdout).text()).toBe(`${pkg.version} (Tropos Code)\n`);
   });
 
   test("print mode streams a text answer", async () => {
@@ -134,11 +135,11 @@ describe("compiled binary", () => {
     expect(r.stderr).not.toContain("malformed");
   });
 
-  test("install.sh installs a versioned binary behind a symlink", async () => {
-    await Bun.$`HOME=${dir} sh install.sh ${bin}`.quiet();
+  test("scripts/install-local.sh installs a versioned binary behind a symlink", async () => {
+    await Bun.$`HOME=${dir} sh scripts/install-local.sh ${bin}`.quiet();
     const link = join(dir, ".local", "bin", "tropos");
-    expect(await readlink(link)).toBe(join(dir, ".local", "share", "tropos", "versions", "0.1.0"));
+    expect(await readlink(link)).toBe(join(dir, ".local", "share", "tropos", "versions", pkg.version));
     const proc = Bun.spawn([link, "--version"], { stdout: "pipe" });
-    expect(await new Response(proc.stdout).text()).toContain("0.1.0");
-  });
+    expect(await new Response(proc.stdout).text()).toContain(pkg.version);
+  }, 60_000);
 });

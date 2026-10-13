@@ -37,13 +37,19 @@ describe("evaluate", () => {
     expect(report.failures[0]).toContain("not loaded by any test");
   });
 
+  test("exempt files are not held to the per-file threshold", () => {
+    const lcov = record("src/a.ts", 10, 10) + record("src/flags.ts", 4, 3);
+    expect(evaluate(lcov, 0.8, ["src/a.ts", "src/flags.ts"], {}).ok).toBe(false);
+    expect(evaluate(lcov, 0.8, ["src/a.ts", "src/flags.ts"], { "src/flags.ts": "test-build only" }).ok).toBe(true);
+  });
+
   test("an exempt file that no test loads passes", () => {
     const lcov = record("src/a.ts", 10, 10);
     expect(evaluate(lcov, 0.8, ["src/a.ts", "src/shim.ts"], { "src/shim.ts": "entry shim" }).ok).toBe(true);
   });
 
   test("the built-in exemptions are explicit and explained", () => {
-    expect(Object.keys(EXEMPT).sort()).toEqual(["src/agent/events.ts", "src/index.ts", "src/ui/runtime.ts"]);
+    expect(Object.keys(EXEMPT).sort()).toEqual(["src/agent/events.ts", "src/index.ts", "src/install/build-flags.ts", "src/ui/runtime.ts"]);
     for (const reason of Object.values(EXEMPT)) expect(reason.length).toBeGreaterThan(5);
   });
 });
