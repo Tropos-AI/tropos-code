@@ -15,7 +15,7 @@ import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
 import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
 import { USAGE } from "./usage";
 
-/** sysexits.h EX_USAGE; distinct from print-mode exit codes (2 = refusal, 3 = max turns). */
+/** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
 export const EXIT_USAGE = 64;
 
 export interface MainDeps {

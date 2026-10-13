@@ -3,7 +3,8 @@ import type { Message } from "../api/model";
 import type { ToolKind } from "../config/constants";
 import type { ToolOutput } from "../tools/types";
 
-export type TurnEndReason = "end_turn" | "refusal" | "max_turns" | "aborted" | "error";
+/** max_tokens: the final reply was cut off at the output limit. context_exceeded: the conversation no longer fits. */
+export type TurnEndReason = "end_turn" | "refusal" | "max_turns" | "max_tokens" | "context_exceeded" | "aborted" | "error";
 export type ToolStatus = "done" | "error" | "denied";
 
 export type AgentEvent =

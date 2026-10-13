@@ -90,6 +90,30 @@ describe("print mode", () => {
     expect(err.err).toContain("no scripted response");
   });
 
+  test("a reply cut off at the output limit prints what arrived but exits non-zero", async () => {
+    const text = await print([() => reply([textBlock("half an ans")], "max_tokens")], "text");
+    expect(text.code).toBe(EXIT_CODES.max_tokens);
+    expect(text.code).not.toBe(0);
+    expect(text.out).toBe("half an ans\n");
+    expect(text.err).toContain("cut off");
+    const json = await print([() => reply([textBlock("half an ans")], "max_tokens")], "json");
+    expect(JSON.parse(json.out)).toMatchObject({ result: "half an ans", is_error: true, stop: "max_tokens" });
+    expect(JSON.parse(json.out).error).toContain("cut off");
+  });
+
+  test("a context overflow exits non-zero with no answer", async () => {
+    const r = await print([() => reply([textBlock("partial")], "model_context_window_exceeded")], "json");
+    expect(r.code).toBe(EXIT_CODES.context_exceeded);
+    expect(r.code).not.toBe(0);
+    expect(JSON.parse(r.out)).toMatchObject({ result: "", is_error: true, stop: "context_exceeded" });
+  });
+
+  test("every stop reason other than end_turn has its own non-zero exit code", () => {
+    const codes = Object.entries(EXIT_CODES).filter(([reason]) => reason !== "end_turn").map(([, code]) => code);
+    expect(codes.every((c) => c !== 0)).toBe(true);
+    expect(new Set(codes).size).toBe(codes.length);
+  });
+
   test("refusal still prints the text it received", async () => {
     const r = await print([() => reply([textBlock("no")], "refusal")], "text");
     expect(r.out).toBe("no\n");

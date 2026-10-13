@@ -187,8 +187,8 @@ export class Agent {
             content: toolUses.map((t) => errorResult(t.id, "Not run: the conversation no longer fits in the model's context window.")),
           });
         }
-        emit({ type: "notice", level: "warn", text: "The conversation no longer fits in the model's context. Start a new one with /clear." });
-        return end("end_turn");
+        emit({ type: "notice", level: "error", text: "The conversation no longer fits in the model's context. Start a new one with /clear." });
+        return end("context_exceeded");
       }
       if (message.stop_reason === "pause_turn" || message.stop_reason === "compaction") continue;
       if (message.stop_reason === "max_tokens") {
@@ -201,8 +201,8 @@ export class Agent {
           });
           continue;
         }
-        emit({ type: "notice", level: "warn", text: "The response hit the output token limit and was cut off." });
-        return end("end_turn");
+        emit({ type: "notice", level: "error", text: "The response hit the output token limit and was cut off." });
+        return end("max_tokens");
       }
       if (toolUses.length === 0) return end("end_turn");
 

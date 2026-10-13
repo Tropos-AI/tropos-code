@@ -255,6 +255,13 @@ describe("Agent", () => {
     expect((h.agent.messages[2]!.content as Array<{ content: string }>)[0]!.content).toContain("output limit");
   });
 
+  test("max_tokens on a text reply ends the turn as max_tokens, not end_turn", async () => {
+    const h = harness([() => reply([textBlock("half an ans")], "max_tokens")]);
+    expect(await run(h)).toBe("max_tokens");
+    expect(h.events.some((e) => e.type === "notice" && e.level === "error" && e.text.includes("cut off"))).toBe(true);
+    expect(h.events.at(-1)).toEqual({ type: "turn_end", reason: "max_tokens" });
+  });
+
   test("pause_turn continues the loop", async () => {
     const h = harness([() => reply([textBlock("part")], "pause_turn"), () => reply([textBlock("rest")])]);
     expect(await run(h)).toBe("end_turn");
@@ -540,13 +547,13 @@ describe("Agent failure paths keep history valid", () => {
   test("context window exceeded with tool calls: not run, turn ends", async () => {
     sleeperRuns = 0;
     const h = harness([() => reply([toolUseBlock("s", "Sleep", { ms: 1 })], "model_context_window_exceeded")], { mode: "bypass" });
-    expect(await run(h)).toBe("end_turn");
+    expect(await run(h)).toBe("context_exceeded");
     expect(sleeperRuns).toBe(0);
     assertToolPairs(h.agent.messages);
     const result = (h.agent.messages[2]!.content as Array<{ content: string; is_error: boolean }>)[0]!;
     expect(result.is_error).toBe(true);
     expect(result.content).toContain("no longer fits");
-    expect(h.events.some((e) => e.type === "notice" && e.level === "warn")).toBe(true);
+    expect(h.events.some((e) => e.type === "notice" && e.level === "error")).toBe(true);
     expect(h.model.requests).toHaveLength(1);
   });
 

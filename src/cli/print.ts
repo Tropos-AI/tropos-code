@@ -9,6 +9,8 @@ export const EXIT_CODES: Record<TurnEndReason, number> = {
   error: 1,
   refusal: 2,
   max_turns: 3,
+  max_tokens: 4,
+  context_exceeded: 5,
   aborted: 130,
 };
 
@@ -61,8 +63,9 @@ export class PrintRenderer {
   }
 
   finish(reason: TurnEndReason): number {
-    // Only a completed or declined turn has an answer worth printing; anything else already explained itself on stderr.
-    const delivered = reason === "end_turn" || reason === "refusal";
+    // Only a completed, declined or cut-off turn has an answer worth printing; anything else already explained itself on stderr.
+    // A cut-off answer still exits non-zero, so scripts never mistake it for a complete one.
+    const delivered = reason === "end_turn" || reason === "refusal" || reason === "max_tokens";
     const result = delivered ? finalText(this.lastAssistant) : "";
     if (this.format === "text") {
       if (result) this.out(`${result}\n`);
