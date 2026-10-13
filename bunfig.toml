@@ -1,2 +1,4 @@
 [test]
 coverageSkipTestFiles = true
+# Eval tasks keep the tests of real fixes for later; they belong to old commits, not this tree.
+pathIgnorePatterns = ["eval/tasks/**"]

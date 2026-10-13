@@ -33,11 +33,17 @@ async function build(outfile: string, target?: Bun.Build.CompileTarget): Promise
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
-  options: { all: { type: "boolean", default: false }, outfile: { type: "string" } },
+  options: { all: { type: "boolean", default: false }, outfile: { type: "string" }, target: { type: "string" } },
 });
 
 if (values.all) {
   for (const target of TARGETS) await build(`dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, target);
+} else if (values.target) {
+  const target = values.target as Bun.Build.CompileTarget;
+  // The baseline build runs on x64 CPUs without AVX2, including x64 containers emulated on Apple Silicon.
+  const allowed: Bun.Build.CompileTarget[] = [...TARGETS, "bun-linux-x64-baseline"];
+  if (!allowed.includes(target)) throw new Error(`unknown --target ${values.target}; one of ${allowed.join(", ")}`);
+  await build(values.outfile ?? `dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, target);
 } else {
   await build(values.outfile ?? "dist/tropos");
 }
