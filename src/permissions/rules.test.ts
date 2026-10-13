@@ -704,3 +704,17 @@ describe("audit of 5b590c8", () => {
     expect(bashPatternMatches("xargs rm:*", "xargs /bin/rm -rf", { restrict: true })).toBe(true);
   });
 });
+
+describe("redirect targets longer than the read limit", () => {
+  test("are never mistaken for a descriptor number or /dev/null", () => {
+    expect(splitBashCommand("ls >&" + "1".repeat(17) + "x").unsafe).toBe(true);
+    expect(splitBashCommand("ls >&" + "1".repeat(40)).unsafe).toBe(true);
+    expect(splitBashCommand("ls <&" + "1".repeat(17) + "x").unsafe).toBe(true);
+    expect(splitBashCommand("ls >/dev/null" + "x".repeat(20)).unsafe).toBe(true);
+  });
+  test("short safe targets still pass", () => {
+    expect(splitBashCommand("ls >&2").unsafe).toBe(false);
+    expect(splitBashCommand("ls 2>&1 >/dev/null").unsafe).toBe(false);
+    expect(splitBashCommand("ls >&" + "1".repeat(16)).unsafe).toBe(false);
+  });
+});

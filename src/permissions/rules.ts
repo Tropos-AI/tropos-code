@@ -59,11 +59,16 @@ const REDIRECT_WORD_MAX = 16;
 
 /**
  * Reads the redirect target word starting at `j`: everything up to whitespace or a control
- * operator, but at most REDIRECT_WORD_MAX + 1 characters, so a run of `>` stays linear.
+ * operator. Reading stops after REDIRECT_WORD_MAX characters, so a run of `>` stays linear;
+ * a longer word is returned as "" (never safe), since a cut prefix such as the digits of
+ * `>&11111111111111111x` would otherwise pass for a descriptor number.
  */
 function readRedirectWord(command: string, j: number): string {
   let end = j;
-  while (end < command.length && end - j <= REDIRECT_WORD_MAX && !/[\s;|&]/.test(command[end]!)) end++;
+  while (end < command.length && !/[\s;|&]/.test(command[end]!)) {
+    if (end - j >= REDIRECT_WORD_MAX) return "";
+    end++;
+  }
   return command.slice(j, end);
 }
 
