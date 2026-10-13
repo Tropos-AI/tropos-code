@@ -8,7 +8,7 @@ import type { Effort, Mode } from "../config/constants";
 import { modeReminder } from "../context/system-prompt";
 import { decide, type PermissionContext } from "../permissions/engine";
 import { danglingToolResults, type MessageParam } from "../session/store";
-import type { AnyTool, ToolContext, ToolOutput } from "../tools/types";
+import { toolKind, type AnyTool, type ToolContext, type ToolOutput } from "../tools/types";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, ToolStatus, TurnEndReason } from "./events";
 
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -212,7 +212,10 @@ export class Agent {
     }
   }
 
-  /** Consecutive read/meta calls run in parallel; edit/exec calls run one at a time. Order is preserved. */
+  /**
+   * Consecutive read/meta calls run in parallel; edit/exec calls, unknown tools and tools that
+   * declare no kind run one at a time, since nothing says they are free of side effects. Order is preserved.
+   */
   private async runTools(toolUses: ToolUse[], signal: AbortSignal): Promise<ToolResult[]> {
     const results: ToolResult[] = [];
     let batch: ToolUse[] = [];
@@ -221,8 +224,9 @@ export class Agent {
       batch = [];
     };
     for (const block of toolUses) {
-      const kind = this.opts.tools.find((t) => t.name === block.name)?.kind;
-      if (kind === "read" || kind === "meta" || kind === undefined) {
+      const tool = this.opts.tools.find((t) => t.name === block.name);
+      const kind = tool ? toolKind(tool) : undefined;
+      if (kind === "read" || kind === "meta") {
         batch.push(block);
         continue;
       }
@@ -288,6 +292,7 @@ export class Agent {
       return this.finish(block, tool.name, { content: `INVALID_INPUT: ${issues}`, isError: true }, "error");
     }
     const input = parsed.data;
+    const kind = toolKind(tool);
     const summary = tool.summarize(input);
     emit({ type: "tool_start", id: block.id, name: tool.name, summary, input });
 
@@ -298,13 +303,13 @@ export class Agent {
       // e.g. PathResolutionError: fail closed, never run the tool.
       return this.finish(block, tool.name, { content: `${tool.name} refused: ${errorText(err)}`, isError: true }, "error");
     }
-    const decision = decide({ toolName: tool.name, kind: tool.kind, ...subject }, this.opts.permissions());
+    const decision = decide({ toolName: tool.name, kind, ...subject }, this.opts.permissions());
     if (decision.behavior === "deny") {
       return this.finish(block, tool.name, { content: decision.reason, isError: true }, "denied");
     }
     if (decision.behavior === "ask") {
       const answer = await this.ask(
-        { toolName: tool.name, kind: tool.kind, summary, input, reason: decision.reason, suggestion: decision.suggestion },
+        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion },
         signal,
       );
       if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");
@@ -325,7 +330,7 @@ export class Agent {
       const permissions = this.opts.permissions();
       // isDenied lets search tools drop files covered by deny rules when they scan a directory.
       const isDenied = (path: string) =>
-        decide({ toolName: tool.name, kind: tool.kind, paths: [path] }, permissions).behavior === "deny" ||
+        decide({ toolName: tool.name, kind, paths: [path] }, permissions).behavior === "deny" ||
         decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
       output = await raceAbort(tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied }), signal);
     } catch (err) {

@@ -57,7 +57,8 @@ export interface PermissionSubject {
 
 export interface Tool<S extends z.ZodType = z.ZodType> {
   readonly name: string;
-  readonly kind: ToolKind;
+  /** What the tool may do. A tool that doesn't say (a future MCP tool, say) is treated as "exec": see toolKind. */
+  readonly kind?: ToolKind;
   readonly description: string;
   readonly schema: S;
   /** Short label for transcript rows and permission prompts. */
@@ -68,6 +69,11 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
 }
 
 export type AnyTool = Tool<z.ZodType>;
+
+/** A tool's kind for scheduling and permissions; one that declares none gets the strictest handling. */
+export function toolKind(tool: Pick<AnyTool, "kind">): ToolKind {
+  return tool.kind ?? "exec";
+}
 
 export function defineTool<S extends z.ZodType>(tool: Tool<S>): Tool<S> {
   return tool;

@@ -348,6 +348,52 @@ describe("Agent", () => {
     assertToolPairs(h.agent.messages);
   });
 
+  test("a tool with no kind is treated as a side effect and never runs in the parallel batch", async () => {
+    let running = 0;
+    let maxRunning = 0;
+    const kindless = (name: string) =>
+      ({
+        name,
+        description: "x",
+        schema: z.object({}),
+        summarize: () => name,
+        subject: () => ({ paths: [] }),
+        run: async () => {
+          running++;
+          maxRunning = Math.max(maxRunning, running);
+          await Bun.sleep(10);
+          running--;
+          return { content: name };
+        },
+      }) as unknown as AnyTool;
+    const h = harness(
+      [() => reply([toolUseBlock("k1", "K1", {}), toolUseBlock("k2", "K2", {})], "tool_use"), () => reply([textBlock("ok")])],
+      { mode: "bypass", tools: [kindless("K1"), kindless("K2")] },
+    );
+    await run(h);
+    expect(maxRunning).toBe(1);
+    expect((h.agent.messages[2]!.content as Array<{ content: string }>).map((r) => r.content)).toEqual(["K1", "K2"]);
+  });
+
+  test("a tool with no kind is refused in plan mode like any command", async () => {
+    let ran = false;
+    const kindless = {
+      name: "K",
+      description: "x",
+      schema: z.object({}),
+      summarize: () => "k",
+      subject: () => ({ paths: [] }),
+      run: async () => {
+        ran = true;
+        return { content: "ran" };
+      },
+    } as unknown as AnyTool;
+    const h = harness([() => reply([toolUseBlock("k", "K", {})], "tool_use"), () => reply([textBlock("ok")])], { mode: "plan", tools: [kindless] });
+    await run(h);
+    expect(ran).toBe(false);
+    expect((h.agent.messages[2]!.content as Array<{ content: string }>)[0]!.content).toBe(PLAN_MODE_REASON);
+  });
+
   test("permission prompts never overlap", async () => {
     // Two parallel read tools whose paths fall outside allowedDirs: each one asks at the same time.
     const outside = (name: string) =>
