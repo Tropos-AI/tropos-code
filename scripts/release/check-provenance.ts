@@ -1,7 +1,7 @@
 // scripts/release/check-provenance.ts
 // Before anything is signed: was this artifact built by release-build.yml, from a version tag of this repository,
 // at the exact tagged commit, which is on main — and is it byte-for-byte what GitHub recorded? (spec §7.3, A4)
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PLATFORMS } from "../../src/install/platform";
 import { isVersion } from "../../src/install/version";
@@ -59,10 +59,12 @@ export async function checkProvenance(run: WorkflowRun, repo: string, api: Prove
 }
 
 export async function runForDispatch(tag: string, api: ProvenanceApi): Promise<WorkflowRun> {
+  if (!tag.startsWith("v") || !isVersion(tag.slice(1))) throw new Error(`${tag} is not a release tag`);
   const sha = await api.tagCommit(tag);
   if (!sha) throw new Error(`tag ${tag} does not exist`);
   const run = await api.latestSuccessfulBuildRun(tag, sha);
   if (!run) throw new Error(`no successful release-build run for ${tag} at ${sha}`);
+  if (run.head_branch !== tag) throw new Error(`run ${run.id} built ${run.head_branch}, not ${tag}`);
   return run;
 }
 
@@ -72,10 +74,14 @@ export async function verifyReleaseInputs(dir: string): Promise<void> {
   const present = (await readdir(dir)).filter((n) => n !== "SHA256SUMS").sort();
   for (const n of present) if (!expected.includes(n)) throw new Error(`unexpected file ${n} in release-inputs`);
   for (const n of expected) if (!present.includes(n)) throw new Error(`missing ${n} in release-inputs`);
+  for (const n of [...expected, "SHA256SUMS"]) {
+    if (!(await lstat(join(dir, n))).isFile()) throw new Error(`${n} in release-inputs is not a regular file`);
+  }
   const sums = new Map<string, string>();
   for (const line of (await readFile(join(dir, "SHA256SUMS"), "utf8")).trim().split("\n")) {
     const m = /^([0-9a-f]{64}) [ *]?(\S+)$/.exec(line.trim());
     if (!m) throw new Error(`bad SHA256SUMS line: ${line}`);
+    if (sums.has(m[2]!)) throw new Error(`duplicate SHA256SUMS entry for ${m[2]}`);
     sums.set(m[2]!, m[1]!);
   }
   if ([...sums.keys()].sort().join() !== expected.join()) throw new Error("SHA256SUMS does not list exactly the release inputs");
@@ -87,20 +93,35 @@ export async function verifyReleaseInputs(dir: string): Promise<void> {
 
 class NotFound extends Error {}
 
+export interface GhResult {
+  exitCode: number;
+  stdout: Uint8Array;
+  stderr: string;
+}
+/** Runs `gh <args>`; stdout stays binary so artifact zips survive. */
+export type GhRunner = (args: string[]) => Promise<GhResult>;
+
+export const runGh: GhRunner = async (args) => {
+  const r = await Bun.$`gh ${args}`.quiet().nothrow();
+  return { exitCode: r.exitCode, stdout: new Uint8Array(r.stdout), stderr: r.stderr.toString() };
+};
+
+type GitObject = { type: string; sha: string };
+
 /** Every API failure throws; only an explicit HTTP 404 is surfaced as NotFound, never as an empty result. */
-function ghApi(repo: string): ProvenanceApi {
-  const json = async <T>(path: string): Promise<T> => {
-    const r = await Bun.$`gh api ${path}`.quiet().nothrow();
+export function ghApi(repo: string, run: GhRunner = runGh): ProvenanceApi {
+  const call = async (path: string): Promise<GhResult> => {
+    const r = await run(["api", path]);
     if (r.exitCode !== 0) {
-      const err = r.stderr.toString();
-      if (/HTTP 404/.test(err)) throw new NotFound(`GitHub API ${path}: not found`);
-      throw new Error(`GitHub API ${path} failed: ${err.trim() || `exit ${r.exitCode}`}`);
+      if (/HTTP 404/.test(r.stderr)) throw new NotFound(`GitHub API ${path}: not found`);
+      throw new Error(`GitHub API ${path} failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
     }
-    return JSON.parse(r.stdout.toString()) as T;
+    return r;
   };
+  const json = async <T>(path: string): Promise<T> => JSON.parse(new TextDecoder().decode((await call(path)).stdout)) as T;
   return {
     async tagCommit(tag) {
-      let ref: { object: { type: string; sha: string } };
+      let ref: { object: GitObject };
       try {
         ref = await json(`repos/${repo}/git/ref/tags/${tag}`);
       } catch (e) {
@@ -109,23 +130,25 @@ function ghApi(repo: string): ProvenanceApi {
       }
       if (ref.object.type === "commit") return ref.object.sha;
       if (ref.object.type !== "tag") throw new Error(`tag ${tag} points at a ${ref.object.type}, not a commit`);
-      const annotated = await json<{ object: { type: string; sha: string } }>(`repos/${repo}/git/tags/${ref.object.sha}`);
+      const annotated = await json<{ object: GitObject }>(`repos/${repo}/git/tags/${ref.object.sha}`);
       if (annotated.object.type !== "commit") throw new Error(`tag ${tag} points at a ${annotated.object.type}, not a commit`);
       return annotated.object.sha;
     },
     async isOnMain(sha) {
-      const cmp = await json<{ status: string }>(`repos/${repo}/compare/${sha}...main`);
+      // Resolve refs/heads/main explicitly: the bare name `main` could resolve to a tag of that name.
+      const head = await json<{ object: GitObject }>(`repos/${repo}/git/ref/heads/main`);
+      if (head.object?.type !== "commit" || !head.object.sha) throw new Error("refs/heads/main does not point at a commit");
+      const cmp = await json<{ status?: string }>(`repos/${repo}/compare/${sha}...${head.object.sha}`);
       return cmp.status === "ahead" || cmp.status === "identical";
     },
     async runArtifacts(runId) {
-      const body = await json<{ artifacts?: Array<{ id: number; name: string; expired: boolean; digest: string | null }> }>(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
-      if (!Array.isArray(body.artifacts)) throw new Error(`GitHub returned no artifact list for run ${runId}`);
+      const body = await json<{ total_count?: number; artifacts?: Array<{ id: number; name: string; expired: boolean; digest: string | null }> }>(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
+      if (!Array.isArray(body.artifacts) || typeof body.total_count !== "number") throw new Error(`GitHub returned no artifact list for run ${runId}`);
+      if (body.total_count > body.artifacts.length) throw new Error(`run ${runId} has ${body.total_count} artifacts but only ${body.artifacts.length} were listed`);
       return body.artifacts;
     },
     async downloadArtifactZip(id) {
-      const r = await Bun.$`gh api repos/${repo}/actions/artifacts/${id}/zip`.quiet().nothrow();
-      if (r.exitCode !== 0) throw new Error(`downloading artifact ${id} failed: ${r.stderr.toString().trim() || `exit ${r.exitCode}`}`);
-      return new Uint8Array(r.stdout);
+      return (await call(`repos/${repo}/actions/artifacts/${id}/zip`)).stdout;
     },
     async latestSuccessfulBuildRun(_tag, sha) {
       const runs = await json<{ workflow_runs?: WorkflowRun[] }>(`repos/${repo}/actions/workflows/release-build.yml/runs?event=push&status=success&head_sha=${sha}&per_page=1`);
@@ -149,7 +172,8 @@ if (import.meta.main) {
   const tagInput = process.env.TAG_INPUT;
   const run = event.workflow_run ?? (tagInput ? await runForDispatch(tagInput, api) : undefined);
   if (!run) throw new Error("no workflow_run in the event and no TAG_INPUT to resume from");
-  const out = args[args.indexOf("--out") + 1];
+  const outIdx = args.indexOf("--out");
+  const out = outIdx < 0 ? undefined : args[outIdx + 1];
   if (!out) throw new Error("--out <path> is required");
   const p = await checkProvenance(run, repo, api);
   await Bun.write(out, p.zip);
