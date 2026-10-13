@@ -37,7 +37,8 @@ const BUILTINS = ["[", "echo", "exit", ":", "read", "for", "case", "umask"];
 /**
  * The simple commands of a run script, each as "<command> <args…>" with quoted strings replaced by Q:
  * command substitutions become commands of their own; comments, keywords, assignments and redirections are dropped.
- * Scripts in policed jobs are kept simple enough for this (no heredocs, no nested substitutions).
+ * Scripts in policed jobs are kept simple enough for this. Anything it cannot see through — a nested `$(`, arithmetic
+ * `$((`, backticks, process substitution `<(` / `>(`, or a heredoc — makes it throw, so the allow-list fails closed.
  */
 function commandsOf(run: string): string[] {
   const out: string[] = [];
@@ -49,6 +50,8 @@ function commandsOf(run: string): string[] {
     out.push(...commandsOf(inner));
     return "SUBST";
   });
+  const opaque = /`|<\(|>\(|\$\(\(|\$\(|<</.exec(text);
+  if (opaque) throw new Error(`run script has ${JSON.stringify(opaque[0])} the policy parser cannot see through: ${run}`);
   text = text.replace(/'[^']*'/g, "Q").replace(/"(?:[^"\\]|\\.)*"/g, "Q");
   text = text.replace(/^\s*(?:Q|[*\w./\\-]+)(?:\s*\|\s*(?:Q|[*\w./\\-]+))*\)\s*/gm, ""); // case patterns
   for (const seg of text.split(/;;|;|&&|\|\||\||\n|\{|\}|\bthen\b|\belse\b|\bdo\b/)) {
@@ -175,6 +178,17 @@ describe("workflow policy (R4.1)", () => {
       const executables = commandsOf(runs(job)).filter((c) => !BUILTINS.includes(c.split(" ")[0]!));
       expect({ jobName, executables: executables.filter((c) => !c.startsWith("gh release ")) }).toEqual({ jobName, executables: [] });
     }
+  });
+
+  test.each([
+    ["a nested substitution", 'echo "$(sh to-sign/install.sh "$(echo x)")"'],
+    ["backticks", "echo `./to-sign/install.sh`"],
+    ["process substitution (input)", "echo <(./x)"],
+    ["process substitution (output)", "tee >(./x)"],
+    ["arithmetic expansion", "echo $(( $(./x) + 1 ))"],
+    ["a heredoc", "cat <<EOF\n./x\nEOF"],
+  ])("the command parser fails closed on %s", (_what, script) => {
+    expect(() => commandsOf(script)).toThrow("the policy parser cannot see through");
   });
 
   test("the command parser sees through substitutions, quotes, case patterns and redirections", () => {
@@ -411,7 +425,7 @@ describe("controller rulings (task 28)", () => {
 
   test("release.yml keeps the spec's stage order and never marks a release latest before promotion (fix 5)", async () => {
     const wf = await load("release.yml");
-    expect(String((wf.jobs.prepare as Job & { if?: string }).if)).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect((wf.jobs.prepare as Job & { if?: string }).if).toBe("github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'");
     expect(Object.fromEntries(Object.entries(wf.jobs).map(([n, j]) => [n, needsOf(j)]))).toEqual({
       prepare: [],
       sign: ["prepare"],
@@ -428,6 +442,49 @@ describe("controller rulings (task 28)", () => {
     const cmds = (job: string) => commandsOf(runs(wf.jobs[job]!));
     expect(cmds("draft").filter((c) => c.startsWith("gh release create "))).toEqual([expect.stringMatching(/ --draft --latest=false /)]);
     expect(cmds("publish")).toEqual([expect.stringMatching(/ --draft=false --latest=false$/)]);
+  });
+
+  test.each(PRIVILEGED)("%s: job and step conditions are exactly the ruled ones, and nothing continues on error (re-review)", async (name) => {
+    const IFS: Record<string, Record<string, string | undefined>> = {
+      "release.yml": { prepare: "github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'" },
+      "promote.yml": {},
+      "channels-health.yml": { check: "github.event_name == 'schedule' || !inputs.repair", repair: "github.event_name == 'workflow_dispatch' && inputs.repair" },
+    };
+    // Only the remove-the-key step (always) and the optional public gates b and c are conditional.
+    const STEP_IFS: Record<string, string> = {
+      "Remove the key file": "always()",
+      "b) the published installer verifies the new release": "needs.previous.outputs.installer_tag != ''",
+      "c) the stable binary installs the new release": "needs.previous.outputs.stable != ''",
+    };
+    const wf = await load(name);
+    for (const [n, j] of Object.entries(wf.jobs) as Array<[string, Job & { if?: string; "continue-on-error"?: unknown }]>) {
+      expect({ job: n, if: j.if, continueOnError: j["continue-on-error"] }).toEqual({ job: n, if: IFS[name]![n], continueOnError: undefined });
+      for (const step of j.steps as Array<Step & { if?: string; "continue-on-error"?: unknown }>) {
+        expect({ job: n, step: step.name, if: step.if, continueOnError: step["continue-on-error"] }).toEqual({
+          job: n,
+          step: step.name,
+          if: step.name ? STEP_IFS[step.name] : undefined,
+          continueOnError: undefined,
+        });
+      }
+    }
+  });
+
+  test.each(PRIVILEGED)("%s uses only the four first-party actions, each at its pinned commit (re-review)", async (name) => {
+    const ACTIONS: Record<string, string> = {
+      "actions/checkout": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+      "oven-sh/setup-bun": "0c5077e51419868618aeaa5fe8019c62421857d6",
+      "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+      "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
+    };
+    const wf = await load(name);
+    for (const [n, j] of Object.entries(wf.jobs)) {
+      for (const step of j.steps) {
+        if (step.uses === undefined) continue;
+        const [action, sha] = step.uses.split("@");
+        expect({ job: n, action, sha }).toEqual({ job: n, action: action!, sha: ACTIONS[action!] ?? "not allowed in a privileged workflow" });
+      }
+    }
   });
 
   test("ci.yml keeps the shellcheck step and covers collect-assets.sh (ruling 4)", async () => {
