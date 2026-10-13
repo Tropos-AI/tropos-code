@@ -244,6 +244,12 @@ describe("workflow policy (R4.1)", () => {
       expect(wf.concurrency).toEqual({ group: "channels", "cancel-in-progress": false });
     }
   });
+
+  test.each(ALL)("%s never interpolates ${{ }} into a run script; values reach the shell through env", async (name) => {
+    const wf = await load(name);
+    for (const [jobName, job] of Object.entries(wf.jobs))
+      for (const step of job.steps) if (step.run?.includes("${{")) throw new Error(`${name}: job ${jobName} interpolates an expression into run: ${step.run}`);
+  });
 });
 
 describe("controller rulings (task 28)", () => {
