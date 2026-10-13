@@ -5,6 +5,7 @@ import { versionPath } from "../../src/install/layout";
 import { readLink, switchLink } from "../../src/install/link";
 import { lockVersionShared } from "../../src/install/locks";
 import { emptyState, writeState } from "../../src/install/state";
+import { withInstallLock } from "../../src/install/engine";
 import { makeEngineFixture, type EngineFixture } from "./helpers/engine";
 
 let f: EngineFixture;
@@ -133,5 +134,113 @@ describe("recovery (spec §10.6)", () => {
     await symlink("/usr/bin/true", f.layout.binLink);
     await f.recoverNow();
     expect(await readLink(f.layout)).toEqual({ kind: "foreign", target: "/usr/bin/true" });
+  });
+
+  test("finishing a pending switch records from as previous", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], link: "1.1.0" });
+    await writeState(f.layout, { ...emptyState(), current: "1.0.0", pending: { op: "switch", from: "1.0.0", to: "1.1.0" } });
+    await f.recoverNow();
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
+  });
+
+  test("link to an unverifiable managed version: switched back to current", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0", link: "1.1.0" });
+    await appendFile(versionPath(f.layout, "1.1.0"), "x");
+    await f.recoverNow();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+    expect(await f.state()).toMatchObject({ current: "1.0.0" });
+  });
+
+  test("dangling link: relinked to the healthy current", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0" });
+    await symlink(versionPath(f.layout, "9.9.9"), f.layout.binLink);
+    await f.recoverNow();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+  });
+
+  test("missing state with a managed healthy link: state rebuilt", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], link: "1.1.0" });
+    await rm(f.layout.stateFile);
+    await f.recoverNow();
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
+  });
+
+  test("corrupt state with a foreign symlink: untouched", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0" });
+    await symlink("/usr/bin/true", f.layout.binLink);
+    await writeFile(f.layout.stateFile, "{bad");
+    const r = await f.recoverNow();
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "foreign", target: "/usr/bin/true" });
+  });
+
+  test("corrupt state with a regular file at the link path: untouched", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0" });
+    await writeFile(f.layout.binLink, "user file");
+    await writeFile(f.layout.stateFile, "{bad");
+    await f.recoverNow();
+    expect(await Bun.file(f.layout.binLink).text()).toBe("user file");
+  });
+
+  test("pending switch with a foreign link: link untouched, pending cleared", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0" });
+    await symlink("/usr/bin/true", f.layout.binLink);
+    await writeState(f.layout, { ...emptyState(), current: "1.0.0", pending: { op: "switch", from: "1.0.0", to: "1.1.0" } });
+    await f.recoverNow();
+    expect(await readLink(f.layout)).toEqual({ kind: "foreign", target: "/usr/bin/true" });
+    expect(await f.state()).toMatchObject({ current: "1.0.0", pending: null });
+  });
+
+  test("corrupt state with a local-build link: link left alone", async () => {
+    f = await makeEngineFixture();
+    await writeFile(versionPath(f.layout, "0.1.0"), "local build");
+    await symlink(versionPath(f.layout, "0.1.0"), f.layout.binLink);
+    await writeFile(f.layout.stateFile, "{bad");
+    const r = await f.recoverNow();
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "0.1.0" });
+    expect(await f.state()).toMatchObject({ current: null, previous: null, pending: null });
+  });
+
+  test("pending switch: from damaged, a healthy to is activated", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], link: "1.0.0" });
+    await writeState(f.layout, { ...emptyState(), current: "1.0.0", pending: { op: "switch", from: "1.0.0", to: "1.1.0" } });
+    await appendFile(versionPath(f.layout, "1.0.0"), "x");
+    const r = await f.recoverNow();
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", pending: null });
+  });
+});
+
+describe("withInstallLock", () => {
+  test("releases the lock when fn throws", async () => {
+    f = await makeEngineFixture();
+    await expect(withInstallLock(f.deps, { wait: false }, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    expect(await withInstallLock(f.deps, { wait: false }, async () => 1)).toMatchObject({ value: 1 });
+  });
+
+  test("returns null when wait is false and the lock is held", async () => {
+    f = await makeEngineFixture();
+    let inner: unknown = "unset";
+    await withInstallLock(f.deps, { wait: false }, async () => {
+      inner = await withInstallLock(f.deps, { wait: false }, async () => 1);
+    });
+    expect(inner).toBeNull();
+  });
+
+  test("recovery runs before fn", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0", link: "1.1.0" });
+    const seen = await withInstallLock(f.deps, { wait: true }, async (s) => s.state.current);
+    expect(seen!.value).toBe("1.1.0");
   });
 });

@@ -49,9 +49,24 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
     return null;
   };
 
+  if (link.kind === "foreign") {
+    // Not ours: never switched or removed (spec §4.4); only the bookkeeping is settled.
+    const pending = read.kind === "ok" && read.state.pending !== null;
+    if (read.kind === "corrupt" || pending) {
+      if (read.kind === "corrupt") actions.push(`install state was unreadable (${read.reason}); rebuilt it`);
+      actions.push(`${l.binLink} is not managed by Tropos; left it alone`);
+      await s.save({ pending: null });
+    }
+    return { actions, fatal };
+  }
+
   if (read.kind !== "ok") {
     if (read.kind === "missing" && !linkedManaged) return { actions, fatal }; // nothing managed, or a user's local build
     if (read.kind === "corrupt") actions.push(`install state was unreadable (${read.reason}); rebuilt it`);
+    if (link.kind === "ours" && !linkedManaged) {
+      await s.save({ current: null, previous: null, pending: null }); // a local build the user linked: leave the link alone
+      return { actions, fatal };
+    }
     const current = linkedManaged && (await healthy(linked)) ? linked : await toFallback("the active version could not be verified");
     let previous: string | null = null;
     for (const v of await listManagedVersions(l)) {
@@ -81,11 +96,9 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
       fatal = FIRST_INSTALL_INCOMPLETE;
       actions.push(FIRST_INSTALL_INCOMPLETE);
     } else {
-      const f = await toFallback(`the interrupted switch to ${to} could not be completed`, new Set([to]));
+      const f = await toFallback(`the interrupted switch to ${to} could not be completed`);
       await s.save({ current: f, pending: null });
     }
-  } else if (link.kind === "foreign") {
-    // Not ours: never touched (spec §4.4).
   } else if (link.kind === "ours" && !linkedManaged && st.current === null) {
     // A local build the user linked themselves.
   } else if (linked !== null && linked !== st.current) {
