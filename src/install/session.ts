@@ -30,8 +30,12 @@ export async function startNativeSession(d: NativeSessionDeps): Promise<NativeSe
   const layout = resolveLayout(d.env);
   const version = nativeVersionOf(layout, d.execPath);
   if (version === null) return { kind: "not-native" };
+  // The loop guard is for this process only; descendants (Bash-tool commands, nested tropos) must not inherit it.
+  const reexeced = Boolean(d.env.TROPOS_REEXEC);
+  delete d.env.TROPOS_REEXEC;
+  delete process.env.TROPOS_REEXEC;
   const lock = await lockVersionShared(layout, version).catch(() => null);
-  if (!existsSync(d.execPath) && !d.env.TROPOS_REEXEC) {
+  if (!existsSync(d.execPath) && !reexeced) {
     lock?.release();
     return { kind: "reexec", via: layout.binLink };
   }

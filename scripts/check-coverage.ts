@@ -52,7 +52,7 @@ export function evaluate(
     .filter((f) => !(norm(f.path) in exempt))
     .filter((f) => pct(f.hit, f.found) < threshold)
     .map((f) => `${f.path}: ${fmt(pct(f.hit, f.found))} of lines covered (need ${fmt(threshold)})`);
-  const reported = new Set(records.map((f) => f.path.replace(/\\/g, "/").replace(/^\.\//, "")));
+  const reported = new Set(records.map((f) => norm(f.path)));
   for (const file of files) {
     if (!reported.has(file) && !(file in exempt)) failures.push(`${file}: not loaded by any test, so 0% covered`);
   }

@@ -50,6 +50,16 @@ describe("startNativeSession", () => {
     expect(r.kind).toBe("native");
   });
 
+  test("consumes the TROPOS_REEXEC loop guard so descendants do not inherit it", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.1.0"], current: "1.1.0", link: "1.1.0" });
+    const env: NodeJS.ProcessEnv = { HOME: f.home, TROPOS_REEXEC: "1" };
+    process.env.TROPOS_REEXEC = "1";
+    await startNativeSession(deps({ env }));
+    expect(env.TROPOS_REEXEC).toBeUndefined();
+    expect(process.env.TROPOS_REEXEC).toBeUndefined();
+  });
+
   test("announces an update once, then spawns a check when due", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });

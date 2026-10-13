@@ -1,9 +1,10 @@
 // src/cli/main.install.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeEngineFixture, type EngineFixture } from "../../test/install/helpers/engine";
 import { versionPath } from "../install/layout";
+import { emptyState, writeState } from "../install/state";
 import { main } from "./main";
 
 let f: EngineFixture;
@@ -93,5 +94,51 @@ describe("corrupt settings.json", () => {
     const r = await run(["update"], versionPath(f.layout, "1.0.0"));
     expect(r.code).toBe(1);
     expect(r.err).toContain("settings");
+  });
+});
+
+describe("main starts native sessions (spec 10.1, 11)", () => {
+  async function session(execPath: string) {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await main([], {
+      out: (s) => void out.push(s),
+      err: (s) => void err.push(s),
+      env: { HOME: f.home, TROPOS_HOME: join(f.home, ".tropos"), SHELL: "/bin/bash" },
+      cwd: f.root,
+      execPath,
+      readStdin: async () => null,
+      tty: { stdin: true, stdout: true },
+    });
+    return { code, err: err.join(""), out: out.join("") };
+  }
+
+  test("re-executes through the link with TROPOS_REEXEC=1 when its binary was removed", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", link: "1.1.0" });
+    await rm(versionPath(f.layout, "1.0.0"));
+    await rm(f.layout.binLink);
+    await writeFile(f.layout.binLink, '#!/bin/sh\necho "reexec=$TROPOS_REEXEC" > "$HOME/reexec.txt"\nexit 7\n', { mode: 0o755 });
+    const r = await session(versionPath(f.layout, "1.0.0"));
+    expect(r.code).toBe(7);
+    expect((await readFile(join(f.home, "reexec.txt"), "utf8")).trim()).toBe("reexec=1");
+  });
+
+  test("a re-exec target that cannot run falls through to a normal start", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", link: "1.1.0" });
+    await rm(versionPath(f.layout, "1.0.0"));
+    await rm(f.layout.binLink);
+    const r = await session(versionPath(f.layout, "1.0.0"));
+    expect(r.err).toContain("interactive mode needs a terminal");
+  });
+
+  test("the update announcement goes to stderr", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
+    await writeState(f.layout, { ...emptyState(), current: "1.0.0", autoUpdate: { ...emptyState().autoUpdate, lastUpdated: "1.0.0", announced: false } });
+    const r = await session(versionPath(f.layout, "1.0.0"));
+    expect(r.err).toContain("Updated to 1.0.0\n");
+    expect(r.out).not.toContain("Updated to");
   });
 });

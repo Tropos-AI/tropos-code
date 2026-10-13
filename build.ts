@@ -47,6 +47,7 @@ const define: Record<string, string> = {
   // Production builds compile the test hooks out (src/install/build-flags.ts, amendment A3).
   TROPOS_TEST_BUILD: values["test-build"] ? "true" : "false",
 };
+if (values["test-signers"] && !values["test-build"]) throw new Error("--test-signers only makes sense with --test-build");
 if (values["test-build"]) {
   if (!values["test-signers"]) throw new Error("--test-build needs --test-signers <allowed_signers file>");
   if (values.all) throw new Error("--test-build cannot be combined with --all");

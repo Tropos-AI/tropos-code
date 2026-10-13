@@ -4,7 +4,8 @@ declare const TROPOS_TEST_SIGNERS: string | undefined;
 
 /**
  * True only in binaries built with `bun build.ts --test-build` for the compiled e2e tests. Production builds
- * define TROPOS_TEST_BUILD as false, so every branch below is removed from them (amendment A3).
+ * define TROPOS_TEST_BUILD as false, so the override branch below is removed from them and no test hook or
+ * test-hook string remains reachable (amendment A3). Dependent ternaries (urls.ts) may survive as dead code.
  */
 export const IS_TEST_BUILD: boolean = typeof TROPOS_TEST_BUILD !== "undefined" && TROPOS_TEST_BUILD === true;
 

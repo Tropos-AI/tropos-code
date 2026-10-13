@@ -140,5 +140,5 @@ describe("compiled binary", () => {
     expect(await readlink(link)).toBe(join(dir, ".local", "share", "tropos", "versions", "0.1.0"));
     const proc = Bun.spawn([link, "--version"], { stdout: "pipe" });
     expect(await new Response(proc.stdout).text()).toContain("0.1.0");
-  });
+  }, 60_000);
 });

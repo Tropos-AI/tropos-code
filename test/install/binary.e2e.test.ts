@@ -44,7 +44,13 @@ async function exec(bin: string, args: string[], extraEnv: Record<string, string
 describe("production binary", () => {
   test("contains no test-build hooks (amendment A3)", async () => {
     const bytes = Buffer.from(await Bun.file(prodBin).arrayBuffer());
-    expect(bytes.includes("TROPOS_TEST_RELEASES_BASE")).toBe(false);
+    for (const marker of ["TROPOS_TEST_RELEASES_BASE", "TROPOS_TEST_SIGNERS", "TROPOS_TEST_BUILD"]) expect(bytes.includes(marker)).toBe(false);
+  });
+
+  test("build.ts rejects --test-signers without --test-build", async () => {
+    const r = await Bun.$`bun build.ts --test-signers ${join(dir, "signers")} --outfile ${join(dir, "never")}`.quiet().nothrow();
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr.toString()).toContain("--test-signers only makes sense with --test-build");
   });
 
   test("subcommands outside a native install exit 73", async () => {

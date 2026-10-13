@@ -32,6 +32,8 @@ export interface MainDeps {
   /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
   execPath?: string;
   engine?: CommandContext["engine"];
+  /** Tests override terminal detection for the native-session announcement. */
+  tty?: { stdin: boolean; stdout: boolean };
 }
 
 const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
@@ -141,14 +143,19 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     env,
     execPath: deps.execPath ?? process.execPath,
     print: opts.print,
-    stdinTTY: Boolean(process.stdin.isTTY) && !deps.readStdin,
-    stdoutTTY: Boolean(process.stdout.isTTY),
+    stdinTTY: deps.tty?.stdin ?? (Boolean(process.stdin.isTTY) && !deps.readStdin),
+    stdoutTTY: deps.tty?.stdout ?? Boolean(process.stdout.isTTY),
     autoUpdates: settings.autoUpdates,
     version: VERSION,
   });
   if (native.kind === "reexec") {
-    const proc = Bun.spawn([native.via, ...argv], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, TROPOS_REEXEC: "1" } });
-    return await proc.exited;
+    // Starting must never fail loudly because of re-exec: if the target cannot run, carry on in this process.
+    try {
+      const proc = Bun.spawn([native.via, ...argv], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, TROPOS_REEXEC: "1" } });
+      return await proc.exited;
+    } catch {
+      // fall through to a native session without the in-use lock
+    }
   }
   if (native.kind === "native" && native.announcement) err(`${native.announcement}\n`);
   const { rules, invalid } = compileRules(settings.permissions);
