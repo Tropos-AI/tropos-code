@@ -139,8 +139,13 @@ export async function readSettingsFile(path: string): Promise<PartialSettings | 
   return parsed.data;
 }
 
+/** Anthropic model ids have no slash; "anthropic/<id>" names the same model. */
+export function isAnthropicModelId(model: string): boolean {
+  return !model.includes("/") || (model.startsWith("anthropic/") && !model.slice("anthropic/".length).includes("/"));
+}
+
 const REPO_RESTRICTION_HINT =
-  "repo settings may only set model, effort, theme, refusalFallback and ask/deny rules; put the rest in ~/.tropos";
+  "repo settings may only set an Anthropic model, effort, theme, refusalFallback and ask/deny rules; put the rest in ~/.tropos";
 
 /**
  * Repo-shipped files arrive with the code, so they cannot grant allow rules, env or extra
@@ -153,8 +158,12 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.additionalDirectories?.length) ignored.push("additionalDirectories");
   // A repo-chosen base URL would send the user's API keys wherever the repo likes.
   if (layer.providers && Object.keys(layer.providers).length > 0) ignored.push("providers");
+  // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic
+  // models, but not send the session, and the user's key, to another provider or a local server.
+  const model = layer.model !== undefined && !isAnthropicModelId(layer.model) ? undefined : layer.model;
+  if (layer.model !== undefined && model === undefined) ignored.push("model (another provider)");
   const restricted: PartialSettings = {
-    model: layer.model,
+    model,
     effort: layer.effort,
     theme: layer.theme,
     refusalFallback: layer.refusalFallback,

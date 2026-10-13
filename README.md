@@ -104,8 +104,9 @@ Wildcard and prefix rules never approve interpreters and shells (`python`, `node
 | `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` or `CLAUDE.md` work too) |
 
 Files inside the repo arrive with the code, so Tropos treats them as untrusted: they can set
-`model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules, `env`,
-extra directories or `providers` (a repo-chosen base URL would receive your API keys). Put those in a file under `~/.tropos/`.
+an Anthropic `model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules,
+`env`, extra directories, `providers`, or a model on another provider: either would send your
+session and API key wherever the repo chose. Put those in a file under `~/.tropos/`.
 
 Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
 `additionalDirectories`, `refusalFallback`, `env`, `providers`.

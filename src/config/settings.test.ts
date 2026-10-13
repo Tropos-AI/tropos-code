@@ -114,6 +114,25 @@ describe("loadSettings", () => {
     expect(warnings[0]).toContain("ignored providers");
   });
 
+  test("repo settings may pick an Anthropic model but never another provider", async () => {
+    await put(paths.user, { model: "claude-opus-5-5" });
+    for (const model of ["deepseek/deepseek-flash", "ollama/qwen3", "my-vllm/x", "anthropic/../x/y", "openrouter/anthropic/claude-opus-5-5"]) {
+      await put(paths.project, { model });
+      const { settings, warnings } = await loadSettings(paths);
+      expect(settings.model).toBe("claude-opus-5-5");
+      expect(warnings[0]).toContain("ignored model (another provider)");
+    }
+    for (const model of ["claude-sonnet-5-5", "anthropic/claude-sonnet-5-5"]) {
+      await put(paths.local, { model });
+      expect((await loadSettings(paths)).settings.model).toBe(model);
+    }
+    // Your own files and the command line can choose any provider.
+    await put(paths.userProject, { model: "deepseek/deepseek-flash" });
+    await put(paths.project, {});
+    await put(paths.local, {});
+    expect((await loadSettings(paths)).settings.model).toBe("deepseek/deepseek-flash");
+  });
+
   test("provider settings are validated", async () => {
     await put(paths.user, { providers: { Bad_Id: {} } });
     await expect(loadSettings(paths)).rejects.toThrow("providers.Bad_Id");
