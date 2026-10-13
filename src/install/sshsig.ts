@@ -76,7 +76,6 @@ export function parseAllowedSigners(text: string): TrustedKey[] {
 interface SshSig {
   publicKey: Uint8Array;
   namespace: string;
-  reserved: Buffer;
   hashAlg: "sha256" | "sha512";
   signature: Buffer;
 }
@@ -91,14 +90,15 @@ function parseSshSig(armored: string): SshSig {
   if (r.uint32() !== 1) throw new Error("unsupported SSHSIG version");
   const publicKey = decodeEd25519Blob(r.string());
   const namespace = r.string().toString("utf8");
-  const reserved = r.string();
+  // ssh-keygen signs over an empty reserved field only; anything else is not a signature it accepts.
+  if (r.string().length !== 0) throw new Error("reserved field is not empty");
   const hashAlg = r.string().toString("latin1");
   if (hashAlg !== "sha256" && hashAlg !== "sha512") throw new Error(`unsupported hash ${hashAlg}`);
   const sigBlob = new Reader(r.string());
   if (sigBlob.string().toString("latin1") !== "ssh-ed25519") throw new Error("not an ed25519 signature");
   const signature = sigBlob.string();
   if (signature.length !== 64 || !sigBlob.done() || !r.done()) throw new Error("malformed signature");
-  return { publicKey, namespace, reserved, hashAlg, signature };
+  return { publicKey, namespace, hashAlg, signature };
 }
 
 export interface VerifyRequest {
@@ -128,7 +128,7 @@ export function verifySshSig(req: VerifyRequest): VerifyResult {
   const signed = Buffer.concat([
     Buffer.from("SSHSIG"),
     sshString(Buffer.from(req.namespace)),
-    sshString(sig.reserved),
+    sshString(new Uint8Array(0)),
     sshString(Buffer.from(sig.hashAlg)),
     sshString(digest),
   ]);

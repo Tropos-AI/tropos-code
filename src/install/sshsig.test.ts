@@ -1,5 +1,6 @@
 // src/install/sshsig.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestKey, sshSign, type TestKey } from "../../test/install/helpers/keys";
@@ -121,5 +122,57 @@ describe("parseAllowedSigners", () => {
     ["bad base64", "tropos-release ssh-ed25519 !!!!"],
   ])("rejects %s", (_name, line) => {
     expect(() => parseAllowedSigners(line)).toThrow("allowed_signers line 1");
+  });
+});
+
+describe("reserved field", () => {
+  const sshStr = (data: Uint8Array | string): Buffer => {
+    const b = Buffer.from(data);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(b.length, 0);
+    return Buffer.concat([len, b]);
+  };
+
+  /** Builds an SSHSIG envelope with node:crypto, signing over the given reserved field. */
+  function craftSignature(reserved: Buffer): { armored: string; trusted: ReturnType<typeof parseAllowedSigners> } {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const raw = (publicKey.export({ format: "der", type: "spki" }) as Buffer).subarray(-32);
+    const pubBlob = Buffer.concat([sshStr("ssh-ed25519"), sshStr(raw)]);
+    const digest = createHash("sha512").update(message).digest();
+    const signed = Buffer.concat([
+      Buffer.from("SSHSIG"),
+      sshStr("tropos-manifest"),
+      sshStr(reserved),
+      sshStr("sha512"),
+      sshStr(digest),
+    ]);
+    const sigBytes = cryptoSign(null, signed, privateKey);
+    const sigBlob = Buffer.concat([sshStr("ssh-ed25519"), sshStr(sigBytes)]);
+    const envelope = Buffer.concat([
+      Buffer.from("SSHSIG"),
+      Buffer.from([0, 0, 0, 1]),
+      sshStr(pubBlob),
+      sshStr("tropos-manifest"),
+      sshStr(reserved),
+      sshStr("sha512"),
+      sshStr(sigBlob),
+    ]);
+    const b64 = envelope.toString("base64").match(/.{1,70}/g)!.join("\n");
+    return {
+      armored: `-----BEGIN SSH SIGNATURE-----\n${b64}\n-----END SSH SIGNATURE-----\n`,
+      trusted: parseAllowedSigners(`tropos-release ssh-ed25519 ${pubBlob.toString("base64")}`),
+    };
+  }
+
+  test("accepts a signature whose reserved field is empty (helper sanity check)", () => {
+    const { armored, trusted } = craftSignature(Buffer.alloc(0));
+    expect(verifySshSig({ message, armoredSignature: armored, namespace: "tropos-manifest", principal: "tropos-release", trusted }).ok).toBe(true);
+  });
+
+  test("rejects a signature with a non-empty reserved field, as ssh-keygen does", () => {
+    const { armored, trusted } = craftSignature(Buffer.from("x"));
+    const r = verifySshSig({ message, armoredSignature: armored, namespace: "tropos-manifest", principal: "tropos-release", trusted });
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toStartWith("unreadable signature");
   });
 });
