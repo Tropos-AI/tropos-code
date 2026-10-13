@@ -241,6 +241,7 @@ failing, so outputs are deleted on any failure.
 ```
 # macos-15
 == musl loader: none
+== ldd /bin/sh: scripts/spike/shell-probe.sh: line 8: ldd: command not found 
 == curl: curl 8.7.1 (x86_64-apple-darwin24.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.64.0
 == wget: GNU Wget 1.25.0 built on darwin24.6.0.
 == wget --https-only: 1
@@ -248,7 +249,7 @@ failing, so outputs are deleted on any failure.
 
 # ubuntu-24.04
 == musl loader: none
-== ldd /bin/sh: 
+== ldd /bin/sh: 	linux-vdso.so.1 (0x00007f07ed830000) 	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f07ed400000) 	/lib64/ld-linux-x86-64.so.2 (0x00007f07ed832000) 
 == curl: curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10
 == wget: GNU Wget 1.21.4 built on linux-gnu.
 == wget --https-only: 1
@@ -256,7 +257,7 @@ failing, so outputs are deleted on any failure.
 
 # alpine x64
 == musl loader: /lib/ld-musl-x86_64.so.1
-== ldd /bin/sh: 
+== ldd /bin/sh: 	/lib/ld-musl-x86_64.so.1 (0x7f5e66529000) 	libc.musl-x86_64.so.1 => /lib/ld-musl-x86_64.so.1 (0x7f5e66529000) 
 == curl: curl 8.14.1 (x86_64-alpine-linux-musl) libcurl/8.14.1 OpenSSL/3.5.8 zlib/1.3.2 brotli/1.1.0 zstd/1.5.7 c-ares/1.34.8 libidn2/2.3.7 libpsl/0.21.5 nghttp2/1.69.0
 == wget: wget: unrecognized option: version
 == wget --https-only: 0
@@ -265,11 +266,15 @@ failing, so outputs are deleted on any failure.
 ```
 
 ubuntu-24.04-arm matches ubuntu-24.04 (curl 8.5.0 for `aarch64-unknown-linux-gnu`, GNU Wget
-1.21.4, both hash tools, no musl loader, empty `ldd /bin/sh` line). macos-15-intel differs from
-macos-15:
+1.21.4, both hash tools, no musl loader) apart from its glibc loader line. macos-15-intel differs
+from macos-15:
 
 ```
+# ubuntu-24.04-arm
+== ldd /bin/sh: 	linux-vdso.so.1 (0x0000ff099348c000) 	libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x0000ff0993250000) 	/lib/ld-linux-aarch64.so.1 (0x0000ff0993450000) 
+
 # macos-15-intel
+== ldd /bin/sh: scripts/spike/shell-probe.sh: line 8: ldd: command not found 
 == curl: curl 8.21.0 (x86_64-apple-darwin23.6.0) libcurl/8.21.0 OpenSSL/3.6.3 zlib/1.2.12 brotli/1.2.0 zstd/1.5.7 AppleIDN libpsl/0.23.3 libssh2/1.11.1 nghttp2/1.70.0 ngtcp2/1.25.0 nghttp3/1.18.0 mit-krb5/1.7-prerelease OpenLDAP/2.4.28/Apple
 == wget: GNU Wget 1.25.0 built on darwin23.6.0.
 == wget --https-only: 1
@@ -278,9 +283,11 @@ macos-15:
 
 (a curl 8.21.0 built with OpenSSL 3.6.3 first on `PATH`, not the system curl 8.7.1 with
 LibreSSL seen on macos-15). Musl detection by the loader file works on Alpine. The
-`ldd /bin/sh` fallback **ran and printed nothing** on every Linux runner, Alpine included, so
-it is **unverified**: it did not detect musl where it should have, and the probe cannot tell
-why (Task 22 must test the fallback on its own). Busybox `wget` has no `--https-only`, so on a curl-less Alpine only the
+`ldd /bin/sh` lines are the probe's first three lines of `ldd` output joined by
+`tr '\n' ' '` (tabs kept as printed). They show musl on Alpine (`/lib/ld-musl-x86_64.so.1`,
+`libc.musl-x86_64.so.1`) and glibc on Ubuntu (`libc.so.6`, `ld-linux-…`), and macOS has no
+`ldd`; so the fallback `ldd /bin/sh | grep -qi musl` would work. It is unverified only as
+exercised by `install.sh` itself (Task 22 must test it). Busybox `wget` has no `--https-only`, so on a curl-less Alpine only the
 HTTPS-only redirect policy of busybox `wget` itself applies (spec §8.2 step 3 prefers `curl`).
 `tail -c 1 | od -An -c` yields the two characters `\n` for a file ending in a newline (on the
 other runners, the probe's `echo` turned them into a line break).
@@ -416,8 +423,9 @@ P2 drafts visible to read-only token: 0
 - **Task 11 (`flock.ts`):** the D5 list matches the plan. linux-arm64-musl is first exercised by
   the musl CI job.
 - **Task 22 (`install.sh`):** the plan's D3 `case` lacks musl's wording; add `*"option: Y"*`.
-  The `ldd /bin/sh` musl fallback is unverified (it printed nothing on every Linux runner);
-  test it directly.
+  The `ldd /bin/sh` musl fallback: the spike's `ldd` output shows musl on Alpine and glibc on
+  Ubuntu, so `ldd /bin/sh | grep -qi musl` would work, but it was not exercised through
+  `install.sh`; test it there.
 - **Task 26 (`promote.ts`):** the plan checks GitHub latest through the API only; per D6a the
   API already reports the first release as latest while the public download route does not, so
   the check must also read `releases/latest/download/manifest.json` (or always mark the first
