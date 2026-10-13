@@ -134,8 +134,8 @@ describe("compiled binary", () => {
     expect(r.stderr).not.toContain("malformed");
   });
 
-  test("install.sh installs a versioned binary behind a symlink", async () => {
-    await Bun.$`HOME=${dir} sh install.sh ${bin}`.quiet();
+  test("scripts/install-local.sh installs a versioned binary behind a symlink", async () => {
+    await Bun.$`HOME=${dir} sh scripts/install-local.sh ${bin}`.quiet();
     const link = join(dir, ".local", "bin", "tropos");
     expect(await readlink(link)).toBe(join(dir, ".local", "share", "tropos", "versions", "0.1.0"));
     const proc = Bun.spawn([link, "--version"], { stdout: "pipe" });

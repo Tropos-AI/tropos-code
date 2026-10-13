@@ -12,7 +12,7 @@ Requires [Bun](https://bun.sh) 1.4+ to build.
 ```bash
 bun install
 bun run build        # → dist/tropos (single self-contained binary)
-./install.sh         # → ~/.local/bin/tropos
+bun run install:local  # → ~/.local/bin/tropos (local build)
 ```
 
 Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.

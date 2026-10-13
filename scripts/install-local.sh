@@ -3,7 +3,7 @@
 # versions: ~/.local/share/tropos/versions/<version>, with ~/.local/bin/tropos symlinked to it.
 set -eu
 
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$here/package.json" | head -n 1)"
 bin="${1:-$here/dist/tropos}"
 
