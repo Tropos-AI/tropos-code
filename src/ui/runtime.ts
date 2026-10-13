@@ -2,12 +2,21 @@
 import type { Agent } from "../agent/agent";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "../agent/events";
 import type { Effort, Mode } from "../config/constants";
+import type { ProviderStatus } from "../providers/router";
 import type { MessageParam, SessionSummary } from "../session/store";
 import type { Theme } from "./theme";
 
 export interface AgentUi {
   emit(event: AgentEvent): void;
   askPermission(prompt: PermissionPrompt, signal: AbortSignal): Promise<PermissionAnswer>;
+}
+
+/** What /providers needs: who is connected, saving and removing keys, and listing models. */
+export interface ProviderControl {
+  status(): Promise<ProviderStatus[]>;
+  connect(id: string, apiKey: string): Promise<void>;
+  disconnect(id: string): Promise<boolean>;
+  models(id: string, signal: AbortSignal): Promise<string[]>;
 }
 
 /** Everything the interactive UI needs from the outside world. */
@@ -20,6 +29,7 @@ export interface Runtime {
   readonly initialPrompt?: string;
   /** Open the session picker on start (`tropos -r` without an id). */
   readonly startWithPicker?: boolean;
+  readonly providers: ProviderControl;
   state(): { model: string; effort: Effort; mode: Mode };
   setMode(mode: Mode): void;
   setModel(model: string): void;

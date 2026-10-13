@@ -6,6 +6,7 @@ import { FakeModel, assertToolPairs, reply, textBlock, toolUseBlock, type Step }
 import { makeToolContext } from "../../test/helpers/tool-context";
 import type { Mode } from "../config/constants";
 import { PLAN_MODE_REASON, compileRules } from "../permissions/engine";
+import { MalformedToolCallError } from "../providers/chat";
 import { defineTool, type AnyTool } from "../tools/types";
 import { Agent, type AgentOptions } from "./agent";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "./events";
@@ -278,6 +279,15 @@ describe("Agent", () => {
 
     const fail = harness([bad, bad, bad]);
     expect(await run(fail)).toBe("error");
+  });
+
+  test("a malformed tool call from another provider is re-requested the same way", async () => {
+    const bad: Step = () => {
+      throw new MalformedToolCallError("Read");
+    };
+    const ok = harness([bad, () => reply([textBlock("fine")])]);
+    expect(await run(ok)).toBe("end_turn");
+    expect(ok.events.filter((e) => e.type === "notice" && e.level === "warn")).toHaveLength(1);
   });
 
   test("a wrapped missing-credentials error ends the turn at once with the credentials notice", async () => {

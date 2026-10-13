@@ -21,6 +21,14 @@ export interface Settings {
   additionalDirectories: string[];
   refusalFallback: boolean;
   env: Record<string, string>;
+  /** Base URL overrides for built-in providers, and extra OpenAI-compatible endpoints. */
+  providers: Record<string, ProviderSetting>;
+}
+
+export interface ProviderSetting {
+  baseURL?: string;
+  /** Display name for a provider that isn't built in. */
+  name?: string;
 }
 
 export type PartialSettings = Partial<Omit<Settings, "permissions">> & {
@@ -35,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
   additionalDirectories: [],
   refusalFallback: true,
   env: {},
+  providers: {},
 };
 
 export interface SettingsPaths {
@@ -76,6 +85,12 @@ const layerSchema = z.object({
   additionalDirectories: z.array(z.string()).optional(),
   refusalFallback: z.boolean().optional(),
   env: z.record(z.string(), z.string()).optional(),
+  providers: z
+    .record(
+      z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "provider ids are lowercase letters, digits and dashes"),
+      z.object({ baseURL: z.string().url().optional(), name: z.string().min(1).optional() }),
+    )
+    .optional(),
 });
 
 function union(a: string[], b: string[] = []): string[] {
@@ -95,6 +110,7 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     additionalDirectories: union(base.additionalDirectories, layer.additionalDirectories),
     refusalFallback: layer.refusalFallback ?? base.refusalFallback,
     env: { ...base.env, ...layer.env },
+    providers: { ...base.providers, ...layer.providers },
   };
 }
 
@@ -135,6 +151,8 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.permissions?.allow?.length) ignored.push("permissions.allow");
   if (layer.env && Object.keys(layer.env).length > 0) ignored.push("env");
   if (layer.additionalDirectories?.length) ignored.push("additionalDirectories");
+  // A repo-chosen base URL would send the user's API keys wherever the repo likes.
+  if (layer.providers && Object.keys(layer.providers).length > 0) ignored.push("providers");
   const restricted: PartialSettings = {
     model: layer.model,
     effort: layer.effort,

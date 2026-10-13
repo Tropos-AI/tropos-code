@@ -38,12 +38,24 @@ export function toolToApi(tool: AnyTool): Anthropic.Beta.BetaTool {
   };
 }
 
+/**
+ * Drops thinking blocks without a signature. Other providers' reasoning is kept in the session that
+ * way, and the Messages API rejects it.
+ */
+export function anthropicHistory(messages: MessageParam[]): MessageParam[] {
+  return messages.map((m) => {
+    if (typeof m.content === "string" || !m.content.some((b) => b.type === "thinking" && !b.signature)) return m;
+    const content = m.content.filter((b) => !(b.type === "thinking" && !b.signature));
+    return { ...m, content: content.length > 0 ? content : [{ type: "text", text: "(no reply)" }] };
+  });
+}
+
 export function buildParams(req: TurnRequest): BetaMessageStreamParams {
   return {
     model: req.model,
     max_tokens: MAX_TOKENS,
     system: req.system,
-    messages: req.messages,
+    messages: anthropicHistory(req.messages),
     tools: req.tools.map(toolToApi),
     thinking: { type: "adaptive", display: "summarized" },
     output_config: { effort: req.effort },
@@ -63,9 +75,4 @@ export class AnthropicModel implements Model {
     stream.on("thinking", (delta) => handlers.onThinking(delta));
     return await stream.finalMessage();
   }
-}
-
-/** Credentials resolve the SDK's usual way: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, `ant auth` profiles. */
-export function createClient(): Anthropic {
-  return new Anthropic({ maxRetries: 2 });
 }

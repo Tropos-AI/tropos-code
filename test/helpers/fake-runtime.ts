@@ -6,7 +6,7 @@ import { compileRules } from "../../src/permissions/engine";
 import type { MessageParam, SessionSummary } from "../../src/session/store";
 import { defineTool, type AnyTool } from "../../src/tools/types";
 import { DARK } from "../../src/ui/theme";
-import type { Runtime } from "../../src/ui/runtime";
+import type { ProviderControl, Runtime } from "../../src/ui/runtime";
 import { FakeModel, type Step } from "./fake-model";
 import { makeToolContext } from "./tool-context";
 
@@ -24,7 +24,7 @@ export type SavedSession = SessionSummary & { history: MessageParam[] };
 
 export function fakeRuntime(
   steps: Step[],
-  over: { mode?: Mode; sessions?: SavedSession[]; initialPrompt?: string; startWithPicker?: boolean } = {},
+  over: { mode?: Mode; sessions?: SavedSession[]; initialPrompt?: string; startWithPicker?: boolean; providers?: ProviderControl } = {},
 ): Runtime & { model: FakeModel; inputs: string[] } {
   const model = new FakeModel(steps);
   let state = { model: "claude-opus-5-5", effort: "high" as Effort, mode: over.mode ?? ("default" as Mode) };
@@ -38,6 +38,7 @@ export function fakeRuntime(
     modes: ["default", "acceptEdits", "plan"],
     initialPrompt: over.initialPrompt,
     startWithPicker: over.startWithPicker,
+    providers: over.providers ?? { status: async () => [], connect: async () => {}, disconnect: async () => false, models: async () => [] },
     model,
     inputs,
     state: () => state,

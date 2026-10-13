@@ -9,7 +9,8 @@ Options:
       --output-format <format>     text | json | stream-json   (print mode)
       --max-turns <n>              stop after n model turns     (print mode)
       --allowed-tools <rules>      extra allow rules, e.g. "Read,Bash(git diff:*)"
-      --model <id>                 model to use (default claude-opus-5-5)
+      --model <id>                 model to use (default claude-opus-5-5); other providers
+                                   as provider/model, e.g. deepseek/deepseek-flash
       --effort <level>             low | medium | high | xhigh | max (default high)
   -c, --continue                   continue the latest session in this directory
   -r, --resume [id]                resume a session; without an id, pick from a list
@@ -20,7 +21,8 @@ Options:
   -v, --version                    print the version
   -h, --help                       show this help
 
-Credentials: ANTHROPIC_API_KEY, or run \`ant auth login\`.
+Credentials: ANTHROPIC_API_KEY, or run \`ant auth login\`. Other providers: their usual
+             variable (OPENAI_API_KEY, DEEPSEEK_API_KEY, …) or /providers in a session.
 Settings: ~/.tropos/settings.json, ~/.tropos/projects/<project>/settings.json,
           .tropos/settings.json, .tropos/settings.local.json (repo files: ask/deny rules and preferences only)
 Memory:   ~/.tropos/TROPOS.md, TROPOS.md (or AGENTS.md, CLAUDE.md) in the repo, TROPOS.local.md

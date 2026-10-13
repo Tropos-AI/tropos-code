@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ProviderRouter } from "../providers/router";
 import { FakeModel } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { DEFAULT_SETTINGS } from "../config/settings";
@@ -23,6 +24,7 @@ beforeEach(async () => {
     allowedDirs: [dir],
     tools: createTools({ rgPath: null }),
     model: new FakeModel([]),
+    providers: new ProviderRouter({ home: join(dir, ".home"), env: {}, settings: {} }),
     shell: "/bin/bash",
     localSettingsPath: join(dir, ".home", "projects", "p", "settings.json"),
   };

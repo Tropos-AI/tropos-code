@@ -15,7 +15,7 @@ import { JobTable } from "../tools/bash/jobs";
 import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
 import type { AnyTool, ToolContext } from "../tools/types";
-import type { AgentUi, Runtime } from "../ui/runtime";
+import type { AgentUi, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
 
 export interface AppContext {
@@ -28,6 +28,8 @@ export interface AppContext {
   allowedDirs: string[];
   tools: AnyTool[];
   model: Model;
+  /** Provider keys and model lists for /providers. */
+  providers: ProviderControl;
   shell: string;
   localSettingsPath: string;
 }
@@ -116,6 +118,7 @@ export async function createRuntime(
     modes: init.modes,
     initialPrompt: init.initialPrompt,
     startWithPicker: init.startWithPicker,
+    providers: ctx.providers,
     state: () => state,
     setMode: (mode) => {
       state = { ...state, mode };

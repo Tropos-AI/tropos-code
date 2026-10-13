@@ -4,7 +4,8 @@ export const COMMANDS = [
   { name: "help", description: "Show commands and shortcuts" },
   { name: "clear", description: "Start a new session" },
   { name: "resume", description: "Resume an earlier session in this directory" },
-  { name: "model", description: "Show or set the model, e.g. /model claude-sonnet-5-5" },
+  { name: "model", description: "Show or set the model, e.g. /model deepseek/deepseek-chat" },
+  { name: "providers", description: "Connect a provider (OpenAI, xAI, DeepSeek…) and pick a model" },
   { name: "effort", description: "Show or set effort: low, medium, high, xhigh, max" },
   { name: "cost", description: "Show this session's cost and context size" },
   { name: "init", description: "Create or improve TROPOS.md for this project" },
@@ -25,6 +26,7 @@ export type CommandResult =
   | { kind: "exit" }
   | { kind: "resume" }
   | { kind: "model"; model?: string }
+  | { kind: "providers" }
   | { kind: "effort"; effort?: Effort; error?: string }
   | { kind: "cost" }
   | { kind: "prompt"; text: string }
@@ -40,7 +42,7 @@ const SHORTCUTS = [
 ] as const;
 
 export function helpText(): string {
-  const commands = COMMANDS.map((c) => `  /${c.name.padEnd(8)} ${c.description}`);
+  const commands = COMMANDS.map((c) => `  /${c.name.padEnd(10)} ${c.description}`);
   const shortcuts = SHORTCUTS.map(([key, what]) => `  ${key.padEnd(12)} ${what}`);
   return ["Commands", ...commands, "", "Shortcuts", ...shortcuts].join("\n");
 }
@@ -67,6 +69,9 @@ export function parseCommand(input: string): CommandResult {
       return { kind: "prompt", text: INIT_PROMPT };
     case "model":
       return arg ? { kind: "model", model: arg } : { kind: "model" };
+    case "providers":
+    case "provider":
+      return { kind: "providers" };
     case "effort":
       if (!arg) return { kind: "effort" };
       return (EFFORTS as readonly string[]).includes(arg)

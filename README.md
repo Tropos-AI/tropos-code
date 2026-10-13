@@ -17,6 +17,29 @@ bun run build        # → dist/tropos (single self-contained binary)
 
 Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.
 
+### Other providers
+
+Tropos also runs on OpenAI, xAI, DeepSeek, OpenRouter, NVIDIA, Google Gemini, Groq, Mistral,
+Together AI, Fireworks, Moonshot (Kimi), Z.ai (GLM), Qwen, Cerebras, and local models through
+Ollama or LM Studio. In a session, `/providers` lists them, asks for a key the first time, and
+shows each provider's current models. Model ids are `provider/model`; bare ids are Anthropic's:
+
+```bash
+tropos --model deepseek/deepseek-flash
+DEEPSEEK_API_KEY=… tropos -p "fix the failing test" --model deepseek/deepseek-flash
+```
+
+A provider's usual variable (`OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, …) wins over
+a key saved with `/providers`, which goes to `~/.tropos/credentials.json`, readable only by you.
+Anthropic models keep server-side compaction and prompt caching; OpenAI and xAI go through the
+Responses API, the rest through OpenAI-compatible Chat Completions. Cost shows as unknown except on
+Anthropic, OpenRouter and xAI, which report it. Other endpoints (vLLM, a proxy, Ollama on another
+machine) go in `~/.tropos/settings.json`:
+
+```json
+{ "providers": { "ollama": { "baseURL": "http://gpu-box:11434/v1" }, "my-vllm": { "baseURL": "http://localhost:8000/v1" } } }
+```
+
 ## Use
 
 ```bash
@@ -81,11 +104,11 @@ Wildcard and prefix rules never approve interpreters and shells (`python`, `node
 | `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` or `CLAUDE.md` work too) |
 
 Files inside the repo arrive with the code, so Tropos treats them as untrusted: they can set
-`model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules, `env`
-or extra directories. Put those in a file under `~/.tropos/`.
+`model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules, `env`,
+extra directories or `providers` (a repo-chosen base URL would receive your API keys). Put those in a file under `~/.tropos/`.
 
 Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
-`additionalDirectories`, `refusalFallback`, `env`.
+`additionalDirectories`, `refusalFallback`, `env`, `providers`.
 
 ## Security notes
 
@@ -105,7 +128,8 @@ Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`
 
 ## How it works
 
-A UI-free agent loop streams `claude-opus-5-5` through the Messages API, validates each
+A UI-free agent loop streams `claude-opus-5-5` through the Messages API (or another provider's
+model through its own API, translated to the same message format), validates each
 tool call, checks it against the permission engine, runs read-only tools in parallel and
 edits/commands in order, and sends every result back in one message until the model is
 done. Sessions are append-only JSONL under `~/.tropos/projects/`; long sessions use

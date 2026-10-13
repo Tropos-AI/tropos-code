@@ -16,6 +16,16 @@ test("context tokens count cached input too", () => {
   expect(contextWindow("claude-opus-5-5")).toBe(1_000_000);
 });
 
+test("an anthropic/ prefix names the same model", () => {
+  expect(costUsd("anthropic/claude-opus-5-5", { input_tokens: 1_000_000, output_tokens: 0 })).toBeCloseTo(4, 6);
+  expect(contextWindow("anthropic/claude-opus-5-5")).toBe(1_000_000);
+  expect(contextWindow("deepseek/claude-opus-5-5")).toBeUndefined();
+});
+
+test("a cost the provider reported wins over the price table", () => {
+  expect(messageCostUsd({ model: "openrouter/x", usage: { input_tokens: 5, output_tokens: 5, cost_usd: 0.25 } }, "openrouter/x")).toBe(0.25);
+});
+
 test("unknown model has no known context window", () => {
   expect(contextWindow("deepseek-v4")).toBeUndefined();
 });

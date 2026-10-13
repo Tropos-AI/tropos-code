@@ -4,6 +4,7 @@ import { describeError } from "../api/errors";
 import { errorText } from "../error-text";
 import type { Message, Model } from "../api/model";
 import { contextTokens, messageCostUsd } from "../api/pricing";
+import { MalformedToolCallError } from "../providers/chat";
 import type { Effort, Mode } from "../config/constants";
 import { modeReminder } from "../context/system-prompt";
 import { decide, type PermissionContext } from "../permissions/engine";
@@ -147,13 +148,12 @@ export class Agent {
           return end("error");
         }
         // The SDK reports an unparseable eager-streamed tool input as a bare AnthropicError
-        // (not an APIError) with this message. Re-request that, at most twice; anything else ends the turn.
-        if (
-          err instanceof Anthropic.AnthropicError &&
-          !(err instanceof Anthropic.APIError) &&
-          err.message.startsWith("Unable to parse tool parameter JSON") &&
-          jsonRetries < MAX_JSON_RETRIES
-        ) {
+        // (not an APIError) with this message; other providers' adapters throw MalformedToolCallError.
+        // Re-request that, at most twice; anything else ends the turn.
+        const malformed =
+          err instanceof MalformedToolCallError ||
+          (err instanceof Anthropic.AnthropicError && !(err instanceof Anthropic.APIError) && err.message.startsWith("Unable to parse tool parameter JSON"));
+        if (malformed && jsonRetries < MAX_JSON_RETRIES) {
           jsonRetries++;
           turns--;
           emit({ type: "notice", level: "warn", text: "A tool call arrived malformed; asking the model again." });

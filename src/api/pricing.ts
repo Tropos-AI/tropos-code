@@ -20,8 +20,11 @@ const PRICES: Record<string, Price> = {
   "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 };
 
+/** "anthropic/claude-opus-5-5" and "claude-opus-5-5" are the same model. */
+const bare = (model: string) => (model.startsWith("anthropic/") ? model.slice("anthropic/".length) : model);
+
 export function costUsd(model: string, usage: UsageLike): number | undefined {
-  const price = PRICES[model];
+  const price = PRICES[bare(model)];
   if (!price) return undefined;
   return (
     (usage.input_tokens * price.input +
@@ -43,9 +46,11 @@ interface IterationLike extends UsageLike {
  * otherwise at the requested model.
  */
 export function messageCostUsd(
-  message: { model: string; usage: UsageLike & { iterations?: IterationLike[] | null } },
+  message: { model: string; usage: UsageLike & { iterations?: IterationLike[] | null; cost_usd?: number } },
   requestedModel: string,
 ): number | undefined {
+  // A provider that reports what it charged (OpenRouter) knows better than any price table.
+  if (typeof message.usage.cost_usd === "number") return message.usage.cost_usd;
   const iterations = message.usage.iterations;
   if (!iterations || iterations.length === 0) return costUsd(message.model, message.usage);
   let total = 0;
@@ -64,5 +69,5 @@ export function contextTokens(usage: UsageLike): number {
 
 /** Undefined for a model Tropos has no record of, rather than a guess. */
 export function contextWindow(model: string): number | undefined {
-  return model in PRICES ? 1_000_000 : undefined; // every model in PRICES has a 1M window
+  return bare(model) in PRICES ? 1_000_000 : undefined; // every model in PRICES has a 1M window
 }

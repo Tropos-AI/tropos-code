@@ -1,5 +1,6 @@
 import { render } from "ink";
-import { AnthropicModel, createClient, type Model } from "../api/model";
+import type { Model } from "../api/model";
+import { ProviderRouter } from "../providers/router";
 import { MODES, type Mode } from "../config/constants";
 import { SettingsError, loadSettings, settingsPaths, type Settings } from "../config/settings";
 import { compileRules } from "../permissions/engine";
@@ -104,6 +105,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   for (const rule of invalid) err(`tropos: ignoring invalid permission rule "${rule}"\n`);
 
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
+  const router = new ProviderRouter({ home, env, settings: settings.providers });
   const ctx: AppContext = {
     cwd,
     home,
@@ -112,7 +114,8 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     rules,
     allowedDirs: [cwd, ...settings.additionalDirectories, ...opts.addDir].map((d) => resolveToolPath(d, cwd)),
     tools: createTools({ rgPath: Bun.which("rg") }),
-    model: deps.model ?? new AnthropicModel(createClient()),
+    model: deps.model ?? router,
+    providers: router,
     shell: picked.shell,
     localSettingsPath: paths.userProject,
   };

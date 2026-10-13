@@ -9,6 +9,7 @@ import { BrandHeader } from "./BrandHeader";
 import { parseCommand } from "./commands";
 import { PermissionDialog } from "./PermissionDialog";
 import { PromptInput } from "./PromptInput";
+import { ProvidersDialog } from "./ProvidersDialog";
 import type { AgentUi, Runtime } from "./runtime";
 import { SessionPicker } from "./SessionPicker";
 import { Spinner } from "./Spinner";
@@ -28,6 +29,7 @@ export function App({ runtime }: { runtime: Runtime }) {
   const [permission, setPermission] = useState<{ id: number; prompt: PermissionPrompt; answer(a: PermissionAnswer): void } | null>(null);
   const permissionId = useRef(0);
   const [picker, setPicker] = useState<SessionSummary[] | null>(null);
+  const [providersOpen, setProvidersOpen] = useState(false);
   const [usage, setUsage] = useState<{ contextTokens: number; totalCostUsd: number | undefined }>({ contextTokens: 0, totalCostUsd: 0 });
   const [settings, setSettings] = useState(runtime.state());
   const [staticKey, setStaticKey] = useState(0);
@@ -144,6 +146,8 @@ export function App({ runtime }: { runtime: Runtime }) {
           runtime.setModel(command.model);
           setSettings(runtime.state());
           return notice("info", `Model set to ${command.model}.`);
+        case "providers":
+          return setProvidersOpen(true);
         case "effort":
           if (command.error) return notice("error", command.error);
           if (!command.effort) return notice("info", `Effort: ${runtime.state().effort}`);
@@ -196,7 +200,7 @@ export function App({ runtime }: { runtime: Runtime }) {
         return;
       }
     },
-    { isActive: !permission && !picker },
+    { isActive: !permission && !picker && !providersOpen },
   );
 
   // Ctrl+C works everywhere: a running turn is aborted (which also declines an open permission dialog),
@@ -205,6 +209,7 @@ export function App({ runtime }: { runtime: Runtime }) {
     if (!(key.ctrl && input === "c")) return;
     if (abortRef.current) abortRef.current.abort();
     else if (picker) setPicker(null);
+    else if (providersOpen) setProvidersOpen(false);
     else exit();
   });
 
@@ -235,7 +240,20 @@ export function App({ runtime }: { runtime: Runtime }) {
             <Spinner />
           </Box>
         ) : null}
-        {!busy && !picker && !permission ? <PromptInput onSubmit={(t) => void submit(t)} history={runtime.inputHistory()} cwd={runtime.cwd} /> : null}
+        {providersOpen ? (
+          <ProvidersDialog
+            control={runtime.providers}
+            currentModel={settings.model}
+            onPick={(model) => {
+              setProvidersOpen(false);
+              runtime.setModel(model);
+              setSettings(runtime.state());
+              notice("info", `Model set to ${model} for this session. To make it the default, set "model": "${model}" in ~/.tropos/settings.json.`);
+            }}
+            onClose={() => setProvidersOpen(false)}
+          />
+        ) : null}
+        {!busy && !picker && !permission && !providersOpen ? <PromptInput onSubmit={(t) => void submit(t)} history={runtime.inputHistory()} cwd={runtime.cwd} /> : null}
         <StatusBar mode={settings.mode} contextPct={contextPct} costUsd={usage.totalCostUsd} />
       </Box>
     </ThemeProvider>

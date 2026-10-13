@@ -55,6 +55,45 @@ describe("App", () => {
     expect(all(r)).toContain("Shell");
   });
 
+  test("/providers opens the dialog; picking a model switches to it and esc closes it", async () => {
+    const runtime = fakeRuntime([], {
+      providers: {
+        status: async () => [
+          {
+            info: { id: "deepseek", name: "DeepSeek", api: "chat", baseURL: "https://d", keyEnv: ["DEEPSEEK_API_KEY"], keyRequired: true, keyURL: null, capabilities: { maxTokensParam: null, streamUsage: true } },
+            key: { kind: "env", name: "DEEPSEEK_API_KEY" },
+            baseURL: "https://d",
+          },
+        ],
+        connect: async () => {},
+        disconnect: async () => false,
+        models: async () => ["deepseek-flash"],
+      },
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/providers");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("Providers");
+    expect(r.lastFrame()).toContain("DeepSeek");
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(runtime.state().model).toBe("deepseek/deepseek-flash");
+    expect(all(r)).toContain("Model set to deepseek/deepseek-flash for this session.");
+    expect(r.lastFrame()).toContain("deepseek/deepseek-flash");
+    r.stdin.write("/providers");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\x1b");
+    await tick();
+    expect(r.lastFrame()).not.toContain("enter to pick a model");
+  });
+
   test("/help and bad /effort", async () => {
     const r = render(<App runtime={fakeRuntime([])} />);
     await tick();
