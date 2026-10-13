@@ -22,8 +22,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       # Grep tests run against ripgrep as well as the built-in fallback when rg is installed.
@@ -33,7 +33,7 @@ jobs:
       - name: Install shellcheck
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install shellcheck; else sudo apt-get install -y shellcheck; fi
-      - run: shellcheck -s sh install.sh scripts/release/make-manifest.sh
+      - run: shellcheck -s sh install.sh scripts/release/make-manifest.sh scripts/release/collect-assets.sh
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
@@ -43,9 +43,61 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run build:all
+
+  installer-native:
+    name: installer (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Tools
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install zstd shellcheck; else sudo apt-get install -y zstd shellcheck dash busybox; fi
+      - run: bun install --frozen-lockfile
+      - run: bun test test/install
+
+  # Decision D2: no job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
+  installer-musl:
+    name: installer (alpine ${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, bunzip: bun-linux-x64-musl }
+          - { runner: ubuntu-24.04-arm, bunzip: bun-linux-aarch64-musl }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Bun for musl (decision D2)
+        env:
+          BUNZIP: ${{ matrix.bunzip }}
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUNZIP.zip"
+          unzip -q -d "$RUNNER_TEMP" "$RUNNER_TEMP/bun.zip"
+          mkdir -p "$RUNNER_TEMP/musl-bun" && install -m 0755 "$RUNNER_TEMP/$BUNZIP/bun" "$RUNNER_TEMP/musl-bun/bun"
+      - name: Installer tests in alpine:3.22, as an unprivileged user
+        run: |
+          docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/musl-bun:/opt/bun:ro" -w /w -e HOST_UID="$(id -u)" alpine:3.22 sh -euc '
+            apk add --no-cache git curl unzip zstd openssh-keygen shellcheck libstdc++ libgcc >/dev/null
+            install -m 0755 /opt/bun/bun /usr/local/bin/bun
+            adduser -D -u "$HOST_UID" tester
+            su tester -c "bun install --frozen-lockfile && bun test test/install"
+          '

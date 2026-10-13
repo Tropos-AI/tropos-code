@@ -1,0 +1,390 @@
+# .github/workflows/release.yml — privileged, defined on main (spec §6.2, §7.3). Treats everything from the tag as data.
+# No job that can read the signing key or holds a write token (including CHANNELS_WRITE_TOKEN) executes a binary,
+# script or dependency from the tag; test/install/workflow-policy.test.ts enforces this.
+name: release
+on:
+  workflow_run:
+    workflows: [release-build]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to resume (vX.Y.Z)"
+        required: true
+permissions: {}
+concurrency:
+  group: channels
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.prov.outputs.tag }}
+      version: ${{ steps.prov.outputs.version }}
+      sha: ${{ steps.prov.outputs.sha }}
+    steps:
+      - name: Only from main
+        run: '[ "$GITHUB_REF" = "refs/heads/main" ] || { echo "release.yml runs only from main"; exit 1; }'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: sudo apt-get install -y zstd unzip
+      - name: Provenance (A4)
+        id: prov
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: bun scripts/release/check-provenance.ts --out release-inputs.zip >> "$GITHUB_OUTPUT"
+      - name: Unpack release-inputs into a fresh directory, refusing unsafe entries (ruling 2)
+        run: |
+          mkdir inputs
+          unzip -Z1 release-inputs.zip >zip-names || { echo "release-inputs.zip cannot be listed"; exit 1; }
+          [ -s zip-names ] || { echo "release-inputs.zip is empty"; exit 1; }
+          while IFS= read -r name; do
+            case $name in
+              '' | */* | *..* | *\\*) echo "release-inputs.zip: refusing entry '$name'"; exit 1 ;;
+            esac
+          done <zip-names
+          unzip -Z release-inputs.zip >zip-listing || { echo "release-inputs.zip cannot be listed"; exit 1; }
+          if grep -q '^l' zip-listing; then echo "release-inputs.zip contains a symlink"; exit 1; fi
+          unzip -q release-inputs.zip -d inputs
+      - name: Check every input against SHA256SUMS (A4)
+        run: bun scripts/release/check-provenance.ts --verify-inputs inputs
+      - name: Compress, round-trip and write the manifest
+        env:
+          VERSION: ${{ steps.prov.outputs.version }}
+          SHA: ${{ steps.prov.outputs.sha }}
+        run: |
+          mkdir assets
+          for p in darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl; do
+            cp "inputs/tropos-$p" "assets/tropos-$p"
+            zstd -19 --check -q -o "assets/tropos-$p.zst" "assets/tropos-$p"
+            zstd -d -q -c "assets/tropos-$p.zst" >"assets/.roundtrip"
+            cmp "assets/.roundtrip" "assets/tropos-$p"
+          done
+          rm -f assets/.roundtrip
+          cp inputs/install.sh assets/install.sh
+          sh scripts/release/make-manifest.sh "$VERSION" "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" assets > assets/manifest.json
+          # Ruling 1: newline and printable ASCII only, ending in a newline, before awk reads it (some awks stop at NUL).
+          LC_ALL=C tr -d '\012\040-\176' <assets/manifest.json >manifest.bad || exit 1
+          [ ! -s "manifest.bad" ] || { echo "assets/manifest.json has bytes outside printable ASCII"; exit 1; }
+          [ "$(tail -c 1 assets/manifest.json | od -An -c | tr -d ' ')" = '\n' ] || { echo "assets/manifest.json does not end with a newline"; exit 1; }
+          awk -v want=linux-x64 -f scripts/release/manifest.awk assets/manifest.json
+          bun -e 'import { parseManifest } from "./src/install/manifest"; parseManifest(new Uint8Array(await Bun.file("assets/manifest.json").arrayBuffer()))'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: to-sign
+          path: |
+            assets/manifest.json
+            assets/install.sh
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: assets/
+          if-no-files-found: error
+
+  sign:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          sparse-checkout: |
+            scripts/release
+            release
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: to-sign
+          path: to-sign
+      - name: Refuse to sign without a pinned key (A5)
+        run: grep -Eq '^tropos-release ssh-ed25519 ' release/allowed_signers || { echo "release/allowed_signers has no key"; exit 1; }
+      - name: Sign and verify
+        env:
+          KEY: ${{ secrets.TROPOS_RELEASE_SIGNING_KEY }}
+        run: |
+          # Ruling 1: the same byte check as install.sh before manifest.awk reads the file.
+          LC_ALL=C tr -d '\012\040-\176' <to-sign/manifest.json >"$RUNNER_TEMP/manifest.bad" || exit 1
+          [ ! -s "$RUNNER_TEMP/manifest.bad" ] || { echo "to-sign/manifest.json has bytes outside printable ASCII"; exit 1; }
+          [ "$(tail -c 1 to-sign/manifest.json | od -An -c | tr -d ' ')" = '\n' ] || { echo "to-sign/manifest.json does not end with a newline"; exit 1; }
+          awk -v want=linux-x64 -f scripts/release/manifest.awk to-sign/manifest.json > /dev/null
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/signing-key"
+          ssh-keygen -Y sign -f "$RUNNER_TEMP/signing-key" -n tropos-manifest to-sign/manifest.json
+          ssh-keygen -Y sign -f "$RUNNER_TEMP/signing-key" -n tropos-installer to-sign/install.sh
+          rm -f "$RUNNER_TEMP/signing-key"
+          ssh-keygen -Y verify -f release/allowed_signers -I tropos-release -n tropos-manifest -s to-sign/manifest.json.sig < to-sign/manifest.json
+          ssh-keygen -Y verify -f release/allowed_signers -I tropos-release -n tropos-installer -s to-sign/install.sh.sig < to-sign/install.sh
+      - name: Remove the key file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/signing-key"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signatures
+          path: |
+            to-sign/manifest.json.sig
+            to-sign/install.sh.sig
+          if-no-files-found: error
+
+  draft:
+    needs: [prepare, sign]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signatures
+          path: assets
+      - name: Create or complete the draft
+        run: |
+          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$state" = missing ]; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --title "$TAG" --notes "Verify with the key fingerprint in the README; see docs/install.md." assets/*
+          elif [ "$state" = true ]; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
+          else
+            echo "$TAG is already published; resuming after the draft stage"
+          fi
+
+  fetch-draft:
+    needs: [prepare, draft]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - name: Authenticated download of the draft's assets (executes nothing — A12)
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir draft
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: draft-assets
+          path: draft/
+          if-no-files-found: error
+
+  smoke-draft-native:
+    needs: [prepare, fetch-draft]
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: draft-assets
+          path: draft
+      - name: Install from the draft
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          HOME="$(mktemp -d)"; export HOME
+          TROPOS_INSTALL_FROM="$GITHUB_WORKSPACE/draft" sh "$GITHUB_WORKSPACE/draft/install.sh" "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+
+  # Decision D2: no job container; the install runs in docker run alpine:3.22 as an unprivileged user.
+  smoke-draft-musl:
+    needs: [prepare, fetch-draft]
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: draft-assets
+          path: draft
+      - name: Install from the draft in alpine:3.22
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cat >"$RUNNER_TEMP/smoke.sh" <<'EOF'
+          set -eu
+          TROPOS_INSTALL_FROM=/draft sh /draft/install.sh "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          EOF
+          docker run --rm -v "$PWD/draft:/draft:ro" -v "$RUNNER_TEMP/smoke.sh:/smoke.sh:ro" -e VERSION alpine:3.22 sh -euc '
+            apk add --no-cache openssh-keygen zstd curl >/dev/null
+            adduser -D tester
+            su tester -c "sh /smoke.sh"
+          '
+
+  publish:
+    needs: [prepare, smoke-draft-native, smoke-draft-musl]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+
+  # previousRelease reads channels/stable with this repository's read-only token and public downloads, so
+  # Tropos-AI/tropos-code-channels must stay public (ruling 5); a private one makes this job fail, never skip gate c.
+  previous:
+    needs: [prepare, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      installer_tag: ${{ steps.prev.outputs.installer_tag }}
+      stable: ${{ steps.prev.outputs.stable }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - id: prev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNELS_REPOSITORY: Tropos-AI/tropos-code-channels
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bun scripts/release/promote.ts previous "$VERSION" >> "$GITHUB_OUTPUT"
+
+  smoke-public-native:
+    needs: [prepare, previous]
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      R: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      OLD_TAG: ${{ needs.previous.outputs.installer_tag }}
+      STABLE: ${{ needs.previous.outputs.stable }}
+    steps:
+      - name: a) this release's installer, public URLs
+        run: |
+          HOME="$(mktemp -d)"; export HOME
+          curl -fsSL "https://github.com/$R/releases/download/$TAG/install.sh" | sh -s -- "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+      - name: b) the published installer verifies the new release
+        if: needs.previous.outputs.installer_tag != ''
+        run: |
+          HOME="$(mktemp -d)"; export HOME
+          curl -fsSL "https://github.com/$R/releases/download/$OLD_TAG/install.sh" | sh -s -- "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public (ruling 5).
+      - name: c) the stable binary installs the new release
+        if: needs.previous.outputs.stable != ''
+        run: |
+          HOME="$(mktemp -d)"; export HOME
+          curl -fsSL "https://github.com/$R/releases/download/v$STABLE/install.sh" | sh -s -- "$STABLE"
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+
+  # Decision D2: no job container; each gate runs in a fresh docker run alpine:3.22 as an unprivileged user.
+  smoke-public-musl:
+    needs: [prepare, previous]
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      R: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      OLD_TAG: ${{ needs.previous.outputs.installer_tag }}
+      STABLE: ${{ needs.previous.outputs.stable }}
+    steps:
+      - name: Gate scripts
+        run: |
+          cat >"$RUNNER_TEMP/a.sh" <<'EOF'
+          set -eu -o pipefail
+          curl -fsSL "https://github.com/$R/releases/download/$TAG/install.sh" | sh -s -- "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          EOF
+          cat >"$RUNNER_TEMP/b.sh" <<'EOF'
+          set -eu -o pipefail
+          curl -fsSL "https://github.com/$R/releases/download/$OLD_TAG/install.sh" | sh -s -- "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          EOF
+          cat >"$RUNNER_TEMP/c.sh" <<'EOF'
+          set -eu -o pipefail
+          curl -fsSL "https://github.com/$R/releases/download/v$STABLE/install.sh" | sh -s -- "$STABLE"
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          EOF
+          # Each gate starts from a fresh alpine:3.22 container and a clean HOME of an unprivileged user.
+          cat >"$RUNNER_TEMP/gate.sh" <<'EOF'
+          set -eu
+          docker run --rm -v "$RUNNER_TEMP/$1.sh:/gate.sh:ro" -e R -e TAG -e VERSION -e OLD_TAG -e STABLE alpine:3.22 sh -euc '
+            apk add --no-cache openssh-keygen zstd curl >/dev/null
+            adduser -D tester
+            su tester -c "sh /gate.sh"
+          '
+          EOF
+      - name: a) this release's installer, public URLs
+        run: sh "$RUNNER_TEMP/gate.sh" a
+      - name: b) the published installer verifies the new release
+        if: needs.previous.outputs.installer_tag != ''
+        run: sh "$RUNNER_TEMP/gate.sh" b
+      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public (ruling 5).
+      - name: c) the stable binary installs the new release
+        if: needs.previous.outputs.stable != ''
+        run: sh "$RUNNER_TEMP/gate.sh" c
+
+  # Marks GitHub latest (promote.ts step 7), so it holds contents: write on tropos-code besides CHANNELS_WRITE_TOKEN.
+  # Kept minimal: main's checkout, Bun, one command; promote.ts imports only src/install/version.ts, so no bun install.
+  promote-latest:
+    needs: [prepare, smoke-public-native, smoke-public-musl]
+    runs-on: ubuntu-24.04
+    environment: channels-write
+    permissions:
+      contents: write
+    steps:
+      - name: Only from main
+        run: '[ "$GITHUB_REF" = "refs/heads/main" ] || { echo "release.yml runs only from main"; exit 1; }'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Promote (convergent; safe to re-run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNELS_REPOSITORY: Tropos-AI/tropos-code-channels
+          CHANNELS_WRITE_TOKEN: ${{ secrets.CHANNELS_WRITE_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bun scripts/release/promote.ts latest "$VERSION"
