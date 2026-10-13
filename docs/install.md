@@ -26,12 +26,12 @@ v=0.3.0
 curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh"
 curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh.sig"
 printf 'tropos-release %s\n' "<the `ssh-ed25519 <base64>` part of the key line in release/allowed_signers>" > allowed_signers
-ssh-keygen -lf allowed_signers          # must print SHA256:<fingerprint-pending-key-ceremony>
+ssh-keygen -lf allowed_signers          # must print SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
 ssh-keygen -Y verify -f allowed_signers -I tropos-release -n tropos-installer -s install.sh.sig < install.sh
 sh install.sh "$v"
 ```
 
-Release key fingerprint: `SHA256:<fingerprint-pending-key-ceremony>` (also in the README).
+Release key fingerprint: `SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8` (also in the README).
 
 ## Commands
 
