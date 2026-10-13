@@ -84,8 +84,13 @@ describe("zstd corpus through install.sh (R8.1)", () => {
   const raw = new TextEncoder().encode(handoffBinary("3.0.0"));
   // An empty .zst cannot be promised by any valid manifest (zst.size >= 1), so the manifest schema
   // rejects it before either client downloads; it has no install.sh path to compare.
+  // Locally a missing zstd skips these; in CI it is a failure, so the corpus can never be skipped silently there.
+  const hasZstd = Bun.which("zstd") !== null;
+  test.if(Boolean(process.env.CI))("zstd is installed (CI must run the corpus, not skip it)", () => {
+    expect(hasZstd).toBe(true);
+  });
   for (const c of zstdCorpus(raw).filter((z) => z.zst.length > 0)) {
-    test.skipIf(!Bun.which("zstd"))(`${c.valid ? "accepts" : "rejects"} ${c.name}`, async () => {
+    test.skipIf(!hasZstd)(`${c.valid ? "accepts" : "rejects"} ${c.name}`, async () => {
       publishFixture(srv, await makeFixtureRelease({ version: "3.0.0", key, dir: root, binary: c.promised, zst: c.zst }));
       const sb = await makeSandbox({ signers: allowedSignersText(key), base: srv.base });
       const out = await sb.run(["3.0.0"]);
