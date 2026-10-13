@@ -208,6 +208,24 @@ describe("install --self (R1.1–R1.3)", () => {
     expect(await readLink(f.layout)).toEqual({ kind: "missing" });
   });
 
+  test("a rejected --self leaves nothing installed: no manifest, no binary, empty staging (R1.2)", async () => {
+    f = await makeEngineFixture();
+    const e = await err(installSelf(f.deps, await selfSource("1.0.0", { tamperBinary: true })));
+    expect(e.message).toBe("this binary does not match its signed manifest");
+    expect(await readdir(f.layout.manifests)).toEqual([]);
+    expect((await readdir(f.layout.versions)).filter((n) => !n.startsWith("."))).toEqual([]);
+    expect(await readdir(f.layout.staging)).toEqual([]);
+  });
+
+  test("the installed bytes are the verified copy, unaffected by later changes to the source (R1.3)", async () => {
+    f = await makeEngineFixture();
+    const src = await selfSource("1.0.0");
+    const original = await readFile(src.execPath);
+    await installSelf(f.deps, src);
+    await writeFile(src.execPath, "swapped after install");
+    expect(await readFile(versionPath(f.layout, "1.0.0"))).toEqual(original);
+  });
+
   test("a missing manifest file is a usage error", async () => {
     f = await makeEngineFixture();
     const src = { ...(await selfSource("1.0.0")), manifestPath: join(f.root, "nope.json") };

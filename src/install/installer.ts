@@ -51,7 +51,7 @@ async function obtainManifest(s: EngineSession, version: string, source: Install
   return vm;
 }
 
-async function preSwitchChecks(s: EngineSession, link: LinkState, force: boolean): Promise<void> {
+export async function preSwitchChecks(s: EngineSession, link: LinkState, force: boolean): Promise<void> {
   const l = s.deps.layout;
   await checkSafeDir(l.data, s.deps.user);
   await checkSafeDir(l.binDir, s.deps.user);
@@ -144,10 +144,17 @@ export async function installVersion(s: EngineSession, version: string, opts: In
       await rename(target, aside);
       s.log(`moved the unverifiable ${target} to ${aside}`);
     }
-    await storeManifest(l, version, vm); // A10: the signed manifest is stored before the binary appears
-    if (!existing.ok) {
+    if (existing.ok) {
+      await storeManifest(l, version, vm);
+    } else {
       const staged = await stage(s, version, entry, opts.source);
       s.crash("after-download");
+      try {
+        await storeManifest(l, version, vm); // A10: the signed manifest is stored before the binary appears
+      } catch (e) {
+        await rm(staged, { force: true });
+        throw e;
+      }
       await rename(staged, target);
       await fsyncDir(l.versions);
       s.crash("after-rename");
