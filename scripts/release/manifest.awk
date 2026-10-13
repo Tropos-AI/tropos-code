@@ -1,7 +1,8 @@
 # scripts/release/manifest.awk — validates a canonical Tropos manifest (spec §5.3) and prints the fields of one platform.
 # Usage: awk -v want=<platform> -f manifest.awk manifest.json
 # Prints version= (and sha256=, size=, zst_sha256=, zst_size= when want is set); exits 1 on any deviation.
-# Callers must also check that the file final byte is a newline. install.sh embeds an identical copy of this
+# Callers must first check that the file contains only newline and printable ASCII (0x20-0x7E) and ends with a
+# newline: some awks truncate at NUL bytes, so the guard below cannot see them (it is defence in depth only). install.sh embeds an identical copy of this
 # program between its "manifest-awk" markers (checked by test/install/parity.test.ts). No single quotes here.
 function fail(msg) { printf "manifest: %s\n", msg > "/dev/stderr"; exit 1 }
 function strip(s, pre, post) {

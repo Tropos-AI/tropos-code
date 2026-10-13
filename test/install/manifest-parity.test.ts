@@ -18,19 +18,21 @@ beforeAll(async () => {
 afterAll(() => removeDir(dir));
 
 /** The shell-side validity check: final byte is a newline, then the awk grammar. */
-async function checkManifestSh(awk: string[], text: string, want = ""): Promise<{ code: number; out: string }> {
+async function checkManifestSh(awk: string[], text: string, want = "", locale = "C"): Promise<{ code: number; out: string }> {
   const file = join(dir, `m-${Math.random().toString(36).slice(2)}.json`);
   await writeFile(file, text);
   // $1 is the file; the rest is the awk command line. od prints a final newline as the two characters \n.
-  const script = '[ "$(tail -c 1 "$1" | od -An -c | tr -d " ")" = "\\n" ] || exit 1; shift; exec "$@"';
-  const proc = Bun.spawn(["sh", "-c", script, "sh", file, ...awk, "-v", `want=${want}`, "-f", AWK, file], { stdout: "pipe", stderr: "pipe" });
+  const script = '[ "$(LC_ALL=C tr -d "\\012\\040-\\176" < "$1" | wc -c | tr -d " ")" = 0 ] || exit 1; [ "$(tail -c 1 "$1" | od -An -c | tr -d " ")" = "\\n" ] || exit 1; shift; exec "$@"';
+  const proc = Bun.spawn(["sh", "-c", script, "sh", file, ...awk, "-v", `want=${want}`, "-f", AWK, file], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LC_ALL: locale } });
   return { code: await proc.exited, out: await new Response(proc.stdout).text() };
 }
 
-describe.each(AWKS.map((a) => [a.join(" "), a]))("manifest.awk under %s", (_name, awk) => {
+const LOCALES = ["C", "en_US.UTF-8"];
+
+describe.each(AWKS.flatMap((a) => LOCALES.map((l) => [`${a.join(" ")} (${l})`, a, l] as const)))("manifest.awk under %s", (_name, awk, locale) => {
   test.each(VALID_CORPUS.map((c) => [c.name, c.text]))("accepts %s like manifest.ts", async (_n, text) => {
     const m = parseManifest(new TextEncoder().encode(text));
-    const r = await checkManifestSh(awk as string[], text, "linux-x64-musl");
+    const r = await checkManifestSh(awk as string[], text, "linux-x64-musl", locale);
     expect(r.code).toBe(0);
     const e = m.platforms["linux-x64-musl"];
     expect(r.out).toBe(`version=${m.version}\nsha256=${e.sha256}\nsize=${e.size}\nzst_sha256=${e.zst.sha256}\nzst_size=${e.zst.size}\n`);
@@ -38,11 +40,11 @@ describe.each(AWKS.map((a) => [a.join(" "), a]))("manifest.awk under %s", (_name
 
   test.each(INVALID_CORPUS.map((c) => [c.name, c.text]))("rejects %s like manifest.ts", async (_n, text) => {
     expect(() => parseManifest(new TextEncoder().encode(text))).toThrow();
-    expect((await checkManifestSh(awk as string[], text)).code).not.toBe(0);
+    expect((await checkManifestSh(awk as string[], text, "", locale)).code).not.toBe(0);
   });
 
   test("rejects a platform that is not in the manifest", async () => {
-    expect((await checkManifestSh(awk as string[], VALID_CORPUS[0]!.text, "win32-x64")).code).not.toBe(0);
+    expect((await checkManifestSh(awk as string[], VALID_CORPUS[0]!.text, "win32-x64", locale)).code).not.toBe(0);
   });
 });
 
