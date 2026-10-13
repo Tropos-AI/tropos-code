@@ -63,20 +63,42 @@ export async function ensureLayout(l: Layout): Promise<void> {
   } catch (e) {
     throw fromFsError(e, "creating the install directories");
   }
+  // Pre-existing directories keep their mode, so check every one we rely on (binDir is checked by the installer).
+  for (const d of [l.data, l.versions, l.manifests, l.staging, l.state, l.locks]) await checkSafeDir(d);
 }
 
 export interface DirOwner {
   uid: number;
   gid: number;
+  /** Login name; "" when unknown. */
+  user: string;
+  /** Primary group name; "" when unknown. */
+  group: string;
+}
+
+function idName(flag: "-un" | "-gn"): string {
+  try {
+    const r = Bun.spawnSync(["id", flag]);
+    return r.exitCode === 0 ? r.stdout.toString().trim() : "";
+  } catch {
+    return "";
+  }
 }
 
 export function currentUser(): DirOwner {
-  return { uid: process.getuid?.() ?? -1, gid: process.getgid?.() ?? -1 };
+  return {
+    uid: process.getuid?.() ?? -1,
+    gid: process.getgid?.() ?? -1,
+    user: idName("-un"),
+    group: idName("-gn"),
+  };
 }
 
 /**
- * A real directory owned by the user, never world-writable, and group-writable only when the group is
- * the user's primary group (spec §10.3 with amendment A1: Ubuntu's umask 002 and user-private groups).
+ * A real directory owned by the user, never world-writable, and group-writable only when the group is the
+ * user's own user-private group (name equals the user's name). A shared primary group such as macOS `staff`
+ * is refused: every local user is a member, so group write would let them replace installed binaries.
+ * Spec §10.3 with amendment A1 (Ubuntu's umask 002 and user-private groups). Fails closed on unknown names.
  */
 export async function checkSafeDir(path: string, user: DirOwner = currentUser()): Promise<void> {
   let st;
@@ -89,7 +111,8 @@ export async function checkSafeDir(path: string, user: DirOwner = currentUser())
   if (!st.isDirectory()) throw new InstallError("local", `${path} is not a directory`);
   if (st.uid !== user.uid) throw new InstallError("local", `${path} is owned by another user (uid ${st.uid})`);
   if (st.mode & 0o002) throw new InstallError("local", `${path} is writable by every user; fix it with: chmod o-w "${path}"`);
-  if (st.mode & 0o020 && st.gid !== user.gid) throw new InstallError("local", `${path} is writable by group ${st.gid}; fix it with: chmod g-w "${path}"`);
+  const userPrivateGroup = user.user !== "" && user.group === user.user && st.gid === user.gid;
+  if (st.mode & 0o020 && !userPrivateGroup) throw new InstallError("local", `${path} is writable by group ${st.gid}; fix it with: chmod g-w "${path}"`);
 }
 
 const real = (p: string) => {

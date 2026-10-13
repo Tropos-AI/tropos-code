@@ -50,6 +50,31 @@ describe("resolveLayout", () => {
     for (const d of [l.data, l.versions, l.manifests, l.staging, l.state, l.locks]) expect((await stat(d)).mode & 0o777).toBe(0o700);
     expect((await stat(l.binDir)).isDirectory()).toBe(true);
   });
+
+  test("ensureLayout rejects a pre-existing world-writable directory", async () => {
+    const l = resolveLayout({ HOME: dir });
+    await ensureLayout(l);
+    await chmod(l.staging, 0o777);
+    const err = await ensureLayout(l).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InstallError);
+    expect((err as InstallError).kind).toBe("local");
+  });
+
+  test("ensureLayout rejects a pre-existing symlink in place of a managed directory", async () => {
+    const l = resolveLayout({ HOME: dir });
+    await mkdir(l.data, { recursive: true });
+    await mkdir(join(dir, "elsewhere"));
+    await symlink(join(dir, "elsewhere"), l.versions);
+    await expect(ensureLayout(l)).rejects.toThrow("is a symbolic link");
+  });
+
+  test("ensureLayout accepts a pre-existing 0755 versions directory (old local-build installs)", async () => {
+    const l = resolveLayout({ HOME: dir });
+    await mkdir(l.versions, { recursive: true });
+    await chmod(l.versions, 0o755);
+    await ensureLayout(l);
+    expect((await stat(l.versions)).isDirectory()).toBe(true);
+  });
 });
 
 describe("checkSafeDir", () => {
@@ -63,13 +88,32 @@ describe("checkSafeDir", () => {
   test("accepts group-writable dir owned by the user's primary group (Ubuntu umask 002, amendment A1)", async () => {
     await chmod(dir, 0o775);
     const st = await stat(dir);
-    await checkSafeDir(dir, { uid: user.uid, gid: st.gid });
+    await checkSafeDir(dir, { uid: user.uid, gid: st.gid, user: "alice", group: "alice" });
+  });
+
+  test("refuses group-writable when the primary group is shared (macOS staff)", async () => {
+    await chmod(dir, 0o775);
+    const st = await stat(dir);
+    await expect(checkSafeDir(dir, { uid: user.uid, gid: st.gid, user: "alice", group: "staff" })).rejects.toThrow("is writable by group");
+  });
+
+  test("refuses group-writable when the user or group name is unknown (fail closed)", async () => {
+    await chmod(dir, 0o775);
+    const st = await stat(dir);
+    await expect(checkSafeDir(dir, { uid: user.uid, gid: st.gid, user: "", group: "" })).rejects.toThrow("is writable by group");
   });
 
   test("refuses group-writable for another group", async () => {
     await chmod(dir, 0o775);
     const st = await stat(dir);
-    await expect(checkSafeDir(dir, { uid: user.uid, gid: st.gid + 1 })).rejects.toThrow("is writable by group");
+    await expect(checkSafeDir(dir, { uid: user.uid, gid: st.gid + 1, user: "alice", group: "alice" })).rejects.toThrow("is writable by group");
+  });
+
+  test("currentUser reports the login and primary group names", () => {
+    const u = currentUser();
+    expect(u.user).toBe(Bun.spawnSync(["id", "-un"]).stdout.toString().trim());
+    expect(u.group).toBe(Bun.spawnSync(["id", "-gn"]).stdout.toString().trim());
+    expect(u.user).not.toBe("");
   });
 
   test("refuses world-writable", async () => {
@@ -78,7 +122,7 @@ describe("checkSafeDir", () => {
   });
 
   test("refuses another owner", async () => {
-    await expect(checkSafeDir(dir, { uid: user.uid + 1, gid: user.gid })).rejects.toThrow("is owned by another user");
+    await expect(checkSafeDir(dir, { ...user, uid: user.uid + 1 })).rejects.toThrow("is owned by another user");
   });
 
   test("refuses a symlink and a file", async () => {
