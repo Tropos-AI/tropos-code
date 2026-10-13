@@ -109,7 +109,7 @@ jobs:
         run: |
           chmod +x release-inputs/tropos-*
           docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/musl-bun:/opt/bun:ro" -w /w -e HOST_UID="$(id -u)" -e TROPOS_TEST_BINARY="/w/release-inputs/tropos-$PLATFORM" alpine:3.22 sh -euc '
-              apk add --no-cache git curl unzip zstd openssh-keygen shellcheck libstdc++ libgcc >/dev/null
+              apk add --no-cache bash git curl unzip zstd openssh-keygen shellcheck libstdc++ libgcc >/dev/null
               install -m 0755 /opt/bun/bun /usr/local/bin/bun
               adduser -D -u "$HOST_UID" tester
               su tester -c "bun install --frozen-lockfile && bun test test/install"
