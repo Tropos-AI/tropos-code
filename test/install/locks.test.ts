@@ -86,6 +86,18 @@ describe("acquireInstallLock", () => {
     h.release();
   });
 
+  test("a failed holder-info write still returns a releasable handle", async () => {
+    const writeInfo = () => {
+      throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+    };
+    const h = (await acquireInstallLock(l, { wait: false, version: "1.2.3", writeInfo }))!;
+    expect(h).not.toBeNull();
+    h.release();
+    const again = await acquireInstallLock(l, { wait: false, version: "1.2.3" });
+    expect(again).not.toBeNull();
+    again!.release();
+  });
+
   test("non-waiting returns null when busy", async () => {
     await holdInChild(installLockPath(l), "ex");
     expect(await acquireInstallLock(l, { wait: false, version: "1.2.3" })).toBeNull();

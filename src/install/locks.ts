@@ -80,6 +80,12 @@ export interface AcquireOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   onWait?: (holder: LockInfo | null) => void;
+  writeInfo?: (fd: number, json: string) => void;
+}
+
+function defaultWriteInfo(fd: number, json: string): void {
+  ftruncateSync(fd, 0);
+  writeSync(fd, json, 0);
 }
 
 /** The install lock (spec §10.1): foreground callers wait up to 60 s, then `busy`; background callers don't wait. */
@@ -93,8 +99,11 @@ export async function acquireInstallLock(l: Layout, opts: AcquireOptions): Promi
     const handle = tryLock(path, LOCK_EX, opts.flock);
     if (handle) {
       const info: LockInfo = { pid: process.pid, token: randomUUID(), version: opts.version, acquiredAt: new Date().toISOString() };
-      ftruncateSync(handle.fd, 0);
-      writeSync(handle.fd, JSON.stringify(info), 0);
+      try {
+        (opts.writeInfo ?? defaultWriteInfo)(handle.fd, JSON.stringify(info));
+      } catch {
+        // The holder info is informational only (spec 10.1); a failed write must not strand the lock.
+      }
       return handle;
     }
     if (!opts.wait) return null;
