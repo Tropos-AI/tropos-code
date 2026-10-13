@@ -30,6 +30,10 @@ jobs:
       - name: Install ripgrep
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install ripgrep; else sudo apt-get install -y ripgrep; fi
+      - name: Install shellcheck
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install shellcheck; else sudo apt-get install -y shellcheck; fi
+      - run: shellcheck -s sh install.sh scripts/release/make-manifest.sh
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test

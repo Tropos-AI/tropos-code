@@ -88,7 +88,7 @@ END {
   }
 
   [ $# -le 1 ] || fail 64 "usage: install.sh [stable|latest|<version>]"
-  target=${1:-latest}
+  target=${1-latest}
   case $target in
     stable | latest) ;;
     *) is_version "$target" || fail 64 "usage: install.sh [stable|latest|<version>] (got \"$target\")" ;;
@@ -140,11 +140,15 @@ END {
   fi
 
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t tropos) || fail 1 "cannot create a temporary directory"
-  chmod 700 "$tmp"
   trap 'rm -rf "$tmp"' EXIT
   trap 'rm -rf "$tmp"; exit 129' HUP
   trap 'rm -rf "$tmp"; exit 130' INT
   trap 'rm -rf "$tmp"; exit 143' TERM
+  case $tmp in
+    /*) ;;
+    *) fail 1 "the temporary directory is not an absolute path: $tmp" ;;
+  esac
+  chmod 700 "$tmp" || fail 1 "cannot secure the temporary directory"
 
   # fetch URL FILE MAX_BYTES MAX_SECONDS — under a file-size limit, no pipelines (spec §8.2 step 7).
   fetch() {
@@ -167,7 +171,7 @@ END {
     done
   }
   sha256_of() {
-    if [ "$hasher" = sha256sum ]; then sum=$(sha256sum "$1"); else sum=$(shasum -a 256 "$1"); fi
+    if [ "$hasher" = sha256sum ]; then sum=$(sha256sum <"$1"); else sum=$(shasum -a 256 <"$1"); fi
     printf '%s\n' "${sum%% *}"
   }
   size_of() {
@@ -191,7 +195,7 @@ END {
       if retry read_pointer "$target"; then version=$resolved
       elif sleep 4 && retry read_pointer "$target.bak"; then version=$resolved
       elif [ "$target" = latest ]; then from_latest_release=yes
-      else fail 69 "cannot resolve the stable channel (no release may have been published yet); try again, or install an explicit version"
+      else fail 69 "cannot resolve the stable channel (no release has been published yet); try again, or install an explicit version"
       fi
       ;;
     *) version=$target ;;
@@ -208,7 +212,10 @@ END {
     fi
   }
 
-  get_asset manifest.json "$tmp/manifest.json" 65536 30 || fail 69 "could not download the release manifest"
+  if ! get_asset manifest.json "$tmp/manifest.json" 65536 30; then
+    if [ "$from_latest_release" = yes ]; then fail 69 "cannot resolve the latest release (no release has been published yet); try again, or install an explicit version"; fi
+    fail 69 "could not download the release manifest"
+  fi
   get_asset manifest.json.sig "$tmp/manifest.json.sig" 4096 30 || fail 69 "could not download the manifest signature"
   printf '%s' "$TROPOS_ALLOWED_SIGNERS" >"$tmp/allowed_signers"
   if ! ssh-keygen -Y verify -f "$tmp/allowed_signers" -I tropos-release -n tropos-manifest -s "$tmp/manifest.json.sig" <"$tmp/manifest.json" >/dev/null 2>&1; then
@@ -274,7 +281,8 @@ END {
   case ":${PATH}:" in
     *":$bindir:"*) say "Run: tropos" ;;
     *)
-      shell_name=$(basename "${SHELL:-sh}")
+      shell_name=${SHELL:-sh}
+      shell_name=${shell_name##*/}
       case $shell_name in
         zsh) rc='~/.zshrc' ;;
         bash) rc='~/.bashrc' ;;
