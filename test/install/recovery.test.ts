@@ -280,7 +280,8 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     await f.setup({ versions: ["1.0.0"], current: "1.0.0" });
     const r = await recoverWith({ ...f.deps, health: (b, v) => defaultHealthCheck(b, v, process.env, 1000, eagain) });
     expect(r.fatal).toBeNull();
-    expect(r.actions).toEqual([`${f.layout.binLink} was missing; the health check of 1.0.0 could not be run, so nothing was changed`]);
+    expect(r.actions).toEqual([`${f.layout.binLink} was missing; the health check of 1.0.0 could not be run, so ${f.layout.binLink} points to it again`]);
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
     expect(await f.state()).toMatchObject({ current: "1.0.0" });
     expect((await f.state()).skip).toEqual({});
   });
@@ -313,5 +314,36 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     expect(r.fatal).toBe("no verified Tropos version is installed; reinstall with install.sh");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
     expect(lines).toContain(`recovery: 1.0.0 could not be verified; no verified version to switch to, left ${f.layout.binLink} in place`);
+  });
+
+  test("link missing and current inconclusive: current is relinked, never a downgrade to a healthy previous", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0" });
+    const health = (b: string, v: string): Promise<HealthResult> => (v === "1.1.0" ? Promise.resolve("unknown") : f.deps.health(b, v));
+    const r = await recoverWith({ ...f.deps, health });
+    expect(r.fatal).toBeNull();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0" });
+  });
+
+  test("link at an unverified version and current inconclusive: back to current, not to previous", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0"], current: "1.1.0", previous: "1.0.0", link: "1.2.0" });
+    await appendFile(versionPath(f.layout, "1.2.0"), "damage");
+    const health = (b: string, v: string): Promise<HealthResult> => (v === "1.1.0" ? Promise.resolve("unknown") : f.deps.health(b, v));
+    await recoverWith({ ...f.deps, health });
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0" });
+  });
+
+  test("an interrupted switch with a broken target and an inconclusive from: back to from, not to previous", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0"], previous: "1.0.0", link: "1.2.0" });
+    await writeState(f.layout, { ...emptyState(), current: "1.1.0", previous: "1.0.0", pending: { op: "switch", from: "1.1.0", to: "1.2.0" } });
+    await appendFile(versionPath(f.layout, "1.2.0"), "damage");
+    const health = (b: string, v: string): Promise<HealthResult> => (v === "1.1.0" ? Promise.resolve("unknown") : f.deps.health(b, v));
+    await recoverWith({ ...f.deps, health });
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
   });
 });

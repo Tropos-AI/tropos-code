@@ -1,7 +1,7 @@
 // src/install/rollback.ts
 import { withInstallLock, type EngineDeps, type LockedRun } from "./engine";
 import { InstallError } from "./errors";
-import { healthNotRun, preSwitchChecks, type Hooks, type InstallOutcome } from "./installer";
+import { preSwitchChecks, staysActive, type Hooks, type InstallOutcome } from "./installer";
 import { linkResolvesTo, readLink, switchLink } from "./link";
 import { dropLink, selectFallback } from "./recovery";
 import { checkHealthy, listManagedVersions } from "./verify";
@@ -25,19 +25,20 @@ export async function rollback(deps: EngineDeps, hooks: Hooks = {}): Promise<Loc
     await switchLink(l, previous);
     s.crash("after-swap");
     const post = (await linkResolvesTo(l, previous)) ? await deps.health(l.binLink, previous) : "bad";
+    const skip = current !== null ? { ...s.state.skip, [current]: "rolled-back" as const } : s.state.skip;
+    if (post === "unknown") {
+      // A transient result never undoes the rollback: the target is Verified and passed its own check.
+      await s.save({ current: previous, previous: current, pending: null, skip });
+      throw staysActive(previous);
+    }
     if (post !== "ok") {
       const restored = current !== null && (await checkHealthy(s.ctx, current)).ok ? current : await selectFallback(s, new Set([previous]));
       if (restored) await switchLink(l, restored);
       else await dropLink(s);
       const using = restored ? `still using ${restored}` : "no verified version is active";
-      if (post === "unknown") {
-        await s.save({ current: restored, pending: null });
-        throw healthNotRun(previous, using);
-      }
       await s.save({ current: restored, pending: null, skip: { ...s.state.skip, [previous]: "health-check" } });
       throw new InstallError("integrity", `version ${previous} failed its check; ${using}`);
     }
-    const skip = current !== null ? { ...s.state.skip, [current]: "rolled-back" as const } : s.state.skip;
     await s.save({ current: previous, previous: current, pending: null, skip });
     s.crash("after-state");
     return { version: previous, previous: current, changed: true };

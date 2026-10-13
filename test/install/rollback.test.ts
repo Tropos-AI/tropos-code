@@ -82,4 +82,19 @@ describe("rollback (spec §10.7)", () => {
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
     expect(await f.state()).toMatchObject({ current: "1.1.0", pending: null, skip: { "1.0.0": "health-check" } });
   });
+
+  test("an inconclusive post-switch check keeps the rollback target active (75), never drops the link (residual I1)", async () => {
+    await twoVersions();
+    let switched = false;
+    const health = async (b: string, v: string) => {
+      if (b === f.layout.binLink) switched = true;
+      return switched ? ("unknown" as const) : f.deps.health(b, v);
+    };
+    const e = (await rollback({ ...f.deps, health }).catch((x) => x)) as InstallError;
+    expect(e.kind).toBe("busy");
+    expect(e.message).toBe("the health check of 1.0.0 could not be run after switching; 1.0.0 stays active — try `tropos --version`");
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
+    expect(await f.state()).toMatchObject({ current: "1.0.0", previous: "1.1.0", pending: null, skip: { "1.1.0": "rolled-back" } });
+    expect((await f.state()).skip["1.0.0"]).toBeUndefined();
+  });
 });

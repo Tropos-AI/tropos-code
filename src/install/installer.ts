@@ -73,6 +73,14 @@ export function healthNotRun(version: string, detail: string): InstallError {
   return new InstallError("busy", `the health check of ${version} could not be run (the system may be short of processes or memory); ${detail}; try again later`);
 }
 
+/**
+ * The check through ~/.local/bin/tropos could not be run after switching to a Verified version that passed its own
+ * check: a transient result never removes the link or moves back, so `version` stays active (exit 75).
+ */
+export function staysActive(version: string): InstallError {
+  return new InstallError("busy", `the health check of ${version} could not be run after switching; ${version} stays active — try \`tropos --version\``);
+}
+
 /** zst first (verified before decompression), raw as fallback; a raw mismatch is retried twice (spec §10.3 step 4). */
 async function downloadVerified(s: EngineSession, version: string, entry: PlatformEntry, staged: string): Promise<void> {
   const d = s.deps;
@@ -201,22 +209,23 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   s.crash("after-swap");
 
   const post: HealthResult = (await linkResolvesTo(l, version)) ? await d.health(l.binLink, version) : "bad";
+  const skip = { ...s.state.skip };
+  delete skip[version];
+  const previous = from !== null && from !== version ? from : s.state.previous;
+  if (post === "unknown") {
+    await s.save({ current: version, previous, pending: null, skip });
+    throw staysActive(version);
+  }
   if (post !== "ok") {
     const restored = from !== null && (await checkHealthy(s.ctx, from)).ok ? from : await selectFallback(s, new Set([version]));
     if (restored) await switchLink(l, restored);
     else await dropLink(s);
     const using = restored ? `still using ${restored}` : "no verified version is active";
-    if (post === "unknown") {
-      await s.save({ current: restored, pending: null });
-      throw healthNotRun(version, `after switching; ${using}`);
-    }
     await s.save({ current: restored, pending: null, skip: { ...s.state.skip, [version]: "health-check" } });
     throw new InstallError("integrity", `release ${version} failed its check after switching; ${using}`);
   }
 
-  const skip = { ...s.state.skip };
-  delete skip[version];
-  await s.save({ current: version, previous: from !== null && from !== version ? from : s.state.previous, pending: null, skip });
+  await s.save({ current: version, previous, pending: null, skip });
   s.crash("after-state");
   try {
     await cleanup(s);

@@ -278,16 +278,27 @@ describe("transient health-check failures are not verdicts (I1)", () => {
     expect((await f.state()).skip).toEqual({});
   });
 
-  test("a post-switch check that cannot run switches back without a skip", async () => {
+  // Residual I1: every check after the switch is inconclusive, including any restore candidate's.
+  const unknownAfterSwitch = () => {
+    let switched = false;
+    return (b: string, v: string): Promise<HealthResult> => {
+      if (b === f.layout.binLink) switched = true;
+      return switched ? Promise.resolve("unknown") : f.deps.health(b, v);
+    };
+  };
+
+  test.each(["install", "update"] as const)("%s: an inconclusive post-switch check keeps the new version active (75), never drops the link", async (how) => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     await f.release("1.1.0");
     await installTarget(f.deps, "1.0.0", false);
-    const e = await err(installTarget({ ...f.deps, health: unknownFor("1.1.0", true) }, "1.1.0", false));
+    f.srv.put("channels", "latest", "1.1.0\n");
+    const deps = { ...f.deps, health: unknownAfterSwitch() };
+    const e = await err(how === "install" ? installTarget(deps, "1.1.0", false) : updateChannel(deps, "latest", { wait: true }));
     expect(e.kind).toBe("busy");
-    expect(e.message).toContain("could not be run");
-    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
-    expect(await f.state()).toMatchObject({ current: "1.0.0", pending: null });
+    expect(e.message).toBe("the health check of 1.1.0 could not be run after switching; 1.1.0 stays active — try `tropos --version`");
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
+    expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
     expect((await f.state()).skip).toEqual({});
   });
 

@@ -68,6 +68,11 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
   const linkedManaged = linked !== null && (await isManaged(l, linked));
   const health = async (v: string | null): Promise<Verdict> => (v === null ? "broken" : verdictOf(await checkHealthy(s.ctx, v)));
   const inconclusive = (v: string) => note(`the health check of ${v} could not be run; left it in place and changed nothing`);
+  /** `current` is Verified but could not be checked: point the link back at it rather than move to another version. */
+  const relinkInconclusive = async (v: string, why: string) => {
+    await switchLink(l, v);
+    note(`${why}; the health check of ${v} could not be run, so ${l.binLink} points to it again`);
+  };
 
   /** The new current version, or `undefined` when no candidate could be judged and nothing was changed. */
   const toFallback = async (why: string, exclude: ReadonlySet<string> = new Set()): Promise<string | null | undefined> => {
@@ -138,9 +143,11 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
         if (linked !== from) await switchLink(l, from);
         await s.save({ current: from, pending: null });
         note(`undid the interrupted switch to ${to}; using ${from}`);
-      } else if (fromHealth === "unknown" && linked === from) {
+      } else if (fromHealth === "unknown") {
+        // A transient result never moves to another version: stay on (or go back to) the Verified `from`.
+        if (linked === from) inconclusive(from);
+        else await relinkInconclusive(from, `the interrupted switch to ${to} could not be completed`);
         await s.save({ current: from, pending: null });
-        inconclusive(from);
       } else {
         const f = await toFallback(`the interrupted switch to ${to} could not be completed`);
         if (f !== undefined) await s.save({ current: f, pending: null });
@@ -161,12 +168,17 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
       note(`adopted ${linked}, which ${l.binLink} points to`);
     } else if (lh === "unknown") {
       inconclusive(linked);
-    } else if ((await health(st.current)) === "healthy") {
-      await switchLink(l, st.current!);
-      note(`${l.binLink} pointed to ${linked}, which could not be verified; switched back to ${st.current}`);
     } else {
-      const f = await toFallback(`${l.binLink} pointed to an unverified version`);
-      if (f !== undefined) await s.save({ current: f });
+      const ch = await health(st.current);
+      if (ch === "healthy") {
+        await switchLink(l, st.current!);
+        note(`${l.binLink} pointed to ${linked}, which could not be verified; switched back to ${st.current}`);
+      } else if (ch === "unknown") {
+        await relinkInconclusive(st.current!, `${l.binLink} pointed to ${linked}, which could not be verified`);
+      } else {
+        const f = await toFallback(`${l.binLink} pointed to an unverified version`);
+        if (f !== undefined) await s.save({ current: f });
+      }
     }
   } else if (linked !== null) {
     const lh = await health(linked);
@@ -176,8 +188,12 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
       if (f !== undefined) await s.save({ current: f, previous: f !== null && f === st.previous ? null : st.previous });
     }
   } else if (st.current !== null || link.kind === "dangling-ours") {
-    const f = await toFallback(`${l.binLink} was missing`);
-    if (f !== undefined) await s.save({ current: f });
+    if ((await health(st.current)) === "unknown") {
+      await relinkInconclusive(st.current!, `${l.binLink} was missing`);
+    } else {
+      const f = await toFallback(`${l.binLink} was missing`);
+      if (f !== undefined) await s.save({ current: f });
+    }
   }
 
   const prev = s.state.previous;
