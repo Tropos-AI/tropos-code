@@ -114,5 +114,9 @@ async function versionEntries(dir: string): Promise<string[]> {
 }
 
 export const listVersionFiles = (l: Layout) => versionEntries(l.versions);
-/** Versions with a stored manifest (their binary may be missing). */
-export const listManagedVersions = (l: Layout) => versionEntries(l.manifests);
+/** Versions with a stored manifest.json (their binary may be missing); a half-written manifests/<v>/ does not count. */
+export async function listManagedVersions(l: Layout): Promise<string[]> {
+  const found = await versionEntries(l.manifests);
+  const managed = await Promise.all(found.map((v) => isManaged(l, v)));
+  return found.filter((_, i) => managed[i]);
+}

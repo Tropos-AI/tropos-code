@@ -1,6 +1,6 @@
 // src/install/verify.test.ts
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { appendFile, chmod, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fakeBinary, installDirect, makeFixtureRelease, type FixtureRelease } from "../../test/install/helpers/fixture-release";
 import { makeTestKey, type TestKey } from "../../test/install/helpers/keys";
@@ -91,5 +91,13 @@ describe("Verified and Healthy", () => {
     await writeFile(join(l.versions, "0.1.0"), "local build");
     expect(await listVersionFiles(l)).toEqual(["1.10.0", "1.0.0", "0.1.0"]);
     expect(await listManagedVersions(l)).toEqual(["1.10.0", "1.0.0"]);
+  });
+
+  test("a manifest dir without manifest.json is not managed", async () => {
+    await installDirect(l, r1);
+    await mkdir(manifestDir(l, "1.5.0"), { recursive: true });
+    await writeFile(join(manifestDir(l, "1.5.0"), "manifest.json.sig"), "sig");
+    expect(await isManaged(l, "1.5.0")).toBe(false);
+    expect(await listManagedVersions(l)).toEqual(["1.0.0"]);
   });
 });
