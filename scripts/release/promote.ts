@@ -78,27 +78,46 @@ export interface PromoteDeps {
   log(line: string): void;
 }
 
+
 type Slot = "latest" | "latest.bak" | "stable" | "stable.bak";
+type Channel = "latest" | "stable";
 const READ_BACK_ATTEMPTS = 10;
 const READ_BACK_DELAY_MS = 3000; // decision D6: at least twice the observed --clobber gap
 
-async function readSlot(d: PromoteDeps, slot: Slot): Promise<string | null> {
+/** A definite "not verified" answer; transport and API errors are never one (they propagate). */
+class NotVerified extends Error {}
+
+/** The slot's content without its trailing newline; null when the asset does not exist. */
+async function readRaw(d: PromoteDeps, slot: Slot): Promise<string | null> {
   const bytes = await d.channels.readAsset("channels", slot);
   if (!bytes) return null;
   const text = dec(bytes);
-  const v = text.endsWith("\n") ? text.slice(0, -1) : text;
-  return isVersion(v) ? v : null;
+  return text.endsWith("\n") ? text.slice(0, -1) : text;
+}
+
+const asVersion = (raw: string | null) => (raw !== null && isVersion(raw) ? raw : null);
+const show = (raw: string) => JSON.stringify(raw.length > 40 ? `${raw.slice(0, 40)}…` : raw);
+
+/** Both slots of a channel; content that is not a version stops a promotion for a maintainer to resolve. */
+async function readChannel(d: PromoteDeps, ch: Channel): Promise<{ primary: string | null; backup: string | null }> {
+  const primary = await readRaw(d, ch);
+  const backup = await readRaw(d, `${ch}.bak`);
+  for (const [slot, raw] of [[ch, primary], [`${ch}.bak`, backup]] as const) {
+    if (raw !== null && !isVersion(raw)) throw new Error(`channels/${slot} holds invalid content ${show(raw)}; a maintainer must fix it (see \`promote.ts check\`)`);
+  }
+  return { primary, backup };
 }
 
 const higher = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : compareVersions(a, b) >= 0 ? a : b);
 
+/** Compare-before-write: `expected` is the raw content this run read; anything else was written by someone else. */
 async function writeSlot(d: PromoteDeps, slot: Slot, x: string, expected: string | null): Promise<void> {
-  const current = await readSlot(d, slot);
+  const current = await readRaw(d, slot);
   if (current === x) return;
   if (current !== expected) throw new Error(`channels/${slot} changed from ${expected} to ${current} while promoting; refusing to overwrite`);
   await d.channels.uploadAsset("channels", slot, enc(`${x}\n`));
   for (let i = 0; i < READ_BACK_ATTEMPTS; i++) {
-    if ((await readSlot(d, slot)) === x) {
+    if ((await readRaw(d, slot)) === x) {
       d.log(`channels/${slot} = ${x}`);
       return;
     }
@@ -113,24 +132,26 @@ async function isGitHubLatest(d: PromoteDeps, tag: string): Promise<boolean> {
 }
 
 async function validateRelease(d: PromoteDeps, x: string): Promise<{ commit: string }> {
-  if (!isVersion(x)) throw new Error(`not a version: ${x}`);
+  if (!isVersion(x)) throw new NotVerified(`not a version: ${x}`);
   const rel = await d.main.getRelease(`v${x}`);
-  if (!rel || rel.draft) throw new Error(`v${x} is not published`);
+  if (!rel || rel.draft) throw new NotVerified(`v${x} is not published`);
   const [bytes, sig] = await Promise.all([d.main.readAsset(`v${x}`, "manifest.json"), d.main.readAsset(`v${x}`, "manifest.json.sig")]);
   const info = bytes && sig ? await d.verifyManifest(bytes, dec(sig)) : null;
-  if (!info || info.version !== x) throw new Error(`v${x}: the manifest signature does not verify against release/allowed_signers`);
+  if (!info || info.version !== x) throw new NotVerified(`v${x}: the manifest signature does not verify against release/allowed_signers`);
   return { commit: info.commit };
 }
 
-async function isVerifiedRelease(d: PromoteDeps, x: string | null): Promise<boolean> {
-  if (x === null) return false;
+/** False only for a definite negative; a transport or API error propagates so a check fails instead of repairing. */
+async function isVerifiedRelease(d: PromoteDeps, x: string): Promise<boolean> {
+  let commit: string;
   try {
-    const { commit } = await validateRelease(d, x);
-    const record = await d.records.read(x);
-    return record !== null && record.version === x && record.commit === commit;
-  } catch {
-    return false;
+    ({ commit } = await validateRelease(d, x));
+  } catch (e) {
+    if (e instanceof NotVerified) return false;
+    throw e;
   }
+  const record = await d.records.read(x);
+  return record !== null && record.version === x && record.commit === commit;
 }
 
 /** `promote.ts latest <x>` — every step checks its own effect first, so re-running resumes (spec §7.4). */
@@ -140,7 +161,8 @@ export async function promoteLatest(d: PromoteDeps, x: string): Promise<void> {
     await d.channels.createChannelsRelease();
     d.log("created the channels release (prerelease, never latest)");
   }
-  const latest = { primary: await readSlot(d, "latest"), backup: await readSlot(d, "latest.bak") };
+  const latest = await readChannel(d, "latest");
+  await readChannel(d, "stable"); // invalid stable content stops the run before anything is written
   const current = higher(latest.primary, latest.backup);
   if (current !== null && compareVersions(current, x) > 0) throw new Error(`promoting ${x} would move latest backwards from ${current}`);
   const record = await d.records.read(x);
@@ -148,7 +170,7 @@ export async function promoteLatest(d: PromoteDeps, x: string): Promise<void> {
   else if (record.version !== x || record.commit !== commit) throw new Error(`v${x} already has a different verification record`);
   await writeSlot(d, "latest.bak", x, latest.backup);
   await writeSlot(d, "latest", x, latest.primary);
-  const stable = { primary: await readSlot(d, "stable"), backup: await readSlot(d, "stable.bak") };
+  const stable = await readChannel(d, "stable");
   // First release: neither slot exists — or only stable.bak, holding x, because a run was interrupted before stable.
   if (stable.primary === null && (stable.backup === null || stable.backup === x)) {
     await writeSlot(d, "stable.bak", x, null);
@@ -169,48 +191,66 @@ export async function promoteStable(d: PromoteDeps, x: string): Promise<void> {
   const { commit } = await validateRelease(d, x);
   const record = await d.records.read(x);
   if (!record || record.version !== x || record.commit !== commit) throw new Error(`v${x} has no verification record; only fully verified releases can become stable`);
-  const latest = higher(await readSlot(d, "latest"), await readSlot(d, "latest.bak"));
+  const latestSlots = await readChannel(d, "latest");
+  const latest = higher(latestSlots.primary, latestSlots.backup);
   if (latest === null || compareVersions(x, latest) > 0) throw new Error(`stable cannot run ahead of latest (${latest})`);
-  const stable = { primary: await readSlot(d, "stable"), backup: await readSlot(d, "stable.bak") };
+  const stable = await readChannel(d, "stable");
   const current = higher(stable.primary, stable.backup);
   if (current !== null && compareVersions(x, current) < 0) throw new Error(`promoting ${x} would move stable backwards from ${current}`);
   await writeSlot(d, "stable.bak", x, stable.backup);
   await writeSlot(d, "stable", x, stable.primary);
 }
 
-/** `promote.ts check [--repair]` (spec §7.4): never points a slot at an unverified release, never lowers a verified slot. */
+/**
+ * `promote.ts check [--repair]` (spec §7.4): never points a slot at an unverified release, never lowers a verified slot.
+ * Every slot is judged before anything is repaired, so an error while judging changes nothing.
+ */
 export async function checkChannels(d: PromoteDeps, repair: boolean): Promise<{ ok: boolean; problems: string[]; repaired: string[] }> {
   const problems: string[] = [];
   const repaired: string[] = [];
+  const verdicts = new Map<string, boolean>();
+  const verified = async (v: string | null): Promise<boolean> => {
+    if (v === null) return false;
+    if (!verdicts.has(v)) verdicts.set(v, await isVerifiedRelease(d, v));
+    return verdicts.get(v)!;
+  };
+  const slotProblem = (raw: string | null) => (raw === null ? "missing" : isVersion(raw) ? `${raw} is not a verified release` : `invalid content ${show(raw)}`);
+  const plans: Array<{ ch: Channel; bak: Slot; p: string | null; b: string | null; target: string | null }> = [];
   for (const ch of ["latest", "stable"] as const) {
     const bak = `${ch}.bak` as Slot;
-    const p = await readSlot(d, ch);
-    const b = await readSlot(d, bak);
-    const pv = await isVerifiedRelease(d, p);
-    const bv = await isVerifiedRelease(d, b);
-    if (!pv) problems.push(`${ch}: ${p === null ? "missing or invalid" : `${p} is not a verified release`}`);
-    if (!bv) problems.push(`${bak}: ${b === null ? "missing or invalid" : `${b} is not a verified release`}`);
+    const p = await readRaw(d, ch);
+    const b = await readRaw(d, bak);
+    const pv = await verified(asVersion(p));
+    const bv = await verified(asVersion(b));
+    if (!pv) problems.push(`${ch}: ${slotProblem(p)}`);
+    if (!bv) problems.push(`${bak}: ${slotProblem(b)}`);
     if (pv && bv && p !== b) problems.push(`${ch}: slots differ (${p} vs ${b})`);
-    if (!repair) continue;
-    const target = higher(pv ? p : null, bv ? b : null);
-    if (target === null) {
-      problems.push(`${ch}: neither slot names a verified release; not repaired`);
-      continue;
-    }
-    for (const [slot, value] of [[bak, b], [ch, p]] as const) {
-      if (value !== target) {
-        await d.channels.uploadAsset("channels", slot, enc(`${target}\n`));
-        repaired.push(`${slot} := ${target}`);
+    plans.push({ ch, bak, p, b, target: higher(pv ? p : null, bv ? b : null) });
+  }
+  if (repair) {
+    for (const { ch, bak, p, b, target } of plans) {
+      if (target === null) {
+        problems.push(`${ch}: neither slot names a verified release; not repaired`);
+        continue;
+      }
+      for (const [slot, value] of [[bak, b], [ch, p]] as const) {
+        if (value !== target) {
+          await writeSlot(d, slot, target, value);
+          repaired.push(`${slot} := ${target}`);
+        }
       }
     }
   }
-  const latest = await readSlot(d, "latest");
-  const stable = await readSlot(d, "stable");
+  const latest = asVersion(await readRaw(d, "latest"));
+  const stable = asVersion(await readRaw(d, "stable"));
   if (latest && stable && compareVersions(stable, latest) > 0) problems.push(`stable ${stable} is ahead of latest ${latest}`);
   if (latest && !(await isGitHubLatest(d, `v${latest}`))) {
     const ghLatest = await d.main.latestReleaseTag();
-    problems.push(ghLatest === `v${latest}` ? `GitHub's public releases/latest/download route does not resolve to v${latest} (channels/latest is ${latest})` : `GitHub latest is ${ghLatest}, channels/latest is ${latest}`);
-    if (repair && (await isVerifiedRelease(d, latest))) {
+    const ghVersion = ghLatest?.startsWith("v") ? asVersion(ghLatest.slice(1)) : null;
+    if (ghLatest === `v${latest}`) problems.push(`GitHub's public releases/latest/download route does not resolve to v${latest} (channels/latest is ${latest})`);
+    else if (ghVersion && compareVersions(ghVersion, latest) > 0) problems.push(`GitHub latest ${ghLatest} is ahead of channels/latest ${latest} — was it marked manually?`);
+    else problems.push(`GitHub latest is ${ghLatest}, channels/latest is ${latest}`);
+    if (repair && (await verified(latest))) {
       await d.main.markLatest(`v${latest}`);
       repaired.push(`GitHub latest := v${latest}`);
     }
@@ -221,19 +261,41 @@ export async function checkChannels(d: PromoteDeps, repair: boolean): Promise<{ 
 /**
  * For smoke-public b/c (spec §7.3 step 7): b (old installer) is skipped when GitHub reports no latest release
  * or reports the release under test itself (a first release; spike D6a); c when the channels release does not exist.
+ * Errors propagate: a gate must never be skipped because GitHub could not be asked.
  */
 export async function previousRelease(d: PromoteDeps, x: string): Promise<{ installerTag: string | null; stable: string | null }> {
   if (!isVersion(x)) throw new Error(`not a version: ${x}`);
   const hasChannels = (await d.channels.getRelease("channels")) !== null;
   const ghLatest = await d.main.latestReleaseTag();
   const installerTag = ghLatest === `v${x}` ? null : ghLatest;
-  const stable = hasChannels ? higher(await readSlot(d, "stable"), await readSlot(d, "stable.bak")) : null;
+  let stable: string | null = null;
+  if (hasChannels) {
+    const slots = await readChannel(d, "stable");
+    stable = higher(slots.primary, slots.backup);
+  }
   return { installerTag, stable };
 }
 
 if (import.meta.main) {
+  const [command, arg, extra] = process.argv.slice(2);
+  const wellFormed = extra === undefined && ((["latest", "stable", "previous"].includes(command ?? "") && arg !== undefined) || (command === "check" && (arg === undefined || arg === "--repair")));
+  if (!wellFormed) {
+    console.error("usage: promote.ts latest <version> | stable <version> | check [--repair] | previous <version>");
+    process.exit(64);
+  }
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (!repo) {
+    console.error("GITHUB_REPOSITORY is not set");
+    process.exit(64);
+  }
+  // Spec §7.1: writes to the channels repository use only CHANNELS_WRITE_TOKEN, never the ambient token.
+  const writesChannels = command === "latest" || command === "stable" || (command === "check" && arg === "--repair");
+  const channelsToken = process.env.CHANNELS_WRITE_TOKEN || undefined;
+  if (writesChannels && !channelsToken) {
+    console.error(`promote.ts ${command}${arg ? ` ${arg}` : ""}: CHANNELS_WRITE_TOKEN is not set; writes to the channels repository use only that token`);
+    process.exit(1);
+  }
   const { ghClient, sshVerifyManifest } = await import("./github");
-  const repo = process.env.GITHUB_REPOSITORY!;
   // Decision D1-B: slots and verification records live on the channels repository; tropos-code releases are immutable.
   const channelsRepo = process.env.CHANNELS_REPOSITORY || "Tropos-AI/tropos-code-channels";
   const main: GitHubClient = {
@@ -242,7 +304,7 @@ if (import.meta.main) {
       throw new Error(`refusing to upload to ${repo} release ${tag}: version releases are immutable`);
     },
   };
-  const channels = ghClient(channelsRepo, process.env.CHANNELS_WRITE_TOKEN || undefined);
+  const channels = ghClient(channelsRepo, channelsToken);
   const deps: PromoteDeps = {
     main,
     channels,
@@ -253,19 +315,15 @@ if (import.meta.main) {
     runId: process.env.GITHUB_RUN_ID ?? "local",
     log: (line) => console.log(line),
   };
-  const [command, arg] = process.argv.slice(2);
   if (command === "latest") await promoteLatest(deps, arg!);
   else if (command === "stable") await promoteStable(deps, arg!);
   else if (command === "check") {
     const report = await checkChannels(deps, arg === "--repair");
     for (const line of [...report.problems, ...report.repaired]) console.log(line);
     process.exit(report.ok ? 0 : 1);
-  } else if (command === "previous" && arg) {
-    const prev = await previousRelease(deps, arg);
+  } else {
+    const prev = await previousRelease(deps, arg!);
     console.log(`installer_tag=${prev.installerTag ?? ""}`);
     console.log(`stable=${prev.stable ?? ""}`);
-  } else {
-    console.error("usage: promote.ts latest <version> | stable <version> | check [--repair] | previous <version>");
-    process.exit(64);
   }
 }

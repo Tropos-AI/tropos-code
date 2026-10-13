@@ -273,6 +273,139 @@ describe("checkChannels (R3.3)", () => {
     expect(repair.repaired).toEqual(["GitHub latest := v1.0.0"]);
     expect(await checkChannels(deps, false)).toEqual({ ok: true, problems: [], repaired: [] });
   });
+
+  test("a transport error while judging a slot fails the check and repairs nothing (never lowers a verified slot)", async () => {
+    gh.publish("1.9.0");
+    gh.publish("2.0.0");
+    await promoteLatest(deps, "1.9.0");
+    gh.failUpload = (_t, n) => n === "latest";
+    await expect(promoteLatest(deps, "2.0.0")).rejects.toThrow();
+    gh.failUpload = () => false;
+    expect([gh.slot("latest"), gh.slot("latest.bak")]).toEqual([null, "2.0.0"]);
+    await gh.uploadAsset("channels", "latest", enc("1.9.0\n")); // latest = 1.9.0, latest.bak = 2.0.0
+    const readAsset = gh.readAsset.bind(gh);
+    gh.readAsset = async (tag, name) => {
+      if (tag === "v2.0.0") throw new Error("reading v2.0.0/manifest.json: HTTP 502");
+      return readAsset(tag, name);
+    };
+    let writes = 0;
+    gh.observe = () => void writes++;
+    await expect(checkChannels(deps, true)).rejects.toThrow("HTTP 502");
+    expect(writes).toBe(0);
+    expect([gh.slot("latest"), gh.slot("latest.bak")]).toEqual(["1.9.0", "2.0.0"]);
+  });
+
+  test("both slots valid and verified but different: both are set to the higher", async () => {
+    gh.publish("1.0.0");
+    gh.publish("1.1.0");
+    await promoteLatest(deps, "1.0.0");
+    gh.failUpload = (_t, n) => n === "latest";
+    await expect(promoteLatest(deps, "1.1.0")).rejects.toThrow();
+    gh.failUpload = () => false;
+    await gh.uploadAsset("channels", "latest", enc("1.0.0\n")); // the interrupted --clobber left the old value
+    expect((await checkChannels(deps, false)).problems).toContain("latest: slots differ (1.0.0 vs 1.1.0)");
+    const report = await checkChannels(deps, true);
+    expect(report.repaired).toEqual(["latest := 1.1.0", "GitHub latest := v1.1.0"]);
+    expect(endState()).toEqual({ latest: "1.1.0", latestBak: "1.1.0", stable: "1.0.0", stableBak: "1.0.0", gh: "v1.1.0" });
+    expect(await checkChannels(deps, false)).toEqual({ ok: true, problems: [], repaired: [] });
+  });
+
+  test("a repair write re-reads the slot first and never overwrites someone else's change", async () => {
+    gh.publish("1.0.0");
+    await promoteLatest(deps, "1.0.0");
+    gh.releases.get("channels")!.assets.delete("stable");
+    let reads = 0;
+    deps.channels = {
+      getRelease: (tag) => gh.getRelease(tag),
+      createChannelsRelease: () => gh.createChannelsRelease(),
+      uploadAsset: (tag, name, data) => gh.uploadAsset(tag, name, data),
+      latestReleaseTag: () => gh.latestReleaseTag(),
+      latestDownloadResolves: (tag) => gh.latestDownloadResolves(tag),
+      markLatest: (tag) => gh.markLatest(tag),
+      // A promotion writes stable between the check's read and its repair.
+      readAsset: async (tag, name) => {
+        if (name === "stable" && ++reads === 2) gh.releases.get("channels")!.assets.set("stable", enc("1.1.0\n"));
+        return gh.readAsset(tag, name);
+      },
+    };
+    await expect(checkChannels(deps, true)).rejects.toThrow("channels/stable changed from null to 1.1.0");
+    expect(gh.slot("stable")).toBe("1.1.0");
+  });
+
+  test("GitHub latest ahead of channels/latest is reported distinctly and set back to channels/latest", async () => {
+    gh.publish("1.0.0");
+    gh.publish("2.0.0");
+    await promoteLatest(deps, "1.0.0");
+    await gh.markLatest("v2.0.0");
+    expect((await checkChannels(deps, false)).problems).toEqual(["GitHub latest v2.0.0 is ahead of channels/latest 1.0.0 — was it marked manually?"]);
+    expect((await checkChannels(deps, true)).repaired).toEqual(["GitHub latest := v1.0.0"]);
+    expect(gh.latest).toBe("v1.0.0");
+  });
+});
+
+describe("invalid slot content (missing is not invalid)", () => {
+  beforeEach(async () => {
+    gh.publish("1.0.0");
+    gh.publish("1.1.0");
+    await promoteLatest(deps, "1.0.0");
+  });
+
+  test("corrupt stable slots stop promoteLatest before anything is written; stable is never invented", async () => {
+    gh.releases.get("channels")!.assets.set("stable", enc("<html>"));
+    gh.releases.get("channels")!.assets.set("stable.bak", enc("<html>"));
+    await expect(promoteLatest(deps, "1.1.0")).rejects.toThrow('channels/stable holds invalid content "<html>"');
+    expect(endState()).toEqual({ latest: "1.0.0", latestBak: "1.0.0", stable: "<html>", stableBak: "<html>", gh: "v1.0.0" });
+    const report = await checkChannels(deps, true);
+    expect(report.problems).toEqual(['stable: invalid content "<html>"', 'stable.bak: invalid content "<html>"', "stable: neither slot names a verified release; not repaired"]);
+    expect([gh.slot("stable"), gh.slot("stable.bak")]).toEqual(["<html>", "<html>"]);
+  });
+
+  test("a corrupt stable.bak stops promoteStable", async () => {
+    gh.releases.get("channels")!.assets.set("stable.bak", enc("1.0\n"));
+    await expect(promoteStable(deps, "1.0.0")).rejects.toThrow('channels/stable.bak holds invalid content "1.0"');
+    expect(gh.slot("stable.bak")).toBe("1.0");
+  });
+
+  test("a corrupt latest stops promoteLatest; check --repair restores it from latest.bak", async () => {
+    gh.releases.get("channels")!.assets.set("latest", enc("garbage"));
+    await expect(promoteLatest(deps, "1.1.0")).rejects.toThrow('channels/latest holds invalid content "garbage"');
+    expect((await checkChannels(deps, true)).repaired).toEqual(["latest := 1.0.0"]);
+    await promoteLatest(deps, "1.1.0");
+    expect(endState()).toMatchObject({ latest: "1.1.0", latestBak: "1.1.0", gh: "v1.1.0" });
+  });
+});
+
+describe("errors from GitHub propagate (a gate never fails open)", () => {
+  test("previousRelease rejects when GitHub cannot be asked", async () => {
+    gh.publish("1.0.0");
+    await promoteLatest(deps, "1.0.0");
+    gh.latestReleaseTag = async () => {
+      throw new Error("reading the latest release failed (exit 1): gh: API rate limit exceeded (HTTP 403)");
+    };
+    await expect(previousRelease(deps, "1.1.0")).rejects.toThrow("HTTP 403");
+  });
+});
+
+describe("CLI", () => {
+  const cli = (...args: string[]) =>
+    Bun.spawnSync([process.execPath, "scripts/release/promote.ts", ...args], {
+      cwd: `${import.meta.dir}/../..`,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, GITHUB_REPOSITORY: "Tropos-AI/tropos-code" },
+    });
+
+  for (const args of [["latest", "1.0.0"], ["stable", "1.0.0"], ["check", "--repair"]]) {
+    test(`${args.join(" ")} fails fast without CHANNELS_WRITE_TOKEN (spec §7.1)`, () => {
+      const r = cli(...args);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr.toString()).toContain("CHANNELS_WRITE_TOKEN is not set");
+    });
+  }
+
+  test("a malformed command is a usage error", () => {
+    const r = cli("previous");
+    expect(r.exitCode).toBe(64);
+    expect(r.stderr.toString()).toContain("usage: promote.ts");
+  });
 });
 
 describe("records on the channels repository (D1-B, production layout)", () => {
