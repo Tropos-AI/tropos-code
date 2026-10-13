@@ -96,6 +96,22 @@ async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: 
 
 /** `tropos update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always resolves. */
 export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
+  try {
+    await backgroundUpdate(deps, channel);
+  } catch {
+    // the detached updater must never crash (spec §11)
+  }
+}
+
+function describe(e: unknown): string {
+  try {
+    return e instanceof Error ? e.message : String(e);
+  } catch {
+    return "unknown error";
+  }
+}
+
+async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
   const log = (line: string): void => {
     try {
       deps.log?.(line);
@@ -122,12 +138,12 @@ export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): P
     log(`background check: ${run.value.kind}`);
   } catch (e) {
     ok = false;
-    log(`background update failed: ${e instanceof Error ? e.message : String(e)}`);
+    log(`background update failed: ${describe(e)}`);
   }
   try {
     await recordCheck(deps, now, ok, updatedTo);
   } catch (e) {
-    log(`could not record the update check: ${e instanceof Error ? e.message : String(e)}`);
+    log(`could not record the update check: ${describe(e)}`);
   }
 }
 

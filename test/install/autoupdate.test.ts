@@ -99,4 +99,14 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     await installTarget(f.deps, "1.0.0", false);
     await expect(runBackgroundUpdate({ ...f.deps, now: () => { throw new Error("clock"); } }, "latest")).resolves.toBeUndefined();
   });
+
+  test.each([
+    ["a null-prototype object", () => Object.create(null)],
+    ["an object whose toString throws", () => ({ toString() { throw new Error("x"); } })],
+  ])("pathological rejection value (%s) still resolves", async (_n, make) => {
+    f = await makeEngineFixture({ now: () => now });
+    await f.release("1.0.0");
+    await installTarget(f.deps, "1.0.0", false);
+    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw make(); } }, "latest")).resolves.toBeUndefined();
+  });
 });
