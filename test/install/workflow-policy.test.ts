@@ -31,6 +31,81 @@ const needsOf = (j: Job) => (j.needs === undefined ? [] : Array.isArray(j.needs)
 const MAIN_CHECK = /^\s*'?\[ "\$GITHUB_REF" = "refs\/heads\/main" \]/;
 const CHANNELS_REPO = "Tropos-AI/tropos-code-channels";
 
+/** Shell builtins and syntax that run nothing by themselves. */
+const BUILTINS = ["[", "echo", "exit", ":", "read", "for", "case", "umask"];
+
+/**
+ * The simple commands of a run script, each as "<command> <args…>" with quoted strings replaced by Q:
+ * command substitutions become commands of their own; comments, keywords, assignments and redirections are dropped.
+ * Scripts in policed jobs are kept simple enough for this (no heredocs, no nested substitutions).
+ */
+function commandsOf(run: string): string[] {
+  const out: string[] = [];
+  let text = run
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  text = text.replace(/\$\(([^()]*)\)/g, (_m, inner: string) => {
+    out.push(...commandsOf(inner));
+    return "SUBST";
+  });
+  text = text.replace(/'[^']*'/g, "Q").replace(/"(?:[^"\\]|\\.)*"/g, "Q");
+  text = text.replace(/^\s*(?:Q|[*\w./\\-]+)(?:\s*\|\s*(?:Q|[*\w./\\-]+))*\)\s*/gm, ""); // case patterns
+  for (const seg of text.split(/;;|;|&&|\|\||\||\n|\{|\}|\bthen\b|\belse\b|\bdo\b/)) {
+    const words = seg.trim().split(/\s+/).filter(Boolean);
+    while (words.length && (/^(if|elif|while|until|!|fi|done|esac)$/.test(words[0]!) || /^[A-Za-z_]\w*=/.test(words[0]!) || /^[0-9]*[<>]/.test(words[0]!))) words.shift();
+    if (words.length) out.push(words.join(" "));
+  }
+  return out;
+}
+
+const MANIFEST_AWK = /^awk -v want=[a-z0-9-]+ -f scripts\/release\/manifest\.awk [\w./-]+( > \/dev\/null)?$/;
+const MAIN_GUARD = { "[": true, echo: true, exit: true } as const;
+/** Per job: command name → allowed (true) or the exact shapes allowed. Every policed job must be listed here. */
+const ALLOW: Record<string, Record<string, true | RegExp[]>> = {
+  "release.yml:prepare": {
+    ...MAIN_GUARD,
+    bun: [/^bun install --frozen-lockfile$/, /^bun scripts\/release\/check-provenance\.ts --out release-inputs\.zip >> Q$/, /^bun scripts\/release\/check-provenance\.ts --verify-inputs inputs$/, /^bun -e Q$/],
+    sudo: [/^sudo apt-get install -y zstd unzip$/],
+    mkdir: [/^mkdir (inputs|assets)$/],
+    unzip: [/^unzip -Z1 release-inputs\.zip >zip-names$/, /^unzip -Z release-inputs\.zip >zip-listing$/, /^unzip -q release-inputs\.zip -d inputs$/],
+    read: true,
+    case: true,
+    for: true,
+    grep: [/^grep -q Q zip-listing$/],
+    cp: [/^cp Q Q$/, /^cp inputs\/install\.sh assets\/install\.sh$/],
+    zstd: [/^zstd -19 --check -q -o Q Q$/, /^zstd -d -q -c Q >Q$/],
+    cmp: [/^cmp Q Q$/],
+    rm: [/^rm -f assets\/\.roundtrip$/],
+    sh: [/^sh scripts\/release\/make-manifest\.sh Q Q Q assets > assets\/manifest\.json$/],
+    date: [/^date -u \+%Y-%m-%dT%H:%M:%SZ$/],
+    tr: [/^tr -d Q <assets\/manifest\.json >manifest\.bad$/, /^tr -d Q$/],
+    tail: [/^tail -c 1 assets\/manifest\.json$/],
+    od: [/^od -An -c$/],
+    awk: [MANIFEST_AWK],
+  },
+  "release.yml:sign": {
+    "[": true,
+    echo: true,
+    exit: true,
+    umask: [/^umask 077$/],
+    grep: [/^grep -Eq Q release\/allowed_signers$/],
+    tr: [/^tr -d Q <to-sign\/manifest\.json >Q$/, /^tr -d Q$/],
+    tail: [/^tail -c 1 to-sign\/manifest\.json$/],
+    od: [/^od -An -c$/],
+    awk: [MANIFEST_AWK],
+    printf: [/^printf Q Q > Q$/],
+    "ssh-keygen": [/^ssh-keygen -Y sign -f Q -n tropos-(manifest|installer) to-sign\/(manifest\.json|install\.sh)$/, /^ssh-keygen -Y verify -f release\/allowed_signers -I tropos-release -n tropos-(manifest|installer) -s to-sign\/(manifest\.json|install\.sh)\.sig < to-sign\/(manifest\.json|install\.sh)$/],
+    rm: [/^rm -f Q$/],
+  },
+  "release.yml:draft": { "[": true, echo: true, gh: [/^gh release (view|create|upload) /] },
+  "release.yml:fetch-draft": { gh: [/^gh release download Q --repo Q --dir draft$/] },
+  "release.yml:publish": { gh: [/^gh release edit Q --repo Q --draft=false --latest=false$/] },
+  "release.yml:promote-latest": { ...MAIN_GUARD, bun: [/^bun scripts\/release\/promote\.ts latest Q$/] },
+  "promote.yml:promote-stable": { ...MAIN_GUARD, bun: [/^bun scripts\/release\/promote\.ts stable Q$/] },
+  "channels-health.yml:repair": { ...MAIN_GUARD, bun: [/^bun scripts\/release\/promote\.ts check --repair$/] },
+};
+
 describe("workflow policy (R4.1)", () => {
   test.each(ALL)("%s pins every action by full commit SHA", async (name) => {
     const wf = await load(name);
@@ -79,16 +154,44 @@ describe("workflow policy (R4.1)", () => {
     }
   });
 
-  test.each(PRIVILEGED)("in %s, jobs with a write token or a protected environment never execute release artifacts or tag code", async (name) => {
+  test.each(PRIVILEGED)("in %s, jobs with a write token or a protected environment (and prepare) run only allow-listed commands", async (name) => {
     const wf = await load(name);
-    for (const [jobName, job] of Object.entries(wf.jobs)) {
-      if (!privileged(job)) continue;
-      for (const step of job.steps) {
-        const run = step.run ?? "";
-        const executes = /\.local\/bin\/tropos|\btropos-(darwin|linux)[a-z0-9-]*\s|\bsh\s+\S*install\.sh|\|\s*sh\b|\bbun\s+(test|install)\b|\bbun\s+build|docker\s+run/.test(run);
-        if (executes) throw new Error(`${name}: job ${jobName} holds a write token or secrets but runs: ${run}`);
+    const policed = Object.entries(wf.jobs).filter(([n, j]) => privileged(j) || n === "prepare");
+    expect(policed.map(([n]) => `${name}:${n}`).sort()).toEqual(Object.keys(ALLOW).filter((k) => k.startsWith(`${name}:`)).sort());
+    for (const [jobName, job] of policed) {
+      const allow = ALLOW[`${name}:${jobName}`]!;
+      for (const cmd of commandsOf(runs(job))) {
+        const rule = allow[cmd.split(" ")[0]!];
+        if (rule === undefined || (rule !== true && !rule.some((re) => re.test(cmd)))) throw new Error(`${name}: job ${jobName} runs a command outside its allow-list: ${cmd}`);
       }
     }
+  });
+
+  test.each(PRIVILEGED)("in %s, privileged jobs download artifacts only to hand them to gh release (sign excepted, policed above)", async (name) => {
+    const wf = await load(name);
+    for (const [jobName, job] of Object.entries(wf.jobs)) {
+      if (!privileged(job) || jobName === "sign") continue;
+      if (!job.steps.some((s) => s.uses?.startsWith("actions/download-artifact@"))) continue;
+      const executables = commandsOf(runs(job)).filter((c) => !BUILTINS.includes(c.split(" ")[0]!));
+      expect({ jobName, executables: executables.filter((c) => !c.startsWith("gh release ")) }).toEqual({ jobName, executables: [] });
+    }
+  });
+
+  test("the command parser sees through substitutions, quotes, case patterns and redirections", () => {
+    expect(commandsOf(`x=$(tail -c 1 f | od -An -c | tr -d ' ')\nif grep -q '^l' a; then echo "a; b"; exit 1; fi\ncase $n in\n  '' | */*) echo no ;;\nesac\nwhile IFS= read -r n; do :; done <f\n./evil.sh && bunx x`)).toEqual([
+      "tail -c 1 f",
+      "od -An -c",
+      "tr -d Q",
+      "grep -q Q a",
+      "echo Q",
+      "exit 1",
+      "case $n in",
+      "echo no",
+      "read -r n",
+      ":",
+      "./evil.sh",
+      "bunx x",
+    ]);
   });
 
   test.each(PRIVILEGED)("%s checks out only the workflow's own commit of main, without persisting the token", async (name) => {
@@ -262,6 +365,69 @@ describe("controller rulings (task 28)", () => {
     expect(runs(build)).not.toMatch(/\bcd\b/);
     for (const s of build.steps) expect((s as Record<string, unknown>)["working-directory"]).toBeUndefined();
     for (const name of ["release-build.yml", "release.yml"]) expect(await text(name)).not.toContain("--test-build");
+  });
+
+  test.each([...PRIVILEGED, "release-build.yml"])("%s: setup-bun never uses its executable cache and never holds the token (fix 1)", async (name) => {
+    const wf = await load(name);
+    let seen = 0;
+    for (const [n, j] of Object.entries(wf.jobs)) {
+      for (const step of j.steps) {
+        if (!step.uses?.startsWith("oven-sh/setup-bun@")) continue;
+        seen++;
+        expect({ job: n, with: step.with }).toEqual({ job: n, with: { "bun-version": "1.4.0", "no-cache": true, token: "" } });
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  test.each(["release-build.yml", "ci.yml"])("%s: every musl Bun zip is checked against its pinned sha256 before unzip (fix 2)", async (name) => {
+    const BUN_ZIP_SHA256: Record<string, string> = {
+      "bun-linux-x64-musl": "83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a",
+      "bun-linux-aarch64-musl": "576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473",
+    };
+    const wf = await load(name);
+    let downloads = 0;
+    for (const [n, j] of Object.entries(wf.jobs)) {
+      const include = ((j.strategy as { matrix?: { include?: Array<Record<string, string>> } } | undefined)?.matrix?.include ?? []).filter((e) => e.bunzip);
+      for (const e of include) expect({ job: n, zip: e.bunzip, sha: e.bunsha }).toEqual({ job: n, zip: e.bunzip!, sha: BUN_ZIP_SHA256[e.bunzip!]! });
+      for (const step of j.steps) {
+        const lines = (step.run ?? "").split("\n");
+        lines.forEach((line, i) => {
+          if (!/oven-sh\/bun\/releases\/download\/.*\.zip/.test(line)) return;
+          downloads++;
+          const check = lines.findIndex((l) => l.trim() === `printf '%s  %s\\n' "$BUNSHA" "$RUNNER_TEMP/bun.zip" | sha256sum -c -`);
+          const unzip = lines.findIndex((l) => /^\s*unzip\b/.test(l));
+          expect({ job: n, ordered: i < check && check < unzip, env: step.env?.BUNSHA }).toEqual({ job: n, ordered: true, env: "${{ matrix.bunsha }}" });
+        });
+      }
+    }
+    expect(downloads).toBeGreaterThan(0);
+  });
+
+  test("prepare's only inline code is the manifest parser from main's src/install/manifest (fix 4)", async () => {
+    const lines = runs((await load("release.yml")).jobs.prepare!).split("\n").filter((l) => /\bbun -e\b/.test(l));
+    expect(lines.map((l) => l.trim())).toEqual([`bun -e 'import { parseManifest } from "./src/install/manifest"; parseManifest(new Uint8Array(await Bun.file("assets/manifest.json").arrayBuffer()))'`]);
+  });
+
+  test("release.yml keeps the spec's stage order and never marks a release latest before promotion (fix 5)", async () => {
+    const wf = await load("release.yml");
+    expect(String((wf.jobs.prepare as Job & { if?: string }).if)).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(Object.fromEntries(Object.entries(wf.jobs).map(([n, j]) => [n, needsOf(j)]))).toEqual({
+      prepare: [],
+      sign: ["prepare"],
+      draft: ["prepare", "sign"],
+      "fetch-draft": ["prepare", "draft"],
+      "smoke-draft-native": ["prepare", "fetch-draft"],
+      "smoke-draft-musl": ["prepare", "fetch-draft"],
+      publish: ["prepare", "smoke-draft-native", "smoke-draft-musl"],
+      previous: ["prepare", "publish"],
+      "smoke-public-native": ["prepare", "previous"],
+      "smoke-public-musl": ["prepare", "previous"],
+      "promote-latest": ["prepare", "smoke-public-native", "smoke-public-musl"],
+    });
+    const cmds = (job: string) => commandsOf(runs(wf.jobs[job]!));
+    expect(cmds("draft").filter((c) => c.startsWith("gh release create "))).toEqual([expect.stringMatching(/ --draft --latest=false /)]);
+    expect(cmds("publish")).toEqual([expect.stringMatching(/ --draft=false --latest=false$/)]);
   });
 
   test("ci.yml keeps the shellcheck step and covers collect-assets.sh (ruling 4)", async () => {

@@ -4,15 +4,19 @@
 import { readFile, writeFile } from "node:fs/promises";
 
 const USES = /^(\s*-?\s*uses:\s*)([\w.-]+\/[\w./-]+)@([^\s#]+)\s*$/;
+const PINNED = /^\s*-?\s*uses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}(\s+#\s*\S+)?\s*$/;
+const ANY_USES = /^\s*-?\s*uses:/;
 
+/** Every `uses:` line ends up pinned; a line it cannot pin (a trailing note, a local or docker action) is an error. */
 export async function pinActions(text: string, resolve: (repo: string, ref: string) => Promise<string>): Promise<string> {
   const out: string[] = [];
   for (const line of text.split("\n")) {
     const m = USES.exec(line);
-    if (!m || /^[0-9a-f]{40}$/.test(m[3]!)) {
+    if (PINNED.test(line) || (!m && !ANY_USES.test(line))) {
       out.push(line);
       continue;
     }
+    if (!m) throw new Error(`cannot pin: ${line.trim()}`);
     const repo = m[2]!.split("/").slice(0, 2).join("/");
     out.push(`${m[1]}${m[2]}@${await resolve(repo, m[3]!)} # ${m[3]}`);
   }

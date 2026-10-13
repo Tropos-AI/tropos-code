@@ -29,6 +29,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+          no-cache: true
+          token: ""
       - run: bun install --frozen-lockfile
       - run: bun run build:all
       - name: Collect release inputs into a fresh directory (ruling 3)
@@ -59,6 +61,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+          no-cache: true
+          token: ""
       - name: Tools
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install zstd shellcheck; else sudo apt-get install -y zstd shellcheck dash busybox; fi
@@ -79,8 +83,8 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { runner: ubuntu-24.04, platform: linux-x64-musl, bunzip: bun-linux-x64-musl }
-          - { runner: ubuntu-24.04-arm, platform: linux-arm64-musl, bunzip: bun-linux-aarch64-musl }
+          - { runner: ubuntu-24.04, platform: linux-x64-musl, bunzip: bun-linux-x64-musl, bunsha: 83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64-musl, bunzip: bun-linux-aarch64-musl, bunsha: 576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473 }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -93,8 +97,10 @@ jobs:
       - name: Bun for musl (decision D2)
         env:
           BUNZIP: ${{ matrix.bunzip }}
+          BUNSHA: ${{ matrix.bunsha }}
         run: |
           curl -fsSLo "$RUNNER_TEMP/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUNZIP.zip"
+          printf '%s  %s\n' "$BUNSHA" "$RUNNER_TEMP/bun.zip" | sha256sum -c -
           unzip -q -d "$RUNNER_TEMP" "$RUNNER_TEMP/bun.zip"
           mkdir -p "$RUNNER_TEMP/musl-bun" && install -m 0755 "$RUNNER_TEMP/$BUNZIP/bun" "$RUNNER_TEMP/musl-bun/bun"
       - name: Installer tests in alpine:3.22, as an unprivileged user

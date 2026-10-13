@@ -35,6 +35,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+          no-cache: true
+          token: ""
       - run: bun install --frozen-lockfile
       - run: sudo apt-get install -y zstd unzip
       - name: Provenance (A4)
@@ -262,6 +264,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+          no-cache: true
+          token: ""
       - id: prev
         env:
           GH_TOKEN: ${{ github.token }}
@@ -381,6 +385,8 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+          no-cache: true
+          token: ""
       - name: Promote (convergent; safe to re-run)
         env:
           GH_TOKEN: ${{ github.token }}

@@ -78,8 +78,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-24.04, bunzip: bun-linux-x64-musl }
-          - { runner: ubuntu-24.04-arm, bunzip: bun-linux-aarch64-musl }
+          - { runner: ubuntu-24.04, bunzip: bun-linux-x64-musl, bunsha: 83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a }
+          - { runner: ubuntu-24.04-arm, bunzip: bun-linux-aarch64-musl, bunsha: 576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -89,8 +89,10 @@ jobs:
       - name: Bun for musl (decision D2)
         env:
           BUNZIP: ${{ matrix.bunzip }}
+          BUNSHA: ${{ matrix.bunsha }}
         run: |
           curl -fsSLo "$RUNNER_TEMP/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUNZIP.zip"
+          printf '%s  %s\n' "$BUNSHA" "$RUNNER_TEMP/bun.zip" | sha256sum -c -
           unzip -q -d "$RUNNER_TEMP" "$RUNNER_TEMP/bun.zip"
           mkdir -p "$RUNNER_TEMP/musl-bun" && install -m 0755 "$RUNNER_TEMP/$BUNZIP/bun" "$RUNNER_TEMP/musl-bun/bun"
       - name: Installer tests in alpine:3.22, as an unprivileged user
