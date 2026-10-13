@@ -103,7 +103,12 @@ export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): P
       // a broken log sink must not crash a background run
     }
   };
-  const now = deps.now?.() ?? new Date();
+  let now: Date;
+  try {
+    now = deps.now?.() ?? new Date();
+  } catch {
+    now = new Date();
+  }
   let ok = true;
   let updatedTo: string | null = null;
   try {
@@ -117,12 +122,12 @@ export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): P
     log(`background check: ${run.value.kind}`);
   } catch (e) {
     ok = false;
-    log(`background update failed: ${(e as Error).message}`);
+    log(`background update failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   try {
     await recordCheck(deps, now, ok, updatedTo);
   } catch (e) {
-    log(`could not record the update check: ${(e as Error).message}`);
+    log(`could not record the update check: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

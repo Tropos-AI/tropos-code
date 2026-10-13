@@ -84,4 +84,19 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     await expect(runBackgroundUpdate({ ...f.deps, log: () => { throw new Error("sink"); } }, "latest")).resolves.toBeUndefined();
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
   });
+
+  test("a non-Error rejection still resolves and records the backoff", async () => {
+    f = await makeEngineFixture({ now: () => now });
+    await f.release("1.0.0");
+    await installTarget(f.deps, "1.0.0", false);
+    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw undefined; } }, "latest")).resolves.toBeUndefined();
+    expect((await f.state()).autoUpdate.failures).toBe(1);
+  });
+
+  test("a throwing clock never makes it reject", async () => {
+    f = await makeEngineFixture({ now: () => now });
+    await f.release("1.0.0");
+    await installTarget(f.deps, "1.0.0", false);
+    await expect(runBackgroundUpdate({ ...f.deps, now: () => { throw new Error("clock"); } }, "latest")).resolves.toBeUndefined();
+  });
 });
