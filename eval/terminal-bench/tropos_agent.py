@@ -61,14 +61,16 @@ class TroposAgent(BaseInstalledAgent):
     @with_prompt_template
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
         if not self.model_name or "/" not in self.model_name:
-            raise ValueError("model must look like anthropic/claude-opus-5-5")
-        model = self.model_name.split("/", 1)[1]
-        access = self.model_connection
-        env = dict(access.env)
-        key = access.api_key or self._get_env("ANTHROPIC_API_KEY")
+            raise ValueError("model must look like anthropic/claude-opus-5-5 or deepseek/deepseek-flash")
+        provider, rest = self.model_name.split("/", 1)
+        # Tropos ids carry the provider prefix, except Anthropic's, which work bare.
+        model = rest if provider == "anthropic" else self.model_name
+        # `bun scripts/eval.ts tb` names the variable holding the model's key (e.g. DEEPSEEK_API_KEY).
+        key_env = os.environ.get("TROPOS_KEY_ENV", "ANTHROPIC_API_KEY")
+        key = os.environ.get(key_env) or (self.model_connection.api_key if provider == "anthropic" else None)
         if not key:
-            raise ValueError("ANTHROPIC_API_KEY is not set")
-        env["ANTHROPIC_API_KEY"] = key
+            raise ValueError(f"{key_env} is not set")
+        env = {key_env: key}
 
         flags = self.build_cli_flags()
         log = (self.environment_logs_dir / LOG).as_posix()

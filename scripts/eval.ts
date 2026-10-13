@@ -11,6 +11,9 @@ import { renderMarkdown } from "../eval/lib/report";
 import { runTrial, validateTask, type TrialResult } from "../eval/lib/runner";
 import { loadTasks, selectTasks, type Task } from "../eval/lib/task";
 import { TEST_FILE, taskRepo } from "../eval/lib/workspace";
+import { runKey } from "../eval/lib/keys";
+import { readCredentials } from "../src/providers/credentials";
+import { troposHome } from "../src/paths";
 
 const ROOT = resolve(import.meta.dir, "..");
 const TASKS = join(ROOT, "eval", "tasks");
@@ -27,10 +30,11 @@ const USAGE = `Usage:
       Check every task fails at its base commit and passes at its fix. No API calls.
   bun scripts/eval.ts run --agents tropos,claude [--task <id>]... [--split dev|holdout]
                           [--attempts 1] [--model claude-opus-5-5] [--effort high] [--concurrency 2]
-      Run agents on tasks in Docker. Needs ANTHROPIC_API_KEY. Spends API money.
+      Run agents on tasks in Docker. Needs the model's API key (env var or /providers). Spends API money.
+      Other providers: --agents tropos --model deepseek/deepseek-chat
   bun scripts/eval.ts tb --agents tropos,claude [--task <name>]... [--limit <n>]
                          [--attempts 1] [--model claude-opus-5-5] [--effort high] [--concurrency 4]
-      Run Terminal-Bench 2.0 through harbor (uvx, Docker). Needs ANTHROPIC_API_KEY. Spends API money.
+      Run Terminal-Bench 2.0 through harbor (uvx, Docker). Needs the model's API key. Spends API money.
   bun scripts/eval.ts report <results.jsonl>...
       Print the scoreboard for earlier runs.
   bun scripts/eval.ts new-task --from-commit <sha> --id <id> [--repo <path>] [--split dev|holdout]
@@ -107,7 +111,6 @@ async function run(values: { task?: string[]; split?: string; agents?: string; a
     return agent;
   });
   if (agents.length === 0) throw new Error("--agents is required, e.g. --agents tropos,claude");
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY must be set: agents in containers cannot use your local login");
   const tasks = await pickTasks(values);
   const drafts = tasks.filter((t) => t.prompt.startsWith("TODO"));
   if (drafts.length) throw new Error(`these tasks still have a TODO prompt: ${drafts.map((t) => t.id).join(", ")}`);
@@ -115,6 +118,8 @@ async function run(values: { task?: string[]; split?: string; agents?: string; a
   const attempts = Number(values.attempts ?? "1");
   const concurrency = Number(values.concurrency ?? "2");
   const runOpts = { model: values.model ?? "claude-opus-5-5", effort: values.effort ?? "high" };
+  const key = runKey(runOpts.model, names, process.env, await readCredentials(troposHome()));
+  const secrets = { [key.envName]: key.apiKey };
 
   const runId = newRunId();
   const arch = await engineArch();
@@ -129,7 +134,7 @@ async function run(values: { task?: string[]; split?: string; agents?: string; a
   const out = join(RESULTS, `${runId}.jsonl`);
   const scratch = join(tmpdir(), "tcode-eval", runId);
   const results = await pool(trials, concurrency, async ({ task, agent, attempt }) => {
-    const r = await runTrial(task, agent, { runId, image: IMAGE, harnessRoot: ROOT, scratch, troposBinary, attempt, run: runOpts });
+    const r = await runTrial(task, agent, { runId, image: IMAGE, harnessRoot: ROOT, scratch, troposBinary, attempt, run: runOpts, secrets });
     await appendFile(out, `${JSON.stringify(r)}\n`);
     const cost = r.costUsd === null ? "cost ?" : `$${r.costUsd.toFixed(2)}`;
     console.error(`${r.pass ? "PASS" : "fail"} ${task.id} · ${agent.name}#${attempt} · ${cost} · ${r.agentSeconds}s${r.harnessError ? ` · harness error: ${r.harnessError}` : ""}`);
@@ -146,9 +151,11 @@ async function tb(values: { task?: string[]; limit?: string; agents?: string; at
   const names = (values.agents ?? "").split(",").filter(Boolean);
   if (names.length === 0) throw new Error("--agents is required, e.g. --agents tropos,claude");
   for (const n of names) if (!TB_AGENTS[n]) throw new Error(`unknown agent "${n}"; one of ${Object.keys(TB_AGENTS).join(", ")}`);
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY must be set");
   const model = values.model ?? "claude-opus-5-5";
   const effort = values.effort ?? "high";
+  const key = runKey(model, names, process.env, await readCredentials(troposHome()));
+  // harbor wants provider/model; a bare Anthropic id gets its prefix.
+  const harborModel = model.includes("/") ? model : `anthropic/${model}`;
   const runId = newRunId();
   if (names.includes("tropos")) {
     // Task images are mostly linux/amd64; the baseline build also runs where x64 is emulated.
@@ -163,14 +170,16 @@ async function tb(values: { task?: string[]; limit?: string; agents?: string; at
   const results: TrialResult[] = [];
   for (const name of names) {
     const job = `${runId}-${name}`;
-    const args = ["uvx", "--from", HARBOR, "harbor", "run", "-d", TB_DATASET, "-a", TB_AGENTS[name]!, "-m", `anthropic/${model}`, "--effort", effort];
+    const args = ["uvx", "--from", HARBOR, "harbor", "run", "-d", TB_DATASET, "-a", TB_AGENTS[name]!, "-m", harborModel, "--effort", effort];
     args.push("-n", values.concurrency ?? "4", "-k", values.attempts ?? "1", "-o", jobs, "--job-name", job);
     if (values.limit) args.push("-l", values.limit);
     for (const t of values.task ?? []) args.push("-i", t);
     // Pin Claude Code to the version the private tasks use.
     if (name === "claude") args.push("--ak", `version=${CLAUDE_CODE_VERSION}`);
     console.error(`$ ${args.join(" ")}`);
-    const proc = Bun.spawn(args, { cwd: join(ROOT, "eval", "terminal-bench"), env: { ...process.env, PYTHONPATH: join(ROOT, "eval", "terminal-bench") }, stdout: "inherit", stderr: "inherit" });
+    // The adapter reads the key from the variable TROPOS_KEY_ENV names, in harbor's own environment.
+    const env = { ...process.env, PYTHONPATH: join(ROOT, "eval", "terminal-bench"), TROPOS_KEY_ENV: key.envName, [key.envName]: key.apiKey };
+    const proc = Bun.spawn(args, { cwd: join(ROOT, "eval", "terminal-bench"), env, stdout: "inherit", stderr: "inherit" });
     if ((await proc.exited) !== 0) console.error(`harbor exited non-zero for ${name}; importing whatever trials finished`);
     if (!existsSync(join(jobs, job))) continue;
     const trials = await readHarborJob(join(jobs, job), { runId, agent: name, effort });

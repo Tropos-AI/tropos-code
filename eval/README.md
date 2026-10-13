@@ -27,6 +27,14 @@ bun scripts/eval.ts run --agents tropos --task print-exit-codes --attempts 3 --e
 bun scripts/eval.ts report results/*.jsonl         # scoreboard across runs
 ```
 
+Other providers run with Tropos alone (Claude Code only speaks Anthropic). The key comes from the
+provider's variable or from a key saved with `/providers`, and is passed into the container:
+
+```bash
+bun scripts/eval.ts run --agents tropos --model deepseek/deepseek-flash --split dev
+bun scripts/eval.ts tb --agents tropos --model openrouter/moonshotai/kimi-k3 --limit 5
+```
+
 `run` writes `results/<run-id>.jsonl` (one line per trial) and `results/<run-id>.md`. The run id
 holds the date and the commit Tropos was built from, plus `-dirty` if `src/` had uncommitted
 changes. The scoreboard reports pass rate, total cost and cost per solved task, median time and

@@ -44,6 +44,8 @@ export interface TrialOptions {
   troposBinary: string;
   attempt: number;
   run: AgentRun;
+  /** Environment for the agent only, e.g. { DEEPSEEK_API_KEY: "…" }; passed by name, never on a command line. */
+  secrets: Record<string, string>;
 }
 
 /** Copies the hidden tests over the workspace and runs `verify` with the network off. */
@@ -111,7 +113,7 @@ export async function runTrial(task: Task, agent: AgentAdapter, opts: TrialOptio
       const ran = await container.exec(agent.command(opts.run), {
         cwd: WORK,
         timeoutSec: task.timeoutSec,
-        env: { PROMPT: task.prompt, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
+        env: { PROMPT: task.prompt, ...opts.secrets },
       });
       Object.assign(result, agent.parse(ran.stdout));
       result.agentSeconds = Math.round(ran.seconds);
