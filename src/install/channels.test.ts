@@ -47,8 +47,12 @@ describe("resolveChannel", () => {
   });
 
   test("stable has no third fallback", async () => {
+    const bytes = serializeManifest(sampleManifest("9.9.9"));
+    srv.put("v9.9.9", "manifest.json", bytes);
+    srv.put("v9.9.9", "manifest.json.sig", await sshSign(key, bytes, "tropos-manifest", dir));
     srv.setLatest("v9.9.9");
     const e = (await resolveChannel("stable", deps()).catch((x) => x)) as InstallError;
+    expect(srv.requests.some((r) => r.includes("/releases/latest/download/"))).toBe(false);
     expect(e.kind).toBe("network");
     expect(e.message).toStartWith("cannot resolve the stable channel");
     expect(e.message).toEndWith("; try again, or install an explicit version");
