@@ -69,7 +69,8 @@ describe("spawnBackgroundUpdate", () => {
     const l = resolveLayout({ HOME: dir });
     await ensureLayout(l);
     const fake = join(dir, "fake-tropos");
-    await writeFile(fake, `#!/bin/sh\nsleep 1\necho "$@" > "${dir}/args"\nenv > "${dir}/env"\n`);
+    // Publish env by rename: `env > file` creates the file before writing it, so polling for existence could read it empty.
+    await writeFile(fake, `#!/bin/sh\nsleep 1\necho "$@" > "${dir}/args"\nenv > "${dir}/env.tmp"\nmv "${dir}/env.tmp" "${dir}/env"\n`);
     await chmod(fake, 0o755);
     const t0 = Date.now();
     expect(spawnBackgroundUpdate(fake, l, { ...process.env, HOME: dir, ANTHROPIC_API_KEY: "secret", GITHUB_TOKEN: "secret", OPENAI_API_KEY: "secret" })).toBe(true);
