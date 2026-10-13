@@ -94,25 +94,36 @@ async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: 
   }
 }
 
-/** `tropos update --background`: never waits for the lock, only moves forward, records the check (spec §11). */
+/** `tropos update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always resolves. */
 export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
+  const log = (line: string): void => {
+    try {
+      deps.log?.(line);
+    } catch {
+      // a broken log sink must not crash a background run
+    }
+  };
   const now = deps.now?.() ?? new Date();
   let ok = true;
   let updatedTo: string | null = null;
   try {
     const run = await updateChannel(deps, channel, { wait: false });
     if (!run) {
-      deps.log?.("another Tropos install is running; skipping this check");
+      log("another Tropos install is running; skipping this check");
       return;
     }
-    if (run.recovery.fatal) deps.log?.(run.recovery.fatal);
+    if (run.recovery.fatal) log(run.recovery.fatal);
     if (run.value.kind === "updated" && run.value.outcome.changed) updatedTo = run.value.outcome.version;
-    deps.log?.(`background check: ${run.value.kind}`);
+    log(`background check: ${run.value.kind}`);
   } catch (e) {
     ok = false;
-    deps.log?.(`background update failed: ${(e as Error).message}`);
+    log(`background update failed: ${(e as Error).message}`);
   }
-  await recordCheck(deps, now, ok, updatedTo);
+  try {
+    await recordCheck(deps, now, ok, updatedTo);
+  } catch (e) {
+    log(`could not record the update check: ${(e as Error).message}`);
+  }
 }
 
 export async function markAnnounced(deps: Pick<EngineDeps, "layout" | "selfVersion" | "flock">): Promise<void> {

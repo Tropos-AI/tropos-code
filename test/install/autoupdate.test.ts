@@ -1,4 +1,5 @@
 // test/install/autoupdate.test.ts
+import { mkdir, rm } from "node:fs/promises";
 import { afterEach, describe, expect, test } from "bun:test";
 import { runBackgroundUpdate } from "../../src/install/autoupdate";
 import { installTarget } from "../../src/install/installer";
@@ -63,5 +64,24 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     await runBackgroundUpdate(f.deps, "latest");
     held.release();
     expect(await f.state()).toEqual(before);
+  });
+
+  test("an unreadable state file never makes it reject", async () => {
+    f = await makeEngineFixture({ now: () => now });
+    await f.release("1.0.0");
+    await installTarget(f.deps, "1.0.0", false);
+    await rm(f.layout.stateFile, { force: true });
+    await mkdir(f.layout.stateFile);
+    await expect(runBackgroundUpdate(f.deps, "latest")).resolves.toBeUndefined();
+  });
+
+  test("a throwing log sink neither rejects nor stops the update", async () => {
+    f = await makeEngineFixture({ now: () => now });
+    await f.release("1.0.0");
+    await f.release("1.1.0");
+    await installTarget(f.deps, "1.0.0", false);
+    f.srv.put("channels", "latest", "1.1.0\n");
+    await expect(runBackgroundUpdate({ ...f.deps, log: () => { throw new Error("sink"); } }, "latest")).resolves.toBeUndefined();
+    expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
   });
 });
