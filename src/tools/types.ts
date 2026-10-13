@@ -2,6 +2,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { z } from "zod";
 import type { ToolKind } from "../config/constants";
+import type { JobTable } from "./bash/jobs";
 import type { ReadState } from "./read-state";
 
 export interface Todo {
@@ -42,6 +43,8 @@ export interface ToolContext {
   allowedDirs: string[];
   readState: ReadState;
   todos: TodoStore;
+  /** Background jobs started with Bash run_in_background. */
+  jobs: JobTable;
   shell: string;
   signal: AbortSignal;
   /** Canonical paths the permission engine approved for this call (set by the agent). */

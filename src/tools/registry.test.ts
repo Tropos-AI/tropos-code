@@ -4,7 +4,7 @@ import { toInputSchema } from "./schema";
 
 test("fixed order, unique names, valid schemas", () => {
   const tools = createTools({ rgPath: null });
-  expect(tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "Glob", "Grep", "TodoWrite"]);
+  expect(tools.map((t) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "TodoWrite"]);
   for (const tool of tools) {
     const schema = toInputSchema(tool.schema);
     expect(schema.type).toBe("object");

@@ -11,6 +11,7 @@ import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
 import type { PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
+import { JobTable } from "../tools/bash/jobs";
 import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
 import type { AnyTool, ToolContext } from "../tools/types";
@@ -41,6 +42,7 @@ export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> 
     allowedDirs: ctx.allowedDirs,
     readState: new ReadState(),
     todos: new MemoryTodoStore(),
+    jobs: new JobTable(),
     shell: ctx.shell,
   };
 }

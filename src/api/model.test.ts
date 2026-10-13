@@ -23,7 +23,7 @@ describe("buildParams", () => {
     expect(p.betas).toEqual([BETA_COMPACTION, BETA_FALLBACK]);
     expect(p.fallbacks).toBe("default");
     expect(p.tool_choice).toBeUndefined();
-    expect(p.tools).toHaveLength(7);
+    expect(p.tools).toHaveLength(9);
   });
 
   test("refusal fallback can be turned off", () => {

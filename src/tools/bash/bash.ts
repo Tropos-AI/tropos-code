@@ -19,6 +19,10 @@ const schema = z.object({
   command: z.string().min(1).describe("The shell command to run."),
   timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).optional().describe("Timeout in milliseconds (default 120000, max 600000)."),
   description: z.string().optional().describe("A few words on what the command does."),
+  run_in_background: z
+    .boolean()
+    .optional()
+    .describe("Start the command as a background job and return its id at once, without waiting. timeout_ms does not apply."),
 });
 
 const SECRET_ENV = new Set([
@@ -64,12 +68,23 @@ export const bashTool = defineTool({
     "Run a command in the user's shell and return its output. The working directory carries over between calls, so cd works. " +
     "Default timeout is 2 minutes (timeout_ms, up to 10 minutes). Output over 15,000 characters per stream (stdout/stderr) is cut in the middle. " +
     "Use Read, Glob, Grep, Edit and Write instead of cat, find, grep, sed or echo-redirection. " +
-    "Start long-running processes such as dev servers or watchers in the background with &.",
+    "Start long-running processes such as dev servers or watchers with run_in_background, then read their output with BashOutput " +
+    "and stop them with KillShell. A background job starts in the current working directory and never changes it.",
   schema,
   summarize: (input) => input.command,
   subject: (input) => ({ command: input.command, paths: [] }),
   async run(input, ctx) {
     const startDir = ctx.cwd();
+    if (input.run_in_background) {
+      const child = spawn(ctx.shell, ["-c", `cd ${quote(startDir)} || exit 1\n${input.command}\n`], {
+        cwd: startDir,
+        env: childEnv(),
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const id = ctx.jobs.add(input.command, child);
+      return { content: `Started background job ${id}. Read its output with BashOutput and stop it with KillShell.`, summary: id };
+    }
     const cwdFile = join(tmpdir(), `tropos-cwd-${randomUUID()}`);
     const script = `cd ${quote(startDir)} || exit 1\n${input.command}\n__tropos_status=$?\npwd -P > ${quote(cwdFile)} 2>/dev/null\nexit $__tropos_status\n`;
 
