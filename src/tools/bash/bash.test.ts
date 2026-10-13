@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { toInputSchema } from "../schema";
-import { bashTool } from "./bash";
+import { bashTool, isSecretEnvName } from "./bash";
 
 let dir: string;
 beforeAll(async () => {
@@ -69,6 +69,38 @@ describe("Bash", () => {
       }
       delete process.env.TROPOS_PLAIN;
     }
+  });
+
+  test("common third-party credentials are scrubbed too", async () => {
+    const names = ["GITHUB_TOKEN", "GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY", "PGPASSWORD"];
+    const saved = [...names, "TROPOS_KEEP_ME"].map((n) => [n, process.env[n]] as const);
+    for (const n of names) process.env[n] = "sk-secret";
+    process.env.TROPOS_KEEP_ME = "kept";
+    try {
+      const probe = names.map((n) => `[$${n}]`).join("") + "$TROPOS_KEEP_ME";
+      const out = await bashTool.run({ command: `echo "${probe}"` }, ctx());
+      expect(out.content).toBe("[][][][][][][]kept");
+    } finally {
+      for (const [n, v] of saved) {
+        if (v === undefined) delete process.env[n];
+        else process.env[n] = v;
+      }
+    }
+  });
+
+  test("isSecretEnvName: credential-shaped names, not everyday ones", () => {
+    const secret = [
+      "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN", "HF_TOKEN", "VERCEL_TOKEN", "SLACK_BOT_TOKEN", "NODE_AUTH_TOKEN",
+      "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY_ID", "OPENAI_API_KEY", "STRIPE_SECRET_KEY", "SENDGRID_APIKEY",
+      "PGPASSWORD", "MYSQL_PWD", "DB_PASSWORD", "GOOGLE_APPLICATION_CREDENTIALS", "SSH_PRIVATE_KEY", "CLIENT_SECRET", "npm_config__authtoken",
+      "ANTHROPIC_API_KEY", "ANTHROPIC_IDENTITY_TOKEN_FILE", "TROPOS_PROXY_TOKEN",
+    ];
+    const plain = [
+      "PATH", "HOME", "SHELL", "TERM", "LANG", "USER", "PWD", "EDITOR", "SSH_AUTH_SOCK", "GPG_TTY", "TOKENIZERS_PARALLELISM",
+      "KEYTIMEOUT", "NODE_ENV", "AWS_REGION", "AWS_PROFILE", "GIT_AUTHOR_NAME", "XAUTHORITY", "ANTHROPIC_BASE_URL", "TROPOS_HOME",
+    ];
+    expect(secret.filter((n) => !isSecretEnvName(n))).toEqual([]);
+    expect(plain.filter((n) => isSecretEnvName(n))).toEqual([]);
   });
 
   test("returns stdout", async () => {

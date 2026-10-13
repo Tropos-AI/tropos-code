@@ -29,11 +29,27 @@ const SECRET_ENV = new Set([
   "ANTHROPIC_IDENTITY_TOKEN_FILE",
 ]);
 
-/** The environment shell commands run with: ours, minus Anthropic credentials and Tropos secrets. */
+/**
+ * Names that look like they hold a credential: GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY, OPENAI_API_KEY,
+ * PGPASSWORD and the like. Deliberately broad, but never PATH-like everyday names (PWD, SSH_AUTH_SOCK,
+ * TOKENIZERS_PARALLELISM, KEYTIMEOUT).
+ */
+export function isSecretEnvName(name: string): boolean {
+  return (
+    SECRET_ENV.has(name) ||
+    /^TROPOS_.*(KEY|TOKEN|SECRET)/i.test(name) ||
+    /PASSWORD|PASSWD|SECRET|CREDENTIAL|PRIVATE_?KEY|ACCESS_KEY/i.test(name) ||
+    /TOKEN(_|$)/i.test(name) ||
+    /(^|_)(API_?)?KEY$/i.test(name) ||
+    /_PWD$/i.test(name)
+  );
+}
+
+/** The environment shell commands run with: ours, minus anything that looks like a credential. */
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (SECRET_ENV.has(name) || /^TROPOS_.*(KEY|TOKEN|SECRET)/i.test(name)) continue;
+    if (isSecretEnvName(name)) continue;
     env[name] = value;
   }
   return env;
