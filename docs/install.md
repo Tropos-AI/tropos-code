@@ -25,19 +25,19 @@ installed if any check fails.
 v=0.3.0
 curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh"
 curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh.sig"
-printf 'tropos-release %s\n' "<the ssh-ed25519 key line from release/allowed_signers>" > allowed_signers
+printf 'tropos-release %s\n' "<the `ssh-ed25519 <base64>` part of the key line in release/allowed_signers>" > allowed_signers
 ssh-keygen -lf allowed_signers          # must print SHA256:<fingerprint-pending-key-ceremony>
 ssh-keygen -Y verify -f allowed_signers -I tropos-release -n tropos-installer -s install.sh.sig < install.sh
 sh install.sh "$v"
 ```
 
-Release key fingerprint: `SHA256:<fingerprint-pending-key-ceremony>` (also in the README and on every release page).
+Release key fingerprint: `SHA256:<fingerprint-pending-key-ceremony>` (also in the README).
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `tropos install [stable\|latest\|<version>] [--force]` | One-time install of a release; does not change your update channel |
+| `tropos install [stable\|latest\|<version>] [--force]` | One-time install of a release (no target means `latest`); does not change your update channel. `--force` re-verifies and re-activates a version that is already installed, and replaces a `~/.local/bin/tropos` that Tropos did not create |
 | `tropos update` / `tropos upgrade` | Newest release of your channel; never older |
 | `tropos rollback` | Back to the previous version; updates then skip the one you left |
 | `tropos -- update` | Everything after `--` is a prompt |
@@ -60,14 +60,15 @@ in the background; the next session prints "Updated to <version>". Set `"autoUpd
 manifests), `~/.local/state/tropos/` (state, locks, `update.log`), `~/.local/bin/tropos` (symlink).
 `XDG_DATA_HOME` and `XDG_STATE_HOME` are honoured when absolute.
 
-Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tropos` (and `~/.tropos` for settings and sessions).
+Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set). `~/.tropos` holds your settings, saved provider keys, memory and sessions; remove it too only if you want those gone.
 
 ## Exit codes
 
-0 ok · 64 usage · 65 verification failed · 69 network · 73 local problem (permissions, disk, not a native install) · 75 another install is running.
+0 ok · 1 other error · 64 usage · 65 verification failed · 69 network · 73 local problem (permissions, disk, not a native install) · 75 another install is running.
 
-Before the first release exists, `install.sh` and `install.sh stable` exit 69 with "no release has
-been published yet, or the release server could not be reached"; installing an explicit version works.
+Before the first release exists, `install.sh` exits 69 with "no release has been published yet, or the
+release server could not be reached"; `install.sh stable` keeps failing the same way until the first
+`promote` run. Installing an explicit version works.
 
 ## For maintainers
 
@@ -94,7 +95,7 @@ policy and the required reviewers are what protect the signing key and the chann
 
 ### Releasing and channels
 
-- Releasing: bump `version` in `package.json` on `main`, push tag `v<version>`, approve the `release-signing` deployment. The pipeline smoke-tests the draft and the public release on six platforms and only then moves `latest`.
+- Releasing: bump `version` in `package.json` on `main`, push tag `v<version>`, approve the `release-signing` deployment. The pipeline smoke-tests the draft and the public release on six platforms and only then moves `latest`. Moving `latest` (`promote-latest`) runs in the `channels-write` environment, so a release needs a second approval there. The `promote` workflow and the `channels-health` repair also need `channels-write` approval.
 - Stable: run the `promote` workflow with the version (it must be verified and not ahead of latest; it never moves stable backwards).
 - Pointer health: `channels-health` runs every 6 hours; dispatch it with `repair: true` to fix a missing or mismatched slot.
 - Where pointers live: the channel pointers (`latest`, `latest.bak`, `stable`, `stable.bak`) and the `verified-<version>.json` records are assets of the `channels` release in `Tropos-AI/tropos-code-channels`. Version releases in `Tropos-AI/tropos-code` are immutable once published.

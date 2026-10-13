@@ -11,6 +11,10 @@ describe("published key fingerprint (spec §8.1)", () => {
     const keys = parseAllowedSigners(await readFile(join(root, "release/allowed_signers"), "utf8"));
     const readme = await readFile(join(root, "README.md"), "utf8");
     const docs = await readFile(join(root, "docs/install.md"), "utf8");
+    if (keys.length > 0) {
+      expect(readme, "README still has the key-ceremony placeholder").not.toContain("<fingerprint-pending");
+      expect(docs, "docs/install.md still has the key-ceremony placeholder").not.toContain("<fingerprint-pending");
+    }
     for (const k of keys) {
       expect(readme).toContain(k.fingerprint);
       expect(docs).toContain(k.fingerprint);
