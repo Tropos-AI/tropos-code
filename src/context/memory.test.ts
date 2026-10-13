@@ -54,6 +54,21 @@ describe("loadMemory", () => {
     expect((await loadMemory(repo, home)).map((f) => f.content)).toEqual(["tropos"]);
   });
 
+  test("CLAUDE.md is read when a directory has neither TROPOS.md nor AGENTS.md", async () => {
+    await writeFile(join(repo, "CLAUDE.md"), "claude root");
+    await writeFile(join(repo, "pkg", "TROPOS.md"), "pkg tropos");
+    await writeFile(join(repo, "pkg", "CLAUDE.md"), "pkg claude");
+    const files = await loadMemory(join(repo, "pkg"), home);
+    expect(files.map((f) => f.content)).toEqual(["claude root", "pkg tropos"]);
+    expect(files[0]!.source).toBe("project");
+  });
+
+  test("AGENTS.md wins over CLAUDE.md in the same directory", async () => {
+    await writeFile(join(repo, "AGENTS.md"), "agents");
+    await writeFile(join(repo, "CLAUDE.md"), "claude");
+    expect((await loadMemory(repo, home)).map((f) => f.content)).toEqual(["agents"]);
+  });
+
   test("empty files are skipped", async () => {
     await writeFile(join(repo, "TROPOS.md"), "   \n");
     expect(await loadMemory(repo, home)).toEqual([]);

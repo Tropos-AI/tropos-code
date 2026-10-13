@@ -79,12 +79,15 @@ async function readMemoryFile(path: string, scope: string | null): Promise<strin
   }
 }
 
+/** Per directory, the first of these that is a usable file is loaded; the rest are ignored. */
+const PROJECT_MEMORY_NAMES = ["TROPOS.md", "AGENTS.md", "CLAUDE.md"];
+
 /**
- * Memory files in load order: ~/.tropos/TROPOS.md, then TROPOS.md (or AGENTS.md when TROPOS.md is
- * not a usable file) in each directory from the git root (filesystem root outside git) down to
- * cwd, then TROPOS.local.md. The user file may be a symlink only into the Tropos home. Project
- * files may be symlinks only inside a git repository and only when they resolve inside its root;
- * outside git no project symlink is followed.
+ * Memory files in load order: ~/.tropos/TROPOS.md, then the first usable PROJECT_MEMORY_NAMES file
+ * in each directory from the git root (filesystem root outside git) down to cwd, then
+ * TROPOS.local.md. The user file may be a symlink only into the Tropos home. Project files may be
+ * symlinks only inside a git repository and only when they resolve inside its root; outside git no
+ * project symlink is followed.
  */
 export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[]> {
   const files: MemoryFile[] = [];
@@ -111,8 +114,8 @@ export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[
     if (dir === top || dirname(dir) === dir) break;
   }
   for (const dir of chain) {
-    if (!(await add(join(dir, "TROPOS.md"), scope, "project"))) {
-      await add(join(dir, "AGENTS.md"), scope, "project");
+    for (const name of PROJECT_MEMORY_NAMES) {
+      if (await add(join(dir, name), scope, "project")) break;
     }
   }
   await add(join(cwd, "TROPOS.local.md"), scope, "project");
