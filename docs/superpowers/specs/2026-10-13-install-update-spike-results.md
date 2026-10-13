@@ -11,16 +11,17 @@ This document records what the infrastructure spike observed and the decisions t
 | Source | What it covers |
 |---|---|
 | CI run `38422254221` of workflow `spike` on `Tropos-AI/tropos-code` (branch `spike/install-infra`, runner 2.337.0) | D2–D5, zstd corpus, tool availability on the six platform runners |
-| `scripts/spike/github-probe.sh` against the scratch repository `Tropos-AI/tropos-release-spike` | D1b, D6a, D6b |
-| `build.yml` / `consume.yml` `workflow_run` probe in the scratch repository (tag `v0.0.3`) | P1, P2 |
+| Commands run by the controller against the scratch repository `Tropos-AI/tropos-release-spike`, adapted from `scripts/spike/github-probe.sh` (not the committed script as is): the D6b poll made 160 requests at roughly one per second, and extra checks were added (public visibility of a draft, upload to a draft after enabling immutability, a `--clobber` on a `channels` release created before enabling). Output saved as `spike-github.txt` | D1b, D6a, D6b |
+| `build.yml` / `consume.yml` `workflow_run` probe in the scratch repository (tag `v0.0.3`, `consume` run `38423588936`), values captured by the controller | P1, P2 |
 | `gh api` against `Tropos-AI/tropos-code` and the `Tropos-AI` organization | D1a |
 | Owner, 2026-10-13 | D1 decision |
 | Local run on the development Mac (macOS 26, OpenSSH 10.3p1), before the CI run | D4, D5 cross-check |
 
 Raw output in the fenced blocks below is copied verbatim; for CI output, the job, step and
 timestamp columns of the log are removed and lines that do not bear on the question are omitted.
-The D1a, P1 and P2 terminal output was not kept as a file; those sections record the values
-written into the task ledger when the probes ran.
+The D1a, P1 and P2 output was not kept as a file; those sections quote the raw values the
+controller recorded in the task ledger (`.superpowers/sdd/2026-10-13-install-update/progress.md`,
+line "Task 2: P1 raw values").
 
 ## CI run overview
 
@@ -247,6 +248,7 @@ failing, so outputs are deleted on any failure.
 
 # ubuntu-24.04
 == musl loader: none
+== ldd /bin/sh: 
 == curl: curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10
 == wget: GNU Wget 1.21.4 built on linux-gnu.
 == wget --https-only: 1
@@ -262,20 +264,35 @@ failing, so outputs are deleted on any failure.
 == tail -c 1 / od: \n
 ```
 
-The other runners match their sibling (macos-15-intel: same tools, Homebrew under
-`/usr/local`; ubuntu-24.04-arm: same as ubuntu-24.04). Musl detection by the loader file
-works on Alpine; the `ldd /bin/sh` fallback printed nothing on any Linux runner in this probe,
-so it was not exercised. Busybox `wget` has no `--https-only`, so on a curl-less Alpine only the
+ubuntu-24.04-arm matches ubuntu-24.04 (curl 8.5.0 for `aarch64-unknown-linux-gnu`, GNU Wget
+1.21.4, both hash tools, no musl loader, empty `ldd /bin/sh` line). macos-15-intel differs from
+macos-15:
+
+```
+# macos-15-intel
+== curl: curl 8.21.0 (x86_64-apple-darwin23.6.0) libcurl/8.21.0 OpenSSL/3.6.3 zlib/1.2.12 brotli/1.2.0 zstd/1.5.7 AppleIDN libpsl/0.23.3 libssh2/1.11.1 nghttp2/1.70.0 ngtcp2/1.25.0 nghttp3/1.18.0 mit-krb5/1.7-prerelease OpenLDAP/2.4.28/Apple
+== wget: GNU Wget 1.25.0 built on darwin23.6.0.
+== wget --https-only: 1
+== sha256sum: /sbin/sha256sum; shasum: /usr/local/bin/shasum
+```
+
+(a curl 8.21.0 built with OpenSSL 3.6.3 first on `PATH`, not the system curl 8.7.1 with
+LibreSSL seen on macos-15). Musl detection by the loader file works on Alpine. The
+`ldd /bin/sh` fallback **ran and printed nothing** on every Linux runner, Alpine included, so
+it is **unverified**: it did not detect musl where it should have, and the probe cannot tell
+why (Task 22 must test the fallback on its own). Busybox `wget` has no `--https-only`, so on a curl-less Alpine only the
 HTTPS-only redirect policy of busybox `wget` itself applies (spec §8.2 step 3 prefers `curl`).
 `tail -c 1 | od -An -c` yields the two characters `\n` for a file ending in a newline (on the
 other runners, the probe's `echo` turned them into a line break).
 
 ## Probe: release immutability (D1a, D1b)
 
-**D1a** — main repository and organization (values recorded in the ledger):
+**D1a** — main repository and organization (raw responses as recorded in the ledger):
 
-- `repos/Tropos-AI/tropos-code/immutable-releases`: `enabled` = `false`.
-- `orgs/Tropos-AI/settings/immutable-releases`: `enforced_repositories` = `none`.
+```
+repos/Tropos-AI/tropos-code/immutable-releases → 200 {"enabled":false,"enforced_by_owner":false}
+orgs/Tropos-AI/settings/immutable-releases → 200 {"enforced_repositories":"none"}
+```
 
 **D1b** — scratch repository with immutability enabled:
 
@@ -302,8 +319,10 @@ attestation API: 1
 
 With immutability on: drafts stay mutable; once published, a release — including a prerelease —
 refuses new assets and `--clobber`; notes and the "latest" flag stay editable; GitHub creates a
-release attestation automatically. A release published before immutability was enabled stays
-mutable (not relied upon).
+release attestation automatically. Whether a release published before immutability was enabled
+stays mutable is **inconclusive**: the `--clobber` on the old `channels` release printed no
+status, and its asset already held `1.0.1` from the D6b step, so the read-back cannot show a
+change (not relied upon).
 
 ## Probe: first release and `--clobber` (D6a, D6b)
 
@@ -322,23 +341,40 @@ latest marked still: v0.0.1
 **D6a:** for a repository's only release, published with `--latest=false`, the REST API's
 `releases/latest` already returns it, but the public `releases/latest/download/<asset>` route
 answers 404. Draft assets are not publicly downloadable (404).
-**D6b:** during a 3 s `--clobber` replacement, 160 polls at 0.25 s intervals all returned 200
-and the content switched from `1.0.0` to `1.0.1`; no window without the asset was observed at
-this resolution (the per-poll sequence line, 160 × `200`, is omitted). GitHub documents `--clobber` as delete-then-upload, so the gap is not ruled out.
+**D6b:** 160 polls, roughly one per second, spanning a `--clobber` replacement whose upload
+took 3 s, all returned 200, and the content switched from `1.0.0` to `1.0.1`; no window without
+the asset was observed at this resolution (the per-poll sequence line, 160 × `200`, is
+omitted). GitHub documents `--clobber` as delete-then-upload, so the gap is not ruled out.
 
 ## Probe: `workflow_run` provenance and draft visibility (P1, P2)
 
 Scratch repository: `build.yml` (tag push, uploads artifact `release-inputs`) and
 `consume.yml` (`workflow_run` of `build`, job in environment `spike-main-only` restricted to
-`main`), tag `v0.0.3`. Values recorded in the ledger:
+`main`), tag `v0.0.3`. Raw values of `consume` run `38423588936`, as captured by the
+controller and recorded in the ledger:
+
+```
+repository=Tropos-AI/tropos-release-spike
+head_repository=Tropos-AI/tropos-release-spike
+head_branch=v0.0.3
+head_sha=6fb6f1f72655ccdc0f66d4800b98443a0e54b4b9
+path=.github/workflows/build.yml
+event=push
+conclusion=success
+ref=refs/heads/main
+sha=6fb6f1f72655ccdc0f66d4800b98443a0e54b4b9
+artifact {id 11827202504, name release-inputs, expired false, digest sha256:054cec0f50b5fed5b69567ef51e28c71b7f160e25ecb71c1c0d5660c61372ec0, size 318}
+zip sha256 054cec0f50b5fed5b69567ef51e28c71b7f160e25ecb71c1c0d5660c61372ec0
+P2 drafts visible to read-only token: 0
+```
 
 - `consume` ran in the `spike-main-only` environment (deployment branches: `main` only) with
-  `GITHUB_REF` = `refs/heads/main`: an environment restricted to `main` accepts `workflow_run`
-  jobs.
-- `workflow_run` payload: `repository.full_name` and `head_repository.full_name` present (the
-  scratch repository); `head_branch` = `v0.0.3` (the tag name); `head_sha` = the tagged commit;
-  `path` present (`.github/workflows/build.yml`); `event` = `push`; `conclusion` = `success`.
-- Artifact `digest` = `sha256:` + the SHA-256 of the zip downloaded from
+  `ref` = `refs/heads/main`: an environment restricted to `main` accepts `workflow_run` jobs.
+- `head_branch` is the tag name and `head_sha` the tagged commit.
+- `path` has the form `.github/workflows/<file>.yml` (no `owner/repo/` prefix, no `@ref`
+  suffix), so `check-provenance.ts` must compare it with exactly
+  `.github/workflows/release-build.yml`.
+- The artifact `digest` equals `sha256:` + the SHA-256 of the zip downloaded from
   `actions/artifacts/<id>/zip`.
 - **P2:** the `contents: read` workflow token listed **0** draft releases while a draft existed.
 
@@ -346,13 +382,13 @@ Scratch repository: `build.yml` (tag push, uploads artifact `release-inputs`) an
 
 | ID | Question | Evidence | Decision |
 |---|---|---|---|
-| D1 | Release immutability on Tropos-AI/tropos-code? Published assets mutable? | D1a: off today, no org enforcement. D1b: published releases (incl. prereleases) refuse uploads and `--clobber`; drafts mutable; latest flag and notes editable; attestation automatic. Owner, 2026-10-13: immutability will be enabled | **D1-B** (below). Immutability is enabled on `tropos-code` and `Tropos-AI/tropos-code-channels` is created at the key-ceremony checkpoint (plan Task 29) |
+| D1 | Release immutability on Tropos-AI/tropos-code? Published assets mutable? | D1a: off today, no org enforcement. D1b: published releases (incl. prereleases) refuse uploads and `--clobber`; drafts mutable; latest flag and notes editable; attestation automatic. Owner, 2026-10-13: immutability will be enabled | **D1-B** (below). Immutability is enabled on `tropos-code` and `Tropos-AI/tropos-code-channels` is created, with an initial commit so that the `channels` release's tag can exist, at the key-ceremony checkpoint (plan Task 29) |
 | D2 | How Bun runs in Alpine containers | `setup-bun` fails inside Alpine (glibc build, `ENOENT`); the musl zip works; JavaScript actions cannot run in Alpine containers on arm64 runners | **musl zip, outside job containers:** musl jobs run actions (checkout, artifacts) on the host runner and run Bun and the tests inside `docker run alpine:3.22`, with Bun from the official `bun-linux-{x64,aarch64}-musl.zip`. No `container: alpine` jobs |
-| D3 | How `install.sh` detects an `ssh-keygen` without `-Y` | All runners have OpenSSH ≥ 9.6; `ssh-keygen -Y verify` (no arguments) prints `Too few arguments for verify: missing namespace`; old versions unobservable | Probe `ssh-keygen -Y verify` with no arguments, message-only (installation stops either way). "Too old" when the output is `getopt`'s rejection of `-Y`: `*"option -- Y"*`, `*"option -- 'Y'"*`, `*"option: Y"*`, `*"unknown option"*`; otherwise "signature not valid" |
+| D3 | How `install.sh` detects an `ssh-keygen` without `-Y` | Every runner that ran the probe has OpenSSH ≥ 9.6 (linux-arm64-musl ran none); `ssh-keygen -Y verify` (no arguments) prints `Too few arguments for verify: missing namespace`; old versions unobservable | Probe `ssh-keygen -Y verify` with no arguments, message-only (installation stops either way). "Too old" when the output is `getopt`'s rejection of `-Y`: `*"option -- Y"*`, `*"option -- 'Y'"*`, `*"option: Y"*`, `*"unknown option"*`; otherwise "signature not valid" |
 | D4 | `ulimit -f` unit per shell | 512 B: dash, busybox ash, zsh, Ubuntu/Alpine `sh`; 1024 B: bash, macOS `sh`; all enforce | Formula stays **⌊size/512⌋ + 2** blocks: at least `size` everywhere, at most about 2 × `size` |
 | D5 | `flock` library per libc | darwin: `libSystem.B.dylib`; glibc and Alpine x64 musl: `libc.so.6`; contention correct everywhere observed, also from compiled binaries | darwin `["libSystem.B.dylib"]`; Linux `["libc.so.6", "/lib/ld-musl-<arch>.so.1", "/lib/libc.musl-<arch>.so.1"]`. linux-arm64-musl unobserved: covered by the musl CI job (D2) |
-| D6 | First release with `--latest=false`: GitHub latest? `--clobber` gap length | D6a: API `releases/latest` returns the only release, the public `releases/latest/download/…` route 404s. D6b: no gap observed (0.25 s resolution, 3 s upload) | Before the first promotion `install.sh` (latest) fails with "no release has been published yet", like `stable`. GitHub latest counts as set only when the API **and** the public `releases/latest/download/manifest.json` name `v<x>`; otherwise promotion marks it explicitly. Read-back: up to 10 attempts 3 s apart; the `.bak` slots stay |
-| P1 | `workflow_run` payload fields and artifact digest | `repository`, `head_repository`, `head_branch` (= tag), `head_sha`, `path`, `event` = `push`, `conclusion`; main-restricted environment accepts the job (ref `refs/heads/main`); `digest` = `sha256:` + SHA-256 of the zip | `check-provenance.ts` requires `repository` = `head_repository` = this repository, `path` = `.github/workflows/release-build.yml`, `event` = `push`, `conclusion` = `success`, `head_branch` = `v<x>` with the tag still at `head_sha`, and the downloaded zip's SHA-256 = the artifact's `digest` (A4). Environments restricted to `main` work for `workflow_run` jobs |
+| D6 | First release with `--latest=false`: GitHub latest? `--clobber` gap length | D6a: API `releases/latest` returns the only release, the public `releases/latest/download/…` route 404s. D6b: no gap observed (160 polls at roughly one per second around a 3 s upload) | Before the first promotion `install.sh` (latest) fails with "no release has been published yet", like `stable`. GitHub latest counts as set only when the API **and** the public `releases/latest/download/manifest.json` name `v<x>`; otherwise promotion marks it explicitly. Read-back: up to 10 attempts 3 s apart; the `.bak` slots stay |
+| P1 | `workflow_run` payload fields and artifact digest | Run `38423588936`: `repository` = `head_repository` = `Tropos-AI/tropos-release-spike`, `head_branch` = `v0.0.3`, `head_sha` = the tagged commit, `path` = `.github/workflows/build.yml`, `event` = `push`, `conclusion` = `success`, `ref` = `refs/heads/main` in a main-restricted environment; `digest` `sha256:054cec0f…` = SHA-256 of the zip | `check-provenance.ts` requires `repository` = `head_repository` = this repository, `path` = exactly `.github/workflows/release-build.yml` (the observed `.github/workflows/<file>.yml` form), `event` = `push`, `conclusion` = `success`, `head_branch` = `v<x>` with the tag still at `head_sha`, and the downloaded zip's SHA-256 = the artifact's `digest` (A4). Environments restricted to `main` work for `workflow_run` jobs |
 | P2 | Can a `contents: read` token see a draft release? | 0 drafts visible | No: confirms the `fetch-draft` job (A12) |
 
 ### D1-B — immutable version releases, separate channels repository
@@ -380,6 +416,8 @@ Scratch repository: `build.yml` (tag push, uploads artifact `release-inputs`) an
 - **Task 11 (`flock.ts`):** the D5 list matches the plan. linux-arm64-musl is first exercised by
   the musl CI job.
 - **Task 22 (`install.sh`):** the plan's D3 `case` lacks musl's wording; add `*"option: Y"*`.
+  The `ldd /bin/sh` musl fallback is unverified (it printed nothing on every Linux runner);
+  test it directly.
 - **Task 26 (`promote.ts`):** the plan checks GitHub latest through the API only; per D6a the
   API already reports the first release as latest while the public download route does not, so
   the check must also read `releases/latest/download/manifest.json` (or always mark the first

@@ -22,7 +22,9 @@ rollback`, and quiet background updates.
    interrupted first install), absent with a clear message. The next run repairs any
    inconsistency, and an unverified binary is never activated.
 5. No running session ever loses its binary; a release that fails CI on any platform never
-   becomes the target of a channel pointer or GitHub's "latest" release.
+   becomes the target of a channel pointer, of the public `releases/latest/download/…` route,
+   or of a "latest" mark set by promotion. (What GitHub's API reports as latest for a
+   repository's first release is outside our control; see §7.6.)
 6. Every existing `tropos` invocation parses exactly as before, except the bare subcommand shapes
    listed in §12.2.
 
@@ -139,7 +141,7 @@ release workflow refuses to sign (amendment A5). No placeholder key is ever trus
 | Decompression bomb or malformed `.zst` | Only a `.zst` whose size and SHA-256 match the signed manifest is decompressed; output is bounded by a file-size limit, the decoder's exit status/errors are checked, and the output must be exactly `size` bytes with the manifest's SHA-256 (§8.2, §10.3) |
 | Path traversal via manifest or state | Versions match a strict semver regex and asset names match exactly before use in any path |
 | Malicious or accidental symlinks in the install tree | `lstat` checks: version files must be regular files; directories must not be symlinks; `bin/tropos` is only replaced if it is a symlink into our `versions/` (or with `--force`) |
-| Group/world-writable install directories | Refuse to install into, or switch through, a directory that is world-writable, owned by another user, or group-writable with a group other than the user's primary group (§10.3; a user-private group, as with Ubuntu's `umask 002`, is accepted — amendment A1) |
+| Group/world-writable install directories | Refuse to install into, or switch through, a directory that is world-writable or owned by another user. A group-writable directory is accepted only when its group is the user's primary group and that group is user-private (group name = user name, as with Ubuntu's `umask 002`); otherwise it is refused, e.g. on macOS, where the primary group `staff` is shared (§10.3, amendment A1) |
 | Replacing assets of a published release | Version releases are immutable once published (decision D1-B); only the `channels` release in `Tropos-AI/tropos-code-channels` is mutable, and nothing in it is trusted without a signed manifest (§5.4) |
 | Signing key exposure via code from the tag | Privileged jobs are defined on `main`, run only `main`'s tooling and runner-image tools, and handle tag outputs as data (§6.2) |
 | Replacing or deleting a binary a process is running | Verified binaries are immutable; replacement of a damaged one and every deletion require an exclusive per-version lock (§10.2, §10.5) |
@@ -253,7 +255,9 @@ the primary, then `.bak` (§8.2, §10.4). (The spike observed no window without 
 a `--clobber`, but GitHub does not guarantee one is absent, so both slots stay.)
 
 Every version release is published with `--latest=false` and only later marked latest by the
-promotion step, so GitHub's "latest release" always names a fully verified version release.
+promotion step, so the public `releases/latest/download/…` route and every "latest" mark set by
+promotion only ever name a fully verified version release. (The API's view of a repository's
+first release is outside our control; see §7.6.)
 The latest flag lives on `Tropos-AI/tropos-code` and stays editable on immutable releases.
 
 URLs (all plain downloads):
@@ -296,7 +300,9 @@ for the release tooling (§7.4).
   `release/allowed_signers`, `install.sh` and `src/install/trust.ts`; publish the fingerprint
   (`ssh-keygen -lf tropos-release.pub`) in the README; create the `v*` tag ruleset and the
   environment rules; enable release immutability on `Tropos-AI/tropos-code`; create the public
-  repository `Tropos-AI/tropos-code-channels`, excluded from the immutability policy; create the
+  repository `Tropos-AI/tropos-code-channels`, excluded from the immutability policy, **with an
+  initial commit** (e.g. created with a README) — a release's tag needs a commit, so the
+  `channels` release cannot be created in an empty repository; create the
   `CHANNELS_WRITE_TOKEN` token and the `channels-write` environment. `docs/install.md` carries
   these steps.
 
@@ -741,11 +747,14 @@ process, so the busy path of step 3 applies (and repoints `bin/tropos` to a heal
 It never skips a signature, hash or health check.
 
 **Pre-switch safety checks:** `bin/` and `$DATA` must be directories (not symlinks), owned by
-the user and not world-writable. A group-writable directory is refused only when its group is
-not the user's primary group: Ubuntu's default `umask 002` with user-private groups makes
-`~/.local/bin` mode 0775 owned by the user's own group, which grants nobody else access
-(amendment A1). `bin/tropos` must be absent or a symlink into `$DATA/versions/`; otherwise
-refuse unless `--force`.
+the user and not world-writable. A group-writable directory is accepted only when its group is
+the user's primary group **and** that group is user-private: its name equals the user name, as
+read with `id -gn` and `id -un` (if either command fails, the directory is refused). Ubuntu's
+default `umask 002` with user-private groups makes `~/.local/bin` mode 0775 owned by the user's
+own group, which grants nobody else access, so it is accepted. On macOS the primary group is
+the shared `staff` group, so a group-writable directory is refused there, with a `chmod g-w`
+hint (amendment A1). `bin/tropos` must be absent or a symlink into `$DATA/versions/`;
+otherwise refuse unless `--force`.
 
 ### 10.4 Channel resolution and downloads
 
@@ -907,7 +916,7 @@ All layers run with `bun test` unless noted. "6P" = all six platforms in CI.
 | 8 | Release gates | smoke-draft, smoke-public, old-installer and old-binary checks (§7.3) | release workflow, 6P |
 | 9 | Key rotation | fixture keys K1, K2, K3. Installer/binary trusting {K1} accept K1 releases; phase-1 clients {K1,K2} accept K1 and K2 releases; {K1}-only clients reject K2 releases with the "reinstall" message; K3 signatures always rejected; the compatibility gate fails a K2 release when the published installer trusts only K1 | every PR (gate logic) |
 | 10 | Auto-update | injected clock: 6 h throttle and failure backoff (12 h, 24 h, 48 h cap, reset); each disabling condition (non-TTY, `-p`, `CI`, env var, user setting, dev run) prevents spawning; repo-layer `autoUpdates` ignored; spawned environment contains only allow-listed variables (a fake binary dumps its env; seeded `ANTHROPIC_API_KEY` etc. must be absent); network failure → no state change except backoff; pointer naming a lower version or a `skip`ped version → no install; "Updated to" shown once | every PR, 6P for the spawn test |
-| 11 | Filesystem security | `versions/<v>` as a symlink → refused; `bin/tropos` pointing outside `versions/` or a regular file → refused without `--force`; `$DATA` or `bin/` group/world-writable or a symlink → refused; manifest/state versions like `../x` or `1.0.0/../../` rejected before any path use; `.zst` expanding beyond `size` → aborted at the cap, nothing installed; binary modified after install → detected on reuse and rollback; `install.json` edited to name an unverified version → not switched to | every PR |
+| 11 | Filesystem security | `versions/<v>` as a symlink → refused; `bin/tropos` pointing outside `versions/` or a regular file → refused without `--force`; `$DATA` or `bin/` world-writable, owned by another user, or a symlink → refused; group-writable → refused unless its group is the user's primary group and user-private (group name = user name; refused if `id -gn`/`id -un` fail; a shared primary group such as macOS `staff` → refused) and accepted when it is (A1); manifest/state versions like `../x` or `1.0.0/../../` rejected before any path use; `.zst` expanding beyond `size` → aborted at the cap, nothing installed; binary modified after install → detected on reuse and rollback; `install.json` edited to name an unverified version → not switched to | every PR |
 | 12 | Promotion failures | `promote.ts` against fake GitHub clients for the main and channels repositories (immutable published version releases): failed smoke → no pointer change, release stays `--latest=false`; interruption after each step (verification record, pointer upload, read-back, latest mark) → rerun converges; pointer never moves backwards; `stable` promotion refused without a verification record or with a bad signature; nothing is ever uploaded to a published version release; during the `--clobber` window a client resolves through the other slot (`.bak`), or for `latest` through GitHub's latest release; GitHub latest reported by the API but not by the public download route (D6a) is still marked; details in R2–R3, R7 | every PR |
 
 ### 13.1 Regression tests for the written-spec review
@@ -925,7 +934,7 @@ Each issue from the review (Appendix B, revision 2) has dedicated tests; IDs are
 | R3.1 | `--clobber` upload of `stable` fails after deleting the asset | `stable.bak` still names a verified version; clients resolve through it; `check --repair` restores `stable` | 12, 5, 1 |
 | R3.2 | Upload of `stable.bak` fails | `stable` untouched and verified; re-run converges | 12 |
 | R3.3 | Slots differ (interrupted promotion); one slot invalid or naming an unverified release; both slots invalid | Clients pick a verified one; repair sets both to the higher verified value and never lowers a verified slot; with both invalid, repair changes nothing and the check fails | 12, 1 |
-| R4.1 | Static policy check of workflow files | Jobs with the `release-signing` environment or `contents: write` contain no checkout of the tag, no `bun`, no execution of downloaded artifacts; every `uses:` is pinned by full SHA; privileged workflows trigger only via `workflow_run`/`workflow_dispatch`/`schedule` | 7 |
+| R4.1 | Static policy check of workflow files | Jobs with the `release-signing` environment, the `channels-write` environment, or `contents: write` contain no checkout of the tag, no `bun`, no execution of downloaded artifacts; every `uses:` is pinned by full SHA; privileged workflows trigger only via `workflow_run`/`workflow_dispatch`/`schedule` | 7 |
 | R4.2 | `prepare` given an artifact set with an extra, missing or renamed file, or a tag that no longer points at the built commit | Fails before signing | 12 |
 | R5.1 | `tropos install <current> --force` run from the current version | The verified file's inode and bytes are unchanged; the switch is an atomic re-link; health check runs | 2, 3 |
 | R5.2 | Damaged version in use by a session (`LOCK_SH` held) | File not renamed or deleted; if current, `bin/tropos` moves to a healthy fallback; exit 75 | 3, 11 |
@@ -935,9 +944,9 @@ Each issue from the review (Appendix B, revision 2) has dedicated tests; IDs are
 | R6.2 | `current`'s file deleted; `current` corrupted | Recovery switches to the first Healthy fallback in the specified order | 4 |
 | R6.3 | `previous` corrupted or missing, then `tropos rollback` | `previous = null`; rollback exits 65 listing Healthy versions; nothing switched | 4 |
 | R6.4 | Randomised corruption of any subset of versions, manifests, signatures, symlink and state (property test, fixed seeds) | `bin/tropos` is either absent or points at a Healthy version | 4 |
-| R7.1 | First release against an empty fake GitHub (the channels repository exists, without releases) | `channels` created in the channels repository as prerelease/not-latest; `verified-<x>.json` written; all four slots = x; GitHub latest = `v<x>` on the main repository; smoke b/c skipped | 12 |
+| R7.1 | First release against an empty fake GitHub (the channels repository exists with an initial commit — required, because the `channels` release's tag needs a commit (§6 setup) — and has no releases) | `channels` created in the channels repository as prerelease/not-latest; `verified-<x>.json` written; all four slots = x; GitHub latest = `v<x>` on the main repository; smoke b/c skipped | 12 |
 | R7.2 | Interleaved `latest` and `stable` promotions (fake client, all interleavings of two runs) | Pointers never move backwards; `stable ≤ latest`; every slot names a verified release | 12 |
-| R7.3 | Before the first promotion completes | `install.sh stable` fails with "no release has been published yet"; explicit version works | 5 |
+| R7.3 | Before the first promotion completes | `install.sh stable` fails with "no release has been published yet"; `install.sh` (latest) fails the same way unless GitHub's public `releases/latest/download/…` route already serves the release (D6a: for a first release published with `--latest=false` it answers 404); explicit version works | 5 |
 | R8.1 | Shared corpus `test/fixtures/zstd/`: truncated frame, trailing garbage, extra concatenated frame, output of `size−1` and `size+1`, corrupted content checksum, non-zstd bytes, empty file — each paired with a test manifest whose `zst` hash matches, so decompression itself is exercised | Both `install.sh` and `installer.ts` reject each and fall back to the raw asset; with a bad raw asset too, fail with nothing installed | 5, 7 |
 | R8.2 | Output far larger than `size` | Stopped by the file-size limit (`install.sh`) or the byte count (TS) without writing beyond the bound | 5, 11 |
 | R9.1 | `tropos install stable` with configured channel `latest` | Settings file unchanged (bytes identical); notice printed; a later background check moves to the newer `latest` | 10 |
@@ -988,13 +997,13 @@ the open questions before the engine was built. Full output and reasoning:
 |---|---|---|
 | Release immutability on `Tropos-AI/tropos-code` | Off today, no organization enforcement. With it on, published releases (prereleases too) refuse new assets and `--clobber`; drafts stay mutable; notes and the latest flag stay editable; GitHub creates a release attestation. The owner will enable it | **D1 = D1-B:** immutable version releases, `channels` release and verification records in `Tropos-AI/tropos-code-channels` (§2, §5.2, §5.4, §6, §7) |
 | `setup-bun` or a musl Bun build inside Alpine containers | `setup-bun` installs the glibc build, which cannot start (`ENOENT`); the official musl zip works; JavaScript actions cannot run in Alpine job containers on `ubuntu-24.04-arm` ("only supported on x64 Linux runners") | **D2:** musl jobs run actions on the host and Bun/tests in `docker run alpine:3.22` with the musl zip (§13 CI runners) |
-| `ssh-keygen -Y` availability; detecting one without `-Y` | Present on every runner (OpenSSH 9.6p1 Ubuntu, 9.9p2 macOS, 10.0p1 Alpine). `ssh-keygen -Y verify` without arguments prints `Too few arguments for verify: missing namespace`; versions without `-Y` (< 8.1) were not observable | **D3:** message probe with `getopt` patterns per libc (§8.2 step 6) |
+| `ssh-keygen -Y` availability; detecting one without `-Y` | Present on every runner that ran the probe (OpenSSH 9.6p1 Ubuntu, 9.9p2 macOS, 10.0p1 Alpine x64); linux-arm64-musl ran no probe (its job failed at checkout). `ssh-keygen -Y verify` without arguments prints `Too few arguments for verify: missing namespace`; versions without `-Y` (< 8.1) were not observable | **D3:** message probe with `getopt` patterns per libc (§8.2 step 6) |
 | `ulimit -f` units and enforcement | 512-byte blocks in `dash`, busybox `ash`, `zsh` (Ubuntu and Alpine `/bin/sh`); 1024-byte blocks in `bash` (macOS `/bin/sh`, bash 3.2); every shell enforces | **D4:** ⌊size/512⌋ + 2 stays (§8.2 step 7) |
 | `flock` FFI library per libc | `libSystem.B.dylib` (darwin); `libc.so.6` on glibc and on Alpine x64 (musl's loader answers for `libc.so.*`); cross-process contention correct; works from compiled binaries. linux-arm64-musl unobserved (job could not start) | **D5:** candidate order of §10.1; arm64 musl covered by the musl CI job |
 | `zstd` availability and exit status per R8.1 corpus file | zstd 1.5.7 on every runner. Exit 1 for truncated, trailing garbage, flipped checksum, non-zstd and empty input; exit 0 with twice the bytes for a concatenated second frame | Exact-size check required (§8.2 step 7), as specified |
 | What GitHub reports as latest after a first release published with `--latest=false` | The API's `releases/latest` returns it; the public `releases/latest/download/<asset>` answers 404 | **D6:** `install.sh` (latest) fails with "no release has been published yet" until the first promotion (§7.5); GitHub latest is checked through the API and the public route (§7.4 step 7) |
-| Does `gh release upload --clobber` leave a window without the asset? | No window observed (160 polls at 0.25 s during a 3 s replacement, all 200) | **D6:** `.bak` slots kept; read-back up to 10 × 3 s (§7.4 step 5) |
-| `workflow_run` fields for a tag-triggered run; `main`-restricted environments | `repository`, `head_repository`, `head_branch` (the tag), `head_sha`, `path`, `event` = `push`, `conclusion` are present; a `main`-restricted environment accepts `workflow_run` jobs (ref `refs/heads/main`); the artifact `digest` equals `sha256:` + the SHA-256 of the downloaded zip | **P1:** provenance and digest checks in `prepare` (§7.3 step 1, amendment A4) |
+| Does `gh release upload --clobber` leave a window without the asset? | No window observed: 160 polls, roughly one per second, spanning a `--clobber` replacement whose upload took 3 s, all returned 200 | **D6:** `.bak` slots kept; read-back up to 10 × 3 s (§7.4 step 5) |
+| `workflow_run` fields for a tag-triggered run; `main`-restricted environments | Scratch run `38423588936`: `repository` = `head_repository` = the scratch repository, `head_branch` = `v0.0.3`, `head_sha` = the tagged commit, `path` = `.github/workflows/build.yml` (so `check-provenance.ts` compares against exactly `.github/workflows/release-build.yml`), `event` = `push`, `conclusion` = `success`; a `main`-restricted environment accepts `workflow_run` jobs (`ref` = `refs/heads/main`); the artifact `digest` equals `sha256:` + the SHA-256 of the downloaded zip | **P1:** provenance and digest checks in `prepare` (§7.3 step 1, amendment A4) |
 | Can a `contents: read` token see a draft release? | No (0 drafts listed) | **P2:** the `fetch-draft` job (§7.3 step 4, amendment A12) |
 
 ## Appendix A — Evidence: how Claude Code installs and updates (v2.1.296, this machine, 2026-10-13)
@@ -1048,7 +1057,7 @@ Spike evidence and the decision table: [2026-10-13-install-update-spike-results.
 
 | # | Change | Where |
 |---|---|---|
-| A1 | Group-writable directories are refused only when their group is not the user's primary group; world-writable or foreign-owned is always refused | §4.4, §10.3 pre-switch checks |
+| A1 | A group-writable directory is accepted only when its group is the user's primary group and that group is user-private (group name = user name via `id -gn`/`id -un`; refused if they fail), so Ubuntu's `umask 002` works and macOS's shared `staff` group is refused; world-writable or foreign-owned is always refused | §4.4, §10.3 pre-switch checks, §13 layer 11 |
 | A2 | `--` as `argv[0]` skips subcommand recognition and passes `argv` unchanged to the existing parser | §12.2 rule 1 |
 | A3 | Compiled-binary e2e tests use a build-time `TROPOS_TEST_BUILD` flag; production builds compile it out, and a test asserts no test hooks remain | §3, §4.2, §13 |
 | A4 | `prepare` downloads `release-inputs` as a zip through the REST API, checks it against the artifact's recorded `digest`, then checks every file against `SHA256SUMS` from `release-build` | §7.2 step 4, §7.3 step 1 |
