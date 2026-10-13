@@ -1,0 +1,18 @@
+{
+  "id": "project-key-collisions",
+  "repo": ".",
+  "base": "12e6af6bcab1",
+  "gold": "6461fcdbd3c7",
+  "prompt": "Per-project user settings can collide between different projects\n\nPer-project settings under the user's home are stored at `<home>/projects/<name>/settings.json`. Here `<name>` is the project path with `/`, `\\` and `:` replaced by `-`. That flattening loses information: /a/b-c and /a-b/c both become `-a-b-c`. Two unrelated projects then read and overwrite the same settings file, including its permission rules. Spaces and other unusual characters also pass straight into the directory name.\n\nExpected: every project path gets a directory name that is readable, stays the same across runs, and never matches the name of a different path.\n\nRequirements: Export `projectKey(cwd: string): string` from src/paths.ts.\n- It must be deterministic.\n- The result starts with the path with every character other than ASCII letters, digits, `.`, `_` and `-` replaced by `-`. For example, `projectKey(\"/work/my app\")` starts with `-work-my-app-`.\n- The result ends with `-` followed by 12 lowercase hex characters taken from a hash of the full path (for example sha256), so `projectKey(\"/a/b-c\") !== projectKey(\"/a-b/c\")`.\n- `settingsPaths(cwd, home).userProject` must become `join(home, \"projects\", projectKey(cwd), \"settings.json\")`.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/config/settings.test.ts",
+    "src/paths.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/config/settings.test.ts ./src/paths.test.ts",
+  "split": "holdout",
+  "timeoutSec": 1800,
+  "tags": [
+    "spec-heavy"
+  ]
+}

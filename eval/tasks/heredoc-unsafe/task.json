@@ -1,0 +1,15 @@
+{
+  "id": "heredoc-unsafe",
+  "repo": ".",
+  "base": "c07af0d34a78",
+  "gold": "564dec4a8d2e",
+  "prompt": "Bash allow rules can be bypassed with a heredoc\n\nWith an allow rule such as `Bash(git status:*)`, Tropos auto-approves a command when every simple command in it matches an allowed prefix. Heredoc bodies are raw text, but the command splitter treats quotes inside them as real shell quotes. So this command:\n\ngit status <<X\n'\nX\nrm -rf y\n'\n\nis seen as a single `git status ...` command (the `'` in the heredoc body opens a \"quote\" that swallows the following lines) and gets auto-approved, even though the shell runs `rm -rf y` as a separate command.\n\nExpected: commands that use a heredoc (`cat <<EOF ...`, `cat <<-EOF ...`) or a herestring (`cat <<<hello`) should be flagged as unsafe by `splitBashCommand` in src/permissions/rules.ts, so they never silently match an allow rule. Plain input redirection such as `bun test < input.txt` must stay safe, and a quoted `<<` (`echo \"<<\"`, `echo '<<'`) is just text and must stay safe too.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/permissions/rules.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/permissions/rules.test.ts",
+  "split": "holdout",
+  "timeoutSec": 1800,
+  "tags": []
+}

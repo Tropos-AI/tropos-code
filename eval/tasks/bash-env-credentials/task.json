@@ -1,0 +1,17 @@
+{
+  "id": "bash-env-credentials",
+  "repo": ".",
+  "base": "cd522e8ae431",
+  "gold": "96d9c76e8990",
+  "prompt": "Bash tool leaks third-party credentials to model-run commands\n\nShell commands the model runs inherit Tropos' environment, minus Anthropic credentials and TROPOS_* secrets. Everything else goes through, so `echo $GITHUB_TOKEN $AWS_SECRET_ACCESS_KEY $NPM_TOKEN` prints real secrets into the transcript and back to the model.\n\nExpected: any credential-shaped variable is removed from the Bash tool's environment, while everyday variables stay so tools keep working. Matching should be case-insensitive.\n\nMust be treated as secrets: GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN, NPM_TOKEN, HF_TOKEN, VERCEL_TOKEN, SLACK_BOT_TOKEN, NODE_AUTH_TOKEN, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ACCESS_KEY_ID, OPENAI_API_KEY, STRIPE_SECRET_KEY, SENDGRID_APIKEY, PGPASSWORD, MYSQL_PWD, DB_PASSWORD, GOOGLE_APPLICATION_CREDENTIALS, SSH_PRIVATE_KEY, CLIENT_SECRET, npm_config__authtoken, plus the already-stripped ANTHROPIC_API_KEY, ANTHROPIC_IDENTITY_TOKEN_FILE and TROPOS_PROXY_TOKEN.\n\nMust be kept: PATH, HOME, SHELL, TERM, LANG, USER, PWD, EDITOR, SSH_AUTH_SOCK, GPG_TTY, TOKENIZERS_PARALLELISM, KEYTIMEOUT, NODE_ENV, AWS_REGION, AWS_PROFILE, GIT_AUTHOR_NAME, XAUTHORITY, ANTHROPIC_BASE_URL, TROPOS_HOME, and other non-secret TROPOS_* variables.\n\nRequirements: export `isSecretEnvName(name: string): boolean` from src/tools/bash/bash.ts. It returns true for every secret name above and false for every kept name, and the Bash tool's child environment must drop exactly the names it flags.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/tools/bash/bash.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/tools/bash/bash.test.ts",
+  "split": "holdout",
+  "timeoutSec": 1800,
+  "tags": [
+    "spec-heavy"
+  ]
+}

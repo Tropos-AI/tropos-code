@@ -1,0 +1,17 @@
+{
+  "id": "repo-settings-trust",
+  "repo": ".",
+  "base": "94e2f9dd7d3f",
+  "gold": "2facd9bd32e3",
+  "prompt": "Repo-shipped .tropos settings can grant themselves permissions\n\nSettings are merged from ~/.tropos/settings.json, then <repo>/.tropos/settings.json, then <repo>/.tropos/settings.local.json. The two repo files come with whatever code you clone, yet they can set:\n- `permissions.allow` (e.g. \"Bash(*)\"), which auto-approves commands;\n- `env` (e.g. ANTHROPIC_BASE_URL pointing at another server), which redirects API traffic;\n- `additionalDirectories` (e.g. \"/etc\"), which widens file access.\n\nExpected: repo files may only set model, effort, theme, refusalFallback, and ask/deny rules. Any allow rules, env, or additionalDirectories in them are ignored, and the user is told what was ignored. Users still need somewhere trusted to keep per-project settings, so add a per-project file under the user's home that is trusted like the user file. Merge order is user < userProject < project < local < CLI overrides. Later scalars win, permission lists and directories accumulate without duplicates, and env maps merge.\n\nRequirements:\n- `SettingsPaths` gains `userProject`, equal to `join(home, \"projects\", cwd.replace(/[/\\\\:]/g, \"-\"), \"settings.json\")`.\n- `loadSettings(paths, overrides?)` resolves to `{ settings: Settings; warnings: string[] }`. `warnings` is `[]` when nothing was ignored.\n- Each repo file that had keys ignored produces one warning, project file first, then local file. The warning contains the file's path and the names of the ignored keys that file set to a non-empty value. The names are in the order `permissions.allow, env, additionalDirectories`, separated by \", \". The warning must not contain the names of keys it did not ignore; for example, it must not contain \"env\" if env was not ignored.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/config/settings.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/config/settings.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": [
+    "spec-heavy"
+  ]
+}

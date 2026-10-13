@@ -1,0 +1,15 @@
+{
+  "id": "price-each-iteration",
+  "repo": ".",
+  "base": "2f32485f2c63",
+  "gold": "5a049af3f010",
+  "prompt": "Response cost is wrong when usage.iterations report their own model\n\nWhen a response carries `usage.iterations`, `messageCostUsd` (src/api/pricing.ts) bills each iteration at the requested model unless the iteration's type is `fallback_message`. Other iteration types can also say which model actually served them, and that model is ignored.\n\nRepro: requested model claude-opus-5-5, one iteration `{ type: \"advisor_message\", model: \"claude-haiku-5-5\", input_tokens: 1_000_000, output_tokens: 1_000_000 }`. The cost comes out at Opus rates ($24). It should be $0.60 at Haiku rates. A `{ type: \"message\", model: \"claude-sonnet-5-5\", input_tokens: 1_000_000 }` iteration has the same problem.\n\nThere is a second problem going the other way. A `fallback_message` iteration whose `model` is null makes the whole response unpriced (undefined), so the cost display goes blank.\n\nExpected: an iteration that names a model is priced at that model, whatever its type. An iteration with no model (missing or null) is priced at the requested model. If any iteration is on a model with no known price, the whole response stays unpriced, as it is now.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/api/pricing.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/api/pricing.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}

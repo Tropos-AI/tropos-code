@@ -1,0 +1,15 @@
+{
+  "id": "session-torn-tails",
+  "repo": ".",
+  "base": "553e9bf41188",
+  "gold": "4a4f0114776a",
+  "prompt": "Session files stay broken after a crash or a failed write\n\nSessions are append-only JSONL files (src/session/store.ts). Several failure cases are handled badly:\n\n1. A crash can leave the file ending in half a line with no newline, e.g. `{\"type\":\"message\",\"message\":{\"role\":\"assis`. If the last complete message is an assistant tool_use, `SessionStore.open` appends the \"Not run: ...\" tool_result repair. That repair is written onto the end of the torn line, so it can't be parsed. The reopened conversation has a tool_use with no result, and every later reopen appends another repair. Expected: the repair parses, the tool_use is followed by its tool_result, and opening the session again does not add a second repair (the file holds exactly one \"Not run:\").\n2. If one `appendMessage` fails (e.g. the file is briefly read-only), every later append on that store also fails, even after the cause is gone. Expected: the failed call still rejects, but later appends succeed.\n3. A line that is valid JSON but not an object (`null`, `42`) breaks `readSessionFile`. A `{\"type\":\"message\"}` line with no `message` field adds an undefined message. Expected: both kinds of line are skipped, in `readSessionFile` and in `listSessions` message counts.\n4. `listSessions` fails entirely if one entry can't be read, e.g. a directory named `<uuid>.jsonl` in the project folder. Expected: that entry is skipped.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/session/store.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/session/store.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}

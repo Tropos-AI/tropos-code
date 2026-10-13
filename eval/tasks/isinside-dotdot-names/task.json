@@ -1,0 +1,15 @@
+{
+  "id": "isinside-dotdot-names",
+  "repo": ".",
+  "base": "fb6465cf4b73",
+  "gold": "463c8582b879",
+  "prompt": "isInside treats folders like `..cache` as outside the project\n\n`isInside(path, dir)` in src/paths.ts returns false when the first path segment under `dir` merely starts with two dots. For example, `isInside(\"/a/b/..cache/x\", \"/a/b\")` returns false. Names like `..cache` or `..data` are legal, and some tools create them. Permission checks and the allowed-directories check depend on isInside, so reads and edits inside such a folder are treated as outside the project and prompt the user for no reason.\n\nExpected: only a real climb to a parent directory counts as outside.\n- \"/a/b/..cache/x\" is inside \"/a/b\".\n- \"/a/b\" is inside itself.\n- \"/a\" and \"/a/c\" are still outside \"/a/b\".\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/paths.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/paths.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}

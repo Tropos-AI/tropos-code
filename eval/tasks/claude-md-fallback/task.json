@@ -1,0 +1,15 @@
+{
+  "id": "claude-md-fallback",
+  "repo": ".",
+  "base": "8be52851ee08",
+  "gold": "f5426ce5cf54",
+  "prompt": "Support CLAUDE.md as a project instructions file\n\nTropos loads project instructions from TROPOS.md in each directory from the git root down to the current directory, falling back to AGENTS.md when a directory has no usable TROPOS.md. Many repositories are already set up for Claude Code and only have CLAUDE.md files. In those repos Tropos loads no project instructions at all unless users keep a second copy under another name.\n\nRepro: in a git repository whose only instructions file is CLAUDE.md at the root, start Tropos. The instructions are not in context.\n\nExpected: CLAUDE.md is used as a last fallback in each directory, after TROPOS.md and AGENTS.md. Each directory still contributes at most one file: the first usable one in the order TROPOS.md, AGENTS.md, CLAUDE.md. For example, with repo/CLAUDE.md, repo/pkg/TROPOS.md and repo/pkg/CLAUDE.md, running in repo/pkg loads repo/CLAUDE.md and then repo/pkg/TROPOS.md, and repo/pkg/CLAUDE.md is ignored. A directory with both AGENTS.md and CLAUDE.md loads only AGENTS.md. CLAUDE.md files are project memory (source \"project\") and follow the same symlink rules as the other project files.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/context/memory.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/context/memory.test.ts",
+  "split": "holdout",
+  "timeoutSec": 1800,
+  "tags": []
+}

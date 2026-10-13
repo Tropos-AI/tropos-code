@@ -1,0 +1,15 @@
+{
+  "id": "bare-bash-allow-rule",
+  "repo": ".",
+  "base": "ed5a47359989",
+  "gold": "7e8b71eee867",
+  "prompt": "A bare `Bash` allow rule auto-approves interpreters that `Bash(*)` refuses\n\nPutting `Bash(*)` in permissions.allow approves ordinary shell commands but still asks before running code runners such as python3 or sh, because those can execute anything. The bare form `Bash` (no parentheses) should mean the same thing as an allow rule. Right now it approves everything instead.\n\nRepro with `allow: [\"Bash\"]`: `git status` is allowed, which is correct. But `python3 x.py`, a plain `sh`, and `echo x | sh` are also allowed with no prompt. With `allow: [\"Bash(*)\"]` those three ask, as they should.\n\nExpected: as an allow rule, bare `Bash` behaves exactly like `Bash(*)`. As a deny or ask rule, bare `Bash` must still match every command:\n- `deny: [\"Bash\"]` denies `python3 x.py`.\n- `allow: [\"Bash\"]` together with `ask: [\"Bash\"]` asks for both `git status` and `sh`.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/permissions/engine.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/permissions/engine.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}

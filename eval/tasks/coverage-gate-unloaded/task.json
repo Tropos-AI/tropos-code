@@ -1,0 +1,17 @@
+{
+  "id": "coverage-gate-unloaded",
+  "repo": ".",
+  "base": "a11a0d3040d4",
+  "gold": "8748be6a2073",
+  "prompt": "Coverage gate passes when a source file is never loaded by any test\n\nscripts/check-coverage.ts enforces a per-file and overall line-coverage floor over src/, but it only looks at files that appear in coverage/lcov.info. Bun only writes lcov records for files some test actually imports, so a new module with no tests at all (say src/tools/new-thing.ts) is simply missing from the report and the gate passes. Untested files are exactly what the gate should catch.\n\nExpected: every non-test source file under src/ (*.ts and *.tsx, excluding *.test.ts(x) and *.d.ts) that the lcov report never mentions should fail the gate with a message naming the file. A few files legitimately have no test that loads them and need an explicit, explained exemption: src/index.ts (entry shim, exercised by the compiled-binary e2e tests) and the type-only modules src/agent/events.ts and src/ui/runtime.ts.\n\nRequirements: `evaluate` in scripts/check-coverage.ts gains two parameters, `evaluate(lcovText, threshold, files: string[], exempt: Record<string, string>)`, where `files` are repo-relative paths like \"src/a.ts\" and `exempt` maps path to reason. Each path in `files` absent from the report and not in `exempt` adds exactly one entry to `failures` that contains the path and the text \"not loaded by any test\". The overall percentage is still computed from the lcov records. Also export `EXEMPT: Record<string, string>` whose keys are exactly src/index.ts, src/agent/events.ts and src/ui/runtime.ts, each with a reason longer than 5 characters.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "scripts/check-coverage.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./scripts/check-coverage.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": [
+    "spec-heavy"
+  ]
+}

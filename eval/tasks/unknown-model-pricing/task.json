@@ -1,0 +1,20 @@
+{
+  "id": "unknown-model-pricing",
+  "repo": ".",
+  "base": "96d9c76e8990",
+  "gold": "ea80ee262f99",
+  "prompt": "Unknown models are billed as $0 and assumed to have a 1M context window\n\nWhen a reply comes from a model that is not in Tropos' price table (for example a custom model id behind a proxy), its cost is added to the session total as $0, and its context window is assumed to be 1,000,000 tokens. The session cost then looks real but is an undercount: `/cost` and the status bar show a dollar figure, and `tropos -p --output-format json` reports a numeric `cost_usd`.\n\nExpected: once any reply in the session came from a model with no known price, the session total becomes unknown and stays unknown for the rest of the session, even if later replies come from priced models. An unknown cost is reported as unknown, never as a number: JSON output has `cost_usd: null`, `/cost` says the cost is unknown, and the status bar shows `cost unknown` with no dollar amount. Likewise the context window of a model Tropos has no record of is unknown, and the status bar shows `ctx ?` instead of a percentage.\n\nRequirements: `Agent.totalCostUsd` becomes `undefined` (not 0) once the cost is unknown, and the `usage` event for such a reply carries `costUsd: undefined` and `totalCostUsd: undefined`. `contextWindow(model)` in src/api/pricing.ts returns `undefined` for unknown models and still 1_000_000 for known ones. `StatusBar` accepts `contextPct={undefined}` and `costUsd={undefined}` and then renders `ctx ?` and `cost unknown` with no `$` anywhere in the frame.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/agent/agent.test.ts",
+    "src/api/pricing.test.ts",
+    "src/cli/print.test.ts",
+    "src/ui/components.test.tsx"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/agent/agent.test.ts ./src/api/pricing.test.ts ./src/cli/print.test.ts ./src/ui/components.test.tsx",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": [
+    "spec-heavy"
+  ]
+}

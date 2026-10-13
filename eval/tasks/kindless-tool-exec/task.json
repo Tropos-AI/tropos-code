@@ -1,0 +1,15 @@
+{
+  "id": "kindless-tool-exec",
+  "repo": ".",
+  "base": "a7b7c6acef43",
+  "gold": "cd522e8ae431",
+  "prompt": "Tools that declare no kind are treated as read-only\n\nEvery tool has a `kind` (read, meta, edit, exec). It drives scheduling (consecutive read/meta calls run in parallel) and permissions (plan mode refuses edit/exec). We are about to accept tools from outside sources (MCP) that may not declare a kind at all, and today such a tool gets the most permissive handling:\n\n- if the model calls two kind-less tools in one turn, they run concurrently in the parallel read-only batch;\n- in plan mode the call is not refused, and the tool actually runs.\n\nRepro: register a tool object with name, description, schema, summarize, subject and run but no `kind`, put the agent in plan mode, and have the model call it. It executes.\n\nExpected: a tool that declares no kind gets the strictest handling, exactly like an `exec` tool. It runs one call at a time, never overlapping with another call, and results stay in call order. In plan mode it is refused without running, and its tool result is the standard plan-mode refusal text (PLAN_MODE_REASON), the same as for any shell command. `kind` should also be optional on the Tool type so such tools type-check.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/agent/agent.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/agent/agent.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}

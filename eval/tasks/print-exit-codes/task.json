@@ -1,0 +1,16 @@
+{
+  "id": "print-exit-codes",
+  "repo": ".",
+  "base": "3fd858d4f9c9",
+  "gold": "a7b7c6acef43",
+  "prompt": "`tropos -p` exits 0 when the answer was cut off or the context overflowed\n\nScripts use the exit code of print mode to tell whether they got a complete answer. Two cases currently look like success:\n\n1. The final text reply stops with `max_tokens` (hit the output token limit). A warning goes to stderr, but the turn ends as `end_turn`, the exit code is 0 and `--output-format json` reports `is_error: false, stop: \"end_turn\"`. A script gets half an answer and thinks it is done.\n2. The API stops with `model_context_window_exceeded`. Same story: a warning, then exit 0.\n\nExpected: each case ends the turn with its own reason and a distinct non-zero exit code. For the truncated reply the partial text is still delivered (text mode prints it followed by a newline; JSON `result` holds it) but the run is marked as an error. For a context overflow no answer is printed (JSON `result` is \"\"). The stderr notice in both cases should be an error rather than a warning, so the JSON `error` field carries it (for truncation it says the response was \"cut off\").\n\nRequirements: add turn end reasons `max_tokens` (exit code 4) and `context_exceeded` (exit code 5) to `TurnEndReason` and to `EXIT_CODES` in src/cli/print.ts. `Agent.run` must return them, the final event must be `{ type: \"turn_end\", reason }` with that reason, and the related notices must have level \"error\". Every reason other than `end_turn` must keep a unique non-zero exit code.\n\nAdd or update tests as appropriate.",
+  "hiddenTests": [
+    "src/agent/agent.test.ts",
+    "src/cli/print.test.ts"
+  ],
+  "setup": "bun install --frozen-lockfile",
+  "verify": "bun test ./src/agent/agent.test.ts ./src/cli/print.test.ts",
+  "split": "dev",
+  "timeoutSec": 1800,
+  "tags": []
+}
