@@ -66,9 +66,9 @@ Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/trop
 
 0 ok · 1 other error · 64 usage · 65 verification failed · 69 network · 73 local problem (permissions, disk, not a native install) · 75 another install is running.
 
-Before the first release exists, `install.sh` exits 69 with "no release has been published yet, or the
-release server could not be reached"; `install.sh stable` keeps failing the same way until the first
-`promote` run. Installing an explicit version works.
+Before the first release is promoted, `install.sh` and `install.sh stable` exit 69 with "no release
+has been published yet, or the release server could not be reached"; the first release's promotion
+sets both `latest` and `stable`. Installing an explicit version works.
 
 ## For maintainers
 
