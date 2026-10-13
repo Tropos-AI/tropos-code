@@ -1,0 +1,1127 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`parseCli compatibility snapshot [] — no arguments 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["hello"] — one-word prompt 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "hello",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["hello","world"] — multi-word prompt 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "hello world",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-p","x"] — print short 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "x",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--print","x"] — print long 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "x",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-p","x","--output-format","json"] — json output 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "json",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "x",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-p","x","--output-format","stream-json"] — stream-json output 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "stream-json",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "x",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--output-format","xml"] — bad output format 1`] = `
+{
+  "error": "--output-format must be one of: text, json, stream-json (got "xml")",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--max-turns","3","-p","x"] — max turns 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": 3,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "x",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--max-turns","0"] — max turns zero 1`] = `
+{
+  "error": "--max-turns must be a positive integer (got "0")",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--max-turns","1.5"] — max turns fractional 1`] = `
+{
+  "error": "--max-turns must be a positive integer (got "1.5")",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--allowed-tools","Read,Bash(git diff:*)"] — allowed tools 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [
+      "Read",
+      "Bash(git diff:*)",
+    ],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--allowed-tools","A","--allowed-tools","B"] — allowed tools repeated 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [
+      "A",
+      "B",
+    ],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--model","claude-sonnet-5-5"] — model 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": "claude-sonnet-5-5",
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--model","deepseek/deepseek-flash"] — provider model 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": "deepseek/deepseek-flash",
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--effort","max"] — effort 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": "max",
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--effort","huge"] — bad effort 1`] = `
+{
+  "error": "--effort must be one of: low, medium, high, xhigh, max (got "huge")",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-c"] — continue short 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": true,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--continue"] — continue long 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": true,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-r"] — resume picker 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": true,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--resume"] — resume picker long 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": true,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-r","3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c"] — resume id 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": true,
+    "resumeId": "3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c",
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--resume","3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c","fix","it"] — resume id with prompt 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "fix it",
+    "resume": true,
+    "resumeId": "3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c",
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-r","not-a-uuid"] — resume with non-uuid word 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "not-a-uuid",
+    "resume": true,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-c","-r"] — continue and resume 1`] = `
+{
+  "error": "--continue and --resume cannot be combined",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--permission-mode","plan"] — permission mode 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": "plan",
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--permission-mode","bypass"] — bypass mode rejected 1`] = `
+{
+  "error": "use --dangerously-skip-permissions to bypass permission checks",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--permission-mode","nope"] — bad permission mode 1`] = `
+{
+  "error": "--permission-mode must be one of: default, acceptEdits, plan, bypass (got "nope")",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--dangerously-skip-permissions"] — skip permissions 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": true,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--add-dir","../x","--add-dir","/y"] — add dirs 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [
+      "../x",
+      "/y",
+    ],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-h"] — help short 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": true,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--help"] — help long 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": true,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-v"] — version short 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": true,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--version"] — version long 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": undefined,
+    "resume": false,
+    "resumeId": undefined,
+    "version": true,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--bogus"] — unknown long flag 1`] = `
+{
+  "error": "Unknown option '--bogus'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--bogus"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-x"] — unknown short flag 1`] = `
+{
+  "error": "Unknown option '-x'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "-x"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--","-p"] — double dash then flag-like word 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "-p",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["--","install"] — double dash then subcommand word 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install"] — bare install (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","stable"] — install channel (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install stable",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","latest","--force"] — install latest force (becomes a subcommand) 1`] = `
+{
+  "error": "Unknown option '--force'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--force"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","1.2.3"] — install version (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install 1.2.3",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","--force"] — install force (becomes a subcommand) 1`] = `
+{
+  "error": "Unknown option '--force'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--force"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","--help"] — install help (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": true,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","--self","--manifest","m","--signature","s"] — install self (becomes a subcommand) 1`] = `
+{
+  "error": "Unknown option '--self'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--self"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update"] — bare update (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "update",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update","-h"] — update help (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": true,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "update",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update","--background"] — background update (becomes a subcommand) 1`] = `
+{
+  "error": "Unknown option '--background'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--background"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["upgrade"] — bare upgrade (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "upgrade",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["rollback"] — bare rollback (becomes a subcommand) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "rollback",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update","the","readme"] — prompt starting with update 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "update the readme",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update","-p"] — print mode with prompt update 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "update",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["-p","install"] — print mode with prompt install 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": true,
+    "prompt": "install",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","foo"] — prompt install foo 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install foo",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","1.2"] — prompt install 1.2 (not a version) 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install 1.2",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","stable","now"] — prompt install stable now 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "install stable now",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["rollback","now"] — prompt rollback now 1`] = `
+{
+  "ok": true,
+  "options": {
+    "addDir": [],
+    "allowedTools": [],
+    "continue": false,
+    "dangerouslySkipPermissions": false,
+    "effort": undefined,
+    "help": false,
+    "maxTurns": undefined,
+    "model": undefined,
+    "outputFormat": "text",
+    "permissionMode": undefined,
+    "print": false,
+    "prompt": "rollback now",
+    "resume": false,
+    "resumeId": undefined,
+    "version": false,
+  },
+}
+`;
+
+exports[`parseCli compatibility snapshot ["install","--force","--bogus"] — subcommand word with unknown flag 1`] = `
+{
+  "error": "Unknown option '--force'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--force"",
+  "ok": false,
+}
+`;
+
+exports[`parseCli compatibility snapshot ["update","--background","-p"] — update background with print 1`] = `
+{
+  "error": "Unknown option '--background'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--background"",
+  "ok": false,
+}
+`;
