@@ -28,7 +28,7 @@ export function App({ runtime }: { runtime: Runtime }) {
   const [permission, setPermission] = useState<{ id: number; prompt: PermissionPrompt; answer(a: PermissionAnswer): void } | null>(null);
   const permissionId = useRef(0);
   const [picker, setPicker] = useState<SessionSummary[] | null>(null);
-  const [usage, setUsage] = useState({ contextTokens: 0, totalCostUsd: 0 });
+  const [usage, setUsage] = useState<{ contextTokens: number; totalCostUsd: number | undefined }>({ contextTokens: 0, totalCostUsd: 0 });
   const [settings, setSettings] = useState(runtime.state());
   const [staticKey, setStaticKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -150,8 +150,11 @@ export function App({ runtime }: { runtime: Runtime }) {
           runtime.setEffort(command.effort);
           setSettings(runtime.state());
           return notice("info", `Effort set to ${command.effort}.`);
-        case "cost":
-          return notice("info", `Session cost $${agentRef.current!.totalCostUsd.toFixed(4)} · context ${usage.contextTokens.toLocaleString()} tokens`);
+        case "cost": {
+          const total = agentRef.current!.totalCostUsd;
+          const cost = total === undefined ? "unknown (a model without a known price answered)" : `$${total.toFixed(4)}`;
+          return notice("info", `Session cost ${cost} · context ${usage.contextTokens.toLocaleString()} tokens`);
+        }
         case "unknown":
           return notice("error", `Unknown command /${command.name}. Type /help for the list.`);
       }
@@ -207,7 +210,8 @@ export function App({ runtime }: { runtime: Runtime }) {
 
   const width = (stdout as { columns?: number }).columns ?? 80;
   const staticItems: StaticItem[] = [{ id: "header", kind: "header" }, ...transcript.done];
-  const contextPct = Math.round((usage.contextTokens / contextWindow(settings.model)) * 100);
+  const contextSize = contextWindow(settings.model);
+  const contextPct = contextSize === undefined ? undefined : Math.round((usage.contextTokens / contextSize) * 100);
 
   return (
     <ThemeProvider theme={runtime.theme}>

@@ -35,6 +35,12 @@ describe("StatusBar", () => {
     expect(frame).toContain("shift+tab");
     expect(render(<StatusBar mode="bypass" contextPct={0} costUsd={0} />).lastFrame()).toContain("bypass permissions");
   });
+  test("unknown context window and cost say so instead of showing a number", () => {
+    const frame = render(<StatusBar mode="default" contextPct={undefined} costUsd={undefined} />).lastFrame()!;
+    expect(frame).toContain("ctx ?");
+    expect(frame).toContain("cost unknown");
+    expect(frame).not.toContain("$");
+  });
 });
 
 describe("ToolRow", () => {

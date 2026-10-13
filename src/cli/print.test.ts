@@ -71,6 +71,13 @@ describe("print mode", () => {
     });
   });
 
+  test("json reports cost_usd as null when a model has no known price", async () => {
+    const known = await print([() => reply([textBlock("Done")])], "json");
+    expect(JSON.parse(known.out).cost_usd).toBeCloseTo((100 * 4 + 20 * 20) / 1_000_000, 9);
+    const unknown = await print([() => reply([textBlock("Done")], "end_turn", "mystery-model")], "json");
+    expect(JSON.parse(unknown.out).cost_usd).toBeNull();
+  });
+
   test("stream-json emits one JSON object per line, ending with the result", async () => {
     const r = await print([() => reply([textBlock("A")])], "stream-json");
     const lines = r.out.trim().split("\n").map((l) => JSON.parse(l));

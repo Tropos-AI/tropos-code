@@ -62,6 +62,7 @@ export function contextTokens(usage: UsageLike): number {
   return usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
 }
 
-export function contextWindow(_model: string): number {
-  return 1_000_000; // every model in PRICES has a 1M window
+/** Undefined for a model Tropos has no record of, rather than a guess. */
+export function contextWindow(model: string): number | undefined {
+  return model in PRICES ? 1_000_000 : undefined; // every model in PRICES has a 1M window
 }

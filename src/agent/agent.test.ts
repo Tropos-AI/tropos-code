@@ -434,6 +434,15 @@ describe("Agent", () => {
     expect(usage).toMatchObject({ inputTokens: 100, outputTokens: 20, contextTokens: 100 });
     expect(h.agent.totalCostUsd).toBeCloseTo((100 * 4 + 20 * 20) / 1_000_000, 9);
   });
+
+  test("a reply from a model with no known price makes the session cost unknown, not $0", async () => {
+    const h = harness([() => reply([textBlock("a")], "end_turn", "mystery-model"), () => reply([textBlock("b")])]);
+    await run(h, "one");
+    expect(h.agent.totalCostUsd).toBeUndefined();
+    expect(h.events.find((e) => e.type === "usage")).toMatchObject({ costUsd: undefined, totalCostUsd: undefined });
+    await run(h, "two");
+    expect(h.agent.totalCostUsd).toBeUndefined();
+  });
 });
 
 describe("Agent failure paths keep history valid", () => {

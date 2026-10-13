@@ -29,7 +29,7 @@ export class PrintRenderer {
   private turns = 0;
   private inputTokens = 0;
   private outputTokens = 0;
-  private cost = 0;
+  private cost: number | undefined = 0;
   private lastError: string | null = null;
 
   constructor(
@@ -78,7 +78,7 @@ export class PrintRenderer {
         stop: reason,
         num_turns: this.turns,
         usage: { input_tokens: this.inputTokens, output_tokens: this.outputTokens },
-        cost_usd: this.cost,
+        cost_usd: this.cost ?? null,
         error: this.lastError,
       };
       this.out(`${JSON.stringify(summary)}\n`);

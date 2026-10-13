@@ -14,7 +14,7 @@ export type AgentEvent =
   | { type: "tool_start"; id: string; name: string; summary: string; input: unknown }
   | { type: "tool_end"; id: string; name: string; output: ToolOutput; status: ToolStatus }
   | { type: "notice"; level: "info" | "warn" | "error"; text: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number; contextTokens: number; costUsd?: number; totalCostUsd: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; contextTokens: number; costUsd?: number; totalCostUsd?: number }
   | { type: "turn_end"; reason: TurnEndReason };
 
 export interface PermissionPrompt {

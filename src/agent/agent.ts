@@ -51,7 +51,8 @@ const errorResult = (id: string, content: string): ToolResult => ({ type: "tool_
 
 export class Agent {
   readonly messages: MessageParam[];
-  totalCostUsd = 0;
+  /** Undefined once any reply came from a model with no known price: an undercount would read as a real total. */
+  totalCostUsd: number | undefined = 0;
   private lastMode: Mode | undefined;
   private askQueue: Promise<unknown> = Promise.resolve();
 
@@ -342,7 +343,7 @@ export class Agent {
   private recordUsage(message: Message, requestedModel: string): void {
     // Sums compaction/fallback iterations and prices fallbacks at the model that served them.
     const cost = messageCostUsd(message, requestedModel);
-    this.totalCostUsd += cost ?? 0;
+    this.totalCostUsd = cost === undefined || this.totalCostUsd === undefined ? undefined : this.totalCostUsd + cost;
     this.emit({
       type: "usage",
       inputTokens: message.usage.input_tokens,

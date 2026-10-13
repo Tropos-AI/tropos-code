@@ -10,7 +10,8 @@ export const MODE_LABELS: Record<Mode, string> = {
   bypass: "bypass permissions",
 };
 
-export function StatusBar({ mode, contextPct, costUsd }: { mode: Mode; contextPct: number; costUsd: number }) {
+/** contextPct and costUsd are undefined when the model's window or price is unknown. */
+export function StatusBar({ mode, contextPct, costUsd }: { mode: Mode; contextPct: number | undefined; costUsd: number | undefined }) {
   const theme = useTheme();
   const color = { default: theme.muted, acceptEdits: theme.accent, plan: theme.warning, bypass: theme.danger }[mode];
   return (
@@ -21,7 +22,7 @@ export function StatusBar({ mode, contextPct, costUsd }: { mode: Mode; contextPc
         </Text>
         <Text color={theme.muted}>
           {" "}
-          · ctx {contextPct}% · ${costUsd.toFixed(2)}
+          · ctx {contextPct === undefined ? "?" : `${contextPct}%`} · {costUsd === undefined ? "cost unknown" : `$${costUsd.toFixed(2)}`}
         </Text>
       </Text>
       <Text color={theme.muted}>shift+tab mode</Text>

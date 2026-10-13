@@ -16,6 +16,10 @@ test("context tokens count cached input too", () => {
   expect(contextWindow("claude-opus-5-5")).toBe(1_000_000);
 });
 
+test("unknown model has no known context window", () => {
+  expect(contextWindow("deepseek-v4")).toBeUndefined();
+});
+
 // A real BetaMessage must be assignable to the parameter type (compile-time check).
 const _check: Parameters<typeof messageCostUsd>[0] = {} as Anthropic.Beta.BetaMessage;
 void _check;
