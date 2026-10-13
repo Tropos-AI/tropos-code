@@ -57,7 +57,7 @@ describe("production binary", () => {
     expect((await exec(prodBin, ["update"])).code).toBe(73);
   });
 
-  test("with no pinned key, install --self fails closed (A5)", async () => {
+  test("rejects a manifest not signed by the pinned key", async () => {
     const r = await makeFixtureRelease({ version: pkg.version, key, dir, binary: new Uint8Array(await Bun.file(prodBin).arrayBuffer()) });
     await writeFile(join(dir, "pm.json"), r.verified.bytes);
     await writeFile(join(dir, "pm.sig"), r.verified.signature);

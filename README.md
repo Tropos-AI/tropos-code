@@ -7,7 +7,15 @@ edits and runs code in your project through Claude, and asks before it does anyt
 
 ## Install
 
-Requires [Bun](https://bun.sh) 1.4+ to build.
+```bash
+curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh
+```
+
+Other channels, verifying the installer first, updates and uninstalling: [docs/install.md](docs/install.md).
+
+Release key fingerprint: SHA256:<fingerprint-pending-key-ceremony>
+
+To build from source you need [Bun](https://bun.sh) 1.4+:
 
 ```bash
 bun install
