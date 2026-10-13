@@ -1,6 +1,6 @@
 // src/install/errors.test.ts
 import { describe, expect, test } from "bun:test";
-import { EXIT_CODES, InstallError, exitCodeFor, fromFsError } from "./errors";
+import { EXIT_CODES, InstallError, describeError, exitCodeFor, fromFsError } from "./errors";
 
 describe("install errors", () => {
   test("exit codes follow sysexits", () => {
@@ -19,8 +19,25 @@ describe("install errors", () => {
     }
   });
 
+  test("maps any error raised by a system call to local, not to a raw exit 1", () => {
+    for (const [code, syscall] of [["EIO", "read"], ["EMFILE", "open"], ["ENOENT", "open"], ["EISDIR", "read"]]) {
+      const mapped = fromFsError(Object.assign(new Error(`${code}: boom`), { code, syscall }), "reading x");
+      expect(mapped).toBeInstanceOf(InstallError);
+      expect(exitCodeFor(mapped)).toBe(73);
+      expect((mapped as InstallError).message).toBe(`reading x: ${code}: boom`);
+    }
+  });
+
   test("leaves other errors unchanged", () => {
     const e = Object.assign(new Error("gone"), { code: "ENOENT" });
     expect(fromFsError(e, "x")).toBe(e);
+    const plain = new TypeError("not a filesystem error");
+    expect(fromFsError(plain, "x")).toBe(plain);
+  });
+
+  test("describeError never throws", () => {
+    expect(describeError(new Error("m"))).toBe("m");
+    expect(describeError("s")).toBe("s");
+    expect(describeError({ toString() { throw new Error("x"); } })).toBe("unknown error");
   });
 });

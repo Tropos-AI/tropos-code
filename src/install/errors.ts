@@ -21,9 +21,24 @@ export function exitCodeFor(e: unknown): number {
 
 const LOCAL_CODES = new Set(["EACCES", "EPERM", "ENOSPC", "EROFS", "EDQUOT", "ELOOP", "ENOTDIR"]);
 
-/** Filesystem errors the user can act on become `local` errors; anything else is returned unchanged. */
+/**
+ * Filesystem errors become `local` errors (exit 73): the well-known actionable codes, and any error raised by a
+ * system call (EIO, EMFILE, ENOENT at open, …), which Node marks with `syscall`. Anything else is returned unchanged.
+ */
 export function fromFsError(e: unknown, action: string): unknown {
-  const code = (e as NodeJS.ErrnoException | undefined)?.code;
-  if (code && LOCAL_CODES.has(code)) return new InstallError("local", `${action}: ${(e as Error).message}`, { cause: e });
+  const err = e as NodeJS.ErrnoException | undefined;
+  const code = err?.code;
+  if ((code && LOCAL_CODES.has(code)) || (e instanceof Error && typeof err?.syscall === "string")) {
+    return new InstallError("local", `${action}: ${(e as Error).message}`, { cause: e });
+  }
   return e;
+}
+
+/** A message for any thrown value, even one whose toString throws. */
+export function describeError(e: unknown): string {
+  try {
+    return e instanceof Error ? e.message : String(e);
+  } catch {
+    return "unknown error";
+  }
 }
