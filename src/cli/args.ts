@@ -1,6 +1,7 @@
 // src/cli/args.ts
 import { parseArgs } from "node:util";
 import { EFFORTS, MODES, OUTPUT_FORMATS, type Effort, type Mode, type OutputFormat } from "../config/constants";
+import { isVersion } from "../install/version";
 
 export interface CliOptions {
   prompt?: string;
@@ -120,4 +121,55 @@ export function parseCli(argv: string[]): CliOptions {
     help: v.help ?? false,
     version: v.version ?? false,
   };
+}
+
+export type InstallCommand =
+  | { kind: "install"; target?: string; force: boolean }
+  | { kind: "install-self"; manifest: string; signature: string }
+  | { kind: "update"; background: boolean; alias: "update" | "upgrade" }
+  | { kind: "rollback" }
+  | { kind: "help"; command: "install" | "update" | "upgrade" | "rollback" };
+
+export type Invocation = { kind: "subcommand"; command: InstallCommand } | { kind: "session"; options: CliOptions };
+
+const SUBCOMMAND_WORDS = new Set(["install", "update", "upgrade", "rollback"]);
+
+/** Spec §12.2: a subcommand only when the whole argv has one of these exact shapes. */
+export function matchSubcommand(argv: string[]): InstallCommand | null {
+  const [word, ...rest] = argv;
+  if (!word || !SUBCOMMAND_WORDS.has(word)) return null;
+  const command = word as "install" | "update" | "upgrade" | "rollback";
+  if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) return { kind: "help", command };
+  if (command === "rollback") return rest.length === 0 ? { kind: "rollback" } : null;
+  if (command === "update" || command === "upgrade") {
+    if (rest.length === 0) return { kind: "update", background: false, alias: command };
+    if (rest.length === 1 && rest[0] === "--background") return { kind: "update", background: true, alias: command };
+    return null;
+  }
+  if (rest.length === 5 && rest[0] === "--self" && rest[1] === "--manifest" && rest[3] === "--signature" && rest[2] && rest[4]) {
+    return { kind: "install-self", manifest: rest[2], signature: rest[4] };
+  }
+  let target: string | undefined;
+  let force = false;
+  for (const arg of rest) {
+    if (arg === "--force" && !force) force = true;
+    else if (target === undefined && (arg === "stable" || arg === "latest" || isVersion(arg))) target = arg;
+    else return null;
+  }
+  return { kind: "install", target, force };
+}
+
+/** Subcommands first (unless argv starts with "--", amendment A2), otherwise exactly the old parser. */
+export function parseInvocation(argv: string[]): Invocation {
+  if (argv[0] !== "--") {
+    const command = matchSubcommand(argv);
+    if (command) return { kind: "subcommand", command };
+  }
+  try {
+    return { kind: "session", options: parseCli(argv) };
+  } catch (e) {
+    const word = argv[0];
+    if (e instanceof CliError && word && SUBCOMMAND_WORDS.has(word)) throw new CliError(`${e.message}\nFor ${word}, see tropos ${word} --help.`);
+    throw e;
+  }
 }
