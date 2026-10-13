@@ -1,7 +1,7 @@
 // src/install/state.ts
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import { fromFsError } from "./errors";
+import { InstallError, fromFsError } from "./errors";
 import { writeFileAtomic } from "./files";
 import type { Layout } from "./layout";
 import { isVersion } from "./version";
@@ -84,6 +84,11 @@ export async function readState(l: Layout): Promise<ReadStateResult> {
 /** Writes atomically and returns the state as written (generation + 1). State is never trusted for integrity. */
 export async function writeState(l: Layout, next: InstallState): Promise<InstallState> {
   const written: InstallState = { ...next, generation: next.generation + 1 };
+  const check = stateSchema.safeParse(written);
+  if (!check.success) {
+    const issue = check.error.issues[0]!;
+    throw new InstallError("local", `refusing to write an invalid install state: ${issue.path.join(".")}: ${issue.message}`);
+  }
   await writeFileAtomic(l.stateFile, `${JSON.stringify(written, null, 2)}\n`, 0o600);
   return written;
 }

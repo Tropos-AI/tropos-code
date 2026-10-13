@@ -41,4 +41,18 @@ describe("install state", () => {
     await writeFile(l.stateFile, text);
     expect((await readState(l)).kind).toBe("corrupt");
   });
+
+  test("writeState refuses a state the reader would reject and keeps the previous file", async () => {
+    const valid = await writeState(l, { ...emptyState(), current: "1.0.0" });
+    const bad = { ...valid, autoUpdate: { ...valid.autoUpdate, failures: 65 } };
+    await expect(writeState(l, bad)).rejects.toMatchObject({ kind: "local" });
+    expect(await readState(l)).toEqual({ kind: "ok", state: valid });
+  });
+
+  test("writeState refuses an extra top-level field and keeps the previous file", async () => {
+    const valid = await writeState(l, { ...emptyState(), current: "1.0.0" });
+    const bad = { ...valid, extra: true } as never;
+    await expect(writeState(l, bad)).rejects.toMatchObject({ kind: "local" });
+    expect(await readState(l)).toEqual({ kind: "ok", state: valid });
+  });
 });
