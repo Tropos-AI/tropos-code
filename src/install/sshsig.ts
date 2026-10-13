@@ -93,7 +93,7 @@ function parseSshSig(armored: string): SshSig {
   // ssh-keygen signs over an empty reserved field only; anything else is not a signature it accepts.
   if (r.string().length !== 0) throw new Error("reserved field is not empty");
   const hashAlg = r.string().toString("latin1");
-  if (hashAlg !== "sha256" && hashAlg !== "sha512") throw new Error(`unsupported hash ${hashAlg}`);
+  if (hashAlg !== "sha256" && hashAlg !== "sha512") throw new Error(`unsupported hash ${JSON.stringify(hashAlg)}`);
   const sigBlob = new Reader(r.string());
   if (sigBlob.string().toString("latin1") !== "ssh-ed25519") throw new Error("not an ed25519 signature");
   const signature = sigBlob.string();
@@ -120,7 +120,8 @@ export function verifySshSig(req: VerifyRequest): VerifyResult {
     return { ok: false, reason: `unreadable signature: ${(e as Error).message}` };
   }
   if (sig.namespace !== req.namespace) {
-    return { ok: false, reason: `signature is for namespace "${sig.namespace}", expected "${req.namespace}"` };
+    // The namespace comes from the attacker-controlled signature: quoted with JSON escapes, never echoed raw.
+    return { ok: false, reason: `signature is for namespace ${JSON.stringify(sig.namespace)}, expected ${JSON.stringify(req.namespace)}` };
   }
   const key = req.trusted.find((k) => k.principal === req.principal && Buffer.from(k.publicKey).equals(Buffer.from(sig.publicKey)));
   if (!key) return { ok: false, reason: `signed by an untrusted key (${fingerprint(sig.publicKey)})` };

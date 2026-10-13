@@ -134,16 +134,16 @@ describe("reserved field", () => {
   };
 
   /** Builds an SSHSIG envelope with node:crypto, signing over the given reserved field. */
-  function craftSignature(reserved: Buffer): { armored: string; trusted: ReturnType<typeof parseAllowedSigners> } {
+  function craftSignature(reserved: Buffer, namespace = "tropos-manifest", hashAlg = "sha512"): { armored: string; trusted: ReturnType<typeof parseAllowedSigners> } {
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const raw = (publicKey.export({ format: "der", type: "spki" }) as Buffer).subarray(-32);
     const pubBlob = Buffer.concat([sshStr("ssh-ed25519"), sshStr(raw)]);
     const digest = createHash("sha512").update(message).digest();
     const signed = Buffer.concat([
       Buffer.from("SSHSIG"),
-      sshStr("tropos-manifest"),
+      sshStr(namespace),
       sshStr(reserved),
-      sshStr("sha512"),
+      sshStr(hashAlg),
       sshStr(digest),
     ]);
     const sigBytes = cryptoSign(null, signed, privateKey);
@@ -152,9 +152,9 @@ describe("reserved field", () => {
       Buffer.from("SSHSIG"),
       Buffer.from([0, 0, 0, 1]),
       sshStr(pubBlob),
-      sshStr("tropos-manifest"),
+      sshStr(namespace),
       sshStr(reserved),
-      sshStr("sha512"),
+      sshStr(hashAlg),
       sshStr(sigBlob),
     ]);
     const b64 = envelope.toString("base64").match(/.{1,70}/g)!.join("\n");
@@ -174,5 +174,18 @@ describe("reserved field", () => {
     const r = verifySshSig({ message, armoredSignature: armored, namespace: "tropos-manifest", principal: "tropos-release", trusted });
     expect(r.ok).toBe(false);
     expect((r as { reason: string }).reason).toStartWith("unreadable signature");
+  });
+
+  test("never echoes a hostile namespace or hash name raw (terminal escapes stay escaped)", () => {
+    const hostile = "x\u001b]0;pwned\u0007\u001b[2J\nfake line";
+    for (const r of [
+      verifySshSig({ message, armoredSignature: craftSignature(Buffer.alloc(0), hostile).armored, namespace: "tropos-manifest", principal: "tropos-release", trusted: k1.trusted }),
+      verifySshSig({ message, armoredSignature: craftSignature(Buffer.alloc(0), "tropos-manifest", hostile).armored, namespace: "tropos-manifest", principal: "tropos-release", trusted: k1.trusted }),
+    ]) {
+      expect(r.ok).toBe(false);
+      const reason = (r as { reason: string }).reason;
+      expect(reason).not.toMatch(/[\u0000-\u001f\u007f]/);
+      expect(reason).toContain(JSON.stringify(hostile));
+    }
   });
 });
