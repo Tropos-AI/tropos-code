@@ -1,4 +1,5 @@
 // src/install/urls.ts
+import { testBuildOverrides } from "./build-flags";
 import { isVersion } from "./version";
 
 export interface ReleaseUrls {
@@ -39,4 +40,5 @@ export function githubReleaseUrls(opts: { base?: string; repo?: string; channels
   };
 }
 
-export const RELEASE_URLS: ReleaseUrls = githubReleaseUrls();
+const testBuild = testBuildOverrides(process.env);
+export const RELEASE_URLS: ReleaseUrls = testBuild ? githubReleaseUrls({ base: testBuild.base, repo: "t/r", channelsRepo: "t/r" }) : githubReleaseUrls();

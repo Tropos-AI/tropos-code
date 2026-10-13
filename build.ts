@@ -16,12 +16,12 @@ const stubDevtools: BunPlugin = {
   },
 };
 
-async function build(outfile: string, target?: Bun.Build.CompileTarget): Promise<void> {
+async function build(outfile: string, define: Record<string, string>, target?: Bun.Build.CompileTarget): Promise<void> {
   const result = await Bun.build({
     entrypoints: ["./src/index.ts"],
     compile: target ? { target, outfile } : { outfile },
     minify: true,
-    define: { "process.env.NODE_ENV": '"production"' },
+    define,
     plugins: [stubDevtools],
   });
   if (!result.success) {
@@ -33,17 +33,34 @@ async function build(outfile: string, target?: Bun.Build.CompileTarget): Promise
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
-  options: { all: { type: "boolean", default: false }, outfile: { type: "string" }, target: { type: "string" } },
+  options: {
+    all: { type: "boolean", default: false },
+    outfile: { type: "string" },
+    target: { type: "string" },
+    "test-build": { type: "boolean", default: false },
+    "test-signers": { type: "string" },
+  },
 });
 
+const define: Record<string, string> = {
+  "process.env.NODE_ENV": '"production"',
+  // Production builds compile the test hooks out (src/install/build-flags.ts, amendment A3).
+  TROPOS_TEST_BUILD: values["test-build"] ? "true" : "false",
+};
+if (values["test-build"]) {
+  if (!values["test-signers"]) throw new Error("--test-build needs --test-signers <allowed_signers file>");
+  if (values.all) throw new Error("--test-build cannot be combined with --all");
+  define.TROPOS_TEST_SIGNERS = JSON.stringify(await Bun.file(values["test-signers"]).text());
+}
+
 if (values.all) {
-  for (const target of TARGETS) await build(`dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, target);
+  for (const target of TARGETS) await build(`dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, define, target);
 } else if (values.target) {
   const target = values.target as Bun.Build.CompileTarget;
   // The baseline build runs on x64 CPUs without AVX2, including x64 containers emulated on Apple Silicon.
   const allowed: Bun.Build.CompileTarget[] = [...TARGETS, "bun-linux-x64-baseline"];
   if (!allowed.includes(target)) throw new Error(`unknown --target ${values.target}; one of ${allowed.join(", ")}`);
-  await build(values.outfile ?? `dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, target);
+  await build(values.outfile ?? `dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, define, target);
 } else {
-  await build(values.outfile ?? "dist/tropos");
+  await build(values.outfile ?? "dist/tropos", define);
 }

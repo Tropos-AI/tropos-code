@@ -2,6 +2,7 @@
 import type { InstallCommand } from "../cli/args";
 import { INSTALL_HELP, ROLLBACK_HELP, UPDATE_HELP } from "../cli/usage";
 import { runBackgroundUpdate } from "./autoupdate";
+import { IS_TEST_BUILD } from "./build-flags";
 import type { Channel } from "./channels";
 import type { EngineDeps } from "./engine";
 import { InstallError, exitCodeFor } from "./errors";
@@ -34,6 +35,7 @@ export function productionEngineDeps(env: NodeJS.ProcessEnv, version: string, lo
     urls: RELEASE_URLS,
     health: (bin, v) => defaultHealthCheck(bin, v, env),
     selfVersion: version,
+    allowLoopbackHttp: IS_TEST_BUILD,
     log,
   };
 }

@@ -13,6 +13,7 @@ export const EXEMPT: Record<string, string> = {
   "src/index.ts": "entry shim; exercised by the compiled-binary e2e tests",
   "src/agent/events.ts": "type-only module",
   "src/ui/runtime.ts": "type-only module",
+  "src/install/build-flags.ts": "test-build branches run only in compiled e2e binaries (amendment A3)",
 };
 
 /** Every non-test source file under src/, as repo-relative paths. */
@@ -42,11 +43,13 @@ export function evaluate(
       current = undefined;
     }
   }
-  const source = records.filter((f) => /(^|\/)src\//.test(f.path.replace(/\\/g, "/")));
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "");
+  const source = records.filter((f) => /(^|\/)src\//.test(norm(f.path)));
   const pct = (hit: number, found: number) => (found === 0 ? 1 : hit / found);
   const fmt = (n: number) => `${(n * 100).toFixed(1)}%`;
 
   const failures = source
+    .filter((f) => !(norm(f.path) in exempt))
     .filter((f) => pct(f.hit, f.found) < threshold)
     .map((f) => `${f.path}: ${fmt(pct(f.hit, f.found))} of lines covered (need ${fmt(threshold)})`);
   const reported = new Set(records.map((f) => f.path.replace(/\\/g, "/").replace(/^\.\//, "")));
