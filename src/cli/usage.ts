@@ -23,5 +23,5 @@ Options:
 Credentials: ANTHROPIC_API_KEY, or run \`ant auth login\`.
 Settings: ~/.tropos/settings.json, ~/.tropos/projects/<project>/settings.json,
           .tropos/settings.json, .tropos/settings.local.json (repo files: ask/deny rules and preferences only)
-Memory:   ~/.tropos/TROPOS.md, TROPOS.md (or AGENTS.md) in the repo, TROPOS.local.md
+Memory:   ~/.tropos/TROPOS.md, TROPOS.md (or AGENTS.md, CLAUDE.md) in the repo, TROPOS.local.md
 `;
