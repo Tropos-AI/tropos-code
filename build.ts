@@ -1,8 +1,9 @@
 import type { BunPlugin } from "bun";
 import { parseArgs } from "node:util";
 import pkg from "./package.json";
+import { RELEASE_TARGETS } from "./scripts/release/targets";
 
-const TARGETS: Bun.Build.CompileTarget[] = ["bun-darwin-arm64", "bun-darwin-x64", "bun-linux-x64", "bun-linux-arm64"];
+const TARGETS: Bun.Build.CompileTarget[] = Object.values(RELEASE_TARGETS);
 
 /** Ink imports react-devtools-core behind a DEV check that the bundler can't drop; give it an inert stub. */
 const stubDevtools: BunPlugin = {
