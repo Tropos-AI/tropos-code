@@ -1,6 +1,8 @@
 // src/install/fetch.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { once } from "node:events";
+import { createServer, type Server } from "node:net";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { InstallError } from "./errors";
@@ -9,6 +11,7 @@ import { downloadToFile, fetchBytes } from "./fetch";
 let dir: string;
 let server: ReturnType<typeof Bun.serve>;
 let base: string;
+let resetServer: Server;
 
 beforeAll(async () => {
   dir = await makeTmpDir();
@@ -42,9 +45,19 @@ beforeAll(async () => {
     },
   });
   base = `http://127.0.0.1:${server.port}`;
+  // Promises 100 bytes, sends 4, then destroys the socket.
+  resetServer = createServer((socket) => {
+    socket.on("error", () => {});
+    socket.once("data", () => {
+      socket.write("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nsome");
+      setTimeout(() => socket.destroy(), 20);
+    });
+  }).listen(0, "127.0.0.1");
+  await once(resetServer, "listening");
 });
 afterAll(async () => {
   server.stop(true);
+  resetServer.close();
   await removeDir(dir);
 });
 
@@ -121,5 +134,16 @@ describe("downloadToFile", () => {
     const e = await failure(downloadToFile(`${base}/stall`, join(dir, "stall.bin"), { ...opts, idleTimeoutMs: 200 }));
     expect(e.kind).toBe("network");
     expect(e.message).toContain("stalled");
+  });
+
+  test("a body that errors mid-transfer is a network error", async () => {
+    const e = await failure(downloadToFile(`http://127.0.0.1:${(resetServer.address() as { port: number }).port}/x`, join(dir, "reset.bin"), opts));
+    expect(e.kind).toBe("network");
+  });
+
+  test.skipIf(process.getuid?.() === 0)("an unwritable destination directory is a local error", async () => {
+    const ro = join(dir, "ro");
+    await mkdir(ro, { mode: 0o500 });
+    expect((await failure(downloadToFile(`${base}/ok`, join(ro, "x.bin"), opts))).kind).toBe("local");
   });
 });

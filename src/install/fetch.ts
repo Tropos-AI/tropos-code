@@ -120,6 +120,7 @@ export async function downloadToFile(url: string, dest: string, opts: FetchOptio
     const res = await openOk(url, opts, controller.signal);
     arm(idle);
     if (res.body) {
+      const writeFailure = new WeakSet<object>();
       try {
         for await (const chunk of res.body) {
           total += chunk.length;
@@ -128,14 +129,15 @@ export async function downloadToFile(url: string, dest: string, opts: FetchOptio
           try {
             await file.write(chunk);
           } catch (e) {
-            throw fromFsError(e, `writing ${dest}`);
+            const mapped = fromFsError(e, `writing ${dest}`) as object;
+            writeFailure.add(mapped);
+            throw mapped;
           }
           arm(idle);
         }
       } catch (e) {
-        if (e instanceof InstallError) throw e;
+        if (e instanceof InstallError || (typeof e === "object" && e !== null && writeFailure.has(e))) throw e;
         if (controller.signal.aborted) throw new InstallError("network", `download from ${hostOf(url)} stalled for ${idle / 1000} s`);
-        if ((e as NodeJS.ErrnoException).code) throw e;
         throw new InstallError("network", `download from ${hostOf(url)} failed: ${(e as Error).message}`, { cause: e });
       }
     }

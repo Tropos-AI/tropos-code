@@ -1,6 +1,6 @@
 // src/install/decompress.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expectedOf, zstdCorpus } from "../../test/install/helpers/zstd-corpus";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
@@ -42,5 +42,33 @@ describe("decompressZstdFile", () => {
     await writeFile(src, c.zst);
     await writeFile(dest, "existing");
     await expect(decompressZstdFile(src, dest, expectedOf(c))).rejects.toThrow();
+  });
+});
+
+describe("decompressZstdFile filesystem errors", () => {
+  test("an existing destination is a local error", async () => {
+    const c = zstdCorpus()[0]!;
+    const src = join(dir, "ex.zst");
+    const dest = join(dir, "ex.out");
+    await writeFile(src, c.zst);
+    await writeFile(dest, "existing");
+    const err = await decompressZstdFile(src, dest, expectedOf(c)).then(() => null, (e: unknown) => e);
+    expect((err as InstallError).kind).toBe("local");
+  });
+
+  test("a missing source is a local error", async () => {
+    const c = zstdCorpus()[0]!;
+    const err = await decompressZstdFile(join(dir, "nope.zst"), join(dir, "nope.out"), expectedOf(c)).then(() => null, (e: unknown) => e);
+    expect((err as InstallError).kind).toBe("local");
+  });
+
+  test.skipIf(process.getuid?.() === 0)("an unwritable destination directory is a local error", async () => {
+    const c = zstdCorpus()[0]!;
+    const ro = join(dir, "ro");
+    await mkdir(ro, { mode: 0o500 });
+    const src = join(dir, "ro.zst");
+    await writeFile(src, c.zst);
+    const err = await decompressZstdFile(src, join(ro, "out"), expectedOf(c)).then(() => null, (e: unknown) => e);
+    expect((err as InstallError).kind).toBe("local");
   });
 });
