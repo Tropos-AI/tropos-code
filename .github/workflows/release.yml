@@ -160,13 +160,24 @@ jobs:
           path: assets
       - name: Create or complete the draft
         run: |
-          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          # Only gh's own "release not found" means there is no release yet; any other failure
+          # (auth, rate limit, outage) stops the job instead of creating a second release.
+          if ! state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            if [ "$state" != "release not found" ]; then
+              echo "gh release view $TAG failed: $state" >&2
+              exit 1
+            fi
+            state=missing
+          fi
           if [ "$state" = missing ]; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --title "$TAG" --notes "Verify with the key fingerprint in the README; see docs/install.md." assets/*
           elif [ "$state" = true ]; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
-          else
+          elif [ "$state" = false ]; then
             echo "$TAG is already published; resuming after the draft stage"
+          else
+            echo "unexpected draft state for $TAG: $state" >&2
+            exit 1
           fi
 
   fetch-draft:

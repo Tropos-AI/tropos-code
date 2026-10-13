@@ -101,7 +101,7 @@ const ALLOW: Record<string, Record<string, true | RegExp[]>> = {
     "ssh-keygen": [/^ssh-keygen -Y sign -f Q -n tropos-(manifest|installer) to-sign\/(manifest\.json|install\.sh)$/, /^ssh-keygen -Y verify -f release\/allowed_signers -I tropos-release -n tropos-(manifest|installer) -s to-sign\/(manifest\.json|install\.sh)\.sig < to-sign\/(manifest\.json|install\.sh)$/],
     rm: [/^rm -f Q$/],
   },
-  "release.yml:draft": { "[": true, echo: true, gh: [/^gh release (view|create|upload) /] },
+  "release.yml:draft": { "[": true, echo: true, exit: true, gh: [/^gh release (view|create|upload) /] },
   "release.yml:fetch-draft": { gh: [/^gh release download Q --repo Q --dir draft$/] },
   "release.yml:publish": { gh: [/^gh release edit Q --repo Q --draft=false --latest=false$/] },
   "release.yml:promote-latest": { ...MAIN_GUARD, bun: [/^bun scripts\/release\/promote\.ts latest Q$/] },
@@ -591,5 +591,53 @@ describe.skipIf(!Bun.which("unzip"))("the prepare job's zip-slip guard (ruling 2
     const r = await runGuard(makeZip(good()), { existingInputs: true });
     expect(r.code).not.toBe(0);
     expect(await readdir(join(r.work, "inputs"))).toEqual([]);
+  });
+});
+
+describe("release.yml draft: only gh's \"release not found\" counts as no release (M1)", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    for (const d of dirs.splice(0)) await removeDir(d);
+  });
+
+  /** Runs the draft step as Actions does (bash -e -o pipefail) against a stub gh that logs its calls. */
+  const runDraft = async (view: { out: string; code: number }) => {
+    const dir = await makeTmpDir("tropos-draft-");
+    dirs.push(dir);
+    const step = (await load("release.yml")).jobs.draft!.steps.find((st) => st.run !== undefined)!;
+    await mkdir(join(dir, "bin"));
+    await mkdir(join(dir, "assets"));
+    await writeFile(join(dir, "assets", "manifest.json"), "{}\n");
+    const stub = `#!/bin/sh\necho "$*" >> "${join(dir, "calls")}"\nif [ "$2" = view ]; then\n  if [ "$VIEW_CODE" = 0 ]; then printf '%s\\n' "$VIEW_OUT"; else printf '%s\\n' "$VIEW_OUT" >&2; fi\n  exit "$VIEW_CODE"\nfi\n`;
+    await writeFile(join(dir, "bin", "gh"), stub, { mode: 0o755 });
+    const p = Bun.spawnSync(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step.run!], {
+      cwd: dir,
+      env: { PATH: `${join(dir, "bin")}:/usr/bin:/bin`, TAG: "v1.0.0", GITHUB_REPOSITORY: "Tropos-AI/tropos-code", VIEW_OUT: view.out, VIEW_CODE: String(view.code) },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const calls = (await Bun.file(join(dir, "calls")).text()).trim().split("\n").map((c) => c.split(" ").slice(0, 2).join(" "));
+    return { code: p.exitCode, calls, stderr: p.stderr.toString() };
+  };
+
+  test("a missing release is created as a draft", async () => {
+    expect(await runDraft({ out: "release not found", code: 1 })).toMatchObject({ code: 0, calls: ["release view", "release create"] });
+  });
+
+  test.each([
+    ["an API outage", "HTTP 502: Bad Gateway (https://api.github.com/graphql)"],
+    ["bad credentials", "HTTP 401: Bad credentials (https://api.github.com/graphql)"],
+    ["a rate limit", "API rate limit exceeded for installation"],
+  ])("%s fails the job and creates nothing", async (_what, out) => {
+    const r = await runDraft({ out, code: 1 });
+    expect(r.code).not.toBe(0);
+    expect(r.calls).toEqual(["release view"]);
+    expect(r.stderr).toContain(out);
+  });
+
+  test("an existing draft is completed; a published release is left alone; anything else fails", async () => {
+    expect(await runDraft({ out: "true", code: 0 })).toMatchObject({ code: 0, calls: ["release view", "release upload"] });
+    expect(await runDraft({ out: "false", code: 0 })).toMatchObject({ code: 0, calls: ["release view"] });
+    expect((await runDraft({ out: "maybe", code: 0 })).code).not.toBe(0);
   });
 });
