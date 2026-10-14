@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { neutraliseHarnessTags } from "../context/tags";
 import { errorText } from "../error-text";
+import { blockedPlaceholder, scanText } from "../learning/threats";
 import { escapeAttr, MAX_EXTENSION_BYTES, NAME_SEGMENT, readCapped } from "./commands";
 import { fmBool, fmString, parseFrontmatter } from "./frontmatter";
 import { qualifiedName, staysInProject, type ExtensionDir, type ExtensionSource } from "./sources";
@@ -36,7 +37,9 @@ function isMissing(err: unknown): boolean {
  * Loads `<dir>/<name>/SKILL.md` skills, highest-precedence folder first; the first of each name
  * wins. The folder name is the skill's name (a differing frontmatter `name` is ignored, so a repo
  * cannot pose as another skill). A skill without a description is skipped with a warning: the
- * model could never know when to use it.
+ * model could never know when to use it. A skill whose text fails the threat scan still loads (so
+ * its name keeps shadowing lower-precedence ones) but its body, or description, becomes a
+ * `[blocked: …]` placeholder and a warning says why.
  */
 export async function loadSkills(dirs: ExtensionDir[]): Promise<{ skills: Skill[]; warnings: string[] }> {
   const warnings: string[] = [];
@@ -82,13 +85,18 @@ export async function loadSkills(dirs: ExtensionDir[]): Promise<{ skills: Skill[
         continue;
       }
       seen.add(name);
+      const whenToUse = optionalLine(fmString(data, "when_to_use"));
+      const bodyScan = scanText(body);
+      const metaScan = scanText(`${description}\n${whenToUse ?? ""}`);
+      const flagged = !bodyScan.ok ? bodyScan : !metaScan.ok ? metaScan : undefined;
+      if (flagged) warnings.push(`Skill ${name} was blocked: ${flagged.reason} (${path})`);
       skills.push({
         name,
-        description: oneLine(description),
-        whenToUse: optionalLine(fmString(data, "when_to_use")),
+        description: metaScan.ok ? oneLine(description) : blockedPlaceholder(metaScan.reason),
+        whenToUse: metaScan.ok ? whenToUse : undefined,
         dir: skillDir,
         path,
-        body,
+        body: bodyScan.ok ? body : blockedPlaceholder(bodyScan.reason),
         source: dir.source,
         modelInvocable: fmBool(data, "disable-model-invocation") !== true,
         userInvocable: fmBool(data, "user-invocable") ?? true,
@@ -119,8 +127,8 @@ function cap(text: string, max: number): string {
 export function skillListing(skills: Skill[], budget = SKILL_LISTING_BUDGET): string {
   const listed = skills.filter((s) => s.modelInvocable);
   if (listed.length === 0) return "";
-  // Repo skills say so: the model follows their procedure but gives them no more authority than project memory.
-  const label = (s: Skill) => (s.source === "project" ? `${s.name} (project)` : s.name);
+  // Repo and learned skills say so: the model follows their procedure but gives them no more authority than project memory.
+  const label = (s: Skill) => (s.source === "project" || s.source === "learned" ? `${s.name} (${s.source})` : s.name);
   const full = listed.map((s) => neutraliseHarnessTags(cap(`- ${label(s)}: ${s.description}${s.whenToUse ? ` — ${s.whenToUse}` : ""}`, MAX_LINE)));
   const short = listed.map((s) => `- ${s.name}`);
   const open = "<skills>";

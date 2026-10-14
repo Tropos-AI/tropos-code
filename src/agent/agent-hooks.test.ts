@@ -290,3 +290,53 @@ test("addCost folds a subagent's spend in; an unknown price makes the total unkn
   agent.addCost(1);
   expect(agent.totalCostUsd).toBeUndefined();
 });
+
+describe("endTurn", () => {
+  type Seen = { reason: string; messages: number };
+  const watch = () => {
+    const seen: Seen[] = [];
+    return { seen, endTurn: (reason: string, messages: readonly unknown[]) => void seen.push({ reason, messages: messages.length }) };
+  };
+
+  test("is called once per run with the final reason and the history", async () => {
+    const w = watch();
+    const { agent } = make([() => reply([textBlock("a")]), () => reply([textBlock("b")])], { endTurn: w.endTurn });
+    expect(await agent.run("one", signal())).toBe("end_turn");
+    expect(await agent.run("two", signal())).toBe("end_turn");
+    expect(w.seen).toEqual([
+      { reason: "end_turn", messages: 2 },
+      { reason: "end_turn", messages: 4 },
+    ]);
+  });
+
+  test("sees error, aborted and blocked turns too", async () => {
+    const w = watch();
+    const failing = make(
+      [
+        () => {
+          throw new Error("boom");
+        },
+      ],
+      { endTurn: w.endTurn },
+    );
+    expect(await failing.agent.run("go", signal())).toBe("error");
+    const controller = new AbortController();
+    controller.abort();
+    expect(await make([], { endTurn: w.endTurn }).agent.run("go", controller.signal)).toBe("aborted");
+    const hooks = fakeHooks({ UserPromptSubmit: () => ({ blocked: "no" }) });
+    expect(await make([], { hooks, endTurn: w.endTurn }).agent.run("go", signal())).toBe("blocked");
+    expect(w.seen.map((s) => s.reason)).toEqual(["error", "aborted", "blocked"]);
+    expect(w.seen[2]!.messages).toBe(0);
+  });
+
+  test("one that throws doesn't break run()", async () => {
+    const { agent } = make([() => reply([textBlock("a")]), () => reply([textBlock("b")])], {
+      endTurn: () => {
+        throw new Error("observer failed");
+      },
+    });
+    expect(await agent.run("one", signal())).toBe("end_turn");
+    expect(await agent.run("two", signal())).toBe("end_turn");
+    expect(agent.messages).toHaveLength(4);
+  });
+});

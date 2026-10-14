@@ -12,11 +12,14 @@ const HARNESS_TAGS = [
   "mode",
   "skills?",
   "notes",
+  "daily-notes",
   "reminder",
   "hook-context",
   "harness-nonce",
   "command",
   "file",
+  "identity",
+  "bootstrap",
 ];
 const TAG = new RegExp(`<(?=\\s*\\/?\\s*(?:${HARNESS_TAGS.join("|")})(?![\\w-]))`, "gi");
 

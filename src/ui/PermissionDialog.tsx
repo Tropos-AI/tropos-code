@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { PermissionAnswer, PermissionPrompt } from "../agent/events";
 import { makeDiff, patchBody } from "../tools/diff";
 import { Pane } from "./design/Pane";
+import { learningPermissionTitle } from "./permission-titles";
 import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
 
@@ -19,6 +20,8 @@ function safe(text: string): string {
 
 /** The dialog title names the action, the way the transcript names the tool, so the prompt reads at a glance. */
 export function permissionTitle(prompt: PermissionPrompt, newFile?: boolean): string {
+  const learned = learningPermissionTitle(prompt.toolName);
+  if (learned) return learned;
   if (prompt.toolName === "Bash" || prompt.kind === "exec") return "Bash command";
   if (prompt.toolName === "Write") return newFile ? "Create file" : "Write file";
   if (prompt.toolName === "Edit" || prompt.kind === "edit") return "Edit file";

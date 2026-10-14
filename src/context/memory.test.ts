@@ -2,9 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { gitRoot, loadMemory } from "./memory";
-
-const TRUNCATED = "\n[truncated: file is larger than 40,000 characters]";
+import { gitRoot, loadMemory, MAX_FILE_CHARS, truncateMemoryText } from "./memory";
 
 let dir: string;
 let home: string;
@@ -81,16 +79,55 @@ describe("loadMemory", () => {
 });
 
 describe("size caps", () => {
-  test("a file over 40,000 characters is truncated with a note", async () => {
-    await writeFile(join(repo, "TROPOS.md"), "a".repeat(50_000));
+  test("a file over 40,000 characters keeps its head and tail with a marker naming it", async () => {
+    await writeFile(join(repo, "TROPOS.md"), "a".repeat(30_000) + "b".repeat(20_000));
     const [file] = await loadMemory(repo, home);
-    expect(file!.content).toBe("a".repeat(40_000) + TRUNCATED);
+    const marker = `[… truncated: ${join(repo, "TROPOS.md")} is 50,000 chars; read it for the full text …]`;
+    expect(file!.content).toBe(`${"a".repeat(18_000)}\n${marker}\n${"b".repeat(6_000)}`);
+    expect(file!.content.length).toBeLessThan(MAX_FILE_CHARS);
   });
 
-  test("a file over 1 MB is read only as far as the cap", async () => {
-    await writeFile(join(repo, "TROPOS.md"), "b".repeat(1_500_000));
+  test("policy lines from the middle survive, in order and deduplicated", async () => {
+    const filler = (tag: string, n: number) => Array.from({ length: n }, (_, i) => `${tag} filler line ${i} `.padEnd(80, "x")).join("\n");
+    const middle = [
+      "You MUST run the linter.",
+      "plain prose",
+      "Never commit secrets.",
+      "You MUST run the linter.",
+      "Use a token bucket.",
+      "testing is not a match",
+      "do not push to main",
+    ].join("\n");
+    await writeFile(join(repo, "TROPOS.md"), `${filler("head", 300)}\n${middle}\n${filler("mid", 300)}\n${filler("tail", 100)}`);
     const [file] = await loadMemory(repo, home);
-    expect(file!.content).toBe("b".repeat(40_000) + TRUNCATED);
+    const text = file!.content;
+    expect(text).toContain("[policy lines from the omitted middle:]\nYou MUST run the linter.\nNever commit secrets.\nUse a token bucket.\ndo not push to main\n[… end of policy lines");
+    expect(text).not.toContain("plain prose");
+    expect(text).not.toContain("testing is not a match");
+    expect(text).toStartWith("head filler line 0");
+    expect(text).toEndWith(`tail filler line 99 `.padEnd(80, "x"));
+    // Head and tail are cut at line breaks.
+    expect(text.split("\n").filter((l) => l.includes("filler")).every((l) => l.length === 80)).toBe(true);
+  });
+
+  test("the digest stops at its share of the budget", () => {
+    const rules = Array.from({ length: 2_000 }, (_, i) => `rule ${i}: always do thing ${i}`).join("\n");
+    const out = truncateMemoryText("/r/T.md", `${"h".repeat(20_000)}\n${rules}\n${"t".repeat(7_000)}`, null, "n chars");
+    const digest = out.slice(out.indexOf("[policy lines"), out.indexOf("[… end of policy"));
+    expect(digest.length).toBeLessThanOrEqual(14_000 + 60);
+    expect(digest).toContain("rule 0: always do thing 0");
+    expect(out.length).toBeLessThan(MAX_FILE_CHARS + 300);
+  });
+
+  test("a file over 1 MB is read only as far as the cap, start and end", async () => {
+    await writeFile(join(repo, "TROPOS.md"), `${"b".repeat(1_000_000)}\nnever skip tests here\n${"é".repeat(500_000)}\nend rule`);
+    const [file] = await loadMemory(repo, home);
+    const text = file!.content;
+    expect(text).toStartWith("b".repeat(18_000));
+    expect(text).toContain(`is ${(1_000_000 + 23 + 1_000_000 + 9).toLocaleString("en-US")} bytes; read it`);
+    expect(text).not.toContain("never skip tests here"); // beyond what is read
+    expect(text).toEndWith("é\nend rule");
+    expect(text).not.toContain("\uFFFD");
   });
 });
 

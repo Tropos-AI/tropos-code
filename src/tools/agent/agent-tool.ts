@@ -36,7 +36,11 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent):
       "Its tool calls go through the same permission checks as yours. Its final message comes back as the result; relay what matters to the user.\n\n" +
       `Available agents:\n${listing(agents)}`,
     schema,
-    summarize: (input) => `${input.subagent_type ?? "general-purpose"}: ${input.description}`,
+    summarize: (input) => {
+      const name = input.subagent_type ?? "general-purpose";
+      const emoji = byName.get(name)?.emoji;
+      return `${emoji ? `${emoji} ` : ""}${name}: ${input.description}`;
+    },
     subject: (input) => ({ paths: [], target: input.subagent_type ?? "general-purpose" }),
     async run(input, ctx) {
       const name = input.subagent_type ?? "general-purpose";

@@ -264,6 +264,10 @@ export function App({ runtime }: { runtime: Runtime }) {
         case "undo":
         case "redo":
           return undoRedo(command.kind);
+        case "learned_undo": {
+          const result = await runtime.undoLearned();
+          return showToast(result.ok ? "success" : "warn", result.ok ? `Undid ${result.summary}` : result.reason);
+        }
         case "unknown":
           return showToast("error", `Unknown command /${command.name}. Type / to see the list.`);
       }
@@ -465,7 +469,7 @@ export function App({ runtime }: { runtime: Runtime }) {
       <Static key={staticKey} items={staticItems}>
         {(item) =>
           item.kind === "header" ? (
-            <BrandHeader key="header" version={runtime.version} model={settings.model} effort={settings.effort} cwd={runtime.cwd} width={width} />
+            <BrandHeader key="header" version={runtime.version} model={settings.model} effort={settings.effort} cwd={runtime.cwd} width={width} identity={runtime.identity()} />
           ) : (
             <TranscriptRow key={item.id} item={item} width={width} verbose={verbose} cwd={runtime.cwd} />
           )

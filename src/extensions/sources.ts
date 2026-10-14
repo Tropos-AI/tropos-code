@@ -5,8 +5,15 @@ import { gitRoot } from "../context/memory";
 
 export type ExtensionKind = "commands" | "skills" | "agents";
 
-/** Where an extension came from. Project files arrive with the code and grant nothing. */
-export type ExtensionSource = "user" | "project" | "plugin";
+/**
+ * Where an extension came from. Project files arrive with the code and grant nothing. "learned" skills were
+ * written by the background learning review without asking (~/.tropos/skills-learned): the agent's own
+ * notes, not the user's instructions.
+ */
+export type ExtensionSource = "user" | "learned" | "project" | "plugin";
+
+/** The folder under the Tropos home where the learning review keeps the skills it writes. */
+export const LEARNED_SKILLS_DIR = "skills-learned";
 
 export interface ExtensionDir {
   dir: string;
@@ -51,6 +58,7 @@ export function projectChain(cwd: string): string[] {
  */
 export function extensionDirs(kind: ExtensionKind, opts: { cwd: string; home: string; plugins?: PluginRoot[] }): ExtensionDir[] {
   const dirs: ExtensionDir[] = [{ dir: join(opts.home, kind), source: "user" }];
+  if (kind === "skills") dirs.push({ dir: join(opts.home, LEARNED_SKILLS_DIR), source: "learned" });
   const chain = projectChain(opts.cwd);
   const root = chain.at(-1)!;
   for (const base of chain) {

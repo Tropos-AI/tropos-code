@@ -203,4 +203,31 @@ describe("demo mode", () => {
     store.stop();
     expect(store.getState().connection.status).toBe("closed");
   });
+
+  test("the demo agent has an identity, a learned panel, and /learned undo answers", async () => {
+    const store = createAppStore({ demo: true });
+    const hello = new Promise<void>((resolve) => {
+      const off = store.subscribe(() => {
+        if (store.getState().hello) {
+          off();
+          resolve();
+        }
+      });
+    });
+    store.start();
+    await hello;
+    expect(store.getState().hello?.identity).toEqual({ name: "Nova", emoji: "🦊" });
+
+    const learned = await store.rpc("panel", "learned");
+    expect(learned.title).toBe("Learned");
+    const items = learned.sections.flatMap((s) => s.items);
+    expect(items.map((i) => i.key)).toEqual(["l3", "l2", "l1"]);
+    expect(items.some((i) => i.label.startsWith("identity:"))).toBe(true);
+    expect(learned.empty).toContain("Nothing learned yet");
+
+    const undone = await store.rpc("learned.undo", undefined);
+    expect(undone.summary).toContain("bun-testing");
+    store.stop();
+    expect(store.getState().connection.status).toBe("closed");
+  });
 });

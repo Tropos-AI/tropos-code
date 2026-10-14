@@ -33,3 +33,10 @@ test("an unknown agent is an error result", async () => {
   const out = await tool.run({ description: "d", prompt: "p", subagent_type: "nope" }, makeToolContext());
   expect(out).toEqual({ content: 'Unknown agent "nope". Available: general-purpose, explore.', isError: true });
 });
+
+test("the summary carries the agent's emoji when it has one", () => {
+  const tool = createAgentTool([...agents, { name: "scout", description: "Scouts.", prompt: "p", emoji: "🔎" }], async () => ({ content: "x" }));
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "scout" })).toBe("🔎 scout: find it");
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "explore" })).toBe("explore: find it");
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "nope" })).toBe("nope: find it");
+});

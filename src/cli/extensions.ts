@@ -12,8 +12,13 @@ import { Formatters } from "../format/formatters";
 import { HookRunner, type HookRunnerConfig } from "../hooks/runner";
 import { LspManager } from "../lsp/manager";
 import { McpManager } from "../mcp/manager";
+import { bootstrapContext, bootstrapPending, createIdentityTool, identityContext, loadIdentity } from "../context/identity";
+import { Ledger } from "../learning/ledger";
+import { SkillTracker } from "../learning/skill-tracker";
+import { createDailyNoteTool, DailyNotes, dailyNotesContext } from "../memory/daily";
 import { createMemoryTool } from "../memory/memory-tool";
 import { NotesStore, notesContext } from "../memory/notes";
+import { SearchIndex } from "../memory/search-index";
 import { createSessionSearchTool } from "../memory/session-search";
 import { createSkillManageTool } from "../memory/skill-manage";
 import { SnapshotStore } from "../snapshots/store";
@@ -36,6 +41,16 @@ export interface Extensions {
   hookConfig: HookRunnerConfig;
   mcp: McpManager | null;
   notes: NotesStore | null;
+  /** Append-only project notes per day (null when memory is off). */
+  daily: DailyNotes | null;
+  /** Every change to learned files (notes, skills, identity), for /learned and undo. */
+  ledger: Ledger;
+  /** Skills loaded or created in this session: SkillManage patches only those (read before write). */
+  tracker: SkillTracker;
+  /** The same, for the learning review, kept apart so its reads never unlock a skill for the main agent. */
+  reviewTracker: SkillTracker;
+  /** The full-text index SessionSearch uses; null in tests or where SQLite/FTS5 is unavailable (it then scans). */
+  searchIndex: SearchIndex | null;
   formatters: Formatters | null;
   lsp: LspManager | null;
   undo: UndoManager;
@@ -103,6 +118,14 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     void snapshots?.prune();
   }
 
+  const ledger = new Ledger(home);
+  const daily = settings.memory
+    ? new DailyNotes(home, cwd, {
+        onChange: (e) =>
+          ledger.record({ actor: e.actor, kind: "daily", path: e.path, action: "append", summary: "daily note", before: e.before, after: e.after }).then(() => {}),
+      })
+    : null;
+
   return {
     plugins,
     commands: commands.commands,
@@ -110,7 +133,12 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     agents: agents.agents,
     hookConfig,
     mcp,
-    notes: settings.memory ? new NotesStore(home) : null,
+    notes: settings.memory ? new NotesStore(home, { ledger }) : null,
+    daily,
+    ledger,
+    tracker: new SkillTracker(),
+    reviewTracker: new SkillTracker(),
+    searchIndex: opts.connect !== false ? SearchIndex.open(home) : null,
     formatters: settings.formatter === false ? null : new Formatters(settings.formatter, cwd),
     lsp: settings.lsp === false ? null : new LspManager(settings.lsp, cwd),
     undo: new UndoManager(snapshots),
@@ -134,7 +162,7 @@ export interface SubagentHolder {
 
 /**
  * The session's tools, in a fixed order: base tools, WebFetch, Skill (when a skill is model-invocable),
- * Agent, Memory (when enabled), SessionSearch, SkillManage, then MCP tools.
+ * Agent, Memory and DailyNote (when memory is on), SessionSearch, SkillManage, Identity, then MCP tools.
  */
 export function sessionTools(
   base: AnyTool[],
@@ -142,7 +170,7 @@ export function sessionTools(
   opts: { home: string; cwd: string; holder: SubagentHolder; sessionId(): string },
 ): AnyTool[] {
   const tools: AnyTool[] = [...base, webFetchTool as AnyTool];
-  if (ext.skills.some((s) => s.modelInvocable)) tools.push(createSkillTool(ext.skills));
+  if (ext.skills.some((s) => s.modelInvocable)) tools.push(createSkillTool(ext.skills, { home: opts.home, tracker: ext.tracker, reviewTracker: ext.reviewTracker }));
   tools.push(
     createAgentTool(ext.agents, (def, prompt, ctx) => {
       const deps = opts.holder.deps;
@@ -151,15 +179,44 @@ export function sessionTools(
     }),
   );
   if (ext.notes) tools.push(createMemoryTool(ext.notes));
-  tools.push(createSessionSearchTool({ home: opts.home, cwd: opts.cwd, currentSessionId: opts.sessionId }));
-  tools.push(createSkillManageTool({ home: opts.home }));
+  if (ext.daily) tools.push(createDailyNoteTool(ext.daily));
+  tools.push(createSessionSearchTool({ home: opts.home, cwd: opts.cwd, currentSessionId: opts.sessionId, index: ext.searchIndex }));
+  tools.push(createSkillManageTool({ home: opts.home, ledger: ext.ledger, tracker: ext.tracker }));
+  tools.push(
+    createIdentityTool({
+      home: opts.home,
+      onChange: (e) =>
+        ext.ledger.record({ actor: e.actor, kind: "identity", path: e.path, action: "write", summary: e.summary, before: e.before, after: e.after }).then(() => {}),
+    }),
+  );
   if (ext.mcp) tools.push(...ext.mcp.tools());
   return tools;
 }
 
-/** The context-block extras: the skill listing and the saved notes. */
-export async function contextExtras(ext: Extensions, listing: (skills: Skill[]) => string): Promise<string[]> {
-  return [listing(ext.skills), ext.notes ? await notesContext(ext.notes).catch(() => "") : ""];
+/**
+ * The context-block extras. The main session gets the identity (and, on the first interactive run, the
+ * bootstrap note), the skill listing, both note stores and recent daily notes. A subagent gets only what
+ * helps the task: the skill listing and the agent's own notes, never the user profile, the soul or the
+ * daily notes.
+ */
+export async function contextExtras(
+  ext: Extensions,
+  listing: (skills: Skill[]) => string,
+  opts: { home: string; scope: "main" | "subagent"; bootstrap?: boolean },
+): Promise<string[]> {
+  const skills = listing(ext.skills);
+  if (opts.scope === "subagent") {
+    return [skills, ext.notes ? await notesContext(ext.notes, { targets: ["memory"] }).catch(() => "") : ""];
+  }
+  const identity = identityContext(await loadIdentity(opts.home).catch(() => ({})));
+  const bootstrap = opts.bootstrap && (await bootstrapPending(opts.home).catch(() => false)) ? bootstrapContext() : "";
+  return [
+    identity,
+    bootstrap,
+    skills,
+    ext.notes ? await notesContext(ext.notes).catch(() => "") : "",
+    ext.daily ? await dailyNotesContext(ext.daily).catch(() => "") : "",
+  ];
 }
 
 /**

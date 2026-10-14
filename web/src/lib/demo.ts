@@ -237,6 +237,7 @@ class DemoServer {
         { name: "frontend-design", description: "Skill: distinctive, intentional UI" },
       ],
       history: this.history,
+      identity: { name: "Nova", emoji: "🦊" },
     };
   }
 
@@ -321,6 +322,8 @@ class DemoServer {
         this.pushState({ contextTokens: 0, turns: 0, totalCostUsd: 0 });
         return hello;
       }
+      case "learned.undo":
+        return { summary: "skill: SkillManage patch bun-testing (+3 −1)" };
       case "undo":
         this.canRedo = true;
         return { ok: true, files: ["web/src/lib/time.ts", "web/src/app/layout/session-list.tsx"] };

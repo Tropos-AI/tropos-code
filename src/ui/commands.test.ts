@@ -58,4 +58,11 @@ describe("phase 2 commands", () => {
     expect(focused.kind === "prompt" && focused.text.endsWith("Focus on: the release flow")).toBe(true);
     expect(RESERVED_COMMANDS.has("undo")).toBe(true);
   });
+  test("/learned lists what was learned; /learned undo reverts the latest", () => {
+    expect(parseCommand("/learned")).toEqual({ kind: "list", what: "learned" });
+    expect(parseCommand("/learned undo")).toEqual({ kind: "learned_undo" });
+    expect(parseCommand("/learned UNDO")).toEqual({ kind: "learned_undo" });
+    expect(parseCommand("/learned foo")).toEqual({ kind: "list", what: "learned" });
+    expect(RESERVED_COMMANDS.has("learned")).toBe(true);
+  });
 });

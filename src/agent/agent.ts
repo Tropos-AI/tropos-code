@@ -83,6 +83,8 @@ export interface AgentOptions {
   nonce?(): string;
   /** Runs as each user turn starts (snapshots mark turn boundaries); returns one-shot reminders for its message, such as that the user undid file changes. */
   startTurn?(): string[];
+  /** Runs once a user turn has ended, with its reason and the history so far (the learning review starts here). Must not throw. */
+  endTurn?(reason: TurnEndReason, messages: readonly MessageParam[]): void;
 }
 
 /** Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left behind). */
@@ -122,6 +124,16 @@ export class Agent {
 
   /** Never rejects: a failure while preparing or running the turn ends it with reason "error". */
   async run(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
+    const reason = await this.runTurn(prompt, signal);
+    try {
+      this.opts.endTurn?.(reason, this.messages);
+    } catch {
+      // an observer; the turn itself is over
+    }
+    return reason;
+  }
+
+  private async runTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
     try {
       // A previous run may have ended with tool_use blocks that never got results; close them first.
       const repair = danglingToolResults(this.messages);

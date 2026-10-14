@@ -55,7 +55,12 @@ export interface ToolContext {
   toolUseId?: string;
   /** Shows a one-line progress update on this call's transcript row (set by the agent). */
   progress?: (text: string) => void;
+  /** Who is acting: the agent the user talks to (default) or the background learning review. Recorded in the learning ledger. */
+  actor?: Actor;
 }
+
+/** Who changed a learned file: the user's agent, the background review, or the user through a command. */
+export type Actor = "agent" | "review" | "user";
 
 export interface PermissionSubject {
   command?: string;

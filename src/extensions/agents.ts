@@ -1,6 +1,7 @@
 // src/extensions/agents.ts
 import { join } from "node:path";
 import { isAnthropicModelId } from "../config/settings";
+import { isEmojiLike } from "../context/identity";
 import { errorText } from "../error-text";
 import { listMarkdown, MAX_EXTENSION_BYTES, NAME_SEGMENT, readCapped } from "./commands";
 import { fmList, fmString, parseFrontmatter } from "./frontmatter";
@@ -19,6 +20,8 @@ export interface AgentDefinition {
   prompt: string;
   source: ExtensionSource | "builtin";
   path?: string;
+  /** One emoji shown beside the name in the UI (frontmatter `emoji`). */
+  emoji?: string;
 }
 
 const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Bash", "WebFetch"];
@@ -35,6 +38,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
       "- End with a concise report: what you did or found, file paths as path:line, and anything left undone or uncertain.",
     ].join("\n"),
     source: "builtin",
+    emoji: "🛠",
   },
   {
     name: "explore",
@@ -48,6 +52,7 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
       "- Report findings, not a narrative of the search: the answer first, then the evidence as path:line references, then open questions.",
     ].join("\n"),
     source: "builtin",
+    emoji: "🔎",
   },
   {
     name: "plan",
@@ -62,8 +67,14 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
       "- Prefer the smallest design that fits the existing code over new abstractions.",
     ].join("\n"),
     source: "builtin",
+    emoji: "🧭",
   },
 ];
+
+/** "🔎 explore", or just the name when the agent has no emoji. */
+export function agentLabel(def: Pick<AgentDefinition, "name" | "emoji">): string {
+  return def.emoji ? `${def.emoji} ${def.name}` : def.name;
+}
 
 /** Parses maxTurns; anything but a positive integer is reported and ignored. */
 function parseMaxTurns(value: unknown): number | undefined | "invalid" {
@@ -125,6 +136,11 @@ export async function loadAgents(dirs: ExtensionDir[]): Promise<{ agents: AgentD
       const maxTurns = parseMaxTurns(data.maxTurns);
       if (maxTurns === "invalid") warnings.push(`Agent ${name} ignores maxTurns: it must be a positive whole number`);
       const tools = fmList(data, "tools");
+      let emoji = fmString(data, "emoji")?.trim();
+      if (emoji !== undefined && !isEmojiLike(emoji)) {
+        warnings.push(`Agent ${name} ignores emoji "${emoji.slice(0, 16)}": it must be a single emoji`);
+        emoji = undefined;
+      }
       loaded.set(name, {
         name,
         description: description.replace(/\s+/g, " "),
@@ -135,6 +151,7 @@ export async function loadAgents(dirs: ExtensionDir[]): Promise<{ agents: AgentD
         prompt: body.trim(),
         source: dir.source,
         path,
+        ...(emoji ? { emoji } : {}),
       });
     }
   }

@@ -65,6 +65,42 @@ describe("session RPCs", () => {
     expect(await host.call("redo", undefined)).toEqual({ ok: true, files: [] });
   });
 
+  test("learned.undo waits for the turn to finish", async () => {
+    const hang = (_r: unknown, _h: unknown, signal: AbortSignal) => new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    const { host } = setup({}, [hang as never]);
+    const turn = host.call("prompt", { text: "work" });
+    await Bun.sleep(10);
+    await expect(host.call("learned.undo", undefined)).rejects.toThrow("busy");
+    await host.call("interrupt", undefined);
+    await turn;
+  });
+
+  test("learned.undo reverts through the runtime and reports why it couldn't", async () => {
+    const ids: Array<string | undefined> = [];
+    const { host } = setup({
+      undoLearned: async (id) => {
+        ids.push(id);
+        return id === "gone" ? { ok: false, reason: "That change was already undone." } : { ok: true, summary: "memory: Uses bun" };
+      },
+    });
+    expect(await host.call("learned.undo", undefined)).toEqual({ summary: "memory: Uses bun" });
+    expect(await host.call("learned.undo", "e1")).toEqual({ summary: "memory: Uses bun" });
+    await expect(host.call("learned.undo", "gone")).rejects.toThrow("That change was already undone.");
+    await expect(host.call("learned.undo", 3 as never)).rejects.toThrow("Which change?");
+    expect(ids).toEqual([undefined, "e1", "gone"]);
+    const { host: fresh } = setup();
+    await expect(fresh.call("learned.undo", undefined)).rejects.toThrow("Nothing learned to undo.");
+  });
+
+  test("the learned panel is allowed; hello carries the agent's identity", async () => {
+    const { host, seen } = setup({ identity: () => ({ name: "Nova", emoji: "🦊" }) });
+    expect(await host.call("panel", "learned")).toMatchObject({ title: "about learned" });
+    expect(host.hello().identity).toEqual({ name: "Nova", emoji: "🦊" });
+    const hello = seen.find((m) => m.t === "hello");
+    expect(hello?.t === "hello" && hello.server.identity).toEqual({ name: "Nova", emoji: "🦊" });
+    expect(setup().host.hello().identity).toEqual({});
+  });
+
   test("expand runs a custom command through the runtime", async () => {
     const { host } = setup({ expand: async (name, args) => ({ ok: true, prompt: `${name}:${args}` }) });
     expect(await host.call("expand", { name: "review", args: "main" })).toEqual({ ok: true, prompt: "review:main" });
@@ -146,4 +182,13 @@ test("a prompt with a command expands and runs it in one busy period; a failed e
   await expect(host.call("prompt", { text: "", command: { name: "other", args: "" } })).rejects.toThrow("/other: you declined `git diff`");
   await expect(host.call("prompt", { text: " " })).rejects.toThrow("Nothing to send.");
   expect(host.state().busy).toBe(false);
+});
+
+test("hello carries the live conversation, so a tab opened mid-session (or reloaded) shows it", async () => {
+  const { host } = setup({}, [() => reply([textBlock("hi there")])]);
+  expect(host.hello().history).toEqual([]);
+  await host.call("prompt", { text: "hello" });
+  const history = host.hello().history;
+  expect(history.map((m) => m.role)).toEqual(["user", "assistant"]);
+  expect(JSON.stringify(history)).toContain("hi there");
 });

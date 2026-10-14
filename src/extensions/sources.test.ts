@@ -20,10 +20,11 @@ test("inside git the chain climbs to the root, nearest first", async () => {
   expect(projectChain(join(dir, "repo", "a", "b"))).toEqual([join(dir, "repo", "a", "b"), join(dir, "repo", "a"), join(dir, "repo")]);
 });
 
-test("user, then project, then plugin directories", () => {
+test("user, then learned (skills only), then project, then plugin directories", () => {
   const dirs = extensionDirs("skills", { cwd: dir, home: "/h", plugins: [{ name: "p", root: "/plugins/p" }] });
   expect(dirs).toEqual([
     { dir: "/h/skills", source: "user" },
+    { dir: "/h/skills-learned", source: "learned" },
     { dir: join(dir, ".tropos", "skills"), source: "project", root: dir },
     { dir: join(dir, ".claude", "skills"), source: "project", root: dir },
     { dir: join(dir, ".agents", "skills"), source: "project", root: dir },
@@ -34,7 +35,7 @@ test("user, then project, then plugin directories", () => {
     join(dir, ".tropos", "commands"),
     join(dir, ".claude", "commands"),
   ]);
-  expect(qualifiedName(dirs[4]!, "x")).toBe("p:x");
+  expect(qualifiedName(dirs[5]!, "x")).toBe("p:x");
   expect(qualifiedName(dirs[0]!, "x")).toBe("x");
 });
 

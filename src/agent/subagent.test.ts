@@ -66,6 +66,8 @@ test("system prompt carries the agent's instructions", () => {
   const text = subagentSystem("BASE", def);
   expect(text.startsWith("BASE\n\n# Agent: explore\n")).toBe(true);
   expect(text.endsWith("Look around.")).toBe(true);
+  expect(text).toContain("# Agent: explore\nYou are the explore agent, working for the main agent.\n");
+  expect(subagentSystem("BASE", { ...def, emoji: "🔎" })).toContain("# Agent: explore\nYou are the explore agent 🔎, working for the main agent.\n");
 });
 
 describe("runSubagent", () => {

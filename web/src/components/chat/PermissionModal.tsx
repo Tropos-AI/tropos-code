@@ -7,6 +7,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { PermissionAnswer, PermissionPrompt } from "@core/agent/events";
 import { makeDiff } from "@core/tools/diff";
+import { learningPermissionTitle } from "@core/ui/permission-titles";
 
 import { DiffBlock } from "@/components/chat/tool-results";
 import { VisibleText } from "@/components/chat/visible-text";
@@ -24,6 +25,8 @@ export const PREVIEW_LINES = 20;
 
 /** The dialog title names the action, the way the transcript names the tool (src/ui/PermissionDialog.tsx). */
 export function permissionTitle(prompt: PermissionPrompt): string {
+  const learned = learningPermissionTitle(prompt.toolName);
+  if (learned) return learned;
   if (prompt.toolName === "Bash" || prompt.kind === "exec") return "Bash command";
   if (prompt.toolName === "Write") return "Write file";
   if (prompt.toolName === "Edit" || prompt.kind === "edit") return "Edit file";

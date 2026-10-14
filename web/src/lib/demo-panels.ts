@@ -235,6 +235,41 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
     ],
     empty: "No plugins. Put plugin folders in ~/.tropos/plugins/.",
   },
+  learned: {
+    title: "Learned",
+    subtitle: "Notes, skills and identity changes, newest first · /learned undo reverts the latest",
+    sections: [
+      {
+        items: [
+          {
+            key: "l3",
+            label: "skill: SkillManage patch bun-testing (+3 −1)",
+            hint: "learned on its own",
+            aside: "2026-10-14 14:02",
+            status: "ok",
+            detail: ["patch by review", `${HOME}/.tropos/skills/bun-testing/SKILL.md`, "2026-10-14T14:02:11.000Z"],
+          },
+          {
+            key: "l2",
+            label: "user: Memory add user: Prefers small, focused commits",
+            hint: "learned on its own",
+            aside: "2026-10-14 13:40",
+            status: "ok",
+            detail: ["add by review", `${HOME}/.tropos/memories/USER.md`, "2026-10-14T13:40:52.000Z"],
+          },
+          {
+            key: "l1",
+            label: "identity: Identity saved: Name: Nova, Emoji: 🦊",
+            hint: "you asked",
+            aside: "2026-10-13 18:21",
+            status: "ok",
+            detail: ["write by agent", `${HOME}/.tropos/IDENTITY.md`, "2026-10-13T18:21:07.000Z"],
+          },
+        ],
+      },
+    ],
+    empty: "Nothing learned yet. Notes, skills and identity changes show up here, with undo.",
+  },
   memory: {
     title: "Memory",
     subtitle: `${HOME}/.tropos/memories`,
