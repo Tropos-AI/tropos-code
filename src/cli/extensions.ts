@@ -1,4 +1,5 @@
 // src/cli/extensions.ts
+import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { runSubagent, type SubagentDeps } from "../agent/subagent";
 import { HOOK_EVENTS, type HooksSetting, type Settings } from "../config/settings";
@@ -162,15 +163,41 @@ export async function contextExtras(ext: Extensions, listing: (skills: Skill[]) 
 }
 
 /**
- * Files formatters and language servers execute or load code from: prettier/biome configs, package.json
- * (its "prettier" key, scripts), TypeScript and Python project files (plugins, interpreters), toolchain
- * pins, and anything under node_modules.
+ * Plain source and document types: a write to one of these leaves formatters and language servers on.
+ * Anything else (JSON, YAML, TOML, dotfiles, unknown types) may be a config they load code from, and a
+ * list of config names would always miss one (prettier also reads package.yaml, tsconfig "extends" any
+ * name...), so those fail closed.
  */
-const CODE_CONFIG = /^(?:prettier\.config\..*|\.prettierrc.*|biome\.jsonc?|package\.json|\.npmrc|tsconfig.*\.json|jsconfig.*\.json|pyrightconfig\.json|pyproject\.toml|setup\.cfg|rust-toolchain(?:\.toml)?|go\.(?:mod|work))$/i;
+const SOURCE_EXT = new Set([
+  ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro",
+  ".css", ".scss", ".sass", ".less", ".html", ".htm", ".md", ".mdx", ".txt",
+  ".py", ".pyi", ".go", ".rs", ".java", ".kt", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".sh",
+]);
+/** Source-typed names the tools still execute: JS configs, Yarn PnP loaders, Cargo build scripts. */
+const CODE_FILE = /^(?:.*\.config\.[cm]?[jt]s|\.prettierrc.*|\.pnp\..*|build\.rs)$/i;
+/** Folders whose contents those tools load: dependencies, Yarn's cache and releases, virtualenvs, Cargo config. */
+const CODE_DIRS = new Set(["node_modules", ".yarn", ".cargo", ".venv", "venv", "site-packages"]);
 
+function mayLoadCodeAt(path: string): boolean {
+  const parts = path.split(/[\\/]/).map((part) => part.toLowerCase());
+  const name = parts.at(-1) ?? "";
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot) : "";
+  return !SOURCE_EXT.has(ext) || CODE_FILE.test(name) || parts.some((part) => CODE_DIRS.has(part));
+}
+
+/**
+ * True when formatters or language servers might load code from this file, so writing it switches them
+ * off. Checked on the path as given and as resolved, case-insensitively (macOS and Windows fold case).
+ */
 export function isCodeConfig(path: string): boolean {
-  const parts = path.split(/[\\/]/);
-  return CODE_CONFIG.test(parts.at(-1) ?? "") || parts.some((p) => p === "node_modules" || p === ".cargo");
+  let real = path;
+  try {
+    real = realpathSync(path);
+  } catch {
+    // a file that doesn't exist yet: its name is all there is to check
+  }
+  return mayLoadCodeAt(path) || mayLoadCodeAt(real);
 }
 
 /**
@@ -183,7 +210,7 @@ export async function postWrite(ext: Extensions, readState: ReadState, paths: st
   const config = paths.find(isCodeConfig);
   if (config) {
     ext.codeConfigWritten = config;
-    return `(formatters and language servers are off for the rest of this session: ${config} is a file they load code from, and it was just changed)`;
+    return `(formatters and language servers are off for the rest of this session: ${config} is not a plain source file, and they may load code from it)`;
   }
   const notes: string[] = [];
   for (const path of paths) {

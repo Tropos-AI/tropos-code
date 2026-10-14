@@ -164,11 +164,22 @@ test("a hook runner exists only when some hook is configured", async () => {
 });
 
 describe("writing a file formatters or language servers load code from", () => {
-  test("recognises configs, package files and node_modules", () => {
-    for (const p of ["/p/prettier.config.js", "/p/.prettierrc.cjs", "/p/package.json", "/p/tsconfig.build.json", "/p/node_modules/x/index.js", "/p/.cargo/config.toml", "/p/go.mod", "/p/biome.json"]) {
-      expect(isCodeConfig(p)).toBe(true);
-    }
-    for (const p of ["/p/src/a.ts", "/p/README.md", "/p/package-lock.md", "/p/config.js"]) expect(isCodeConfig(p)).toBe(false);
+  test("only plain source and doc files keep formatters on", () => {
+    const risky = [
+      "/p/prettier.config.js", "/p/.prettierrc", "/p/.prettierrc.cjs", "/p/package.json", "/p/package.yaml", "/p/tsconfig.build.json",
+      "/p/base.json", "/p/node_modules/x/index.js", "/p/NODE_MODULES/x.js", "/p/.cargo/config.toml", "/p/go.mod", "/p/biome.json",
+      "/p/.pnp.cjs", "/p/.yarnrc.yml", "/p/.yarn/releases/y.cjs", "/p/Cargo.toml", "/p/build.rs", "/p/deno.jsonc", "/p/.venv/bin/python",
+      "/p/vite.config.ts", "/p/Makefile", "/p/.editorconfig",
+    ];
+    for (const p of risky) expect([p, isCodeConfig(p)]).toEqual([p, true]);
+    for (const p of ["/p/src/a.ts", "/p/README.md", "/p/src/App.TSX", "/p/lib/x.py", "/p/main.go", "/p/src/lib.rs"]) expect([p, isCodeConfig(p)]).toEqual([p, false]);
+  });
+
+  test("a harmless-looking name that links to a config counts as the config", async () => {
+    const real = join(cwd, "prettier.config.js");
+    await writeFile(real, "x");
+    await symlink(real, join(cwd, "notes.md"));
+    expect(isCodeConfig(join(cwd, "notes.md"))).toBe(true);
   });
 
   test("switches formatting off for the rest of the session", async () => {
