@@ -138,7 +138,7 @@ session and API key wherever the repo chose. Put those in a file under `~/.tropo
 
 Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
 `additionalDirectories`, `refusalFallback`, `env`, `providers`, and for extensions (below; your own
-files only) `hooks`, `mcpServers`, `formatter`, `lsp`, `snapshots`, `memory`, `disabledPlugins`.
+files only) `hooks`, `mcpServers`, `formatter`, `lsp`, `snapshots`, `memory`, `learning`, `disabledPlugins`.
 
 ## Extending Tropos
 
@@ -227,12 +227,39 @@ tools with `mcp__github__get_*`.
   formatters and language servers stay off for the rest of that session, since they might load code
   from it.
 - **Memory.** Tropos keeps short notes in `~/.tropos/memories/` (about the work and about you, each with
-  a size budget) and sees them at the start of every session. Each write asks first, so a page or
-  file the model read can't plant lasting instructions. Turn this off with `"memory": false`.
-- **SessionSearch** finds earlier conversations in this project, and asks before searching all of them. **SkillManage** lets the model write skills to
-  `~/.tropos/skills/`, and it always asks first. `/learn` asks it to turn the current session into a
+  a size budget) and sees them at the start of every session. When the agent you're talking to writes
+  one, it asks first. Turn memory off with `"memory": false`.
+- **Daily notes.** `DailyNote` appends decisions and the state of the work to
+  `~/.tropos/projects/<project>/notes/<date>.md`. New sessions see today's and yesterday's notes, and
+  `SessionSearch` (full-text, with SQLite FTS5) finds older notes and earlier conversations.
+- **Learning loop.** As in Hermes Agent, a background review looks back over the conversation every 10
+  turns (or 10 tool calls). It saves what's worth keeping: your preferences as notes, and procedures as
+  skills, patching a skill it used before writing a new one. Before the conversation gets compacted, it
+  also writes the session's decisions to the daily notes. The review runs after Tropos has answered and
+  stops as soon as you send something. It can only use the memory, skill and read tools, and it **saves
+  without asking**, with limits:
+  - It only adds notes, never replaces or removes yours.
+  - Skills it writes go to `~/.tropos/skills-learned/` and are marked as learned, so they never pass for
+    yours. It can't change your skills.
+  - Your `ask` rules and hooks that ask count as a no.
+  - Each save shows as a `💡 Learned: …` line, and can be undone.
+  - Saves are scanned for prompt-injection text, exfiltration and secrets such as keys and tokens. Notes,
+    skills and SOUL.md are scanned again when they load.
+  `/learned` lists every change to notes, skills and identity, and `/learned undo` reverts the latest
+  (the web app has an Undo button per change). Settings:
+  `"learning": {"review": true, "interval": 10, "flushAt": 0.7, "curator": true}`. Set
+  `"review": false` to keep only the saves the agent asks you about. Once a week the curator moves
+  learned skills that nobody used for 30 days into `~/.tropos/skills-learned/.archive/`. It never deletes
+  anything, and leaves learned skills you edited by hand alone.
+- **Identity.** On the first interactive run Tropos asks what you'd like to call it, and suggests a vibe
+  and an emoji. It keeps them in `~/.tropos/IDENTITY.md`, and its voice in `~/.tropos/SOUL.md`, which you
+  can edit. The identity shows in the terminal header and the web sidebar. It never overrides your
+  instructions or permissions. Subagents get their own label (🔎 explore, 🧭 plan, 🛠 general-purpose, or an
+  `emoji:` in your agent file), and never see your profile, soul or daily notes.
+- **SkillManage** lets the model write skills to `~/.tropos/skills/`, and it asks first. It can only
+  change a skill it has loaded in this session. `/learn` asks it to turn the current session into a
   skill.
-- `/skills`, `/agents`, `/hooks`, `/mcp`, `/plugins` and `/memory` show what's loaded.
+- `/skills`, `/agents`, `/hooks`, `/mcp`, `/plugins`, `/memory` and `/learned` show what's loaded.
 
 ## Security notes
 
