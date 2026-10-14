@@ -58,6 +58,10 @@ function buildPreview(prompt: PermissionPrompt, colors: PreviewColors): PreviewD
     hidden: Math.max(0, lines.length - PREVIEW_LINES),
     hiddenNote: note,
   });
+  if (prompt.preview) {
+    const data = cap(prompt.preview.text.split("\n").map((l) => ({ text: safe(l) })), "the full text will be written");
+    return { ...data, header: safe(prompt.preview.header) };
+  }
   if (prompt.toolName === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
     const body = patchBody(sanitizeForTerminal(makeDiff(prompt.summary, input.old_string, input.new_string).patch));
     const lines = body.map((l): PreviewLine => {

@@ -81,10 +81,21 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   summarize(input: z.infer<S>): string;
   /** What the permission engine checks. Paths must come from resolveToolPath. */
   subject(input: z.infer<S>, cwd: string): PermissionSubject;
+  /**
+   * The full change, shown in the permission dialog when the summary can't say it all (a file the tool will
+   * write under ~/.tropos, say): approving what you can't see isn't approval.
+   */
+  preview?(input: z.infer<S>): PermissionPreview | undefined;
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolOutput>;
 }
 
 export type AnyTool = Tool<z.ZodType>;
+
+/** What a permission dialog shows of a change: a header line (usually a path) and the text. */
+export interface PermissionPreview {
+  header: string;
+  text: string;
+}
 
 /** A tool's kind for scheduling and permissions; one that declares none gets the strictest handling. */
 export function toolKind(tool: Pick<AnyTool, "kind">): ToolKind {

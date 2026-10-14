@@ -51,6 +51,8 @@ export interface PreviewModel {
 /** What the preview shows for a prompt. Only commands are cut; diffs and files scroll. */
 export function previewOf(prompt: PermissionPrompt): PreviewModel {
   const input = record(prompt.input);
+  // The tool's own preview (AgentManage, SkillManage, Identity): the full text it will write.
+  if (prompt.preview) return { kind: "file", header: prompt.preview.header, lines: prompt.preview.text.split("\n"), hidden: 0 };
   if (prompt.toolName === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
     const patch = makeDiff(prompt.summary, input.old_string, input.new_string).patch;
     return { kind: "diff", header: `${prompt.summary}${input.replace_all === true ? " (replace all)" : ""}`, lines: [], hidden: 0, patch };

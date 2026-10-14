@@ -101,6 +101,16 @@ function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolO
   });
 }
 
+/** The tool's preview for a permission prompt; a preview that throws is left out, never the prompt. */
+function previewOf(tool: AnyTool, input: unknown): { preview?: { header: string; text: string } } {
+  try {
+    const preview = tool.preview?.(input);
+    return preview ? { preview } : {};
+  } catch {
+    return {};
+  }
+}
+
 /** The message of a caught value: anything can be thrown, not only Error. */
 const errorResult = (id: string, content: string): ToolResult => ({ type: "tool_result", tool_use_id: id, content, is_error: true });
 
@@ -461,7 +471,7 @@ export class Agent {
     if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };
     if (decision.behavior === "ask") {
       const answer = await this.ask(
-        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion },
+        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion, ...previewOf(tool, input) },
         signal,
       );
       if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");

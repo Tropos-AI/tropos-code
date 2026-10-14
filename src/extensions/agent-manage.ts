@@ -78,6 +78,26 @@ function problem(f: Partial<Fields>): string | undefined {
   return undefined;
 }
 
+/**
+ * What the permission dialog shows: the whole new file for create (the prompt becomes the agent's system
+ * prompt in every later session), the fields that change for update.
+ */
+export function agentPreview(input: Input, path: string): { header: string; text: string } {
+  if (input.action === "delete") return { header: path, text: `Delete agent ${input.name}.` };
+  const unlimited = input.tools === undefined || input.tools.length === 0;
+  if (input.action === "create") {
+    const text = renderAgentFile(input.name, { description: input.description ?? "", prompt: input.prompt ?? "", tools: input.tools, model: input.model, emoji: input.emoji });
+    return { header: unlimited ? `${path} · may use every tool` : path, text };
+  }
+  const changes: string[] = [];
+  if (input.description !== undefined) changes.push(`description: ${input.description}`);
+  if (input.tools !== undefined) changes.push(`tools: ${unlimited ? "every tool" : input.tools.join(", ")}`);
+  if (input.model !== undefined) changes.push(`model: ${input.model}`);
+  if (input.emoji !== undefined) changes.push(`emoji: ${input.emoji}`);
+  if (input.prompt !== undefined) changes.push("prompt:", input.prompt);
+  return { header: `${path} · update`, text: changes.length > 0 ? changes.join("\n") : "(no changes)" };
+}
+
 export interface AgentManageOptions {
   home: string;
   ledger?: Ledger;
@@ -109,6 +129,7 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
     schema,
     summarize: (input) => `${input.action} ${input.emoji ? `${input.emoji} ` : ""}${input.name}`,
     subject: (input) => ({ paths: [pathOf(input.name)] }),
+    preview: (input) => agentPreview(input, pathOf(input.name)),
     async run(input: Input, ctx) {
       const actor = ctx.actor ?? "agent";
       let path: string;

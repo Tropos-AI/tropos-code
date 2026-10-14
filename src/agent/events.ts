@@ -29,6 +29,8 @@ export interface PermissionPrompt {
   input: unknown;
   reason?: string;
   suggestion?: string;
+  /** The full change, from the tool, when the summary can't show it (see Tool.preview). */
+  preview?: { header: string; text: string };
 }
 
 export type PermissionAnswer =

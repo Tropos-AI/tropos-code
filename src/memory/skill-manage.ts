@@ -221,6 +221,24 @@ async function remove(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
   return { content: `Deleted skill ${input.name} (${at.dir}).`, display: { kind: "text", text: `Deleted ${at.dir}` }, summary: "deleted" };
 }
 
+/** What the permission dialog shows: skills are prompt text that later sessions follow, so the text itself. */
+export function skillPreview(input: Input, dir: string): { header: string; text: string } {
+  const file = join(dir, input.action === "create" ? "SKILL.md" : (input.file_path ?? "SKILL.md"));
+  switch (input.action) {
+    case "create":
+      return { header: file, text: input.content ?? "" };
+    case "write_file":
+      return { header: file, text: input.file_content ?? "" };
+    case "patch":
+      return {
+        header: `${file}${input.replace_all ? " · replace all" : ""}`,
+        text: [...(input.old_string ?? "").split("\n").map((l) => `- ${l}`), ...(input.new_string ?? "").split("\n").map((l) => `+ ${l}`)].join("\n"),
+      };
+    case "delete":
+      return { header: dir, text: `Delete the skill ${input.name} and every file in its folder.` };
+  }
+}
+
 /**
  * SkillManage: lets the model write its own skills under <home>/skills, the procedures it learned and
  * wants to reuse. Kind "edit"; the paths are outside the project, so the permission engine always asks.
@@ -240,6 +258,7 @@ export function createSkillManageTool(opts: SkillManageOptions): AnyTool {
       "Load a skill with the Skill tool before you patch it or write its files, and prefer patching an existing skill over creating a near-duplicate.",
     schema,
     summarize: (input) => `${input.action} ${input.name}${input.file_path ? `/${input.file_path}` : ""}`,
+    preview: (input) => skillPreview(input, join(skillsBase(opts), input.name)),
     subject: (input) => {
       try {
         return { paths: [layout(skillsBase(opts), input).target] };

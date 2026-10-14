@@ -348,3 +348,13 @@ describe("Identity tool", () => {
     expect(out.content).toStartWith("Identity soul failed:");
   });
 });
+
+test("the permission preview shows what IDENTITY.md and SOUL.md will say", async () => {
+  const { createIdentityTool: create } = await import("./identity");
+  const home = "/h";
+  const tool = create({ home });
+  expect(tool.preview!({ action: "set", name: "Bob", emoji: "🔧" })).toEqual({ header: join(home, "IDENTITY.md"), text: "Name: Bob\nEmoji: 🔧" });
+  expect(tool.preview!({ action: "soul", soul: "Plain-spoken." })).toEqual({ header: join(home, "SOUL.md"), text: "Plain-spoken." });
+  expect(tool.preview!({ action: "soul" })!.text).toBe("");
+  expect(tool.preview!({ action: "skip" })).toBeUndefined();
+});

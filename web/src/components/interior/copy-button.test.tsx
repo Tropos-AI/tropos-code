@@ -94,7 +94,8 @@ describe("useCopyToClipboard", () => {
   test("ignores empty text, returns the outcome and settles back to idle after the timeout", async () => {
     setClipboard({ writeText: async () => {} });
     let copy: (text: string) => Promise<boolean> = async () => false;
-    render(createElement(Harness, { timeout: 30, onReady: (fn) => (copy = fn) }));
+    // Long enough that "copied" is still showing when checked on a loaded machine.
+    render(createElement(Harness, { timeout: 250, onReady: (fn) => (copy = fn) }));
     const out = () => document.querySelector("output")?.textContent;
 
     let result = true;
@@ -109,7 +110,7 @@ describe("useCopyToClipboard", () => {
     });
     expect(result).toBe(true);
     expect(out()).toBe("copied");
-    await act(() => wait(60));
+    await act(() => wait(400));
     expect(out()).toBe("idle");
   });
 
@@ -128,7 +129,8 @@ describe("useCopyToClipboard", () => {
     setClipboard(undefined);
     setExecCommand(() => false);
     let copy: (text: string) => Promise<boolean> = async () => true;
-    render(createElement(Harness, { timeout: 30, onReady: (fn) => (copy = fn) }));
+    // A long reset: this checks the error state, which a short one could clear on a loaded machine first.
+    render(createElement(Harness, { timeout: 10_000, onReady: (fn) => (copy = fn) }));
     let result = true;
     await act(async () => {
       result = await copy("x");

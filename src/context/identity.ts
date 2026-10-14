@@ -348,6 +348,15 @@ export function createIdentityTool(opts: IdentityToolOptions): AnyTool {
       if (input.action === "set") return `set ${FIELDS.filter((f) => input[f] !== undefined).map((f) => `${f}=${input[f]}`).join(" ")}`.trim();
       return input.action;
     },
+    // SOUL.md and IDENTITY.md ride in every later session: the dialog shows what will be written.
+    preview: (input) => {
+      if (input.action === "soul") return { header: homeFile(home, SOUL_FILE), text: input.soul ?? "" };
+      if (input.action === "set") {
+        const lines = FIELDS.filter((f) => input[f] !== undefined).map((f) => `${LABELS[f]}: ${input[f]}`);
+        return { header: homeFile(home, IDENTITY_FILE), text: lines.join("\n") };
+      }
+      return undefined;
+    },
     subject: (input) => {
       try {
         return { paths: targetsFor(home, input.action) };

@@ -6,7 +6,7 @@ import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { Ledger } from "../learning/ledger";
 import { SkillTracker } from "../learning/skill-tracker";
-import { createSkillManageTool, MAX_SKILL_FILE_CHARS } from "./skill-manage";
+import { createSkillManageTool, MAX_SKILL_FILE_CHARS, skillPreview } from "./skill-manage";
 
 let home: string;
 let outside: string;
@@ -251,4 +251,14 @@ test("folder: the learning review's own skills folder", async () => {
   expect(out.isError).toBeUndefined();
   expect(await readFile(join(home, "skills-learned", "bun-release", "SKILL.md"), "utf8")).toBe(SKILL);
   expect(existsSync(join(home, "skills", "bun-release"))).toBe(false);
+});
+
+test("the permission preview shows the text a skill will hold", () => {
+  const tool = createSkillManageTool({ home });
+  expect(tool.preview!({ action: "create", name: "release", content: SKILL })).toEqual({ header: join(home, "skills", "release", "SKILL.md"), text: SKILL });
+  expect(skillPreview({ action: "write_file", name: "r", file_path: "scripts/x.sh", file_content: "echo" }, "/s/r")).toEqual({ header: "/s/r/scripts/x.sh", text: "echo" });
+  expect(skillPreview({ action: "patch", name: "r", old_string: "a\nb", new_string: "c", replace_all: true }, "/s/r")).toEqual({ header: "/s/r/SKILL.md · replace all", text: "- a\n- b\n+ c" });
+  expect(skillPreview({ action: "patch", name: "r" }, "/s/r").text).toBe("- \n+ ");
+  expect(skillPreview({ action: "delete", name: "r" }, "/s/r")).toEqual({ header: "/s/r", text: "Delete the skill r and every file in its folder." });
+  expect(skillPreview({ action: "create", name: "r" }, "/s/r").text).toBe("");
 });

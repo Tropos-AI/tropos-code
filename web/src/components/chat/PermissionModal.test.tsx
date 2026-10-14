@@ -98,6 +98,15 @@ describe("PermissionModal", () => {
     expect(screen.queryByRole("button", { name: "Close" }) === null).toBe(true);
   });
 
+  test("a tool's preview is shown in full as the file it will write", async () => {
+    const prompt: PermissionPrompt = { toolName: "AgentManage", kind: "edit", summary: "create george", input: {}, preview: { header: "/h/.tropos/agents/george.md", text: "---\nname: george\n---\n\nYou research." } };
+    expect(previewOf(prompt)).toEqual({ kind: "file", header: "/h/.tropos/agents/george.md", lines: ["---", "name: george", "---", "", "You research."], hidden: 0 });
+    await ask(prompt);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("Change an agent");
+    expect(dialog.textContent).toContain("You research.");
+  });
+
   test("a command longer than the preview is cut and can't be allowed for good; No becomes 2", async () => {
     const long = Array.from({ length: PREVIEW_LINES + 5 }, (_, i) => `echo ${i}`).join("\n");
     const prompt: PermissionPrompt = { ...BASH, summary: long, input: { command: long } };

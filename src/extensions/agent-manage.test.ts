@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { Ledger } from "../learning/ledger";
-import { createAgentManageTool, renderAgentFile } from "./agent-manage";
+import { agentPreview, createAgentManageTool, renderAgentFile } from "./agent-manage";
 import { loadAgents } from "./agents";
 
 let home: string;
@@ -107,4 +107,18 @@ test("renderAgentFile quotes values so YAML reads them back as written", async (
   await writeFile(join(home, "agents", "x.md"), text);
   const { agents } = await loadAgents([{ dir: join(home, "agents"), source: "user" }]);
   expect(agents.find((a) => a.name === "x")).toMatchObject({ description: 'Says "hi": colons, # hashes', tools: ["Bash(git diff:*)", "Read"] });
+});
+
+test("the permission preview shows the whole new file, every tool when none are listed, and only the changes on update", () => {
+  const tool = createAgentManageTool({ home });
+  const created = tool.preview!(GEORGE)!;
+  expect(created.header).toBe(join(home, "agents", "george.md"));
+  expect(created.text).toBe(renderAgentFile("george", { ...GEORGE, tools: [...GEORGE.tools] }));
+  const open = agentPreview({ action: "create", name: "ana", description: "d", prompt: "Do anything." }, "/p/ana.md");
+  expect(open.header).toBe("/p/ana.md · may use every tool");
+  expect(open.text).toContain("Do anything.");
+  expect(agentPreview({ action: "update", name: "ana", tools: [], prompt: "new\nrules" }, "/p/ana.md")).toEqual({ header: "/p/ana.md · update", text: "tools: every tool\nprompt:\nnew\nrules" });
+  expect(agentPreview({ action: "update", name: "ana", description: "x", model: "haiku", emoji: "🧭", tools: ["Read"] }, "/p").text).toBe("description: x\ntools: Read\nmodel: haiku\nemoji: 🧭");
+  expect(agentPreview({ action: "update", name: "ana" }, "/p").text).toBe("(no changes)");
+  expect(agentPreview({ action: "delete", name: "ana" }, "/p/ana.md")).toEqual({ header: "/p/ana.md", text: "Delete agent ana." });
 });
