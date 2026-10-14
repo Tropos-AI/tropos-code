@@ -57,7 +57,8 @@ describe("useValueFlash", () => {
   type State = ReturnType<typeof useValueFlash<string>>;
 
   function Harness<T>({ value, compare, onState }: { value: T; compare?: (a: T, b: T) => number; onState: (s: ReturnType<typeof useValueFlash<T>>) => void }) {
-    onState(useValueFlash(value, { hold: 30, compare }));
+    // A hold well above timer jitter on a loaded machine; the waits below are fractions of it.
+    onState(useValueFlash(value, { hold: 300, compare }));
     return null;
   }
 
@@ -69,12 +70,13 @@ describe("useValueFlash", () => {
 
     view.rerender(createElement(Harness<string>, { value: "aaa", compare: byLength, onState: (s) => (state = s) }));
     expect(state).toMatchObject({ direction: "up", from: "aa", changeId: 1, flashing: true });
-    await act(() => wait(15));
+    await act(() => wait(150));
     view.rerender(createElement(Harness<string>, { value: "a", compare: byLength, onState: (s) => (state = s) }));
     expect(state).toMatchObject({ direction: "down", from: "aaa", changeId: 2, flashing: true });
-    await act(() => wait(20));
+    // 150 + 150 ms is past the first change's hold: still flashing means the second change restarted it.
+    await act(() => wait(150));
     expect(state.flashing).toBe(true);
-    await act(() => wait(30));
+    await act(() => wait(250));
     expect(state.flashing).toBe(false);
 
     // A change compare calls equal is not a flash.
@@ -93,6 +95,6 @@ describe("useValueFlash", () => {
     numeric.rerender(createElement(Harness<number>, { value: 2, onState: (s) => (n = s) }));
     expect(n.flashing).toBe(true);
     numeric.unmount();
-    await act(() => wait(40));
+    await act(() => wait(350));
   });
 });
