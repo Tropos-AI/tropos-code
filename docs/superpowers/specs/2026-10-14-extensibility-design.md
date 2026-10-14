@@ -31,9 +31,11 @@ It stays a **clean-room build**. Claude Code's file formats are public and widel
      whose `.npmrc`/`node_modules` would steer `npx`), and a host containing `*` is refused (no wildcard rule
      suggestions).
    - Formatter and language-server programs are found through absolute PATH entries only, never inside the project.
-     Once the agent writes a file they load code from (prettier/biome configs, `package.json`, `tsconfig*.json`,
-     `pyproject.toml`, `go.mod`, anything under `node_modules` or `.cargo`), both stay off for the session, so an
-     approved edit can't become code execution. Slash-command shell lines honour PreToolUse `ask` and `updatedInput`
+     Once the agent writes anything but a plain source or doc file (an extension allowlist; JS
+     `*.config.*`, `.prettierrc*`, `.pnp.*` and `build.rs` excluded, as is anything under `node_modules`, `.yarn`,
+     `.cargo` or a virtualenv; checked case-insensitively on the given and resolved path), both stay off for the
+     session, so an approved edit can't become code execution. This fails closed by design: a list of config names
+     would always miss one. Slash-command shell lines honour PreToolUse `ask` and `updatedInput`
      like model calls. Patterned deny/ask rules still cover pathless tools, MCP server names can't start or end with
      `_`, and no "don't ask again" rule is offered for a folder whose name contains glob characters.
    - Formatters and language servers are the exception: once the user turns them on they run the project's own code
