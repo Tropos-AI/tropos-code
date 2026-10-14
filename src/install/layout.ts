@@ -16,8 +16,19 @@ export interface Layout {
   locks: string;
   log: string;
   binDir: string;
+  /** The managed command, `tcode`. */
   binLink: string;
+  /**
+   * Older names that keep working: `tropos` (the command before 0.3.0). Each is a symlink to `tcode`,
+   * so it follows every update and rollback; a file there that Tropos didn't make is left alone.
+   */
+  aliasLinks: string[];
 }
+
+/** The command's name. */
+export const COMMAND = "tcode";
+/** The command's name before 0.3.0, kept as an alias. */
+export const LEGACY_COMMAND = "tropos";
 
 /** Spec §9. XDG variables count only when absolute; install.sh applies the same rule. */
 export function resolveLayout(env: NodeJS.ProcessEnv = process.env, home?: string): Layout {
@@ -39,7 +50,8 @@ export function resolveLayout(env: NodeJS.ProcessEnv = process.env, home?: strin
     locks: join(state, "locks"),
     log: join(state, "update.log"),
     binDir,
-    binLink: join(binDir, "tropos"),
+    binLink: join(binDir, COMMAND),
+    aliasLinks: [join(binDir, LEGACY_COMMAND)],
   };
 }
 

@@ -14,7 +14,7 @@ let f: EngineFixture;
 afterEach(() => f?.close());
 
 describe("key rotation K1 → K2 (spec §6.1, layer 9)", () => {
-  test("tropos: K1-only clients refuse K2 releases with the reinstall hint; phase-1 clients accept both; K3 never", async () => {
+  test("tcode: K1-only clients refuse K2 releases with the reinstall hint; phase-1 clients accept both; K3 never", async () => {
     f = await makeEngineFixture(); // f.key is K1
     const k2 = await makeTestKey(f.root, "k2");
     const k3 = await makeTestKey(f.root, "k3");

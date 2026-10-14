@@ -77,7 +77,7 @@ describe("test-build binary: install --self → update → rollback", () => {
     const installed = await exec(testBin, ["install", "--self", "--manifest", join(dir, "m.json"), "--signature", join(dir, "m.sig")]);
     expect(installed.stderr).toBe("");
     expect(installed.code).toBe(0);
-    const link = join(home(), ".local/bin/tropos");
+    const link = join(home(), ".local/bin/tcode");
     expect((await exec(link, ["--version"])).stdout).toBe(`${pkg.version} (Tropos Code)\n`);
 
     const next = "99.0.0";

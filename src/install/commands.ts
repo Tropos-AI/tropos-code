@@ -15,6 +15,7 @@ import { rollback } from "./rollback";
 import { TRUSTED_KEYS } from "./trust";
 import { RELEASE_URLS } from "./urls";
 import { defaultHealthCheck } from "./verify";
+import { migrateCommandLink } from "./session";
 
 export interface CommandContext {
   out: (s: string) => void;
@@ -63,16 +64,19 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
   // Printed as soon as recovery has run, so its actions show even when the command then fails (A11: install and
   // update also print the fatal condition and carry on; rollback fails with it, which the catch below prints).
   const report = (r: RecoveryReport) => {
-    for (const a of r.actions) ctx.err(`tropos: ${a}\n`);
-    if (r.fatal && cmd.kind !== "rollback" && cmd.kind !== "install-self" && !r.actions.includes(r.fatal)) ctx.err(`tropos: ${r.fatal}\n`);
+    for (const a of r.actions) ctx.err(`tcode: ${a}\n`);
+    if (r.fatal && cmd.kind !== "rollback" && cmd.kind !== "install-self" && !r.actions.includes(r.fatal)) ctx.err(`tcode: ${r.fatal}\n`);
   };
   const onWait = (holder: LockInfo | null) =>
-    ctx.err(`tropos: waiting for another Tropos install to finish${holder ? ` (pid ${holder.pid})` : ""}…\n`);
+    ctx.err(`tcode: waiting for another Tropos install to finish${holder ? ` (pid ${holder.pid})` : ""}…\n`);
   const hooks: Hooks = { onWait, onRecovery: report };
 
   try {
     const base = (ctx.engine ?? ((l) => productionEngineDeps(ctx.env, ctx.version, l)))(log);
     const deps = { ...base, user: base.user ?? currentUser() };
+    // An install from before 0.3.0 has only `tropos`: add `tcode` quietly first, instead of recovery
+    // reporting it "missing" (install --self links tcode itself).
+    if (cmd.kind !== "install-self") await migrateCommandLink(deps.layout);
     if (cmd.kind === "install-self") {
       // Runs from install.sh's temporary folder: there is no installed version of ours to hold (spec §10.1).
       const run = await installSelf(deps, { kind: "self", execPath: ctx.execPath, manifestPath: cmd.manifest, signaturePath: cmd.signature, compiledVersion: ctx.version }, hooks);
@@ -98,7 +102,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
       log(`failed: ${describeError(e)}`);
       return 0;
     }
-    ctx.err(`tropos: ${describeError(e)}\n`);
+    ctx.err(`tcode: ${describeError(e)}\n`);
     return exitCodeFor(e);
   }
 }
@@ -121,7 +125,7 @@ async function runNative(cmd: Exclude<InstallCommand, { kind: "help" | "install-
     const r = run.value;
     if (r.kind === "updated") ctx.out(`Updated Tropos Code from ${r.outcome.previous ?? "an unmanaged build"} to ${r.outcome.version}.\n`);
     else if (r.kind === "up-to-date") ctx.out(`Tropos Code ${r.current} is up to date (${ctx.settings.autoUpdatesChannel}: ${r.available}).\n`);
-    else ctx.out(`Tropos Code ${r.version} is available but skipped because ${SKIP_TEXT[r.reason]}; install it with tropos install ${r.version}.\n`);
+    else ctx.out(`Tropos Code ${r.version} is available but skipped because ${SKIP_TEXT[r.reason]}; install it with tcode install ${r.version}.\n`);
     return 0;
   }
   const run = await rollback(deps, hooks);

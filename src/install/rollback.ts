@@ -16,7 +16,7 @@ export async function rollback(deps: EngineDeps, hooks: Hooks = {}): Promise<Loc
     if (previous === null || !(await checkHealthy(s.ctx, previous)).ok) {
       const healthy: string[] = [];
       for (const v of await listManagedVersions(l)) if (v !== current && (await checkHealthy(s.ctx, v)).ok) healthy.push(v);
-      const hint = healthy.length ? `; verified versions: ${healthy.join(", ")} — install one with tropos install <version>` : "";
+      const hint = healthy.length ? `; verified versions: ${healthy.join(", ")} — install one with tcode install <version>` : "";
       throw new InstallError("integrity", `no verified previous version to roll back to${hint}`);
     }
     await preSwitchChecks(s, await readLink(l), false, "move");

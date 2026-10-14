@@ -72,13 +72,13 @@ async function readPipedStdin(): Promise<string | null> {
   return text.trim() ? text : null;
 }
 
-/** Runs the CLI. Any failure that isn't handled below becomes one `tropos: <message>` line and exit code 1. */
+/** Runs the CLI. Any failure that isn't handled below becomes one `tcode: <message>` line and exit code 1. */
 export async function main(argv: string[], deps: MainDeps = {}): Promise<number> {
   try {
     return await run(argv, deps);
   } catch (e) {
     const err = deps.err ?? ((s: string) => void process.stderr.write(s));
-    err(`tropos: ${e instanceof Error ? e.message : String(e)}\n`);
+    err(`tcode: ${e instanceof Error ? e.message : String(e)}\n`);
     return 1;
   }
 }
@@ -104,7 +104,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
           // A background update never fails loudly (spec 11): it falls back to defaults.
           if (!(e instanceof SettingsError)) throw e;
           if (!(cmd.kind === "update" && cmd.background)) {
-            err(`tropos: ${e.message}\n`);
+            err(`tcode: ${e.message}\n`);
             return 1;
           }
         }
@@ -122,7 +122,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     opts = invocation.options;
   } catch (e) {
     if (e instanceof CliError) {
-      err(`tropos: ${e.message}\nRun tropos --help for usage.\n`);
+      err(`tcode: ${e.message}\nRun tcode --help for usage.\n`);
       return EXIT_USAGE;
     }
     throw e;
@@ -145,10 +145,10 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   try {
     const loaded = await loadSettings(paths, { model: opts.model, effort: opts.effort, permissions: { allow: opts.allowedTools } });
     settings = loaded.settings;
-    for (const warning of loaded.warnings) err(`tropos: ${warning}\n`);
+    for (const warning of loaded.warnings) err(`tcode: ${warning}\n`);
   } catch (e) {
     if (e instanceof SettingsError) {
-      err(`tropos: ${e.message}\n`);
+      err(`tcode: ${e.message}\n`);
       return 1;
     }
     throw e;
@@ -174,13 +174,13 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
   if (native.kind === "native" && native.announcement) err(`${native.announcement}\n`);
   const { rules, invalid } = compileRules(settings.permissions);
-  for (const rule of invalid) err(`tropos: ignoring invalid permission rule "${rule}"\n`);
+  for (const rule of invalid) err(`tcode: ignoring invalid permission rule "${rule}"\n`);
 
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const router = new ProviderRouter({ home, env, settings: settings.providers });
   // Usage errors come before any session file is created or extension started.
   if (opts.resume && !opts.resumeId && opts.print) {
-    err("tropos: --resume needs a session id in print mode.\n");
+    err("tcode: --resume needs a session id in print mode.\n");
     return EXIT_USAGE;
   }
   let printPrompt = "";
@@ -188,21 +188,21 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     const stdin = await (deps.readStdin ?? readPipedStdin)();
     printPrompt = [opts.prompt, stdin?.trimEnd()].filter(Boolean).join("\n\n");
     if (!printPrompt) {
-      err('tropos: print mode needs a prompt, e.g. tropos -p "explain this repo"\n');
+      err('tcode: print mode needs a prompt, e.g. tcode -p "explain this repo"\n');
       return EXIT_USAGE;
     }
   } else if (!process.stdin.isTTY || deps.readStdin) {
-    err("tropos: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
+    err("tcode: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
     return EXIT_USAGE;
   }
 
   if (!opts.print && picked.rejected) {
-    err(`tropos: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
+    err(`tcode: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
   const ext = await loadExtensions({ cwd, home, settings, env });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
-  for (const warning of ext.warnings) err(`tropos: ${sanitizeForTerminal(warning)}\n`);
+  for (const warning of ext.warnings) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
   const subagents: SubagentHolder = {};
   // The current session, for SessionSearch to skip; set once the session is open below.
   let sessionId = "";
@@ -236,7 +236,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       if (opts.continue) {
         const latest = (await listSessions(home, cwd))[0];
         if (!latest) {
-          err("tropos: there is no earlier session in this directory to continue.\n");
+          err("tcode: there is no earlier session in this directory to continue.\n");
           return 1;
         }
         ({ store: session, messages: history } = await SessionStore.open(home, cwd, latest.id));
@@ -246,7 +246,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION });
       }
     } catch (e) {
-      err(`tropos: ${(e as Error).message}\n`);
+      err(`tcode: ${(e as Error).message}\n`);
       return 1;
     }
 
@@ -259,20 +259,20 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       const state = { model: settings.model, effort: settings.effort, mode };
       const hooks = sessionHooks(ctx, () => session, () => state.mode);
       const toolContext = createToolContext(ctx);
-      // `tropos -p "/review main"` runs a custom command or skill, as typing it would.
+      // `tcode -p "/review main"` runs a custom command or skill, as typing it would.
       const slash = parseCommand(printPrompt, extraCommands(ext));
       let prompt = printPrompt;
       if (slash.kind === "custom") {
         const io = commandIO(ctx, () => state.mode, toolContext, { askPermission: async () => PRINT_DENY }, new AbortController().signal, hooks);
         const expanded = await expandSlash(ctx, slash.name, slash.args, io);
         if (!expanded.ok) {
-          err(`tropos: /${slash.name}: ${expanded.reason}\n`);
+          err(`tcode: /${slash.name}: ${expanded.reason}\n`);
           return 1;
         }
         prompt = expanded.prompt;
         if (expanded.model) state.model = expanded.model;
       }
-      let context = await sessionStart(hooks, resumed ? "resume" : "startup", (_level, text) => err(`tropos: ${sanitizeForTerminal(text)}\n`), harnessNonce(session.id));
+      let context = await sessionStart(hooks, resumed ? "resume" : "startup", (_level, text) => err(`tcode: ${sanitizeForTerminal(text)}\n`), harnessNonce(session.id));
       const agent = makeAgent(ctx, {
         session: () => session,
         history,

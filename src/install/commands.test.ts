@@ -44,7 +44,7 @@ describe("runInstallCommand", () => {
     f = await makeEngineFixture();
     const { c, out } = ctx();
     expect(await runInstallCommand({ kind: "help", command: "rollback" }, c)).toBe(0);
-    expect(out.join("")).toStartWith("Usage: tropos rollback");
+    expect(out.join("")).toStartWith("Usage: tcode rollback");
   });
 
   test("not a native install: exit 73 (R1.4)", async () => {
@@ -84,7 +84,7 @@ describe("runInstallCommand", () => {
     expect(await runInstallCommand({ kind: "rollback" }, c)).toBe(0);
     expect(out.join("")).toContain("Rolled back from 1.1.0 to 1.0.0. Background updates will skip 1.1.0.");
     expect(await runInstallCommand({ kind: "update", background: false, alias: "update" }, c)).toBe(0);
-    expect(out.join("")).toContain("Tropos Code 1.1.0 is available but skipped because you rolled back from it; install it with tropos install 1.1.0.");
+    expect(out.join("")).toContain("Tropos Code 1.1.0 is available but skipped because you rolled back from it; install it with tcode install 1.1.0.");
     f.srv.put("channels", "latest", "<html>");
     f.srv.put("channels", "latest.bak", "<html>");
     expect(await runInstallCommand({ kind: "install", target: "latest", force: false }, c)).toBe(69);
@@ -121,7 +121,7 @@ describe("runInstallCommand fix round 1", () => {
     const other = await makeTestKey(f.root, "other");
     const { c, err } = ctx({ engine: (log) => ({ ...f.deps, log, trusted: other.trusted }) });
     expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: false }, c)).toBe(65);
-    expect(err.join("")).toStartWith("tropos: ");
+    expect(err.join("")).toStartWith("tcode: ");
   });
 
   test("a held install lock maps to 75", async () => {
@@ -140,10 +140,10 @@ describe("runInstallCommand fix round 1", () => {
     f = await makeEngineFixture();
     const a = ctx({ engine: () => { throw new TypeError("boom"); } });
     expect(await runInstallCommand({ kind: "rollback" }, a.c)).toBe(1);
-    expect(a.err.join("")).toBe("tropos: boom\n");
+    expect(a.err.join("")).toBe("tcode: boom\n");
     const b = ctx({ engine: () => { throw "plain failure"; } });
     expect(await runInstallCommand({ kind: "rollback" }, b.c)).toBe(1);
-    expect(b.err.join("")).toBe("tropos: plain failure\n");
+    expect(b.err.join("")).toBe("tcode: plain failure\n");
   });
 
   test("upgrade alias behaves like update", async () => {
@@ -176,7 +176,7 @@ describe("commands hold the in-use lock of the version they run from (I2, spec Â
     const damaged = await readFile(versionPath(f.layout, "1.0.0"));
     const { c, err } = ctx();
     expect(await runInstallCommand({ kind: "install", target: "1.0.0", force: true }, c)).toBe(75);
-    expect(err.join("")).toContain("version 1.0.0 is damaged and this tropos is running from it");
+    expect(err.join("")).toContain("version 1.0.0 is damaged and this tcode is running from it");
     expect(err.join("")).toContain("reinstall it with install.sh");
     expect(await readFile(versionPath(f.layout, "1.0.0"))).toEqual(damaged);
     expect((await readdir(f.layout.versions)).filter((n) => n.startsWith("."))).toEqual([]);
@@ -217,7 +217,7 @@ describe("recovery reporting (D2, M5)", () => {
     f.srv.put("channels", "latest.bak", "<html>");
     const { c, err } = ctx();
     expect(await runInstallCommand({ kind: "install", target: "latest", force: false }, c)).toBe(69);
-    expect(err.join("")).toContain(`tropos: adopted 1.1.0, which ${f.layout.binLink} points to\n`);
+    expect(err.join("")).toContain(`tcode: adopted 1.1.0, which ${f.layout.binLink} points to\n`);
   });
 
   test("install and update print the fatal recovery condition and carry on (A11)", async () => {
@@ -228,7 +228,7 @@ describe("recovery reporting (D2, M5)", () => {
     f.srv.put("channels", "latest", "1.1.0\n");
     const { c, out, err } = ctx();
     expect(await runInstallCommand({ kind: "update", background: false, alias: "update" }, c)).toBe(0);
-    expect(err.join("")).toContain("tropos: no verified Tropos version is installed; reinstall with install.sh\n");
+    expect(err.join("")).toContain("tcode: no verified Tropos version is installed; reinstall with install.sh\n");
     expect(out.join("")).toContain("to 1.1.0.");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
   });
@@ -247,7 +247,7 @@ describe("recovery reporting (D2, M5)", () => {
       const { c, err } = ctx({ engine: (log) => ({ ...f.deps, log, lockTimeoutMs: 50 }) });
       const command = cmd ?? ({ kind: "install-self", manifest: join(f.root, "m.json"), signature: join(f.root, "m.sig") } as const);
       expect(await runInstallCommand(command, c)).toBe(75);
-      expect(err.join("")).toContain("tropos: waiting for another Tropos install to finish");
+      expect(err.join("")).toContain("tcode: waiting for another Tropos install to finish");
     } finally {
       held.release();
     }

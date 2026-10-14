@@ -64,7 +64,7 @@ export interface Runtime {
   /** Shift+Tab cycle order; includes "bypass" only when started with --dangerously-skip-permissions. */
   readonly modes: Mode[];
   readonly initialPrompt?: string;
-  /** Open the session picker on start (`tropos -r` without an id). */
+  /** Open the session picker on start (`tcode -r` without an id). */
   readonly startWithPicker?: boolean;
   readonly providers: ProviderControl;
   state(): { model: string; effort: Effort; mode: Mode };

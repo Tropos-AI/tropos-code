@@ -1,5 +1,5 @@
 // test/install/install-sh.e2e.test.ts
-// install.sh hands off to a real (test-build) tropos, which then updates and rolls back — success criteria 1–4.
+// install.sh hands off to a real (test-build) tcode, which then updates and rolls back — success criteria 1–4.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +32,7 @@ afterAll(async () => {
   if (dir) await removeDir(dir);
 });
 
-describe("install.sh → tropos install --self → update → rollback", () => {
+describe("install.sh → tcode install --self → update → rollback", () => {
   test("the whole path with real binaries", async () => {
     const box = await makeSandbox({ signers: allowedSignersText(key), base: srv.base });
     sb = box;
@@ -40,7 +40,7 @@ describe("install.sh → tropos install --self → update → rollback", () => {
     const installed = await box.run([], { env });
     expect(installed.stderr).toBe("");
     expect(installed.code).toBe(0);
-    const link = join(box.home, ".local/bin/tropos");
+    const link = join(box.home, ".local/bin/tcode");
     expect(await readlink(link)).toEndWith(`/versions/${pkg.version}`);
 
     const run = async (bin: string, args: string[]) => {

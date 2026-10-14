@@ -1,8 +1,11 @@
 // src/install/session.ts
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { announcement, markAnnounced, shouldCheck, spawnBackgroundUpdate } from "./autoupdate";
-import { nativeVersionOf, resolveLayout } from "./layout";
-import { lockVersionShared } from "./locks";
+import { installLockPath, nativeVersionOf, resolveLayout, type Layout } from "./layout";
+import { migrateLegacyLink } from "./link";
+import { LOCK_EX } from "./flock";
+import { lockVersionShared, tryLock } from "./locks";
 import { readState } from "./state";
 import { isManaged } from "./verify";
 
@@ -24,14 +27,38 @@ export type NativeSessionStart =
   | { kind: "native"; version: string; holdsLock: boolean; announcement: string | null; updateSpawned: boolean };
 
 /**
+ * Adds `tcode` for an install made before 0.3.0 (see migrateLegacyLink), under the install lock so it
+ * never races an update. Best effort: a busy lock or any error just leaves things for the next run.
+ */
+export async function migrateCommandLink(layout: Layout): Promise<string | null> {
+  let lock;
+  try {
+    // A local build installed by the old install-local.sh never made the state folders.
+    await mkdir(layout.locks, { recursive: true, mode: 0o700 });
+    lock = tryLock(installLockPath(layout), LOCK_EX);
+  } catch {
+    return null;
+  }
+  if (!lock) return null;
+  try {
+    return await migrateLegacyLink(layout);
+  } catch {
+    return null;
+  } finally {
+    lock.release();
+  }
+}
+
+/**
  * Spec §10.1 and §11: hold a shared lock on our own version for the whole session; if our binary vanished
- * before we locked it, run again through ~/.local/bin/tropos; announce a finished update; maybe start one.
+ * before we locked it, run again through ~/.local/bin/tcode; announce a finished update; maybe start one.
  */
 export async function startNativeSession(d: NativeSessionDeps): Promise<NativeSessionStart> {
   const layout = resolveLayout(d.env);
   const version = nativeVersionOf(layout, d.execPath);
   if (version === null) return { kind: "not-native" };
-  // The loop guard is for this process only; descendants (Bash-tool commands, nested tropos) must not inherit it.
+  await migrateCommandLink(layout);
+  // The loop guard is for this process only; descendants (Bash-tool commands, nested tcode) must not inherit it.
   const reexeced = Boolean(d.env.TROPOS_REEXEC);
   delete d.env.TROPOS_REEXEC;
   delete process.env.TROPOS_REEXEC;

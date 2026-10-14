@@ -1,15 +1,15 @@
 export const USAGE = `Tropos Code — an agentic coding CLI by Tropos Labs
 
 Usage:
-  tropos [prompt]                  start an interactive session, optionally with a first prompt
-  tropos -p "prompt"               answer once and exit (stdin is appended when piped)
+  tcode [prompt]                   start an interactive session, optionally with a first prompt
+  tcode -p "prompt"                answer once and exit (stdin is appended when piped)
 
 Commands:
-  tropos install [stable|latest|<version>] [--force]
-                                   install a release and make it the active tropos
-  tropos update                    update to the newest release of your channel (also: upgrade)
-  tropos rollback                  return to the previous version
-  tropos -- <prompt>               everything after -- is the prompt (e.g. tropos -- update)
+  tcode install [stable|latest|<version>] [--force]
+                                   install a release and make it the active tcode
+  tcode update                     update to the newest release of your channel (also: upgrade)
+  tcode rollback                   return to the previous version
+  tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- update)
 
 Options:
   -p, --print                      non-interactive mode
@@ -35,7 +35,7 @@ Settings: ~/.tropos/settings.json, ~/.tropos/projects/<project>/settings.json,
 Memory:   ~/.tropos/TROPOS.md, TROPOS.md (or AGENTS.md, CLAUDE.md) in the repo, TROPOS.local.md
 `;
 
-export const INSTALL_HELP = `Usage: tropos install [stable|latest|<version>] [--force]
+export const INSTALL_HELP = `Usage: tcode install [stable|latest|<version>] [--force]
 
 Installs a Tropos Code release and makes it the active tropos. Without a target, installs latest.
 This is a one-time install: background updates keep following "autoUpdatesChannel" in
@@ -47,7 +47,7 @@ Options:
   -h, --help     show this help
 `;
 
-export const UPDATE_HELP = `Usage: tropos update   (or: tropos upgrade)
+export const UPDATE_HELP = `Usage: tcode update   (or: tcode upgrade)
 
 Updates to the newest release of your update channel ("autoUpdatesChannel": "latest" or "stable"
 in ~/.tropos/settings.json). Never installs an older version.
@@ -56,7 +56,7 @@ Options:
   -h, --help     show this help
 `;
 
-export const ROLLBACK_HELP = `Usage: tropos rollback
+export const ROLLBACK_HELP = `Usage: tcode rollback
 
 Returns to the previous installed version after verifying it. Background updates then skip the
 version you rolled back from until a newer release appears.

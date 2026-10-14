@@ -20,7 +20,7 @@ To build from source you need [Bun](https://bun.sh) 1.4+:
 ```bash
 bun install
 bun run build        # → dist/tropos (single self-contained binary)
-bun run install:local  # → ~/.local/bin/tropos (local build)
+bun run install:local  # → ~/.local/bin/tcode (local build)
 ```
 
 Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.
@@ -33,8 +33,8 @@ Ollama or LM Studio. In a session, `/providers` lists them, asks for a key the f
 shows each provider's current models. Model ids are `provider/model`; bare ids are Anthropic's:
 
 ```bash
-tropos --model deepseek/deepseek-flash
-DEEPSEEK_API_KEY=… tropos -p "fix the failing test" --model deepseek/deepseek-flash
+tcode --model deepseek/deepseek-flash
+DEEPSEEK_API_KEY=… tcode -p "fix the failing test" --model deepseek/deepseek-flash
 ```
 
 A provider's usual variable (`OPENAI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, …) wins over
@@ -50,20 +50,22 @@ machine) go in `~/.tropos/settings.json`:
 
 ## Use
 
+The command is `tcode`. Before 0.3.0 it was `tropos`, which keeps working as an alias.
+
 ```bash
-tropos                          # interactive session
-tropos "add a --json flag"      # interactive, starting with a prompt
-tropos -p "explain src/agent"   # print mode for scripts and CI
-git diff | tropos -p "review this diff" --output-format json
-tropos -c                       # continue the last session here
-tropos -r                       # pick a session to resume
+tcode                           # interactive session
+tcode "add a --json flag"       # interactive, starting with a prompt
+tcode -p "explain src/agent"    # print mode for scripts and CI
+git diff | tcode -p "review this diff" --output-format json
+tcode -c                        # continue the last session here
+tcode -r                        # pick a session to resume
 ```
 
 Print mode exits 0 only when the answer is complete: 1 error, 2 refusal, 3 `--max-turns` reached,
 4 answer cut off at the output limit (what arrived is still printed), 5 conversation too long for
 the context window, 6 a hook blocked the prompt or stopped the turn, 130 interrupted. With
 `--output-format json`, `cost_usd` is `null` when a model without a known price answered.
-`tropos -p "/review main"` runs a custom command or skill, as typing it in a session would.
+`tcode -p "/review main"` runs a custom command or skill, as typing it in a session would.
 
 In a session:
 - Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.
@@ -236,7 +238,7 @@ tools with `mcp__github__get_*`.
   with `ps eww -p <pid>`. Reading another process's environment goes through the normal Bash
   permission prompt, so avoid broad rules such as `Bash(ps:*)`, and avoid bypass mode in
   untrusted repositories. Prefer `ant auth login` over exporting the key.
-- `tropos -p` reads piped stdin until EOF. In scripts and CI that have no input, pass
+- `tcode -p` reads piped stdin until EOF. In scripts and CI that have no input, pass
   `</dev/null` so it doesn't wait.
 
 ## How it works

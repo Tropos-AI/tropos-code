@@ -216,6 +216,7 @@ jobs:
         run: |
           HOME="$(mktemp -d)"; export HOME
           TROPOS_INSTALL_FROM="$GITHUB_WORKSPACE/draft" sh "$GITHUB_WORKSPACE/draft/install.sh" "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
 
   # Decision D2: no job container; the install runs in docker run alpine:3.22 as an unprivileged user.
@@ -239,6 +240,7 @@ jobs:
           cat >"$RUNNER_TEMP/smoke.sh" <<'EOF'
           set -eu
           TROPOS_INSTALL_FROM=/draft sh /draft/install.sh "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
           EOF
           docker run --rm -v "$PWD/draft:/draft:ro" -v "$RUNNER_TEMP/smoke.sh:/smoke.sh:ro" -e VERSION alpine:3.22 sh -euc '
@@ -306,23 +308,28 @@ jobs:
         run: |
           HOME="$(mktemp -d)"; export HOME
           curl -fsSL "https://github.com/$R/releases/download/$TAG/install.sh" | sh -s -- "$VERSION"
-          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
-          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tcode" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
       - name: b) the published installer verifies the new release
         if: needs.previous.outputs.installer_tag != ''
         run: |
           HOME="$(mktemp -d)"; export HOME
           curl -fsSL "https://github.com/$R/releases/download/$OLD_TAG/install.sh" | sh -s -- "$VERSION"
-          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
       # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public (ruling 5).
       - name: c) the stable binary installs the new release
         if: needs.previous.outputs.stable != ''
         run: |
           HOME="$(mktemp -d)"; export HOME
           curl -fsSL "https://github.com/$R/releases/download/v$STABLE/install.sh" | sh -s -- "$STABLE"
-          "$HOME/.local/bin/tropos" install "$VERSION"
+          # A stable from before 0.3.0 knows only `tropos`; the new version's first command adds `tcode`.
+          if [ -x "$HOME/.local/bin/tcode" ]; then cmd="$HOME/.local/bin/tcode"; else cmd="$HOME/.local/bin/tropos"; fi
+          "$cmd" install "$VERSION"
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
 
   # Decision D2: no job container; each gate runs in a fresh docker run alpine:3.22 as an unprivileged user.
   smoke-public-musl:
@@ -345,20 +352,25 @@ jobs:
           cat >"$RUNNER_TEMP/a.sh" <<'EOF'
           set -eu -o pipefail
           curl -fsSL "https://github.com/$R/releases/download/$TAG/install.sh" | sh -s -- "$VERSION"
-          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
-          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tcode" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
           EOF
           cat >"$RUNNER_TEMP/b.sh" <<'EOF'
           set -eu -o pipefail
           curl -fsSL "https://github.com/$R/releases/download/$OLD_TAG/install.sh" | sh -s -- "$VERSION"
-          [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           EOF
           cat >"$RUNNER_TEMP/c.sh" <<'EOF'
           set -eu -o pipefail
           curl -fsSL "https://github.com/$R/releases/download/v$STABLE/install.sh" | sh -s -- "$STABLE"
-          "$HOME/.local/bin/tropos" install "$VERSION"
+          # A stable from before 0.3.0 knows only `tropos`; the new version's first command adds `tcode`.
+          if [ -x "$HOME/.local/bin/tcode" ]; then cmd="$HOME/.local/bin/tcode"; else cmd="$HOME/.local/bin/tropos"; fi
+          "$cmd" install "$VERSION"
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
+          "$HOME/.local/bin/tropos" install "$VERSION"
+          [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           EOF
           # Each gate starts from a fresh alpine:3.22 container and a clean HOME of an unprivileged user.
           cat >"$RUNNER_TEMP/gate.sh" <<'EOF'

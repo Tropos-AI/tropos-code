@@ -89,7 +89,7 @@ describe("install from the network", () => {
     expect((await f.state()).skip).toEqual({ "1.1.0": "health-check" });
   });
 
-  test("a foreign ~/.local/bin/tropos needs --force", async () => {
+  test("a foreign ~/.local/bin/tcode needs --force", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     await writeFile(f.layout.binLink, "#!/bin/sh\n");
@@ -182,7 +182,7 @@ describe("install --self (R1.1–R1.3)", () => {
     const r = await f.release(opts.manifestVersion ?? version);
     const tmp = join(f.root, `tmp-${Math.random().toString(36).slice(2)}`);
     await mkdir(tmp);
-    const exe = join(tmp, "tropos");
+    const exe = join(tmp, "tcode");
     await writeFile(exe, opts.tamperBinary ? fakeBinary(version, "# tampered") : r.binary);
     await chmod(exe, 0o700);
     await writeFile(join(tmp, "manifest.json"), r.verified.bytes);
@@ -228,7 +228,7 @@ describe("install --self (R1.1–R1.3)", () => {
     expect(await readFile(versionPath(f.layout, "1.0.0"))).toEqual(original);
   });
 
-  test("a foreign ~/.local/bin/tropos: the message points to install.sh, not to a --force it does not have (M4)", async () => {
+  test("a foreign ~/.local/bin/tcode: the message points to install.sh, not to a --force it does not have (M4)", async () => {
     f = await makeEngineFixture();
     await writeFile(f.layout.binLink, "#!/bin/sh\n");
     const e = await err(installSelf(f.deps, await selfSource("1.0.0")));
@@ -296,7 +296,7 @@ describe("transient health-check failures are not verdicts (I1)", () => {
     const deps = { ...f.deps, health: unknownAfterSwitch() };
     const e = await err(how === "install" ? installTarget(deps, "1.1.0", false) : updateChannel(deps, "latest", { wait: true }));
     expect(e.kind).toBe("busy");
-    expect(e.message).toBe("the health check of 1.1.0 could not be run after switching; 1.1.0 stays active — try `tropos --version`");
+    expect(e.message).toBe("the health check of 1.1.0 could not be run after switching; 1.1.0 stays active — try `tcode --version`");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
     expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0", pending: null });
     expect((await f.state()).skip).toEqual({});

@@ -17,7 +17,7 @@ async function put(path: string, text: string) {
 
 beforeAll(async () => {
   dir = await makeTmpDir();
-  bin = join(dir, "tropos");
+  bin = join(dir, "tcode");
   home = join(dir, ".tropos-home");
   project = join(dir, "proj");
   await Bun.$`bun build.ts --outfile ${bin}`.quiet();

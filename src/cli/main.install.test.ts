@@ -57,7 +57,7 @@ describe("main dispatches install subcommands (spec §12)", () => {
     f = await makeEngineFixture();
     const r = await run(["install", "--help"], "/usr/local/bin/bun");
     expect(r.code).toBe(0);
-    expect(r.out).toStartWith("Usage: tropos install");
+    expect(r.out).toStartWith("Usage: tcode install");
   });
 });
 

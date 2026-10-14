@@ -139,7 +139,7 @@ describe("install.sh platform detection and manifest bytes", () => {
     const sb = await sandbox();
     const r = await sb.run(["1.0.0"]);
     expect(r.code).toBe(65);
-    expect(r.stderr).toBe("tropos install: the release manifest is malformed\n");
+    expect(r.stderr).toBe("tcode install: the release manifest is malformed\n");
     expect(await Bun.file(join(sb.home, "handoff")).exists()).toBe(false);
   });
 });

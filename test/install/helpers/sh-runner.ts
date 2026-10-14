@@ -30,7 +30,7 @@ export function blockOf(text: string, name: string): string {
   return text.slice(text.indexOf("\n", i) + 1, j).replace(/\n\s*$/, "");
 }
 
-/** The fake tropos the installer hands off to: records its arguments and exits with $FAKE_EXIT. */
+/** The fake tcode the installer hands off to: records its arguments and exits with $FAKE_EXIT. */
 export function handoffBinary(version = "1.0.0"): string {
   // The final comment line lets the zstd corpus flip a byte without breaking the script.
   return `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${version} (Tropos Code)"; exit 0; fi\necho "$*" > "$HOME/handoff"\n[ -n "$FAKE_SIGNAL" ] && kill -9 $$\nexit \${FAKE_EXIT:-0}\n# zzzz\n`;

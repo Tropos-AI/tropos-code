@@ -305,7 +305,7 @@ describe("recovery: a health check that cannot run is not a broken release (I1)"
     expect((await f.state()).current).toBe("1.0.0");
   });
 
-  test("a background run never removes ~/.local/bin/tropos, even with no healthy candidate; it logs what it did", async () => {
+  test("a background run never removes ~/.local/bin/tcode, even with no healthy candidate; it logs what it did", async () => {
     const lines: string[] = [];
     f = await makeEngineFixture({ log: (line) => void lines.push(line) });
     await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });

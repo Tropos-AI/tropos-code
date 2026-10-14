@@ -79,7 +79,7 @@ END {
   fail() {
     fail_code=$1
     shift
-    printf 'tropos install: %s\n' "$*" >&2
+    printf 'tcode install: %s\n' "$*" >&2
     exit "$fail_code"
   }
   need() { fail 1 "$1 is required. Install it with: apt install $2 | apk add $3 | dnf install $4 | brew install $5"; }
@@ -274,14 +274,14 @@ END {
   if [ "$status" -ne 0 ]; then
     if [ "$status" -ge 128 ]; then
       if [ -t 0 ]; then stty sane 2>/dev/null || true; fi
-      printf 'tropos install: the installer was stopped by a signal (exit %s)\n' "$status" >&2
+      printf 'tcode install: the installer was stopped by a signal (exit %s)\n' "$status" >&2
     fi
     exit "$status"
   fi
 
   bindir="$HOME/.local/bin"
   case ":${PATH}:" in
-    *":$bindir:"*) say "Run: tropos" ;;
+    *":$bindir:"*) say "Run: tcode" ;;
     *)
       shell_name=${SHELL:-sh}
       shell_name=${shell_name##*/}

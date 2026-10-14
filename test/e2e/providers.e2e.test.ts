@@ -11,7 +11,7 @@ let home: string;
 
 beforeAll(async () => {
   dir = await makeTmpDir();
-  bin = join(dir, "tropos");
+  bin = join(dir, "tcode");
   home = join(dir, ".tropos-home");
   await Bun.$`bun build.ts --outfile ${bin}`.quiet();
   await writeFile(join(dir, "hello.txt"), "hello world\n");
