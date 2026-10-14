@@ -89,9 +89,16 @@ describe("BlinkingDot", () => {
     );
     const r2 = render(<BlinkingDot glyph="Y" />);
     expect(r.lastFrame()).toBe("X|");
-    await Bun.sleep(BLINK_MS + 100);
+    // Wait for the hidden phase instead of sleeping a fixed time: a slow runner may tick twice in BLINK_MS + 100.
+    const until = async (done: () => boolean) => {
+      const deadline = Date.now() + BLINK_MS * 4;
+      while (!done() && Date.now() < deadline) await Bun.sleep(10);
+    };
+    await until(() => r.lastFrame() === " |");
     expect(r.lastFrame()).toBe(" |");
-    expect(r2.lastFrame()).toBe("");
+    // Both dots run on the one shared clock, so the second is hidden in the same phase.
+    await until(() => r2.lastFrame() === "" || r.lastFrame() !== " |");
+    expect(r.lastFrame() === " |" ? r2.lastFrame() : "").toBe("");
     r.unmount();
     r2.unmount();
     // The clock restarts in the visible phase.
