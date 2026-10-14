@@ -21,7 +21,22 @@ export function fitPath(path: string, max: number): string {
 /** Columns left for the text column: the mark (15), the gap (3) and the padding (2). */
 const TEXT_OFFSET = 20;
 
-export function BrandHeader({ version, model, effort, cwd, width = 80 }: { version: string; model: string; effort: string; cwd: string; width?: number }) {
+export function BrandHeader({
+  version,
+  model,
+  effort,
+  cwd,
+  width = 80,
+  identity = {},
+}: {
+  version: string;
+  model: string;
+  effort: string;
+  cwd: string;
+  width?: number;
+  /** The agent's own name and emoji (~/.tropos/IDENTITY.md), shown above the product name. */
+  identity?: { name?: string; emoji?: string };
+}) {
   const theme = useTheme();
   const room = Math.max(20, width - TEXT_OFFSET);
   return (
@@ -34,6 +49,11 @@ export function BrandHeader({ version, model, effort, cwd, width = 80 }: { versi
         ))}
       </Box>
       <Box flexDirection="column" justifyContent="center">
+        {identity.name ? (
+          <Text bold color={theme.accent}>
+            {sanitizeForTerminal(identity.emoji ? `${identity.emoji} ${identity.name}` : identity.name)}
+          </Text>
+        ) : null}
         <Text bold>
           Tropos Code <Text color={theme.muted}>v{sanitizeForTerminal(version)}</Text>
         </Text>

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { BUILTIN_AGENTS, loadAgents } from "./agents";
+import { agentLabel, BUILTIN_AGENTS, loadAgents } from "./agents";
 import type { ExtensionDir } from "./sources";
 
 let dir: string;
@@ -84,4 +84,22 @@ test("project agents lose non-Anthropic models; bad files become warnings", asyn
   expect(text).toContain('Skipped agent "bad name"');
   expect(text).toContain("was cut to 200 KB");
   if (process.getuid?.() !== 0) expect(text).toContain("Cannot read agent");
+});
+
+test("built-ins carry an emoji and agents may set one in frontmatter", async () => {
+  expect(BUILTIN_AGENTS.map(agentLabel)).toEqual(["🛠 general-purpose", "🔎 explore", "🧭 plan"]);
+  await put("u/fox.md", "---\nname: fox\ndescription: F\nemoji: 🦊\n---\n");
+  await put("u/two.md", "---\nname: two\ndescription: T\nemoji: 🦊🦊\n---\n");
+  await put("u/word.md", "---\nname: word\ndescription: W\nemoji: robot\n---\n");
+  const { agents, warnings } = await loadAgents([{ dir: join(dir, "u"), source: "user" }]);
+  const byName = (n: string) => agents.find((a) => a.name === n)!;
+  expect(byName("fox").emoji).toBe("🦊");
+  expect(agentLabel(byName("fox"))).toBe("🦊 fox");
+  expect(byName("two").emoji).toBeUndefined();
+  expect("emoji" in byName("word")).toBe(false);
+  expect(agentLabel(byName("word"))).toBe("word");
+  expect(warnings).toEqual([
+    'Agent two ignores emoji "🦊🦊": it must be a single emoji',
+    'Agent word ignores emoji "robot": it must be a single emoji',
+  ]);
 });

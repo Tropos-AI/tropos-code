@@ -799,3 +799,31 @@ describe("Agent failure paths keep history valid", () => {
     expect(result).toMatchObject({ is_error: true, content: "Odd failed: plain string" });
   });
 });
+
+test("a tool's preview reaches the permission prompt; a preview that throws is left out", async () => {
+  const writer = (preview: AnyTool["preview"]) =>
+    defineTool({
+      name: "Keep",
+      kind: "exec",
+      description: "keep",
+      schema: z.object({ text: z.string() }),
+      summarize: () => "keep",
+      subject: () => ({ command: "keep", paths: [] }),
+      preview,
+      run: async () => ({ content: "kept" }),
+    }) as AnyTool;
+  const steps = () => [() => reply([toolUseBlock("t1", "Keep", { text: "the whole text" })], "tool_use"), () => reply([textBlock("ok")])];
+  const shown = harness(steps(), { tools: [writer((i) => ({ header: "/h/file.md", text: (i as { text: string }).text }))] });
+  await run(shown);
+  expect(shown.prompts[0]!.preview).toEqual({ header: "/h/file.md", text: "the whole text" });
+  const broken = harness(steps(), {
+    tools: [
+      writer(() => {
+        throw new Error("boom");
+      }),
+    ],
+  });
+  await run(broken);
+  expect(broken.prompts).toHaveLength(1);
+  expect(broken.prompts[0]!.preview).toBeUndefined();
+});

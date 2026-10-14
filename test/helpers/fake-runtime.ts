@@ -34,6 +34,8 @@ export function fakeRuntime(
     extraCommands?: ExtraCommand[];
     expand?: Runtime["expandCommand"];
     undo?: Runtime["undo"];
+    undoLearned?: Runtime["undoLearned"];
+    identity?: Runtime["identity"];
     start?: Runtime["start"];
     modelPrefs?: Runtime["modelPrefs"];
   } = {},
@@ -69,6 +71,8 @@ export function fakeRuntime(
     modelPrefs: over.modelPrefs ?? { get: async () => ({ recent: [], favorites: [] }), recordUse: async () => {}, toggleFavorite: async () => true },
     undo: over.undo ?? (async () => ({ ok: false, reason: "Nothing to undo." })),
     redo: async () => ({ ok: true, files: [] }),
+    undoLearned: over.undoLearned ?? (async () => ({ ok: false, reason: "Nothing learned to undo." })),
+    identity: over.identity ?? (() => ({})),
     start: over.start ?? (async () => {}),
     shutdown: async () => {},
     state: () => state,

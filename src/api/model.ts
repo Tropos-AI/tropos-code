@@ -27,6 +27,11 @@ export interface Model {
 
 export const MAX_TOKENS = 64_000;
 export const BETA_COMPACTION = "compact-2026-01-12";
+/**
+ * Prompt size at which the server compacts the conversation: compact_20260112's default trigger, which
+ * Tropos doesn't override. The learning review's memory flush is timed against it.
+ */
+export const COMPACTION_TRIGGER_TOKENS = 150_000;
 export const BETA_FALLBACK = "server-side-fallback-2026-07-01";
 
 export function toolToApi(tool: AnyTool): Anthropic.Beta.BetaTool {

@@ -5,11 +5,14 @@ import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { z } from "zod";
 import { errorText } from "../error-text";
 import { fmString, parseFrontmatter } from "../extensions/frontmatter";
+import type { Ledger } from "../learning/ledger";
+import type { SkillTracker } from "../learning/skill-tracker";
+import { scanText } from "../learning/threats";
 import { isInside } from "../paths";
 import { makeDiff } from "../tools/diff";
 import { writeFileNoFollow } from "../tools/file-guard";
 import { resolveToolPath } from "../tools/paths";
-import { defineTool, type AnyTool, type ToolOutput } from "../tools/types";
+import { defineTool, type Actor, type AnyTool, type ToolOutput } from "../tools/types";
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -30,6 +33,27 @@ const schema = z.object({
 type Input = z.infer<typeof schema>;
 
 class SkillError extends Error {}
+
+export interface SkillManageOptions {
+  home: string;
+  /** Records every write so the user can review and undo it. */
+  ledger?: Ledger;
+  /** When given, patch and write_file need the skill loaded (or created) in this session first. */
+  tracker?: SkillTracker;
+  /** The folder under home the skills live in: "skills" (default), or the learning review's own "skills-learned". */
+  folder?: string;
+}
+
+/** The skills folder this tool writes to. */
+function skillsBase(opts: SkillManageOptions): string {
+  return join(opts.home, opts.folder ?? "skills");
+}
+
+/** What each action needs besides its input: where to record, and who is acting. */
+interface Env {
+  opts: SkillManageOptions;
+  actor: Actor;
+}
 
 interface Layout {
   /** Canonical skill directory. */
@@ -57,9 +81,9 @@ function relativePath(filePath: string | undefined): string {
  * Resolves where an action lands, following symlinks the way the OS will. A symlinked skill folder
  * or file that points outside <home>/skills is refused, so a skill can't be used to write elsewhere.
  */
-function layout(home: string, input: Input): Layout {
-  const root = resolveToolPath(join(home, "skills"), "/");
-  const dir = resolveToolPath(join(home, "skills", input.name), "/");
+function layout(base: string, input: Input): Layout {
+  const root = resolveToolPath(base, "/");
+  const dir = resolveToolPath(join(base, input.name), "/");
   if (!isInside(dir, root) || dir === root) throw new SkillError(`skill folder for ${input.name} resolves outside ${root}.`);
   if (input.action === "delete") return { dir, target: dir, rel: "" };
   const rel = input.action === "create" ? "SKILL.md" : relativePath(input.file_path);
@@ -87,14 +111,28 @@ function fail(content: string): ToolOutput {
   return { content, isError: true };
 }
 
-async function create(input: Input, at: Layout): Promise<ToolOutput> {
+/** Skills are prompt text for every later session: refuse text that tries to steer or leak. */
+function unsafe(text: string): string | undefined {
+  const scan = scanText(text);
+  return scan.ok ? undefined : `Refused: the content looks unsafe (${scan.reason}). Skills are loaded as instructions in later sessions, so they may not carry injected instructions, secret exfiltration or hidden characters.`;
+}
+
+/** Records the change before the write, so a failed write leaves an entry undo refuses rather than a silent change. */
+async function record(env: Env, input: Input, path: string, action: string, before: string | null, after: string | null): Promise<void> {
+  const rel = input.file_path && action !== "create" && action !== "delete" ? `/${input.file_path}` : "";
+  await env.opts.ledger?.record({ actor: env.actor, kind: "skill", path, action, summary: `${action} ${input.name}${rel}`, before, after });
+}
+
+async function create(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
   if (input.content === undefined) return fail("create needs content: the full SKILL.md.");
   if (existsSync(at.dir)) return fail(`Skill ${input.name} already exists at ${at.dir}. Use patch or write_file to change it.`);
   if (input.content.length > MAX_SKILL_FILE_CHARS) return fail(`content is over ${MAX_SKILL_FILE_CHARS.toLocaleString("en-US")} chars.`);
-  const problem = skillFileProblem(input.content);
+  const problem = skillFileProblem(input.content) ?? unsafe(input.content);
   if (problem) return fail(problem);
+  await record(env, input, at.target, "create", null, input.content);
   await mkdir(at.dir, { recursive: true, mode: 0o700 });
   await writeFileNoFollow(at.target, input.content);
+  env.opts.tracker?.markViewed(input.name);
   return {
     content: `Created skill ${input.name} at ${at.target}. It joins the skill listing in the next session.`,
     display: makeDiff(at.target, "", input.content),
@@ -106,7 +144,7 @@ async function requireSkill(input: Input, at: Layout): Promise<void> {
   if (!existsSync(join(at.dir, "SKILL.md"))) throw new SkillError(`No skill named ${input.name} (no ${join(at.dir, "SKILL.md")}).`);
 }
 
-async function patch(input: Input, at: Layout): Promise<ToolOutput> {
+async function patch(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
   if (input.old_string === undefined || input.new_string === undefined) return fail("patch needs old_string and new_string.");
   if (input.old_string === "") return fail("old_string is empty; give the exact text to replace.");
   if (input.old_string === input.new_string) return fail("old_string and new_string are identical, so there is nothing to change.");
@@ -135,6 +173,9 @@ async function patch(input: Input, at: Layout): Promise<ToolOutput> {
     const problem = skillFileProblem(updated);
     if (problem) return fail(`Not saved: ${problem}`);
   }
+  const danger = unsafe(updated);
+  if (danger) return fail(danger);
+  await record(env, input, at.target, "patch", original, updated);
   await writeFileNoFollow(at.target, updated);
   const diff = makeDiff(at.target, original, updated);
   const n = input.replace_all ? count : 1;
@@ -145,7 +186,7 @@ async function patch(input: Input, at: Layout): Promise<ToolOutput> {
   };
 }
 
-async function writeFileAction(input: Input, at: Layout): Promise<ToolOutput> {
+async function writeFileAction(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
   if (input.file_path === undefined || input.file_content === undefined) return fail("write_file needs file_path and file_content.");
   if (input.file_content.length > MAX_SKILL_FILE_CHARS) return fail(`file_content is over ${MAX_SKILL_FILE_CHARS.toLocaleString("en-US")} chars.`);
   await requireSkill(input, at);
@@ -153,28 +194,56 @@ async function writeFileAction(input: Input, at: Layout): Promise<ToolOutput> {
     const problem = skillFileProblem(input.file_content);
     if (problem) return fail(`Not saved: ${problem}`);
   }
-  const before = await readFile(at.target, "utf8").catch(() => "");
+  const danger = unsafe(input.file_content);
+  if (danger) return fail(danger);
+  const before = await readFile(at.target, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  await record(env, input, at.target, "write_file", before, input.file_content);
   await mkdir(dirname(at.target), { recursive: true, mode: 0o700 });
   await writeFileNoFollow(at.target, input.file_content);
-  const diff = makeDiff(at.target, before, input.file_content);
+  const diff = makeDiff(at.target, before ?? "", input.file_content);
   return { content: `Wrote ${at.target}.`, display: diff, summary: `+${diff.added} −${diff.removed}` };
 }
 
-async function remove(input: Input, at: Layout, home: string): Promise<ToolOutput> {
+async function remove(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
+  if (env.actor === "review") return fail("The background review may not delete skills; patch it instead, or leave it to the user.");
   await requireSkill(input, at);
   // A symlinked skill folder is left alone: deleting its target would surprise whoever made the link.
-  if (!(await lstat(join(home, "skills", input.name)).catch(() => null))?.isDirectory()) {
+  if (!(await lstat(join(skillsBase(env.opts), input.name)).catch(() => null))?.isDirectory()) {
     return fail(`${at.dir} is not a plain skill folder; delete it by hand.`);
   }
+  // The ledger keeps SKILL.md, the part worth restoring; supporting files go with the folder.
+  const skillFile = join(at.dir, "SKILL.md");
+  await record(env, input, skillFile, "delete", await readFile(skillFile, "utf8"), null);
   await rm(at.dir, { recursive: true, force: true });
   return { content: `Deleted skill ${input.name} (${at.dir}).`, display: { kind: "text", text: `Deleted ${at.dir}` }, summary: "deleted" };
+}
+
+/** What the permission dialog shows: skills are prompt text that later sessions follow, so the text itself. */
+export function skillPreview(input: Input, dir: string): { header: string; text: string } {
+  const file = join(dir, input.action === "create" ? "SKILL.md" : (input.file_path ?? "SKILL.md"));
+  switch (input.action) {
+    case "create":
+      return { header: file, text: input.content ?? "" };
+    case "write_file":
+      return { header: file, text: input.file_content ?? "" };
+    case "patch":
+      return {
+        header: `${file}${input.replace_all ? " · replace all" : ""}`,
+        text: [...(input.old_string ?? "").split("\n").map((l) => `- ${l}`), ...(input.new_string ?? "").split("\n").map((l) => `+ ${l}`)].join("\n"),
+      };
+    case "delete":
+      return { header: dir, text: `Delete the skill ${input.name} and every file in its folder.` };
+  }
 }
 
 /**
  * SkillManage: lets the model write its own skills under <home>/skills, the procedures it learned and
  * wants to reuse. Kind "edit"; the paths are outside the project, so the permission engine always asks.
  */
-export function createSkillManageTool(opts: { home: string }): AnyTool {
+export function createSkillManageTool(opts: SkillManageOptions): AnyTool {
   return defineTool({
     name: "SkillManage",
     kind: "edit",
@@ -185,37 +254,46 @@ export function createSkillManageTool(opts: { home: string }): AnyTool {
       "to use it, followed by concise step-by-step instructions; fails if the skill exists. " +
       "patch: replace old_string with new_string in SKILL.md (or file_path); old_string must be unique unless replace_all. " +
       "write_file: write a supporting file (script, template, reference) at file_path relative to the skill folder. " +
-      "delete: remove the whole skill. New skills join the listing in the next session.",
+      "delete: remove the whole skill. New skills join the listing in the next session. " +
+      "Load a skill with the Skill tool before you patch it or write its files, and prefer patching an existing skill over creating a near-duplicate.",
     schema,
     summarize: (input) => `${input.action} ${input.name}${input.file_path ? `/${input.file_path}` : ""}`,
+    preview: (input) => skillPreview(input, join(skillsBase(opts), input.name)),
     subject: (input) => {
       try {
-        return { paths: [layout(opts.home, input).target] };
+        return { paths: [layout(skillsBase(opts), input).target] };
       } catch {
         // Invalid input: name the skills folder so the call still asks; run reports the real problem.
-        return { paths: [join(opts.home, "skills", input.name)] };
+        return { paths: [join(skillsBase(opts), input.name)] };
       }
     },
     async run(input, ctx) {
       let at: Layout;
       try {
-        at = layout(opts.home, input);
+        at = layout(skillsBase(opts), input);
       } catch (error) {
         return fail(`Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);
       }
       if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(at.target)) {
         return fail(`${at.target} changed after it was approved; nothing was written. Try again.`);
       }
+      const env: Env = { opts, actor: ctx.actor ?? "agent" };
       try {
+        if ((input.action === "patch" || input.action === "write_file") && opts.tracker && !opts.tracker.hasViewed(input.name)) {
+          await requireSkill(input, at);
+          return fail(
+            `Load skill ${input.name} with the Skill tool before changing it: ${input.action} needs its current instructions in this conversation.`,
+          );
+        }
         switch (input.action) {
           case "create":
-            return await create(input, at);
+            return await create(input, at, env);
           case "patch":
-            return await patch(input, at);
+            return await patch(input, at, env);
           case "write_file":
-            return await writeFileAction(input, at);
+            return await writeFileAction(input, at, env);
           case "delete":
-            return await remove(input, at, opts.home);
+            return await remove(input, at, env);
         }
       } catch (error) {
         return fail(error instanceof SkillError ? error.message : `Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);

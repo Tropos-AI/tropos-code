@@ -6,7 +6,7 @@ import { mountPage, stubMatchMedia } from "@/components/pages/page-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { screen, cleanup, fireEvent, within } = await import("@testing-library/react");
+const { screen, cleanup, fireEvent, within, act } = await import("@testing-library/react");
 const { MemoryPage, parseUsage } = await import("@/app/pages/MemoryPage");
 
 const MEMORY: PanelData = {
@@ -25,6 +25,24 @@ const MEMORY: PanelData = {
   empty: "No notes yet.",
 };
 
+const LEARNED: PanelData = {
+  title: "Learned",
+  sections: [
+    {
+      items: [
+        { key: "e3", label: "memory: undo of Memory add", hint: "undo", aside: "2026-10-14 14:10", status: "warn", detail: ["undo by user", "/home/me/.tropos/memories/MEMORY.md", "t"] },
+        { key: "e2", label: "skill: SkillManage patch bun-testing", hint: "learned on its own", aside: "2026-10-14 14:02", status: "ok", detail: ["patch by review", "/home/me/.tropos/skills/bun-testing/SKILL.md", "t"] },
+        { key: "e1", label: "memory: Memory add memory: uses bun", hint: "learned on its own", aside: "2026-10-14 13:40", status: "off", detail: ["add by review (undone)", "/home/me/.tropos/memories/MEMORY.md", "t"] },
+      ],
+    },
+  ],
+  empty: "Nothing learned yet.",
+};
+
+/** Answers "memory" with `memory` and "learned" with `learned`. */
+const panels = (memory: PanelData, learned: PanelData = { title: "Learned", sections: [], empty: "Nothing learned yet." }) => (topic: unknown) =>
+  topic === "learned" ? learned : memory;
+
 beforeEach(() => stubMatchMedia());
 afterEach(() => cleanup());
 
@@ -37,7 +55,7 @@ describe("parseUsage", () => {
 
 describe("MemoryPage", () => {
   test("renders both stores with a usage meter and the notes folder", async () => {
-    await mountPage(MemoryPage, { panel: () => MEMORY });
+    await mountPage(MemoryPage, { panel: panels(MEMORY) });
     const notes = await screen.findByRole("region", { name: /Agent notes/ });
     const meter = within(notes).getByRole("progressbar");
     expect(meter.getAttribute("aria-valuenow")).toBe("1474");
@@ -49,7 +67,7 @@ describe("MemoryPage", () => {
   });
 
   test("multi-line entries open to their full text; single-line ones have no toggle", async () => {
-    await mountPage(MemoryPage, { panel: () => MEMORY });
+    await mountPage(MemoryPage, { panel: panels(MEMORY) });
     const toggle = await screen.findByRole("button", { name: "2 more lines" });
     expect(screen.queryAllByRole("button", { name: /more line/ })).toHaveLength(1);
     fireEvent.click(toggle);
@@ -58,7 +76,43 @@ describe("MemoryPage", () => {
   });
 
   test("memory turned off shows the panel's empty text", async () => {
-    await mountPage(MemoryPage, { panel: () => ({ title: "Memory", sections: [], empty: 'Memory is off ("memory": false in settings).' }) });
+    await mountPage(MemoryPage, { panel: panels({ title: "Memory", sections: [], empty: 'Memory is off ("memory": false in settings).' }) });
     expect(await screen.findByText(/Memory is off/)).toBeTruthy();
+    expect(await screen.findByText("Nothing learned yet.")).toBeTruthy();
+  });
+
+  test("the Learned card lists ledger entries; Undo appears only on changes that can still be reverted", async () => {
+    const { socket } = await mountPage(MemoryPage, { panel: panels(MEMORY, LEARNED), "learned.undo": () => ({ summary: "skill: SkillManage patch bun-testing" }) });
+    const card = await screen.findByRole("region", { name: /Learned/ });
+    await within(card).findByText("skill: SkillManage patch bun-testing");
+    const undo = within(card).getAllByRole("button", { name: "Undo" });
+    // The undo entry itself and the already-undone add have no button.
+    expect(undo).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(undo[0]!);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(socket.callsOf("learned.undo")[0]!.params).toBe("e2");
+    // Both cards reload: the undo may have changed a note.
+    expect(socket.callsOf("panel").filter((c) => c.params === "memory").length).toBeGreaterThan(1);
+    expect(socket.callsOf("panel").filter((c) => c.params === "learned").length).toBeGreaterThan(1);
+  });
+
+  test("a failed undo says why and keeps the list", async () => {
+    const { store } = await mountPage(MemoryPage, {
+      panel: panels(MEMORY, LEARNED),
+      "learned.undo": () => {
+        throw new Error("The file changed since; not undone.");
+      },
+    });
+    const card = await screen.findByRole("region", { name: /Learned/ });
+    const button = await within(card).findByRole("button", { name: "Undo" });
+    await act(async () => {
+      fireEvent.click(button);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(within(card).getByText("skill: SkillManage patch bun-testing")).toBeTruthy();
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    expect(store.getState().toasts.find((t) => t.title === "Could not undo")?.description).toContain("changed since");
   });
 });

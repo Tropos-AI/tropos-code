@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import type { Skill } from "../../extensions/skills";
+import { SkillTracker } from "../../learning/skill-tracker";
+import { readSkillUsage } from "../../learning/skill-usage";
 import { createSkillTool } from "./skill";
 
 let dir: string;
@@ -54,4 +56,38 @@ test("a skill that fails to render is an error result", async () => {
   const out = await createSkillTool([broken]).run({ skill: "deploy" }, makeToolContext({ root: dir }));
   expect(out.isError).toBe(true);
   expect(out.content).toStartWith("Cannot load skill deploy:");
+});
+
+test("a successful load marks the skill viewed and records its use; failures don't", async () => {
+  const tracker = new SkillTracker();
+  const tool = createSkillTool(skills, { home: dir, tracker });
+  await tool.run({ skill: "deploy" }, makeToolContext({ root: dir }));
+  expect(tracker.hasViewed("deploy")).toBe(true);
+  // The usage write is fire-and-forget: poll until it lands.
+  let uses: number | undefined;
+  for (let i = 0; i < 200 && uses === undefined; i++) {
+    uses = (await readSkillUsage(dir)).deploy?.uses;
+    if (uses === undefined) await Bun.sleep(5);
+  }
+  expect(uses).toBe(1);
+  await tool.run({ skill: "secret" }, makeToolContext({ root: dir }));
+  expect(tracker.hasViewed("secret")).toBe(false);
+});
+
+test("a usage write that fails never fails the tool", async () => {
+  await mkdir(join(dir, "skills", ".usage.json"), { recursive: true });
+  const out = await createSkillTool(skills, { home: dir }).run({ skill: "deploy" }, makeToolContext({ root: dir }));
+  expect(out.isError).toBeUndefined();
+});
+
+test("a load by the learning review counts only in its own tracker, and not as a use", async () => {
+  const tracker = new SkillTracker();
+  const reviewTracker = new SkillTracker();
+  const tool = createSkillTool(skills, { home: dir, tracker, reviewTracker });
+  const out = await tool.run({ skill: "deploy" }, { ...makeToolContext({ root: dir }), actor: "review" });
+  expect(out.isError).toBeUndefined();
+  expect(reviewTracker.hasViewed("deploy")).toBe(true);
+  expect(tracker.hasViewed("deploy")).toBe(false);
+  await Bun.sleep(30);
+  expect((await readSkillUsage(dir)).deploy).toBeUndefined();
 });

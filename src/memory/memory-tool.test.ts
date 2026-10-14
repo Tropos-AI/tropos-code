@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { Ledger } from "../learning/ledger";
 import { createMemoryTool } from "./memory-tool";
 import { NotesStore } from "./notes";
 
@@ -71,4 +72,55 @@ test("disk errors become error results", async () => {
   const out = await createMemoryTool(store).run({ target: "memory", action: "add", content: "x" }, makeToolContext());
   expect(out.isError).toBe(true);
   expect(out.content).toStartWith("Could not update the agent notes:");
+});
+
+test("operations apply as one batch and report the count", async () => {
+  const tool = createMemoryTool(store);
+  const ctx = makeToolContext();
+  await tool.run({ target: "memory", action: "add", content: "old one" }, ctx);
+  const input = {
+    target: "memory" as const,
+    operations: [
+      { action: "remove" as const, old_text: "old" },
+      { action: "add" as const, content: "User prefers concise answers" },
+    ],
+  };
+  expect(tool.schema.safeParse(input).success).toBe(true);
+  expect(tool.schema.safeParse({ target: "memory", operations: [] }).success).toBe(false);
+  expect(tool.summarize(input)).toBe("batch memory: 2 changes");
+  const out = await tool.run(input, ctx);
+  expect(out.isError).toBeUndefined();
+  expect(out.display).toEqual({ kind: "text", text: "Applied 2 changes to agent notes" });
+  expect(out.summary).toBe("2 changes to agent notes");
+  expect(out.content).toContain("User prefers concise answers");
+  expect(await store.entries("memory")).toEqual(["User prefers concise answers"]);
+
+  const one = await tool.run({ target: "memory", operations: [{ action: "remove", old_text: "concise" }] }, ctx);
+  expect(one.summary).toBe("1 change to agent notes");
+  expect(tool.summarize({ target: "user", operations: [{ action: "add", content: "x" }] })).toBe("batch user: 1 change");
+
+  const bad = await tool.run({ target: "memory", operations: [{ action: "remove", old_text: "missing" }] }, ctx);
+  expect(bad.isError).toBe(true);
+  expect(bad.content).toStartWith("Operation 1 (remove):");
+});
+
+test("neither action nor operations is an error", async () => {
+  const tool = createMemoryTool(store);
+  expect(tool.summarize({ target: "memory" })).toBe("change memory: ");
+  expect(await tool.run({ target: "memory" }, makeToolContext())).toEqual({ content: "Give either action or operations.", isError: true });
+});
+
+test("the acting agent is recorded in the ledger", async () => {
+  const ledger = new Ledger(home);
+  const tool = createMemoryTool(new NotesStore(home, { ledger }));
+  await tool.run({ target: "user", action: "add", content: "x" }, makeToolContext({ actor: "review" }));
+  await tool.run({ target: "user", action: "add", content: "y" }, makeToolContext());
+  expect((await ledger.list()).map((e) => e.actor)).toEqual(["agent", "review"]);
+});
+
+test("the description steers toward declarative facts, skills and batches", () => {
+  const { description } = createMemoryTool(store);
+  expect(description).toContain('"User prefers concise answers"');
+  expect(description).toContain("SkillManage");
+  expect(description).toContain("operations");
 });

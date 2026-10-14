@@ -18,6 +18,7 @@ export const COMMANDS = [
   { name: "plugins", description: "Plugins in ~/.tropos/plugins" },
   { name: "memory", description: "Tropos's notes about you and this work" },
   { name: "learn", description: "Save what worked in this session as a reusable skill", argumentHint: "[topic]" },
+  { name: "learned", description: "What Tropos learned (notes, skills, identity); /learned undo reverts the latest", argumentHint: "[undo]" },
   { name: "exit", description: "Quit Tropos Code" },
 ] as const satisfies ReadonlyArray<{ name: string; description: string; argumentHint?: string }>;
 
@@ -33,7 +34,7 @@ export const LEARN_PROMPT =
   '"Use when …" and says when the skill applies, and a body with When to use, Steps, Pitfalls and Verification sections. ' +
   "Write lessons, not a log of what happened. If a skill for this already exists, patch it instead. Tell me what you saved.";
 
-export type ListTopic = "skills" | "agents" | "hooks" | "mcp" | "plugins" | "memory";
+export type ListTopic = "skills" | "agents" | "hooks" | "mcp" | "plugins" | "memory" | "learned";
 
 /** Extra entries for /help and completion: custom commands and user-invocable skills. */
 export interface ExtraCommand {
@@ -63,6 +64,8 @@ export type CommandResult =
   | { kind: "list"; what: ListTopic }
   | { kind: "undo" }
   | { kind: "redo" }
+  /** `/learned undo`: revert the latest learned change. */
+  | { kind: "learned_undo" }
   | { kind: "custom"; name: string; args: string }
   | { kind: "unknown"; name: string };
 
@@ -113,6 +116,9 @@ export function parseCommand(input: string, extra: ExtraCommand[] = []): Command
       return { kind: "undo" };
     case "redo":
       return { kind: "redo" };
+    case "learned":
+      if (arg.toLowerCase() === "undo") return { kind: "learned_undo" };
+      return { kind: "list", what: "learned" };
     case "skills":
     case "agents":
     case "hooks":

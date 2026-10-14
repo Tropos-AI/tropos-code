@@ -86,13 +86,39 @@ describe("loadExtensions", () => {
 });
 
 describe("sessionTools", () => {
-  test("fixed order; Skill only when a skill is model-invocable; Memory only when on", async () => {
+  test("fixed order; Skill only when a skill is model-invocable; Memory and DailyNote only when on", async () => {
     const holder = {};
     const base = createTools({ rgPath: null });
     const names = (ext: Extensions) => sessionTools(base, ext, { home, cwd, holder, sessionId: () => "s" }).map((t) => t.name).slice(base.length);
-    expect(names(await load())).toEqual(["WebFetch", "Agent", "Memory", "SessionSearch", "SkillManage"]);
+    expect(names(await load())).toEqual(["WebFetch", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
     await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
-    expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage"]);
+    expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
+  });
+
+  test("Memory, SkillManage, DailyNote and Identity record their writes in the ledger with the actor", async () => {
+    const ext = await load();
+    const tools = sessionTools([], ext, { home, cwd, holder: {}, sessionId: () => "s" });
+    const tool = (name: string) => tools.find((t) => t.name === name)!;
+    const { makeToolContext } = await import("../../test/helpers/tool-context");
+    const ctx = (actor?: "review") => makeToolContext({ root: cwd, ...(actor ? { actor } : {}) });
+    expect((await tool("Memory").run({ target: "memory", action: "add", content: "Uses bun" }, ctx())).isError).toBeUndefined();
+    const skill = "---\nname: ship\ndescription: Use when shipping\n---\nSteps";
+    expect((await tool("SkillManage").run({ action: "create", name: "ship", content: skill }, ctx("review"))).isError).toBeUndefined();
+    expect((await tool("DailyNote").run({ text: "Moved the parser" }, ctx())).isError).toBeUndefined();
+    expect((await tool("Identity").run({ action: "set", name: "Nova" }, ctx())).isError).toBeUndefined();
+    const entries = (await ext.ledger.list()).reverse();
+    expect(entries.map((e) => [e.kind, e.actor])).toEqual([
+      ["memory", "agent"],
+      ["skill", "review"],
+      ["daily", "agent"],
+      ["identity", "agent"],
+    ]);
+    expect(entries[0]!.path).toBe(join(home, "memories", "MEMORY.md"));
+    expect(entries[2]).toMatchObject({ action: "append", summary: "daily note", before: null });
+    expect(entries[3]).toMatchObject({ path: join(home, "IDENTITY.md"), action: "write", summary: expect.stringContaining("Name: Nova") });
+    // Undo goes through the same ledger: the identity file is gone again.
+    expect(await ext.ledger.undo()).toMatchObject({ ok: true, entry: { kind: "identity" } });
+    expect(await readFile(join(home, "IDENTITY.md"), "utf8").catch(() => null)).toBeNull();
   });
 
   test("the Agent tool needs a running session", async () => {
@@ -104,14 +130,41 @@ describe("sessionTools", () => {
   });
 });
 
-test("context extras: skills listing and notes", async () => {
+test("context extras: identity, bootstrap, skills listing, notes and daily notes for the main session", async () => {
   await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
   const ext = await load();
   await ext.notes!.add("user", "Prefers bun");
-  const [skills, notes] = await contextExtras(ext, (s) => skillListing(s));
+  await ext.notes!.add("memory", "Tests are colocated");
+  await ext.daily!.append("Moved the parser to src/parse");
+  const [identity, bootstrap, skills, notes, daily] = await contextExtras(ext, (s) => skillListing(s), { home, scope: "main", bootstrap: true });
+  expect(identity).toBe("");
+  expect(bootstrap).toContain("<bootstrap>");
   expect(skills).toContain("- deploy: Deploy");
   expect(notes).toContain("Prefers bun");
-  expect(await contextExtras(await load({ memory: false }), () => "")).toEqual(["", ""]);
+  expect(daily).toContain("Moved the parser");
+  // Not interactive (print mode): no bootstrap note.
+  expect((await contextExtras(ext, () => "", { home, scope: "main" }))[1]).toBe("");
+  // Once the agent has a name, the ritual is over and the identity rides along.
+  await put(join(home, "IDENTITY.md"), "- Name: Nova\n- Emoji: 🦊\n");
+  const named = await contextExtras(ext, () => "", { home, scope: "main", bootstrap: true });
+  expect(named[0]).toContain("Nova");
+  expect(named[1]).toBe("");
+  expect(await contextExtras(await load({ memory: false }), () => "", { home, scope: "main" })).toEqual([named[0], "", "", "", ""]);
+});
+
+test("context extras: a subagent gets the skills and the agent's own notes, not the user profile or daily notes", async () => {
+  const ext = await load();
+  await ext.notes!.add("user", "Prefers bun");
+  await ext.notes!.add("memory", "Tests are colocated");
+  await ext.daily!.append("Moved the parser to src/parse");
+  await put(join(home, "IDENTITY.md"), "- Name: Nova\n");
+  const extras = await contextExtras(ext, () => "<skills>x</skills>", { home, scope: "subagent", bootstrap: true });
+  expect(extras).toHaveLength(2);
+  expect(extras[1]).toContain("Tests are colocated");
+  expect(extras.join("\n")).not.toContain("Prefers bun");
+  expect(extras.join("\n")).not.toContain("Nova");
+  expect(extras.join("\n")).not.toContain("parser");
+  expect(await contextExtras(await load({ memory: false }), () => "", { home, scope: "subagent" })).toEqual(["", ""]);
 });
 
 describe("postWrite", () => {
@@ -196,4 +249,19 @@ describe("writing a file formatters or language servers load code from", () => {
     expect(await postWrite(ext, new ReadState(), [doc], signal)).toBeNull();
     expect(await readFile(doc, "utf8")).toBe("x");
   });
+});
+
+test("reloadAgents picks up an agent file written after startup, in the same list the Agent tool reads", async () => {
+  const ext = await load();
+  const list = ext.agents;
+  expect(list.some((a) => a.name === "george")).toBe(false);
+  await put(join(home, "agents", "george.md"), "---\nname: george\ndescription: Researches\nemoji: \"🔬\"\n---\nYou research.");
+  await ext.reloadAgents();
+  expect(ext.agents).toBe(list);
+  expect(list.find((a) => a.name === "george")).toMatchObject({ emoji: "🔬", source: "user" });
+  // AgentManage, wired by sessionTools, reloads after it writes.
+  const tools = sessionTools([], ext, { home, cwd, holder: {}, sessionId: () => "s" });
+  const { makeToolContext } = await import("../../test/helpers/tool-context");
+  await tools.find((t) => t.name === "AgentManage")!.run({ action: "create", name: "ana", description: "Analyses", prompt: "You analyse." }, makeToolContext());
+  expect(list.some((a) => a.name === "ana")).toBe(true);
 });

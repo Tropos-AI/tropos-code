@@ -1,5 +1,6 @@
 // src/agent/subagent.ts
 import type { Model } from "../api/model";
+import { subagentIdentityLine } from "../context/identity";
 import type { Effort } from "../config/constants";
 import { errorText } from "../error-text";
 import type { PermissionContext } from "../permissions/engine";
@@ -17,6 +18,7 @@ export interface SubagentDefinition {
   model?: string;
   maxTurns?: number;
   prompt: string;
+  emoji?: string;
 }
 
 /** Everything a subagent shares with the session that starts it. */
@@ -73,7 +75,7 @@ export function filterTools(tools: AnyTool[], def: Pick<SubagentDefinition, "too
 
 export function subagentSystem(base: string, def: SubagentDefinition): string {
   return (
-    `${base}\n\n# Agent: ${def.name}\n` +
+    `${base}\n\n# Agent: ${def.name}\n${subagentIdentityLine(def)}\n` +
     "You are running as a subagent: another Tropos agent gave you the task in the first user message. " +
     "Work on it autonomously; nobody will answer questions. Your final message is returned to that agent as your result, " +
     "so make it a complete, self-contained report.\n\n" +

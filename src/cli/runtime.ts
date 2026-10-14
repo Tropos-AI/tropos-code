@@ -10,6 +10,14 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
+import { contextWindow } from "../api/pricing";
+import { COMPACTION_TRIGGER_TOKENS } from "../api/model";
+import { LEARNED_SKILLS_DIR } from "../extensions/sources";
+import { agentLabel } from "../extensions/agents";
+import { createSkillManageTool } from "../memory/skill-manage";
+import { LearningLoop, runReviewAgent } from "../learning/review";
+import { loadIdentity } from "../context/identity";
+import { runCurator } from "../learning/curator";
 import { commandMessage, expandCommand, MAX_EXTENSION_BYTES, type CommandIO } from "../extensions/commands";
 import { renderSkill, skillListing } from "../extensions/skills";
 import type { HookRunner } from "../hooks/runner";
@@ -113,6 +121,15 @@ export function makeAgent(
     hooks?: HookRunner;
     /** One-shot context for the first turn, such as SessionStart hook output. */
     pending?: { take(): string | null };
+    /**
+     * An interactive session (the TUI or `tcode web`): it gets the first-run identity note and, when
+     * learning is on, the background review. Print mode gets neither.
+     */
+    interactive?: boolean;
+    /** Receives the session's learning loop, so the runtime can cancel it on /clear and at exit. */
+    onLearning?(loop: LearningLoop): void;
+    /** After the Identity tool saved something (headers show the new name). */
+    onIdentityChange?(): void;
   },
 ): Agent {
   const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
@@ -120,11 +137,12 @@ export function makeAgent(
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
   const nonce = () => harnessNonce(opts.session().id);
-  const contextText = async () =>
+  const contextFor = (scope: "main" | "subagent") => async () =>
     buildContextText(await loadMemory(ctx.cwd, ctx.home), await environmentBlock(ctx.cwd, { shell: ctx.shell }), [
-      ...(await contextExtras(ctx.ext, (skills) => skillListing(skills))),
+      ...(await contextExtras(ctx.ext, (skills) => skillListing(skills), { home: ctx.home, scope, bootstrap: opts.interactive })),
       nonceBlock(nonce()),
     ]);
+  const contextText = contextFor("main");
   const beforeChange = () => ctx.ext.undo.beforeChange();
   const onAllowAlways = async (rule: string) => {
     ctx.rules.allow.push(parseRule(rule));
@@ -142,7 +160,7 @@ export function makeAgent(
     config,
     permissions,
     askPermission,
-    contextText,
+    contextText: contextFor("subagent"),
     nonce,
     onAllowAlways,
     recordCost: (cost) => agent?.addCost(cost),
@@ -150,6 +168,35 @@ export function makeAgent(
     beforeChange,
     postWrite: afterWrite,
   };
+  // The background review (Hermes' learning loop): interactive sessions only, never print mode.
+  // The review writes skills to its own folder (~/.tropos/skills-learned), never over the user's.
+  const learnedSkills = createSkillManageTool({ home: ctx.home, folder: LEARNED_SKILLS_DIR, ledger: ctx.ext.ledger, tracker: ctx.ext.reviewTracker });
+  const learning = opts.interactive
+    ? new LearningLoop({
+        settings: () => ctx.settings.learning,
+        notice: (text) => opts.ui.emit({ type: "notice", level: "info", text }),
+        runReview: async (_kind, prompt, history, signal) => {
+          const result = await runReviewAgent({
+            model: ctx.model,
+            tools: ctx.tools,
+            system: SYSTEM_PROMPT,
+            config,
+            permissions,
+            hooks: opts.hooks,
+            // Its own read-state and todos: the review's reads must not count for the main agent's write guard.
+            toolContext: { ...opts.toolContext, readState: new ReadState(), todos: new MemoryTodoStore() },
+            history,
+            prompt,
+            signal,
+            overrides: { SkillManage: learnedSkills },
+          });
+          agent?.addCost(result.costUsd);
+          return result;
+        },
+      })
+    : undefined;
+  if (learning) opts.onLearning?.(learning);
+
   agent = new Agent(
     {
       model: ctx.model,
@@ -164,11 +211,23 @@ export function makeAgent(
       persist: (message) => opts.session().appendMessage(message),
       toolContext: opts.toolContext,
       maxTurns: opts.maxTurns,
-      emit: (event) => opts.ui.emit(event),
+      emit: (event) => {
+        if (event.type === "tool_end" && event.name === "Identity" && event.status === "done") opts.onIdentityChange?.();
+        if (learning) {
+          if (event.type === "tool_end") learning.onToolEnd(event.name, event.status);
+          // The flush is timed against compaction, which comes long before a 1M window fills; models
+          // without a known window (other providers) get no compaction and no flush.
+          else if (event.type === "usage") learning.onUsage(event.contextTokens, Math.min(contextWindow(config().model) ?? 0, COMPACTION_TRIGGER_TOKENS));
+        }
+        opts.ui.emit(event);
+      },
       hooks: opts.hooks,
       beforeChange,
       postWrite: afterWrite,
+      endTurn: (reason, messages) => learning?.afterTurn(reason, [...messages]),
       startTurn: () => {
+        // A new turn wins over a review still running in the background.
+        learning?.cancel();
         ctx.ext.undo.beginTurn();
         const undone = ctx.ext.undo.takeReminder()?.replace(/^<reminder>/, `<reminder nonce="${nonce()}">`) ?? null;
         return [opts.pending?.take() ?? null, undone].filter((t): t is string => t !== null);
@@ -295,6 +354,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         subtitle: plural(ext.skills.length, "skill"),
         sections: [
           { title: "Yours (~/.tropos/skills)", items: bySource("user") },
+          { title: "Learned on its own (~/.tropos/skills-learned)", items: bySource("learned") },
           { title: "This project", items: bySource("project") },
           { title: "Plugins", items: bySource("plugin") },
         ].filter((section) => section.items.length > 0),
@@ -312,7 +372,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
               .filter((a) => a.source === source)
               .map((a) => ({
                 key: a.name,
-                label: a.name,
+                label: agentLabel(a),
                 hint: firstLine(a.description),
                 aside: a.model,
                 detail: [a.description, `Tools: ${a.tools ? a.tools.join(", ") : "all"}`, ...(a.path ? [a.path] : [])],
@@ -391,8 +451,38 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
       }
       return { title: "Memory", subtitle: ext.notes.dir, sections, empty: "No notes yet." };
     }
+    case "learned": {
+      const entries = await ext.ledger.list(LEARNED_PANEL_LIMIT);
+      const by = { agent: "you asked", review: "learned on its own", user: "you" } as const;
+      return {
+        title: "Learned",
+        subtitle: "Notes, skills and identity changes, newest first · /learned undo reverts the latest",
+        sections: [
+          {
+            items: entries.map((e) => ({
+              key: e.id,
+              label: `${e.kind}: ${e.summary}`,
+              hint: e.action === "undo" ? "undo" : by[e.actor],
+              aside: e.ts.slice(0, 16).replace("T", " "),
+              status: e.undone ? ("off" as const) : e.action === "undo" ? ("warn" as const) : ("ok" as const),
+              detail: [`${e.action} by ${e.actor}${e.undone ? " (undone)" : ""}`, e.path, e.ts],
+            })),
+          },
+        ].filter((section) => section.items.length > 0),
+        empty: "Nothing learned yet. Notes, skills and identity changes show up here, with undo.",
+      };
+    }
   }
 }
+
+/** Name and emoji for headers; nothing when unset or unreadable. */
+async function headerIdentity(home: string): Promise<{ name?: string; emoji?: string }> {
+  const { name, emoji } = await loadIdentity(home).catch(() => ({}) as { name?: string; emoji?: string });
+  return { ...(name ? { name } : {}), ...(emoji ? { emoji } : {}) };
+}
+
+/** Ledger entries the /learned panel shows. */
+const LEARNED_PANEL_LIMIT = 50;
 
 const INPUT_HISTORY_LIMIT = 200;
 
@@ -442,6 +532,20 @@ export async function createRuntime(
     },
   };
   const agentState = () => (turnModel ? { ...state, model: turnModel } : state);
+  let learning: LearningLoop | undefined;
+  let identity = await headerIdentity(ctx.home);
+  // Saves can land close together: only the newest read may win.
+  let identityReads = 0;
+  const refreshIdentity = () => {
+    const read = ++identityReads;
+    void headerIdentity(ctx.home).then((id) => {
+      if (read === identityReads) identity = id;
+    });
+  };
+  const stopLearning = async () => {
+    learning?.cancel();
+    await learning?.whenIdle();
+  };
 
   return {
     version: ctx.version,
@@ -468,10 +572,29 @@ export async function createRuntime(
     setTurnModel: (model) => {
       turnModel = model;
     },
-    newAgent: (ui) => makeAgent(ctx, { session: () => session, history, state: agentState, ui, toolContext, hooks, pending }),
+    newAgent: (ui) => {
+      // A new agent (start, /clear, resume) ends the previous one's review.
+      learning?.cancel();
+      return makeAgent(ctx, {
+        session: () => session,
+        history,
+        state: agentState,
+        ui,
+        toolContext,
+        hooks,
+        pending,
+        interactive: true,
+        onLearning: (loop) => {
+          learning = loop;
+        },
+        onIdentityChange: refreshIdentity,
+      });
+    },
     history: () => history,
     sessionId: () => session.id,
     clear: async () => {
+      await stopLearning();
+      ctx.ext.tracker.reset();
       await sessionEnd(hooks, "clear");
       session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version });
       history = [];
@@ -479,6 +602,8 @@ export async function createRuntime(
     },
     sessions: () => listSessions(ctx.home, ctx.cwd),
     resume: async (id) => {
+      await stopLearning();
+      ctx.ext.tracker.reset();
       const opened = await SessionStore.open(ctx.home, ctx.cwd, id);
       session = opened.store;
       history = opened.messages;
@@ -496,10 +621,29 @@ export async function createRuntime(
     modelPrefs: ctx.modelPrefs,
     undo: () => ctx.ext.undo.undo(),
     redo: () => ctx.ext.undo.redo(),
+    undoLearned: async (id) => {
+      // An undo racing the review's own write could be overwritten by it.
+      if (learning?.running) return { ok: false, reason: "The background review is saving; try again in a moment." };
+      const out = await ctx.ext.ledger.undo(id);
+      return out.ok ? { ok: true, summary: `${out.entry.kind}: ${out.entry.summary}` } : out;
+    },
+    identity: () => identity,
     start: async (notice) => {
       pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
+      // Archive learned skills nobody used for a month (at most once a week; never deletes).
+      if (ctx.settings.learning.curator) {
+        void runCurator(ctx.home, { ledger: ctx.ext.ledger, skillsDir: join(ctx.home, LEARNED_SKILLS_DIR) })
+          .then(({ archived }) => {
+            if (archived.length > 0) {
+              notice("info", `Archived ${archived.length} learned skill${archived.length === 1 ? "" : "s"} unused for 30 days: ${archived.join(", ")} (in ${join(ctx.home, LEARNED_SKILLS_DIR, ".archive")})`);
+            }
+          })
+          .catch(() => {});
+      }
     },
     shutdown: async () => {
+      await stopLearning();
+      ctx.ext.searchIndex?.close();
       await sessionEnd(hooks, "exit");
       await Promise.all([ctx.ext.mcp?.close(), ctx.ext.lsp?.close()]);
     },

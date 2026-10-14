@@ -74,7 +74,13 @@ async function execute(store: AppStore, command: CommandResult, typed: string): 
     case "providers":
       return navigate("settings");
     case "list":
-      return navigate(command.what);
+      // What was learned lives on the Memory page, next to the notes it changed.
+      return navigate(command.what === "learned" ? "memory" : command.what);
+    case "learned_undo":
+      return attempt(store, "Could not undo", async () => {
+        const { summary } = await store.rpc("learned.undo", undefined);
+        store.toast({ tone: "ok", title: "Undid a learned change", description: summary });
+      });
     case "clear":
       return attempt(store, "Could not start a new session", async () => {
         await store.rpc("clear");

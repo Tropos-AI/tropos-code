@@ -382,6 +382,56 @@ describe("App", () => {
     expect(all(r)).toContain("Nothing to undo.");
   });
 
+  test("/learned opens the learned panel", async () => {
+    const runtime = fakeRuntime([]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/learned");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(runtime.described).toEqual(["learned"]);
+    expect(r.lastFrame()).toContain("about learned");
+    expect(r.lastFrame()).toContain("learned item");
+  });
+
+  test("/learned undo reverts the latest learned change and says what", async () => {
+    let calls = 0;
+    const runtime = fakeRuntime([], {
+      undoLearned: async () => {
+        calls++;
+        return { ok: true, summary: "skill: SkillManage patch bun-testing" };
+      },
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/learned undo");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(calls).toBe(1);
+    expect(all(r)).toContain("Undid skill: SkillManage patch bun-testing");
+    expect(runtime.described).toEqual([]);
+  });
+
+  test("/learned undo with nothing to undo warns with the reason", async () => {
+    const r = render(<App runtime={fakeRuntime([])} />);
+    await tick();
+    r.stdin.write("/learned undo");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(all(r)).toContain("Nothing learned to undo.");
+    expect(all(r)).not.toContain("Undid");
+  });
+
+  test("the header shows the agent's identity", async () => {
+    const r = render(<App runtime={fakeRuntime([], { identity: () => ({ name: "Nova", emoji: "🦊" }) })} />);
+    await waitFor(() => expect(r.lastFrame()).toContain("❯ Ask Tropos"));
+    expect(all(r)).toContain("🦊 Nova");
+    expect(all(r)).toContain("Tropos Code");
+  });
+
   test("SessionStart runs before the initial prompt and its notices show", async () => {
     const order: string[] = [];
     const runtime = fakeRuntime(

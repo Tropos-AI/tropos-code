@@ -7,6 +7,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { PermissionAnswer, PermissionPrompt } from "@core/agent/events";
 import { makeDiff } from "@core/tools/diff";
+import { learningPermissionTitle } from "@core/ui/permission-titles";
 
 import { DiffBlock } from "@/components/chat/tool-results";
 import { VisibleText } from "@/components/chat/visible-text";
@@ -24,6 +25,8 @@ export const PREVIEW_LINES = 20;
 
 /** The dialog title names the action, the way the transcript names the tool (src/ui/PermissionDialog.tsx). */
 export function permissionTitle(prompt: PermissionPrompt): string {
+  const learned = learningPermissionTitle(prompt.toolName);
+  if (learned) return learned;
   if (prompt.toolName === "Bash" || prompt.kind === "exec") return "Bash command";
   if (prompt.toolName === "Write") return "Write file";
   if (prompt.toolName === "Edit" || prompt.kind === "edit") return "Edit file";
@@ -48,6 +51,8 @@ export interface PreviewModel {
 /** What the preview shows for a prompt. Only commands are cut; diffs and files scroll. */
 export function previewOf(prompt: PermissionPrompt): PreviewModel {
   const input = record(prompt.input);
+  // The tool's own preview (AgentManage, SkillManage, Identity): the full text it will write.
+  if (prompt.preview) return { kind: "file", header: prompt.preview.header, lines: prompt.preview.text.split("\n"), hidden: 0 };
   if (prompt.toolName === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
     const patch = makeDiff(prompt.summary, input.old_string, input.new_string).patch;
     return { kind: "diff", header: `${prompt.summary}${input.replace_all === true ? " (replace all)" : ""}`, lines: [], hidden: 0, patch };

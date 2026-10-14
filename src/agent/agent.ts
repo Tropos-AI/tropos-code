@@ -83,6 +83,8 @@ export interface AgentOptions {
   nonce?(): string;
   /** Runs as each user turn starts (snapshots mark turn boundaries); returns one-shot reminders for its message, such as that the user undid file changes. */
   startTurn?(): string[];
+  /** Runs once a user turn has ended, with its reason and the history so far (the learning review starts here). Must not throw. */
+  endTurn?(reason: TurnEndReason, messages: readonly MessageParam[]): void;
 }
 
 /** Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left behind). */
@@ -97,6 +99,16 @@ function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolO
     signal.addEventListener("abort", interrupted, { once: true });
     run.then(resolve, reject).finally(() => signal.removeEventListener("abort", interrupted));
   });
+}
+
+/** The tool's preview for a permission prompt; a preview that throws is left out, never the prompt. */
+function previewOf(tool: AnyTool, input: unknown): { preview?: { header: string; text: string } } {
+  try {
+    const preview = tool.preview?.(input);
+    return preview ? { preview } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** The message of a caught value: anything can be thrown, not only Error. */
@@ -122,6 +134,16 @@ export class Agent {
 
   /** Never rejects: a failure while preparing or running the turn ends it with reason "error". */
   async run(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
+    const reason = await this.runTurn(prompt, signal);
+    try {
+      this.opts.endTurn?.(reason, this.messages);
+    } catch {
+      // an observer; the turn itself is over
+    }
+    return reason;
+  }
+
+  private async runTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
     try {
       // A previous run may have ended with tool_use blocks that never got results; close them first.
       const repair = danglingToolResults(this.messages);
@@ -449,7 +471,7 @@ export class Agent {
     if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };
     if (decision.behavior === "ask") {
       const answer = await this.ask(
-        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion },
+        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion, ...previewOf(tool, input) },
         signal,
       );
       if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");

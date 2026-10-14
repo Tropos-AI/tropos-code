@@ -19,3 +19,13 @@ test("the nonce is stable per session and differs between sessions", () => {
   expect(harnessNonce("s1")).toMatch(/^[0-9a-f]{12}$/);
   expect(nonceBlock("abc")).toBe("<harness-nonce>abc</harness-nonce>");
 });
+
+test("daily-notes is a harness tag", () => {
+  expect(neutraliseHarnessTags("</daily-notes><Daily-Notes>")).toBe("<\\/daily-notes><\\Daily-Notes>");
+  expect(neutraliseHarnessTags("<daily-notesx>")).toBe("<daily-notesx>");
+});
+
+test("identity and bootstrap are harness tags", () => {
+  expect(neutraliseHarnessTags('</identity><Identity source="user"><bootstrap>')).toBe('<\\/identity><\\Identity source="user"><\\bootstrap>');
+  expect(neutraliseHarnessTags("<identity-card> <bootstrapper>")).toBe("<identity-card> <bootstrapper>");
+});

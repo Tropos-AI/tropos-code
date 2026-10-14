@@ -15,6 +15,8 @@ export interface HelloInfo {
   commands: ExtraCommand[];
   /** The session's saved history, for historyToTranscript. */
   history: MessageParam[];
+  /** The agent's own name and emoji (~/.tropos/IDENTITY.md); empty until it has one. */
+  identity?: { name?: string; emoji?: string };
 }
 
 export interface SessionState {
@@ -30,6 +32,8 @@ export interface SessionState {
   turns: number;
   /** When the running turn started (ms since epoch), for "Worked for 12s" in a tab that joins mid-turn. */
   turnStartedAt?: number;
+  /** The agent's name and emoji, current as of this state: it changes when the Identity tool saves. */
+  identity?: { name?: string; emoji?: string };
 }
 
 /** A saved session as the session list shows it; dates travel as ISO strings. */
@@ -76,6 +80,8 @@ export interface RpcMap {
   clear: { params: undefined; result: HelloInfo };
   undo: { params: undefined; result: UndoResult };
   redo: { params: undefined; result: UndoResult };
+  /** Reverts a learned change (the latest one when no id is given). */
+  "learned.undo": { params: string | undefined; result: { summary: string } };
   "providers.status": { params: undefined; result: ProviderInfoView[] };
   "providers.connect": { params: { id: string; key: string }; result: null };
   "providers.disconnect": { params: string; result: boolean };
@@ -100,6 +106,7 @@ export const RPC_METHODS: RpcMethod[] = [
   "clear",
   "undo",
   "redo",
+  "learned.undo",
   "providers.status",
   "providers.connect",
   "providers.disconnect",

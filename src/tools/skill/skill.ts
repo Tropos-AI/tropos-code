@@ -2,6 +2,8 @@
 import { z } from "zod";
 import { errorText } from "../../error-text";
 import { renderSkill, type Skill } from "../../extensions/skills";
+import type { SkillTracker } from "../../learning/skill-tracker";
+import { recordSkillUse } from "../../learning/skill-usage";
 import { defineTool, type AnyTool } from "../types";
 
 const schema = z.object({
@@ -14,8 +16,13 @@ const schema = z.object({
  * never names the skills; they are listed in the first message's <context>, so the tool list (and
  * the prompt cache) stays the same whatever skills are installed. Skills that opt out of model
  * invocation are refused here as well as left out of the listing.
+ *
+ * With `tracker`, a loaded skill counts as read (SkillManage may then patch it); with `home`, each
+ * load is counted in the usage file the curator consults. A load by the learning review counts only in
+ * `reviewTracker`, and not as a use: the review reading a skill must neither unlock it for the main agent
+ * nor keep it from being archived.
  */
-export function createSkillTool(skills: Skill[]): AnyTool {
+export function createSkillTool(skills: Skill[], opts: { home?: string; tracker?: SkillTracker; reviewTracker?: SkillTracker } = {}): AnyTool {
   const byName = new Map(skills.filter((s) => s.modelInvocable).map((s) => [s.name, s]));
   const userOnly = new Set(skills.filter((s) => !s.modelInvocable).map((s) => s.name));
   const strip =(name: string) => name.trim().replace(/^\//, "");
@@ -30,7 +37,7 @@ export function createSkillTool(skills: Skill[]): AnyTool {
     schema,
     summarize: (input) => strip(input.skill),
     subject: (input) => ({ paths: [], target: strip(input.skill) }),
-    async run(input) {
+    async run(input, ctx) {
       const name = strip(input.skill);
       const skill = byName.get(name);
       if (!skill) {
@@ -40,7 +47,15 @@ export function createSkillTool(skills: Skill[]): AnyTool {
         return { content: `${why} ${list}`, isError: true };
       }
       try {
-        return { content: await renderSkill(skill, input.args), summary: `loaded ${skill.name}` };
+        const content = await renderSkill(skill, input.args);
+        if (ctx.actor === "review") {
+          opts.reviewTracker?.markViewed(skill.name);
+        } else {
+          opts.tracker?.markViewed(skill.name);
+          // Usage is a hint for the curator: never worth failing or delaying the load over.
+          if (opts.home) recordSkillUse(opts.home, skill.name).catch(() => {});
+        }
+        return { content, summary: `loaded ${skill.name}` };
       } catch (err) {
         return { content: `Cannot load skill ${skill.name}: ${errorText(err)}`, isError: true };
       }

@@ -23,11 +23,21 @@ type Props = {
   idPrefix: string;
 };
 
-export function Brand({ version, demo }: { version?: string; demo?: boolean }) {
+export function Brand({ version, demo, identity }: { version?: string; demo?: boolean; identity?: { name?: string; emoji?: string } }) {
   return (
     <a href={hrefFor("chat")} className="-mx-1 flex items-center gap-2.5 rounded-[9px] px-1 py-1 outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]">
       <img src="/brand/tropos-logo.png" alt="" width={26} height={26} className="size-[26px] shrink-0 select-none" draggable={false} />
-      <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">Tropos Code</span>
+      {identity?.name ? (
+        <span className="flex min-w-0 flex-col leading-tight">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">
+            {identity.emoji ? `${identity.emoji} ` : ""}
+            {identity.name}
+          </span>
+          <span className="text-[11px] text-ink-3">Tropos Code</span>
+        </span>
+      ) : (
+        <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">Tropos Code</span>
+      )}
       {demo ? (
         <Badge tone="accent" className="ml-auto">
           demo
@@ -41,7 +51,8 @@ export function Brand({ version, demo }: { version?: string; demo?: boolean }) {
 export function SidebarContent({ page, navigate, onNavigated, showBrand = true, idPrefix }: Props) {
   const store = useAppStore();
   const hello = useHello();
-  const busy = useSessionState()?.busy ?? false;
+  const session = useSessionState();
+  const busy = session?.busy ?? false;
   const reduced = usePrefersReducedMotion();
 
   const newSession = async () => {
@@ -58,7 +69,7 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
     <div className="flex h-full min-h-0 flex-col">
       {showBrand ? (
         <div className="px-4 pb-3 pt-4">
-          <Brand version={hello?.version} demo={store.demo} />
+          <Brand version={hello?.version} demo={store.demo} identity={session?.identity ?? hello?.identity} />
         </div>
       ) : null}
 

@@ -38,6 +38,22 @@ describe("permissionTitle", () => {
 });
 
 describe("PermissionDialog v2", () => {
+  test("a tool's preview shows the full text it will write, under its header", () => {
+    const prompt: PermissionPrompt = {
+      toolName: "AgentManage",
+      kind: "edit",
+      summary: "create 🔬 george",
+      input: {},
+      preview: { header: "/h/.tropos/agents/george.md · may use every tool", text: "---\nname: george\n---\n\nYou research. Ignore\u202e nothing." },
+    };
+    const frame = render(<PermissionDialog prompt={prompt} onAnswer={() => {}} />).lastFrame()!;
+    expect(frame).toContain("Change an agent");
+    expect(frame).toContain("/h/.tropos/agents/george.md · may use every tool");
+    expect(frame).toContain("You research.");
+    // Hidden characters in the text are made visible, as for any preview.
+    expect(frame).toContain("⟨U+202E⟩");
+  });
+
   test("Pane layout: title, preview, question, options, reason and footer", () => {
     const frame = render(<PermissionDialog prompt={{ ...bash, reason: "not in the allow list" }} onAnswer={() => {}} />).lastFrame()!;
     expect(frame).toContain("─────");

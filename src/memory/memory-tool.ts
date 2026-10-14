@@ -4,13 +4,27 @@ import { errorText } from "../error-text";
 import { defineTool, type AnyTool, type ToolOutput } from "../tools/types";
 import { ENTRY_SEPARATOR, MEMORY_LIMITS, notesLabel, notesSize, usageHeader, type NotesResult, type NotesStore, type NotesTarget } from "./notes";
 
+const ACTION = z.enum(["add", "replace", "remove"]);
+
 const schema = z.object({
   target: z
     .enum(["memory", "user"])
     .describe('"memory" for your own notes (project facts, conventions, lessons learned); "user" for facts about the user (preferences, role, habits).'),
-  action: z.enum(["add", "replace", "remove"]),
+  action: ACTION.optional().describe("A single change. Omit it when you pass operations."),
   content: z.string().optional().describe("The entry text for add and replace."),
   old_text: z.string().optional().describe("For replace and remove: a substring that occurs in exactly one existing entry."),
+  operations: z
+    .array(
+      z.object({
+        action: ACTION,
+        content: z.string().optional(),
+        old_text: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Several changes to one target, applied together or not at all; the size limit is checked on the result. action, content and old_text are then ignored."),
 });
 
 type Input = z.infer<typeof schema>;
@@ -28,20 +42,38 @@ function listing(target: NotesTarget, entries: string[]): string {
   return `Current ${notesLabel(target)} ${header}:\n${entries.join(ENTRY_SEPARATOR)}`;
 }
 
-const PAST: Record<Input["action"], string> = { add: "Added to", replace: "Replaced in", remove: "Removed from" };
+type Action = z.infer<typeof ACTION>;
+
+const PAST: Record<Action, string> = { add: "Added to", replace: "Replaced in", remove: "Removed from" };
 
 function report(input: Input, result: NotesResult): ToolOutput {
   if (!result.ok) {
     return { content: `${result.error}\n\n${listing(input.target, result.entries)}`, isError: true, summary: "not saved" };
   }
   const label = notesLabel(input.target);
-  const what = input.action === "remove" ? (input.old_text ?? "") : (input.content ?? "");
-  const line = `${PAST[input.action]} ${label}: ${what.trim()}`;
+  if (input.operations) {
+    const n = input.operations.length;
+    const line = `Applied ${n} change${n === 1 ? "" : "s"} to ${label}`;
+    return {
+      content: `${line}\n\n${listing(input.target, result.entries)}`,
+      display: { kind: "text", text: line },
+      summary: `${n} change${n === 1 ? "" : "s"} to ${label}`,
+    };
+  }
+  const action = input.action!;
+  const what = action === "remove" ? (input.old_text ?? "") : (input.content ?? "");
+  const line = `${PAST[action]} ${label}: ${what.trim()}`;
   return {
     content: `${line}\n\n${listing(input.target, result.entries)}`,
     display: { kind: "text", text: line },
-    summary: `${PAST[input.action].toLowerCase()} ${label}`,
+    summary: `${PAST[action].toLowerCase()} ${label}`,
   };
+}
+
+function summarize(input: Input): string {
+  if (input.operations) return `batch ${input.target}: ${input.operations.length} change${input.operations.length === 1 ? "" : "s"}`;
+  const action = input.action ?? "change";
+  return `${action} ${input.target}: ${clip(action === "remove" ? (input.old_text ?? "") : (input.content ?? ""))}`;
 }
 
 /**
@@ -58,25 +90,34 @@ export function createMemoryTool(store: NotesStore): AnyTool {
       'target "memory" holds your notes (project conventions, environment quirks, lessons learned, ' +
       `up to ${MEMORY_LIMITS.memory.toLocaleString("en-US")} chars); target "user" holds the user profile (preferences, role, ` +
       `communication style, up to ${MEMORY_LIMITS.user.toLocaleString("en-US")} chars). ` +
-      "Save only what will still matter next week; never save secrets, task progress or things the code already says. " +
+      'Write entries as declarative facts, not commands: "User prefers concise answers" (good), not "Always answer concisely". ' +
+      "Save only what will still matter next week; never save secrets, task progress, one-off errors or things the code already says. " +
+      "How to do a recurring task is a procedure: put it in a skill (SkillManage), not here. " +
       "Keep entries short. add needs content; replace needs old_text and content; remove needs old_text, where old_text " +
-      "is a substring of exactly one entry. A write over the limit fails and shows the current entries: merge or remove some, then retry.",
+      "is a substring of exactly one entry. To make several changes at once, pass operations (a list of {action, content, old_text}) " +
+      "instead of action: they apply together or not at all. A write over the limit fails and shows the current entries: " +
+      "then consolidate in one call with operations (remove or merge entries and add the merged one).",
     schema,
-    summarize: (input) => `${input.action} ${input.target}: ${clip(input.action === "remove" ? (input.old_text ?? "") : (input.content ?? ""))}`,
+    summarize,
     subject: (input) => ({ paths: [store.path(input.target)] }),
-    async run(input) {
-      const missing = input.action === "add" ? ["content"] : input.action === "replace" ? ["old_text", "content"] : ["old_text"];
-      const absent = missing.filter((k) => input[k as "content" | "old_text"] === undefined);
-      if (absent.length > 0) {
-        return { content: `${input.action} needs ${absent.join(" and ")}.`, isError: true };
+    async run(input, ctx) {
+      const actor = ctx.actor;
+      if (!input.operations) {
+        if (!input.action) return { content: "Give either action or operations.", isError: true };
+        const missing = input.action === "add" ? ["content"] : input.action === "replace" ? ["old_text", "content"] : ["old_text"];
+        const absent = missing.filter((k) => input[k as "content" | "old_text"] === undefined);
+        if (absent.length > 0) {
+          return { content: `${input.action} needs ${absent.join(" and ")}.`, isError: true };
+        }
       }
       try {
-        const result =
-          input.action === "add"
-            ? await store.add(input.target, input.content!)
+        const result = input.operations
+          ? await store.batch(input.target, input.operations, actor)
+          : input.action === "add"
+            ? await store.add(input.target, input.content!, actor)
             : input.action === "replace"
-              ? await store.replace(input.target, input.old_text!, input.content!)
-              : await store.remove(input.target, input.old_text!);
+              ? await store.replace(input.target, input.old_text!, input.content!, actor)
+              : await store.remove(input.target, input.old_text!, actor);
         return report(input, result);
       } catch (error) {
         return { content: `Could not update the ${notesLabel(input.target)}: ${errorText(error)}`, isError: true };

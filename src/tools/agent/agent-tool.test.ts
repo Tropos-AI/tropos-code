@@ -33,3 +33,34 @@ test("an unknown agent is an error result", async () => {
   const out = await tool.run({ description: "d", prompt: "p", subagent_type: "nope" }, makeToolContext());
   expect(out).toEqual({ content: 'Unknown agent "nope". Available: general-purpose, explore.', isError: true });
 });
+
+test("the summary carries the agent's emoji when it has one", () => {
+  const tool = createAgentTool([...agents, { name: "scout", description: "Scouts.", prompt: "p", emoji: "🔎" }], async () => ({ content: "x" }));
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "scout" })).toBe("🔎 scout: find it");
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "explore" })).toBe("explore: find it");
+  expect(tool.summarize({ description: "find it", prompt: "x", subagent_type: "nope" })).toBe("nope: find it");
+});
+
+test("an agent created mid-session is found after a reload; the description keeps the starting list", async () => {
+  const list = [...agents];
+  let reloads = 0;
+  const tool = createAgentTool(
+    list,
+    async (def) => ({ content: `ran ${def.name}` }),
+    async () => {
+      reloads++;
+      list.push({ name: "george", description: "Researches.", prompt: "p", emoji: "🔬" } as (typeof list)[number]);
+    },
+  );
+  const ctx = makeToolContext();
+  expect(await tool.run({ description: "dig", prompt: "x", subagent_type: "george" }, ctx)).toEqual({ content: "ran george" });
+  expect(reloads).toBe(1);
+  expect(tool.summarize({ description: "dig", prompt: "x", subagent_type: "george" })).toBe("🔬 george: dig");
+  // Prompt caching: the tool's description is what it was when the session started.
+  expect(tool.description).not.toContain("george");
+  // A known agent needs no reload; an unknown one still fails after it.
+  await tool.run({ description: "d", prompt: "x", subagent_type: "explore" }, ctx);
+  expect(reloads).toBe(1);
+  expect(await tool.run({ description: "d", prompt: "x", subagent_type: "nobody" }, ctx)).toMatchObject({ isError: true });
+  expect(reloads).toBe(2);
+});

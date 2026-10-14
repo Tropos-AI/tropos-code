@@ -88,6 +88,8 @@ export function reduce(t: Transcript, event: AgentEvent): Transcript {
   switch (event.type) {
     case "text":
     case "thinking": {
+      // An empty delta would open an empty item between two thinking deltas and split them into many rows.
+      if (!event.delta) return t;
       const kind = event.type === "text" ? "assistant" : "thinking";
       const last = t.live.at(-1);
       if (last && (last.kind === "assistant" || last.kind === "thinking") && last.kind === kind) {

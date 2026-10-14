@@ -40,6 +40,19 @@ export interface Settings {
   memory: boolean;
   /** Plugins under ~/.tropos/plugins that stay off. */
   disabledPlugins: string[];
+  /** The background learning review and memory flush (src/learning). User layers only: it spends tokens and writes prompt text. */
+  learning: LearningSettings;
+}
+
+export interface LearningSettings {
+  /** Run the background review after turns. */
+  review: boolean;
+  /** User turns (memory) or tool calls (skills) between reviews. */
+  interval: number;
+  /** Fraction of the context window at which a flush review saves the session's state to the daily note. */
+  flushAt: number;
+  /** Periodic skill-library curation. */
+  curator: boolean;
 }
 
 export const HOOK_EVENTS = [
@@ -87,8 +100,9 @@ export interface ProviderSetting {
   name?: string;
 }
 
-export type PartialSettings = Partial<Omit<Settings, "permissions">> & {
+export type PartialSettings = Partial<Omit<Settings, "permissions" | "learning">> & {
   permissions?: Partial<PermissionRulesConfig>;
+  learning?: Partial<LearningSettings>;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -109,6 +123,7 @@ export const DEFAULT_SETTINGS: Settings = {
   snapshots: true,
   memory: true,
   disabledPlugins: [],
+  learning: { review: true, interval: 10, flushAt: 0.7, curator: true },
 };
 
 export interface SettingsPaths {
@@ -208,7 +223,21 @@ const layerSchema = z.object({
   snapshots: z.boolean().optional(),
   memory: z.boolean().optional(),
   disabledPlugins: z.array(z.string()).optional(),
+  learning: z
+    .object({
+      review: z.boolean(),
+      interval: z.number().int().min(2).max(100),
+      flushAt: z.number().min(0.3).max(0.95),
+      curator: z.boolean(),
+    })
+    .partial()
+    .optional(),
 });
+
+/** Drops undefined values so a partial layer never blanks a field it didn't set. */
+function definedOnly<T extends object>(value: T | undefined): Partial<T> {
+  return Object.fromEntries(Object.entries(value ?? {}).filter(([, v]) => v !== undefined)) as Partial<T>;
+}
 
 function union(a: string[], b: string[] = []): string[] {
   return [...new Set([...a, ...b])];
@@ -237,6 +266,7 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     snapshots: layer.snapshots ?? base.snapshots,
     memory: layer.memory ?? base.memory,
     disabledPlugins: union(base.disabledPlugins, layer.disabledPlugins),
+    learning: { ...base.learning, ...definedOnly(layer.learning) },
   };
 }
 
@@ -298,7 +328,8 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.autoUpdates !== undefined) ignored.push("autoUpdates");
   if (layer.autoUpdatesChannel !== undefined) ignored.push("autoUpdatesChannel");
   // Hooks, MCP servers, formatters and language servers run programs; plugins choose which run.
-  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins"] as const) {
+  // Learning spends the user's tokens in the background and writes prompt text under ~/.tropos.
+  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins", "learning"] as const) {
     if (layer[key] !== undefined) ignored.push(key);
   }
   // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic

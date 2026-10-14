@@ -13,7 +13,7 @@ import { BUSY_ERROR, RPC_METHODS } from "./protocol";
 
 export type Send = (message: ServerMessage) => void;
 
-const LIST_TOPICS: ListTopic[] = ["skills", "agents", "hooks", "mcp", "plugins", "memory"];
+const LIST_TOPICS: ListTopic[] = ["skills", "agents", "hooks", "mcp", "plugins", "memory", "learned"];
 
 interface OpenAsk {
   prompt: PermissionPrompt;
@@ -73,7 +73,9 @@ export class WebHost {
       sessionId: this.runtime.sessionId(),
       modes: this.runtime.modes,
       commands: this.runtime.extraCommands,
-      history: this.runtime.history(),
+      // The live conversation, so a tab opened (or reloaded) mid-session shows it; runtime.history() is only the saved start.
+      history: this.agent.messages,
+      identity: this.runtime.identity(),
     };
   }
 
@@ -89,6 +91,7 @@ export class WebHost {
       totalCostUsd: this.usage.totalCostUsd,
       turns: this.turns,
       turnStartedAt: this.turnStartedAt,
+      identity: this.runtime.identity(),
     };
   }
 
@@ -259,6 +262,13 @@ export class WebHost {
       case "redo":
         this.needIdle();
         return (await r.redo()) as RpcMap[M]["result"];
+      case "learned.undo": {
+        this.needIdle();
+        if (params !== undefined && typeof params !== "string") throw new RpcError("Which change?");
+        const out = await r.undoLearned(params as string | undefined);
+        if (!out.ok) throw new RpcError(out.reason);
+        return { summary: out.summary } as RpcMap[M]["result"];
+      }
       case "providers.status":
         return (await r.providers.status()).map(
           (s): ProviderInfoView => ({

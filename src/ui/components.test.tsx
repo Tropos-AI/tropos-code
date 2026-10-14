@@ -24,6 +24,30 @@ describe("BrandHeader", () => {
     expect(frame).toContain("claude-opus-5-5 · effort high");
     expect(frame).toContain("/work/app");
   });
+
+  test("an identity with a name shows emoji and name above the product name", () => {
+    const frame = render(<BrandHeader version="0.1.0" model="m" effort="high" cwd="/w" identity={{ name: "Nova", emoji: "🦊" }} />).lastFrame()!;
+    expect(frame).toContain("🦊 Nova");
+    const lines = frame.split("\n");
+    const nameRow = lines.findIndex((l) => l.includes("Nova"));
+    const productRow = lines.findIndex((l) => l.includes("Tropos Code"));
+    expect(nameRow).toBeGreaterThanOrEqual(0);
+    expect(nameRow).toBeLessThan(productRow);
+  });
+
+  test("a name without an emoji shows just the name; the name is sanitized", () => {
+    const frame = render(<BrandHeader version="0.1.0" model="m" effort="high" cwd="/w" identity={{ name: "Nova\x1b[31m" }} />).lastFrame()!;
+    expect(frame).toContain("Nova");
+    expect(frame).not.toContain("\x1b[31m");
+    expect(frame).not.toContain("undefined");
+  });
+
+  test("no name (even with an emoji) adds nothing", () => {
+    const plain = render(<BrandHeader version="0.1.0" model="m" effort="high" cwd="/w" />).lastFrame()!;
+    const emojiOnly = render(<BrandHeader version="0.1.0" model="m" effort="high" cwd="/w" identity={{ emoji: "🦊" }} />).lastFrame()!;
+    expect(emojiOnly).not.toContain("🦊");
+    expect(emojiOnly).toBe(plain);
+  });
 });
 
 describe("ToolRow", () => {

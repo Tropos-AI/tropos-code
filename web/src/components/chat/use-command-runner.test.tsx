@@ -184,6 +184,32 @@ describe("useCommandRunner", () => {
     expect(window.location.hash).toBe("#/skills");
   });
 
+  test("/learned opens the Memory page, where learned changes live", async () => {
+    const { type, socket } = mount();
+    await type("/learned");
+    expect(window.location.hash).toBe("#/memory");
+    expect(socket.rpcs("learned.undo")).toEqual([]);
+  });
+
+  test("/learned undo reverts the latest learned change and names it", async () => {
+    const { type, socket, lastToast, overlay } = mount({ "learned.undo": () => ({ summary: "skill: SkillManage patch bun-testing" }) });
+    await type("/learned undo");
+    const calls = socket.rpcs("learned.undo");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.params).toBeUndefined();
+    expect(lastToast()).toMatchObject({ tone: "ok", title: "Undid a learned change", description: "skill: SkillManage patch bun-testing" });
+    expect(window.location.hash).toBe("");
+    expect(overlay()).toBe("none");
+  });
+
+  test("/learned undo that fails toasts the reason", async () => {
+    const { type, fail, lastToast } = mount();
+    await type("/learned undo");
+    await fail("learned.undo", "Nothing learned to undo.");
+    expect(lastToast()).toMatchObject({ tone: "error", title: "Could not undo" });
+    expect(lastToast()?.description).toContain("Nothing learned to undo.");
+  });
+
   test("/clear starts a new session; a failure toasts", async () => {
     const { type, socket, fail, lastToast } = mount();
     await type("/clear");
