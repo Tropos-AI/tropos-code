@@ -1,7 +1,8 @@
 // src/paths.ts
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, relative, isAbsolute, sep } from "node:path";
+import { delimiter, join, relative, isAbsolute, sep } from "node:path";
 
 /**
  * Collision-free directory name for per-project data. The readable prefix is the
@@ -30,4 +31,43 @@ export function expandHome(p: string, home: string = homedir()): string {
 export function isInside(path: string, dir: string): boolean {
   const rel = relative(dir, path);
   return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+}
+
+/**
+ * PATH without its relative entries. "node_modules/.bin" or "." on PATH resolves against the current
+ * directory, which is a project a cloned repo controls.
+ */
+export function absolutePathEnv(path: string | undefined = process.env.PATH): string {
+  return (path ?? "").split(delimiter).filter((dir) => dir !== "" && isAbsolute(dir)).join(delimiter);
+}
+
+/**
+ * Finds a program for Tropos to run on its own (formatters, language servers): only through absolute
+ * PATH entries, and never a file that really lives inside `root`, so a repo can't stand in its own
+ * `prettier` or `gopls`.
+ */
+export function safeWhich(bin: string, root: string | undefined, path: string | undefined = process.env.PATH): string | null {
+  let entries = absolutePathEnv(path).split(delimiter).filter(Boolean);
+  let realRoot: string | undefined;
+  if (root) {
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      realRoot = root;
+    }
+    const inRoot = realRoot;
+    entries = entries.filter((dir) => !isInside(realOr(dir), inRoot));
+  }
+  const found = Bun.which(bin, { PATH: entries.join(delimiter) });
+  // A PATH entry outside the repo can still hold a symlink into it.
+  if (!found || !realRoot) return found;
+  return isInside(realOr(found), realRoot) ? null : found;
+}
+
+function realOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }

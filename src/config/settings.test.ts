@@ -245,6 +245,8 @@ describe("extension settings", () => {
     await expect(loadSettings(paths)).rejects.toThrow("mcpServers.bad name");
     await put(paths.user, { mcpServers: { github__x: { command: "x" } } });
     await expect(loadSettings(paths)).rejects.toThrow("mcpServers.github__x");
+    await put(paths.user, { mcpServers: { github_: { command: "x" } } });
+    await expect(loadSettings(paths)).rejects.toThrow("mcpServers.github_");
     await put(paths.user, { formatter: { x: { command: ["x"], extensions: ["md"] } } });
     await expect(loadSettings(paths)).rejects.toThrow("extensions start with a dot");
   });

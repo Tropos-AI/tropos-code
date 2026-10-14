@@ -3,6 +3,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:
 import { pathToFileURL } from "node:url";
 import type { Settings } from "../config/settings";
 import { gitRoot } from "../context/memory";
+import { absolutePathEnv, safeWhich } from "../paths";
 import { isSecretEnvName } from "../tools/bash/bash";
 import { LspClient } from "./client";
 
@@ -95,7 +96,7 @@ export class LspManager {
   constructor(
     private readonly setting: Settings["lsp"],
     private readonly cwd: string,
-    private readonly which: Which = (bin) => Bun.which(bin),
+    private readonly which: Which = (bin) => safeWhich(bin, gitRoot(cwd) ?? cwd),
     timings: LspTimings = {},
   ) {
     this.waitMs = timings.waitMs ?? 3_000;
@@ -195,7 +196,10 @@ export class LspManager {
       for (const [name, custom] of Object.entries(this.setting)) {
         if (custom.disabled || custom.command.length === 0) continue;
         if (custom.extensions.some((e) => e.toLowerCase() === ext)) {
-          def = { name, argv: custom.command };
+          // A bare program name is found the same safe way as the built-ins; not found, the server is skipped.
+          const [bin, ...rest] = custom.command as [string, ...string[]];
+          const found = bin.includes("/") ? bin : this.which(bin);
+          if (found) def = { name, argv: [found, ...rest] };
           break;
         }
       }
@@ -335,5 +339,7 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal, fallback: T):
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) if (!isSecretEnvName(name)) env[name] = value;
+  // Children look programs up from the project directory: relative PATH entries would find the repo's.
+  env.PATH = absolutePathEnv(env.PATH);
   return env;
 }

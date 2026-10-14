@@ -371,6 +371,17 @@ describe("decide — targets, network and MCP tools", () => {
     expect(decide(fetchReq("*"), ctx())).toEqual({ behavior: "ask" });
     expect(decide({ toolName: "Skill", kind: "net", paths: [], target: "a)b" }, ctx())).toEqual({ behavior: "ask" });
   });
+  test("patterned deny and ask rules still cover tools without paths, commands or targets", () => {
+    expect(decide(mcp("mcp__github__delete_repo"), ctx({ allow: ["mcp__github"], deny: ["mcp__github__delete_repo(*)"] })).behavior).toBe("deny");
+    expect(decide(mcp("mcp__github__x"), ctx({ allow: ["mcp__github"], ask: ["mcp__github(*)"] })).behavior).toBe("ask");
+    expect(decide(mcp("mcp__github__x"), ctx({ allow: ["mcp__github__x(*)"] })).behavior).toBe("ask");
+    // Kind-based matching doesn't reach them: a Read path rule leaves a pathless read tool alone.
+    expect(decide({ toolName: "SessionSearch", kind: "read", paths: [] }, ctx({ deny: ["Read(.env)"] })).behavior).toBe("allow");
+  });
+  test("no rule suggestion for a folder whose name is a glob", () => {
+    expect(decide(edit("/work/app/*/a.ts"), ctx())).toEqual({ behavior: "ask" });
+    expect(decide(edit("/work/app/[a-z]/a.ts"), ctx())).toEqual({ behavior: "ask" });
+  });
   test("an exec tool without command or paths suggests its own name", () => {
     expect(decide(mcp("mcp__db__query"), ctx())).toEqual({ behavior: "ask", suggestion: "mcp__db__query" });
   });

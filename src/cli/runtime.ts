@@ -196,18 +196,36 @@ export function commandIO(
 ): CommandIO {
   const permissions = () => ({ mode: mode(), rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs });
   return {
-    async runShell(command) {
+    async runShell(original) {
+      let command = original;
       if (signal.aborted) return { ok: false, reason: "interrupted" };
-      // Bash guard hooks see these commands too, exactly as they would a model's Bash call.
+      // Bash guard hooks see these commands too, and their answers count exactly as for a model's Bash call.
+      let hookPermission: "allow" | "deny" | "ask" | undefined;
       if (hooks?.has("PreToolUse")) {
         const out = await hooks.run("PreToolUse", { tool_name: "Bash", tool_input: { command }, tool_use_id: "slash-command" }, "Bash", signal);
         const refusal = out.blocked ?? out.stop ?? (out.permission === "deny" ? (out.permissionReason ?? "denied by a hook") : undefined);
         if (refusal !== undefined) return { ok: false, reason: `a PreToolUse hook refused \`${command}\`: ${refusal}` };
+        if (out.updatedInput !== undefined) {
+          const rewritten = (out.updatedInput as { command?: unknown } | null)?.command;
+          if (typeof rewritten !== "string" || !rewritten.trim()) return { ok: false, reason: `a PreToolUse hook rewrote \`${command}\` into something invalid` };
+          command = rewritten;
+        }
+        // As in the agent: an allow can't vouch for a rewritten command; an ask always prompts.
+        hookPermission = out.updatedInput !== undefined && out.permission === "allow" ? undefined : out.permission;
+        if (signal.aborted) return { ok: false, reason: "interrupted" };
       }
-      const decision = decide({ toolName: "Bash", kind: "exec", command, paths: [] }, permissions());
+      let decision = decide({ toolName: "Bash", kind: "exec", command, paths: [] }, permissions());
       if (decision.behavior === "deny") return { ok: false, reason: decision.reason };
+      if (hookPermission === "allow" && decision.behavior === "ask") decision = { behavior: "allow" };
+      if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };
       if (decision.behavior === "ask") {
-        const prompt: PermissionPrompt = { toolName: "Bash", kind: "exec", summary: command, input: { command }, reason: "a slash command runs this" };
+        const prompt: PermissionPrompt = {
+          toolName: "Bash",
+          kind: "exec",
+          summary: command,
+          input: { command },
+          reason: decision.reason ?? "a slash command runs this",
+        };
         const answer = await ui.askPermission(prompt, signal);
         if (answer.kind === "deny") return { ok: false, reason: `you declined \`${command}\`` };
         if (signal.aborted) return { ok: false, reason: "interrupted" };

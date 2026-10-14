@@ -202,7 +202,10 @@ tools with `mcp__github__get_*`.
   load code from the project they analyse, such as its own TypeScript or its Python environment, much
   like an editor without workspace trust. rust-analyzer's build scripts and proc macros are turned off,
   and gopls never downloads a toolchain. If you don't trust every repo you open, turn `lsp` on per
-  project in `~/.tropos/projects/<project>/settings.json` instead of globally.
+  project in `~/.tropos/projects/<project>/settings.json` instead of globally. Tropos looks these programs
+  up through absolute PATH entries only, never inside the repo. If Tropos itself edits a file they load
+  code from (a prettier config, `package.json`, `tsconfig`, anything in `node_modules`), formatters and
+  language servers stay off for the rest of that session.
 - **Memory.** Tropos keeps short notes in `~/.tropos/memories/` (about the work and about you, each with
   a size budget) and sees them at the start of every session. Each write asks first, so a page or
   file the model read can't plant lasting instructions. Turn this off with `"memory": false`.

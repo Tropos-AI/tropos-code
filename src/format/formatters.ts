@@ -6,7 +6,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import type { CommandToolSetting, Settings } from "../config/settings";
 import { gitRoot } from "../context/memory";
 import { errorText } from "../error-text";
-import { isInside } from "../paths";
+import { absolutePathEnv, isInside, safeWhich } from "../paths";
 import { isSecretEnvName } from "../tools/bash/bash";
 
 export type FormatResult = { name: string; changed: boolean } | { name: string; error: string } | null;
@@ -39,7 +39,7 @@ export class Formatters {
   constructor(
     private readonly setting: Settings["formatter"],
     private readonly cwd: string,
-    private readonly which: Which = (bin) => Bun.which(bin),
+    private readonly which: Which = (bin) => safeWhich(bin, gitRoot(cwd) ?? cwd),
     options: FormatterOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -51,6 +51,13 @@ export class Formatters {
     const root = gitRoot(this.cwd) ?? this.cwd;
     const picked = this.pick(file, root);
     if (!picked) return null;
+    // A custom command named bare ("deno") is found the same safe way as the built-ins.
+    const [bin] = picked.argv;
+    if (bin !== undefined && !bin.includes("/")) {
+      const found = this.which(bin);
+      if (!found) return { name: picked.name, error: `${bin} not found on PATH` };
+      picked.argv = [found, ...picked.argv.slice(1)];
+    }
 
     let before: Buffer;
     try {
@@ -138,6 +145,8 @@ function searchDirs(file: string, root: string): string[] {
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) if (!isSecretEnvName(name)) env[name] = value;
+  // Children look programs up from the project directory: relative PATH entries would find the repo's.
+  env.PATH = absolutePathEnv(env.PATH);
   return env;
 }
 

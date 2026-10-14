@@ -226,4 +226,22 @@ describe("extensions in the runtime", () => {
     expect(await rt.expandCommand("two", "", ui("allow", asked), dead.signal)).toEqual({ ok: false, reason: "interrupted" });
     expect(asked).toEqual(["echo one"]);
   });
+
+  test("PreToolUse hooks rule slash-command shell lines: ask prompts despite an allow rule; rewrites are used", async () => {
+    await writeFileAt(join(dir, ".tropos", "commands", "say.md"), "Say: !`echo RAN`");
+    const hook = (json: object) => ({ PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command" as const, command: `echo '${JSON.stringify(json)}'` }] }] });
+    await withExt({ hooks: hook({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask" } }) });
+    ctx.rules = compileRules({ allow: ["Bash(echo:*)"], ask: [], deny: [] }).rules;
+    const { runtime: rt } = await runtime();
+    const asked: string[] = [];
+    expect(await rt.expandCommand("say", "", ui("deny", asked), signal())).toMatchObject({ ok: false });
+    expect(asked).toEqual(["echo RAN"]);
+    await withExt({ hooks: hook({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { command: "echo REWRITTEN" } } }) });
+    const { runtime: rt2 } = await runtime();
+    const out = await rt2.expandCommand("say", "", ui("deny"), signal());
+    expect(out.ok && out.prompt).toContain("REWRITTEN");
+    await withExt({ hooks: hook({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: { nope: 1 } } }) });
+    const { runtime: rt3 } = await runtime();
+    expect(await rt3.expandCommand("say", "", ui("allow"), signal())).toMatchObject({ ok: false, reason: expect.stringContaining("into something invalid") });
+  });
 });

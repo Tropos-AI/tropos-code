@@ -123,8 +123,8 @@ async function loadMcpServers(name: string, root: string, warnings: string[]): P
   for (const [server, value] of Object.entries(file.data.mcpServers ?? {})) {
     const full = `${name}-${server}`;
     // Same limits as settings: "__" or an over-long name would blur which server a tool belongs to.
-    if (!SERVER_NAME.test(server) || full.includes("__") || full.length > 32) {
-      warnings.push(`Plugin ${name}: MCP server "${server}" skipped: names are letters, digits, _ and -, without "__", and "${name}-<server>" fits in 32 characters`);
+    if (!SERVER_NAME.test(server) || full.includes("__") || full.endsWith("_") || full.length > 32) {
+      warnings.push(`Plugin ${name}: MCP server "${server}" skipped: names are letters, digits, _ and -, without "__" or a trailing "_", and "${name}-<server>" fits in 32 characters`);
       continue;
     }
     const parsed = mcpServerSchema.safeParse(value);
