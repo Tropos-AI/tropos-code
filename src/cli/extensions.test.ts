@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS, type Settings } from "../config/settings";
 import { skillListing } from "../extensions/skills";
 import { ReadState } from "../tools/read-state";
 import { createTools } from "../tools/registry";
-import { contextExtras, createHookRunner, extraCommands, loadExtensions, postWrite, sessionTools, type Extensions } from "./extensions";
+import { contextExtras, createHookRunner, extraCommands, isCodeConfig, loadExtensions, postWrite, sessionTools, type Extensions } from "./extensions";
 
 let dir: string;
 let home: string;
@@ -161,4 +161,28 @@ test("a hook runner exists only when some hook is configured", async () => {
   expect(createHookRunner(await load(), base)).toBeUndefined();
   const ext = await load({ hooks: { Stop: [{ hooks: [{ type: "command", command: "true" }] }] } });
   expect(createHookRunner(ext, base)?.has("Stop")).toBe(true);
+});
+
+describe("writing a file formatters or language servers load code from", () => {
+  test("recognises configs, package files and node_modules", () => {
+    for (const p of ["/p/prettier.config.js", "/p/.prettierrc.cjs", "/p/package.json", "/p/tsconfig.build.json", "/p/node_modules/x/index.js", "/p/.cargo/config.toml", "/p/go.mod", "/p/biome.json"]) {
+      expect(isCodeConfig(p)).toBe(true);
+    }
+    for (const p of ["/p/src/a.ts", "/p/README.md", "/p/package-lock.md", "/p/config.js"]) expect(isCodeConfig(p)).toBe(false);
+  });
+
+  test("switches formatting off for the rest of the session", async () => {
+    const script = join(dir, "fmt.sh");
+    await writeFile(script, '#!/bin/sh\necho formatted > "$1"\n', { mode: 0o755 });
+    const ext = await load({ formatter: { fmt: { command: [script, "$FILE"], extensions: [".js", ".md"] } } });
+    const config = join(cwd, "prettier.config.js");
+    const doc = join(cwd, "a.md");
+    await writeFile(config, "x");
+    await writeFile(doc, "x");
+    const signal = new AbortController().signal;
+    expect(await postWrite(ext, new ReadState(), [config], signal)).toContain("off for the rest of this session");
+    expect(await readFile(config, "utf8")).toBe("x");
+    expect(await postWrite(ext, new ReadState(), [doc], signal)).toBeNull();
+    expect(await readFile(doc, "utf8")).toBe("x");
+  });
 });

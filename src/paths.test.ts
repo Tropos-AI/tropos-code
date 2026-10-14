@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { expandHome, isInside, projectKey, troposHome } from "./paths";
+import { absolutePathEnv, expandHome, isInside, projectKey, safeWhich, troposHome } from "./paths";
 
 describe("projectKey", () => {
   test("starts with a readable, sanitized form of the path", () => {
@@ -58,5 +58,36 @@ describe("isInside", () => {
   });
   test("a child whose name starts with .. is inside", () => {
     expect(isInside("/a/b/..cache/x", "/a/b")).toBe(true);
+  });
+});
+
+describe("safeWhich", () => {
+  test("ignores relative PATH entries and programs inside the project", async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const base = await mkdtemp(join(tmpdir(), "tropos-which-"));
+    try {
+      const repo = join(base, "repo");
+      const bin = join(repo, "node_modules", ".bin");
+      const outside = join(base, "tools");
+      await mkdir(bin, { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(bin, "prettier"), "#!/bin/sh\n", { mode: 0o755 });
+      await writeFile(join(outside, "prettier"), "#!/bin/sh\n", { mode: 0o755 });
+      expect(absolutePathEnv(`node_modules/.bin:.:${outside}::`)).toBe(outside);
+      // An absolute PATH entry that points into the repo is refused too.
+      expect(safeWhich("prettier", repo, bin)).toBeNull();
+      expect(safeWhich("prettier", repo, `${bin}:${outside}`)).toBe(join(outside, "prettier"));
+      const { symlink } = await import("node:fs/promises");
+      const linkDir = join(base, "links");
+      await mkdir(linkDir);
+      await symlink(join(bin, "prettier"), join(linkDir, "prettier"));
+      expect(safeWhich("prettier", repo, linkDir)).toBeNull();
+      expect(safeWhich("prettier", repo, `node_modules/.bin:${outside}`)).toBe(join(outside, "prettier"));
+      expect(safeWhich("prettier", undefined, bin)).toBe(join(bin, "prettier"));
+      expect(safeWhich("nope", repo, outside)).toBeNull();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });

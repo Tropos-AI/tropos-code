@@ -110,7 +110,10 @@ function ruleHits(
     return mode === "any" ? parts.some(hit) : parts.length > 0 && parts.every(hit);
   }
   if (req.target !== undefined) return targetPatternMatches(rule.pattern, req.target);
-  if (req.paths.length === 0) return false;
+  // A tool that acts with nothing a pattern could match (an MCP tool): a deny or ask rule naming it
+  // still applies, so `mcp__github__delete_repo(*)` can't silently miss; an allow rule must be bare.
+  // Read tools without paths keep the old reading: a path rule says nothing about them.
+  if (req.paths.length === 0) return restrict && (req.kind === "exec" || req.kind === "net") && toolNameMatches(rule.tool, req.toolName);
   const hit = (p: string) => pathPatternMatches(rule.pattern!, p, ctx.cwd, ctx.home, { restrict });
   return mode === "any" ? req.paths.some(hit) : req.paths.every(hit);
 }
@@ -219,6 +222,8 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
     const dir = dirname(req.paths[0]!);
     if (!isInside(dir, cwd)) return undefined;
     const rel = relative(cwd, dir);
+    // A folder named "*" or "[a-z]" would turn into a glob covering far more than was approved.
+    if (/[*?[\]{}()!]/.test(rel)) return undefined;
     return `Edit(${rel ? `${rel}/` : ""}**)`;
   }
   return undefined;

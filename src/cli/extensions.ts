@@ -38,6 +38,11 @@ export interface Extensions {
   formatters: Formatters | null;
   lsp: LspManager | null;
   undo: UndoManager;
+  /**
+   * Set once the agent writes a file formatters or language servers load code from: both stay off for
+   * the rest of the session, so an approved file edit can't turn into running code.
+   */
+  codeConfigWritten?: string;
   /** Startup notices: files that didn't load, servers that didn't start. */
   warnings: string[];
 }
@@ -157,11 +162,29 @@ export async function contextExtras(ext: Extensions, listing: (skills: Skill[]) 
 }
 
 /**
+ * Files formatters and language servers execute or load code from: prettier/biome configs, package.json
+ * (its "prettier" key, scripts), TypeScript and Python project files (plugins, interpreters), toolchain
+ * pins, and anything under node_modules.
+ */
+const CODE_CONFIG = /^(?:prettier\.config\..*|\.prettierrc.*|biome\.jsonc?|package\.json|\.npmrc|tsconfig.*\.json|jsconfig.*\.json|pyrightconfig\.json|pyproject\.toml|setup\.cfg|rust-toolchain(?:\.toml)?|go\.(?:mod|work))$/i;
+
+export function isCodeConfig(path: string): boolean {
+  const parts = path.split(/[\\/]/);
+  return CODE_CONFIG.test(parts.at(-1) ?? "") || parts.some((p) => p === "node_modules" || p === ".cargo");
+}
+
+/**
  * After a successful Write/Edit: run the formatter, refresh read-state if it changed the file (so the
  * next Edit isn't refused as stale), then collect language-server errors for the new content.
  */
 export async function postWrite(ext: Extensions, readState: ReadState, paths: string[], signal: AbortSignal): Promise<string | null> {
   if ((!ext.formatters && !ext.lsp) || paths.length === 0) return null;
+  if (ext.codeConfigWritten) return null;
+  const config = paths.find(isCodeConfig);
+  if (config) {
+    ext.codeConfigWritten = config;
+    return `(formatters and language servers are off for the rest of this session: ${config} is a file they load code from, and it was just changed)`;
+  }
   const notes: string[] = [];
   for (const path of paths) {
     const formatted = await ext.formatters?.format(path, signal).catch(() => null);

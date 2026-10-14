@@ -30,6 +30,12 @@ It stays a **clean-room build**. Claude Code's file formats are public and widel
      MCP server's `readOnlyHint` never skips a prompt, stdio MCP servers start in the home directory (never the repo,
      whose `.npmrc`/`node_modules` would steer `npx`), and a host containing `*` is refused (no wildcard rule
      suggestions).
+   - Formatter and language-server programs are found through absolute PATH entries only, never inside the project.
+     Once the agent writes a file they load code from (prettier/biome configs, `package.json`, `tsconfig*.json`,
+     `pyproject.toml`, `go.mod`, anything under `node_modules` or `.cargo`), both stay off for the session, so an
+     approved edit can't become code execution. Slash-command shell lines honour PreToolUse `ask` and `updatedInput`
+     like model calls. Patterned deny/ask rules still cover pathless tools, MCP server names can't start or end with
+     `_`, and no "don't ask again" rule is offered for a folder whose name contains glob characters.
    - Formatters and language servers are the exception: once the user turns them on they run the project's own code
      (prettier's JS config, the workspace TypeScript), so the README recommends enabling them per project.
 2. **The prompt cache is sacred.** The system prompt and tool list are fixed for a session. Skill and agent listings,

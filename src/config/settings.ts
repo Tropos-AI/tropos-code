@@ -198,7 +198,8 @@ const layerSchema = z.object({
       z
         .string()
         .regex(/^[A-Za-z0-9_-]{1,32}$/, "MCP server names are 1-32 letters, digits, _ and -")
-        .refine((name) => !name.includes("__"), "MCP server names can't contain __ (it separates server and tool in tool names)"),
+        // "__" separates server and tool in tool names; a leading or trailing "_" would blur that boundary too.
+        .refine((name) => !name.includes("__") && !name.startsWith("_") && !name.endsWith("_"), "MCP server names can't contain __ or start or end with _"),
       mcpServerSchema,
     )
     .optional(),
