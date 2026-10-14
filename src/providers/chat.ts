@@ -2,7 +2,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Message } from "../api/model";
 import type { MessageParam } from "../session/store";
-import { toInputSchema } from "../tools/schema";
+import { toolInputSchema } from "../tools/schema";
 import type { AnyTool } from "../tools/types";
 import { foreignThinking, readForeign, type ForeignReasoning } from "./reasoning";
 
@@ -108,7 +108,7 @@ export function toChatMessages(
 export function toChatTools(tools: AnyTool[]): ChatTool[] {
   return tools.map((tool) => ({
     type: "function",
-    function: { name: tool.name, description: tool.description, parameters: toInputSchema(tool.schema) as Record<string, unknown> },
+    function: { name: tool.name, description: tool.description, parameters: toolInputSchema(tool) as Record<string, unknown> },
   }));
 }
 

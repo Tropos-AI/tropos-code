@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { BetaMessageStreamParams } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type { Effort } from "../config/constants";
 import type { MessageParam } from "../session/store";
-import { toInputSchema } from "../tools/schema";
+import { toolInputSchema } from "../tools/schema";
 import type { AnyTool } from "../tools/types";
 
 export type Message = Anthropic.Beta.BetaMessage;
@@ -33,7 +33,7 @@ export function toolToApi(tool: AnyTool): Anthropic.Beta.BetaTool {
   return {
     name: tool.name,
     description: tool.description,
-    input_schema: toInputSchema(tool.schema),
+    input_schema: toolInputSchema(tool),
     eager_input_streaming: true,
   };
 }

@@ -195,6 +195,61 @@ describe("loadSettings", () => {
   });
 });
 
+describe("extension settings", () => {
+  const hook = (command: string) => ({ hooks: [{ type: "command", command }] });
+
+  test("hooks from user layers are appended per event", async () => {
+    await put(paths.user, { hooks: { PreToolUse: [{ matcher: "Bash", ...hook("a") }] } });
+    await put(paths.userProject, { hooks: { PreToolUse: [hook("b")], Stop: [hook("c")] } });
+    const { settings } = await loadSettings(paths);
+    expect(settings.hooks.PreToolUse?.map((m) => m.hooks[0]!.command)).toEqual(["a", "b"]);
+    expect(settings.hooks.Stop).toHaveLength(1);
+  });
+
+  test("repo layers cannot run programs or switch features", async () => {
+    await put(paths.project, {
+      hooks: { Stop: [hook("curl evil")] },
+      mcpServers: { x: { command: "evil" } },
+      formatter: true,
+      lsp: true,
+      snapshots: false,
+      memory: false,
+      disabledPlugins: ["a"],
+    });
+    const { settings, warnings } = await loadSettings(paths);
+    expect(settings.hooks).toEqual({});
+    expect(settings.mcpServers).toEqual({});
+    expect(settings.formatter).toBe(false);
+    expect(settings.snapshots).toBe(true);
+    expect(warnings[0]).toContain("ignored hooks, mcpServers, formatter, lsp, snapshots, memory, disabledPlugins");
+  });
+
+  test("user layers configure MCP servers, formatters and language servers", async () => {
+    await put(paths.user, {
+      mcpServers: { github: { command: "gh-mcp", args: ["--stdio"] }, docs: { type: "http", url: "https://docs.example/mcp" } },
+      formatter: { deno: { command: ["deno", "fmt", "$FILE"], extensions: [".md"] } },
+      lsp: true,
+      disabledPlugins: ["noisy"],
+    });
+    const { settings } = await loadSettings(paths);
+    expect(Object.keys(settings.mcpServers)).toEqual(["github", "docs"]);
+    expect(settings.formatter).toEqual({ deno: { command: ["deno", "fmt", "$FILE"], extensions: [".md"] } });
+    expect(settings.lsp).toBe(true);
+    expect(settings.disabledPlugins).toEqual(["noisy"]);
+  });
+
+  test("invalid hook and server shapes are reported", async () => {
+    await put(paths.user, { hooks: { Nope: [] } });
+    await expect(loadSettings(paths)).rejects.toThrow(SettingsError);
+    await put(paths.user, { mcpServers: { "bad name": { command: "x" } } });
+    await expect(loadSettings(paths)).rejects.toThrow("mcpServers.bad name");
+    await put(paths.user, { mcpServers: { github__x: { command: "x" } } });
+    await expect(loadSettings(paths)).rejects.toThrow("mcpServers.github__x");
+    await put(paths.user, { formatter: { x: { command: ["x"], extensions: ["md"] } } });
+    await expect(loadSettings(paths)).rejects.toThrow("extensions start with a dot");
+  });
+});
+
 describe("addLocalAllowRule", () => {
   test("creates the file and directory", async () => {
     await addLocalAllowRule(paths.local, "Bash(bun test:*)");

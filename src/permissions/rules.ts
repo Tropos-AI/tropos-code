@@ -20,7 +20,7 @@ export interface Rule {
   pattern?: string;
 }
 
-const RULE_RE = /^([A-Za-z][A-Za-z0-9_]*)(?:\((.*)\))?$/s;
+const RULE_RE = /^([A-Za-z][A-Za-z0-9_-]*\*?)(?:\((.*)\))?$/s;
 
 export function parseRule(text: string): Rule {
   const match = RULE_RE.exec(text.trim());

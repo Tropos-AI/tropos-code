@@ -3,7 +3,7 @@ import type { Message, Model, StreamHandlers, TurnRequest } from "../api/model";
 import type { Effort } from "../config/constants";
 import { clampEffort } from "./registry";
 import type { MessageParam } from "../session/store";
-import { toInputSchema } from "../tools/schema";
+import { toolInputSchema } from "../tools/schema";
 import type { AnyTool } from "../tools/types";
 import { MalformedToolCallError, safeToolId, sseJson } from "./chat";
 import { ProviderError, postWithEffortFallback, type ChatEndpoint } from "./chat-model";
@@ -61,7 +61,7 @@ export function toResponsesInput(history: MessageParam[]): ResponsesInputItem[] 
 }
 
 export function toResponsesTools(tools: AnyTool[]): Array<Record<string, unknown>> {
-  return tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: toInputSchema(t.schema), strict: false }));
+  return tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: toolInputSchema(t), strict: false }));
 }
 
 /** Per-provider Responses options. */

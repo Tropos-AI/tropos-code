@@ -22,6 +22,8 @@ export interface PermissionRequest {
   kind: ToolKind;
   command?: string;
   paths: string[];
+  /** Matched by rule patterns for tools without paths or a command (WebFetch domains, skill names). */
+  target?: string;
 }
 
 export interface PermissionRules {
@@ -63,8 +65,21 @@ export function compileRules(cfg: { allow: string[]; ask: string[]; deny: string
   return { rules: { allow: compile(cfg.allow), ask: compile(cfg.ask), deny: compile(cfg.deny) }, invalid };
 }
 
+/** `mcp__github` covers every tool of that server; `mcp__github__*` (any name ending in `*`) is a prefix. */
+function toolNameMatches(ruleTool: string, toolName: string): boolean {
+  if (ruleTool === toolName) return true;
+  if (ruleTool.endsWith("*")) return toolName.startsWith(ruleTool.slice(0, -1));
+  return /^mcp__[^_]/.test(ruleTool) && !ruleTool.slice(5).includes("__") && toolName.startsWith(`${ruleTool}__`);
+}
+
+/** Glob match of a rule pattern against a target: `*` matches anything; case-insensitive (domains, names). */
+export function targetPatternMatches(pattern: string, target: string): boolean {
+  const re = new RegExp(`^${pattern.split("*").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "is");
+  return re.test(target);
+}
+
 function toolMatches(rule: Rule, req: PermissionRequest): boolean {
-  if (rule.tool === req.toolName) return true;
+  if (toolNameMatches(rule.tool, req.toolName)) return true;
   if (rule.tool === "Edit" && req.kind === "edit") return true;
   if (rule.tool === "Read" && req.kind === "read") return true;
   return false;
@@ -94,6 +109,7 @@ function ruleHits(
     const hit = (p: string) => bashPatternMatches(rule.pattern!, p, { restrict, budget });
     return mode === "any" ? parts.some(hit) : parts.length > 0 && parts.every(hit);
   }
+  if (req.target !== undefined) return targetPatternMatches(rule.pattern, req.target);
   if (req.paths.length === 0) return false;
   const hit = (p: string) => pathPatternMatches(rule.pattern!, p, ctx.cwd, ctx.home, { restrict });
   return mode === "any" ? req.paths.some(hit) : req.paths.every(hit);
@@ -196,6 +212,9 @@ export function suggestRule(req: PermissionRequest, cwd: string): string | undef
     }
     return `${req.toolName}(${commandPrefix(part)}:*)`;
   }
+  // A target with "*" would suggest a wildcard rule; parentheses would end the rule early.
+  if (req.target !== undefined) return /[*()]/.test(req.target) ? undefined : `${req.toolName}(${req.target})`;
+  if (req.kind === "exec" && req.paths.length === 0) return req.toolName;
   if (req.kind === "edit" && req.paths.length > 0) {
     const dir = dirname(req.paths[0]!);
     if (!isInside(dir, cwd)) return undefined;

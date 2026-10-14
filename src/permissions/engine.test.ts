@@ -342,3 +342,36 @@ describe("decide — bounded work", () => {
     expect(decide(bash("sudo rm -rf build"), c).behavior).toBe("deny");
   });
 });
+
+describe("decide — targets, network and MCP tools", () => {
+  const fetchReq = (domain: string): PermissionRequest => ({ toolName: "WebFetch", kind: "net", paths: [], target: `domain:${domain}` });
+  const mcp = (name: string): PermissionRequest => ({ toolName: name, kind: "exec", paths: [] });
+
+  test("network tools ask with a target rule suggestion, even in acceptEdits", () => {
+    expect(decide(fetchReq("bun.sh"), ctx({ mode: "acceptEdits" }))).toEqual({ behavior: "ask", suggestion: "WebFetch(domain:bun.sh)" });
+  });
+  test("network tools may run in plan mode", () => {
+    expect(decide(fetchReq("bun.sh"), ctx({ mode: "plan", allow: ["WebFetch(domain:bun.sh)"] }))).toEqual({ behavior: "allow" });
+  });
+  test("target patterns glob and ignore case", () => {
+    expect(decide(fetchReq("Docs.Python.org"), ctx({ allow: ["WebFetch(domain:*.python.org)"] }))).toEqual({ behavior: "allow" });
+    expect(decide(fetchReq("python.org.evil.com"), ctx({ allow: ["WebFetch(domain:*.python.org)"] })).behavior).toBe("ask");
+    expect(decide(fetchReq("x.io"), ctx({ allow: ["WebFetch"], deny: ["WebFetch(domain:x.io)"] })).behavior).toBe("deny");
+  });
+  test("a bare rule allows every target", () => {
+    expect(decide(fetchReq("x.io"), ctx({ allow: ["WebFetch"] }))).toEqual({ behavior: "allow" });
+  });
+  test("a server rule covers all of its tools, and a trailing * is a prefix", () => {
+    expect(decide(mcp("mcp__github__create_issue"), ctx({ allow: ["mcp__github"] }))).toEqual({ behavior: "allow" });
+    expect(decide(mcp("mcp__github__create_issue"), ctx({ allow: ["mcp__github__*"] }))).toEqual({ behavior: "allow" });
+    expect(decide(mcp("mcp__githubx__a"), ctx({ allow: ["mcp__github"] })).behavior).toBe("ask");
+    expect(decide(mcp("mcp__github__delete_repo"), ctx({ allow: ["mcp__github"], deny: ["mcp__github__delete_*"] })).behavior).toBe("deny");
+  });
+  test("a target with a wildcard or parenthesis gets no rule suggestion", () => {
+    expect(decide(fetchReq("*"), ctx())).toEqual({ behavior: "ask" });
+    expect(decide({ toolName: "Skill", kind: "net", paths: [], target: "a)b" }, ctx())).toEqual({ behavior: "ask" });
+  });
+  test("an exec tool without command or paths suggests its own name", () => {
+    expect(decide(mcp("mcp__db__query"), ctx())).toEqual({ behavior: "ask", suggestion: "mcp__db__query" });
+  });
+});
