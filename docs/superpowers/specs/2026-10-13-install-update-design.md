@@ -1,6 +1,6 @@
 # Tropos Code — Install and Update System — Design Spec
 
-**Date:** 2026-10-13 · **Owner:** Tropos Labs · **Status:** Sections 1–4 approved in conversation; revision 2 addresses the eight written-spec review issues; revision 3 records the infrastructure spike (decisions D1–D6, P1–P2; [results](2026-10-13-install-update-spike-results.md)) and the plan's amendments A1–A12 (Appendix B); pending approval
+**Date:** 2026-10-13 · **Owner:** Tropos Labs · **Status:** Sections 1–4 approved in conversation; revision 2 addresses the eight written-spec review issues; revision 3 records the infrastructure spike (decisions D1–D6, P1–P2; [results](2026-10-13-install-update-spike-results.md)) and the plan's amendments A1–A12; revision 4 records the implementation, the key ceremony, the release dry run and the first release (Appendix B); approved by the owner 2026-10-14
 
 ## 1. Purpose
 
@@ -415,14 +415,16 @@ nothing and is simply re-run, because `promote.ts` is convergent (§7.4).
 7. **smoke-public** (6 platforms, `contents: read`) —
    a. `curl -fsSL …/releases/download/v<x>/install.sh | sh -s <x>` on a clean `HOME`, then
       `tropos install <x>` must succeed as a no-op;
-   b. **old installer:** download `install.sh` from GitHub's current latest release (the
-      previous version) and run `sh install.sh <x>` on a clean `HOME`;
+   b. **old installer:** download `install.sh` from the release currently promoted to
+      `channels/latest` (the previous version; promotion makes it GitHub latest) and run
+      `sh install.sh <x>` on a clean `HOME`;
    c. **old binary:** on a clean `HOME`, install the version in `channels/stable` with its own
       installer, then run that binary's `tropos install <x>`.
-   All must end with `tropos --version` printing `<x> (Tropos Code)`. b is skipped when GitHub
-   reports no latest release or reports `v<x>` itself (for a repository's first release the API
-   already does so although it was published with `--latest=false` — spike, D6a); c is skipped
-   when the `channels` release does not exist yet.
+   All must end with `tropos --version` printing `<x> (Tropos Code)`. b is skipped when nothing
+   is promoted yet or `channels/latest` already holds `x` (a resumed run). It reads `channels`,
+   not GitHub's latest flag, because the API can name a release published with `--latest=false`
+   as latest (spike D6a for a first release; the dry run saw it again for a second release,
+   revision 4). c is skipped when the `channels` release does not exist yet.
 8. **promote-latest** (environment `channels-write`, `contents: write` on
    `Tropos-AI/tropos-code`) — `scripts/release/promote.ts latest <x>` from the `main` checkout
    (§7.4), writing to `Tropos-AI/tropos-code-channels` with `CHANNELS_WRITE_TOKEN` and marking
@@ -454,7 +456,12 @@ error instead of overwriting.
    `version` and `commit`, skip; if present with different values, fail.
 5. **Write slots:** `latest.bak := x`, read back until it returns `x` (bounded retries: up to
    10 reads, 3 s apart — spike, D6); then `latest := x`, read back. Each write is skipped if
-   the slot already holds `x`.
+   the slot already holds `x`. `promote.ts` reads every asset through the REST API (by asset
+   id), never through `github.com/…/releases/download`: that route's edge cache serves a 404
+   for about 70 s after an asset first appears and a replaced asset's old bytes for about 110 s
+   (release dry run, revision 4). Clients use the public route and may therefore see the
+   previous pointer for about two minutes after a promotion; they never act on it unsafely
+   (signed manifests, no automatic downgrades).
 6. **First-release stable:** if neither `stable` nor `stable.bak` exists, write them the same way
    with `x` (§7.5).
 7. **GitHub latest** (on `Tropos-AI/tropos-code`): GitHub latest counts as `v<x>` only when
@@ -635,7 +642,9 @@ every write. State is never trusted for integrity: every switch target is re-ver
 stored signed manifest.
 
 **Existing installs** from the local-build script (versions without a stored manifest) are
-*unmanaged*: never deleted automatically, never a rollback target, and replaced by `update`.
+*unmanaged*: never deleted automatically, never a rollback target, and replaced by `update` only
+with a strictly higher version (the running version is the floor when `current` is unset); the
+background updater does nothing while an unmanaged build is running (revision 4).
 When an install needs the name `versions/<v>` that an unmanaged file occupies, the file is
 renamed to `versions/.unmanaged-<v>-<ts>`, not quarantined (§10.3 step 3).
 
@@ -674,6 +683,11 @@ renamed to `versions/.unmanaged-<v>-<ts>`, not quarantined (§10.3 step 3).
   for this machine's platform.
 - **Healthy(v):** Verified(v), and `versions/<v> --version` (10 s timeout, §11 environment
   allow-list) exits 0 printing exactly `<v> (Tropos Code)\n`.
+- **Health-check outcomes** (revision 4): *ok*; *bad* — it ran and exited non-zero or printed
+  anything else; *unknown* — it could not run (spawn error such as EAGAIN/ENOMEM/EMFILE, or the
+  timeout), retried once. Only *bad* is evidence of a broken release: an *unknown* check never
+  records a skip, never switches away from or removes a Verified version, and fails the command
+  as transient (`busy`, exit 75).
 - **Activation rule:** `bin/tropos` is only ever pointed at a version that is Healthy at that
   moment — by install, rollback and recovery alike.
 - **Immutability rule:** an existing `versions/<v>` is never overwritten in place. It is renamed
@@ -715,14 +729,17 @@ renamed to `versions/.unmanaged-<v>-<ts>`, not quarantined (§10.3 step 3).
    exist at this point, by step 3), `fsync` the directory. A crash between the two leaves a
    manifest without a binary, which cleanup removes, never a binary without a manifest (which
    would look unmanaged). Release any `<v>.lock` taken in step 3.
-6. **Health check:** Healthy(v). Failure → `skip[v] = "health-check"`, `integrity` error
-   "release <v> does not run on this machine"; `bin/tropos` untouched.
+6. **Health check:** Healthy(v). *bad* → `skip[v] = "health-check"`, `integrity` error
+   "release <v> does not run on this machine"; *unknown* → no skip, transient error (exit 75);
+   `bin/tropos` untouched either way.
 7. **Switch:** write `pending = {from: current (or null), to: v}`; create
    `bin/.tropos.<random>` → `versions/<v>`; `rename` it over `bin/tropos`; `fsync` `bin/`. This
    also runs when `v` is already current (an atomic no-op re-link).
 8. **Post-switch check:** `realpath(bin/tropos)` equals `versions/<v>` and running it through
-   `bin/tropos` passes the health check. Otherwise switch back to `from` if it is Healthy, else
-   to the §10.6 fallback, else remove `bin/tropos`; record the skip; `integrity` error.
+   `bin/tropos` passes the health check. On *bad*: switch back to `from` if it is Healthy, else
+   to the §10.6 fallback, else remove `bin/tropos` (foreground only); record the skip;
+   `integrity` error. On *unknown*: `v` stays linked and becomes `current` (it is Verified and
+   passed step 6); exit 75 "the health check could not be run; <v> stays active".
 9. **State:** `current = v`; `previous = from` when `from` is a different version (otherwise
    unchanged); `pending = null`.
 10. Cleanup (§10.5); release the install lock.
@@ -785,7 +802,11 @@ touched.
 ### 10.6 Recovery
 
 Runs under the install lock at the start of `install`, `update`, `rollback` and the background
-updater. It never activates a version that is not Healthy (§10.2).
+updater. It never activates a version that is not Healthy (§10.2). It acts only on a version
+that is not Verified or whose health check is *bad*: when a check is *unknown* it re-links that
+version if needed and reports the condition, never falls back to an older one; and a background
+run never removes `bin/tropos` (revision 4). Every recovery action is logged to `update.log` in
+background runs.
 
 **Fallback selection** returns the first Healthy version from: `current`, `pending.to`,
 `pending.from`, `previous`, then the remaining managed versions newest first, excluding those
@@ -1078,3 +1099,32 @@ Spike evidence and the decision table: [2026-10-13-install-update-spike-results.
 | P1 | `workflow_run` payload fields and artifact digest confirmed; `main`-restricted environments accept `workflow_run` jobs | §6, §7.3 step 1 |
 | P2 | A `contents: read` token cannot see drafts | §7.3 step 4 |
 | — | §16 now records the spike's answers instead of the questions | §16 |
+
+### Revision 4: implementation, key ceremony, release dry run, first release (approved 2026-10-14)
+
+Implemented on `feat/install-update` (merged to `main` as PRs #1 and #2) through 30 plan tasks, per-task reviews and a final whole-branch review. Changes against revision 3:
+
+| # | Change | Where |
+|---|---|---|
+| R4-1 | Health checks have three outcomes (ok / bad / unknown); only *bad* records a skip or makes recovery act; *unknown* fails as transient (75) and keeps a Verified version active; background runs never remove `bin/tropos` and log every recovery action | §10.2, §10.3 steps 6 and 8, §10.6 |
+| R4-2 | `install`/`update`/`rollback` hold the shared in-use lock on the running version (as §10.1 already required; was missing for subcommands) | §10.1 |
+| R4-3 | Automatic and channel updates never go below the running version when `current` is unset; background updates skip an unmanaged running build; the background updater stops on a fatal recovery result (A11) | §9, §11 |
+| R4-4 | `promote.ts` reads assets through the API; GitHub's download edge cache makes the public route stale for 1–2 minutes (probed in the dry run) | §7.4 step 5 |
+| R4-5 | Smoke gate b takes the old installer from `channels/latest`, not GitHub's latest flag | §7.3 step 7 |
+| R4-6 | Release jobs run setup-bun with `no-cache: true` and an empty token; musl Bun zips are checked against pinned SHA-256s; privileged jobs run only allow-listed commands and actions, with no `${{ }}` in `run:` | §6.2, §7.1–7.3 |
+| R4-7 | Key ceremony done (A5 closed): `release/allowed_signers` and `install.sh` pin `tropos-release`, fingerprint `SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8`; private key only in the `release-signing` secret and the owner's offline backup | §4.2, §6 |
+| R4-8 | Repository setup: environments `release-signing` and `channels-write` (deployments from `main` only, owner as required reviewer; self-review allowed and no required pull-request approvals while the owner is the only maintainer — enable both when maintainers join); release immutability on `tropos-code`; tag ruleset `v*` (creation by admins, no update/deletion); `main` ruleset (no deletion, no force-push); `Tropos-AI/tropos-code-channels` public | §6, `docs/install.md` |
+
+**Release dry run** (throwaway repositories `Tropos-AI/tropos-release-dryrun` and `-channels` with a throwaway key, 2026-10-13/14; repositories deleted afterwards, so run links no longer resolve):
+
+| Step | Expected | Actual |
+|---|---|---|
+| v0.0.1: release-build, release | 6/6 build+test; approval; draft; smoke-draft 6/6; publish; smoke-public a; promote | All green except promote-latest: read-back failed (edge cache) → R4-4; resumed by `workflow_dispatch` → green; slots and GitHub latest `0.0.1` |
+| Public installs of 0.0.1 | `curl … | sh` verifies and installs on clean machines | macOS arm64, Alpine arm64 (musl), Ubuntu arm64: installed, `--version` correct; `latest` and `stable` routes work |
+| v0.0.2 | b and c run | c ran 6/6; b skipped (API called v0.0.2 latest) → R4-5 |
+| `tropos update` on 0.0.1 machines | moves to 0.0.2 | macOS and Alpine moved; `rollback` → 0.0.1 with skip notice; `update` reports the skip; `install 0.0.2` works |
+| `promote` 0.0.2, `channels-health` | `stable`/`stable.bak` = 0.0.2; green | as expected |
+| v0.0.3 (after R4-5) | a, b, c all run | a/b/c green on 6/6 |
+| Failure drill, interruption drill | broken release stays a draft; re-run is a no-op | not run as separate drills; the v0.0.1 resume showed convergence over a published immutable release |
+
+**First release:** `v0.1.0` on `main` (`aef8e6b`), 2026-10-14 — release-build 6/6, release all green; channels `latest`/`stable` (and `.bak`) = `0.1.0`; GitHub latest `v0.1.0`; release immutable, 16 assets; `install.sh.sig` verifies with the pinned key; `curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh` installs 0.1.0 on macOS arm64, Alpine arm64 and Ubuntu arm64.
