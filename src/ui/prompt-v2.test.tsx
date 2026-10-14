@@ -10,8 +10,9 @@ import { BUSY_PLACEHOLDER, lineSegments, PLACEHOLDER, PromptInput } from "./Prom
 import type { SuggestCommand } from "./suggest";
 import { Suggestions, truncate } from "./Suggestions";
 import { DARK } from "./theme";
+import { settle } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const ESC = "\x1b";

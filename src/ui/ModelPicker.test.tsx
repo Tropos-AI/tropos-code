@@ -6,8 +6,9 @@ import type { ProviderInfo } from "../providers/registry";
 import type { ProviderStatus } from "../providers/router";
 import { ModelPicker } from "./ModelPicker";
 import type { ModelPrefsControl, ProviderControl } from "./runtime";
+import { settle, waitFor } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const RIGHT = "\x1b[C";
@@ -124,18 +125,16 @@ describe("ModelPicker", () => {
     let resolve!: (m: string[]) => void;
     const slow = new Promise<string[]>((res) => (resolve = res));
     const { r } = open({ models: { ...MODELS, deepseek: slow } });
-    await tick();
-    expect(r.lastFrame()).toContain("Loading…");
+    await waitFor(() => expect(r.lastFrame()).toContain("Loading…"));
     resolve(["deepseek-chat"]);
-    await tick();
-    expect(r.lastFrame()).not.toContain("Loading…");
+    await waitFor(() => expect(r.lastFrame()).not.toContain("Loading…"));
     expect(r.lastFrame()).toContain("deepseek-chat");
   });
 
   test("Favorites and Recent come first, with the provider as an aside", async () => {
     const { prefs } = fakePrefs({ recent: ["deepseek/deepseek-chat", "claude-opus-5-5"], favorites: ["claude-opus-5-5"] });
     const { r } = open({ prefs });
-    await tick();
+    await waitFor(() => expect(r.lastFrame()).toContain("· DeepSeek"));
     const lines = r.lastFrame()!.split("\n");
     const at = (text: string) => lines.findIndex((l) => l.includes(text));
     expect(at("Favorites")).toBeGreaterThan(-1);
@@ -228,21 +227,16 @@ describe("ModelPicker", () => {
   test("ctrl+f toggles a favorite and the list refreshes; ctrl+a asks to connect", async () => {
     const { prefs, log } = fakePrefs();
     const { r, calls } = open({ prefs });
-    await tick();
+    await waitFor(() => expect(selectedLine(r.lastFrame()!)).toContain("claude-opus-5-5"));
     expect(r.lastFrame()).not.toContain("Favorites");
     r.stdin.write(ctrl("f"));
-    await tick();
-    await tick();
+    await waitFor(() => expect(r.lastFrame()).toContain("Favorites"));
     expect(log).toEqual(["fav claude-opus-5-5"]);
-    expect(r.lastFrame()).toContain("Favorites");
     expect(selectedLine(r.lastFrame()!)).toContain("claude-opus-5-5");
     r.stdin.write(ctrl("f"));
-    await tick();
-    await tick();
-    expect(r.lastFrame()).not.toContain("Favorites");
+    await waitFor(() => expect(r.lastFrame()).not.toContain("Favorites"));
     r.stdin.write(ctrl("a"));
-    await tick();
-    expect(calls.connect).toBe(1);
+    await waitFor(() => expect(calls.connect).toBe(1));
   });
 
   test("a failing prefs store doesn't block picking", async () => {
@@ -252,12 +246,11 @@ describe("ModelPicker", () => {
       toggleFavorite: async () => Promise.reject(new Error("disk")),
     };
     const { r, picked } = open({ prefs });
-    await tick();
+    await waitFor(() => expect(selectedLine(r.lastFrame()!)).toContain("claude-opus-5-5"));
     r.stdin.write(ctrl("f"));
     await tick();
     r.stdin.write(ENTER);
-    await tick();
-    expect(picked).toEqual([["claude-opus-5-5", "high"]]);
+    await waitFor(() => expect(picked).toEqual([["claude-opus-5-5", "high"]]));
   });
 
   test("a provider status failure is shown", async () => {

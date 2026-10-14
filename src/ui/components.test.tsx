@@ -11,8 +11,9 @@ import { SessionPicker } from "./SessionPicker";
 import { ToolRow } from "./ToolRow";
 import { TodoList } from "./TodoList";
 import { TranscriptRow } from "./TranscriptRow";
+import { settle } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const armed = () => Bun.sleep(ANSWER_GRACE_MS + 60);
 
 describe("BrandHeader", () => {

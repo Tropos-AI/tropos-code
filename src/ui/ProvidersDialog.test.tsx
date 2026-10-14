@@ -5,8 +5,9 @@ import type { ProviderInfo } from "../providers/registry";
 import type { ProviderStatus } from "../providers/router";
 import { ProvidersDialog } from "./ProvidersDialog";
 import type { ProviderControl } from "./runtime";
+import { settle } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const DOWN = "\x1b[B";
 const ENTER = "\r";
 const ESC = "\x1b";

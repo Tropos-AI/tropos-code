@@ -3,19 +3,19 @@ import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { fakeRuntime, type SavedSession } from "../../test/helpers/fake-runtime";
+import { settle, waitFor } from "../../test/helpers/wait";
 import { App } from "./App";
 import { ANSWER_GRACE_MS } from "./PermissionDialog";
 
-const tick = (ms = 40) => Bun.sleep(ms);
+const tick = (ms = 40) => settle(ms);
 const all = (r: ReturnType<typeof render>) => r.frames.join("\n");
 
 describe("App", () => {
   test("header and status bar", async () => {
     const r = render(<App runtime={fakeRuntime([])} />);
-    await tick();
+    await waitFor(() => expect(r.lastFrame()).toContain("❯ Ask Tropos"));
     expect(all(r)).toContain("Tropos Code");
     expect(r.lastFrame()).toContain("? for shortcuts");
-    expect(r.lastFrame()).toContain("❯ Ask Tropos");
   });
 
   test("a prompt gets a streamed answer", async () => {
@@ -181,10 +181,13 @@ describe("App", () => {
 
   test("long live text is clipped to its tail; the finished text is shown in full", async () => {
     const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+    // The reply stays open until the test has looked at the live frame (no race with a fixed delay).
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => (finish = resolve));
     const runtime = fakeRuntime([
       async (_req, handlers) => {
         handlers.onText(lines.join("\n"));
-        await Bun.sleep(300);
+        await gate;
         return reply([textBlock("")]);
       },
     ]);
@@ -193,13 +196,14 @@ describe("App", () => {
     r.stdin.write("go");
     await tick();
     r.stdin.write("\r");
-    await tick(150);
+    await waitFor(() => expect(r.lastFrame()).toContain("earlier lines"));
     const live = r.lastFrame()!;
     expect(live).toContain("earlier lines");
     expect(live).toContain("line 100");
     expect(live).not.toContain("line 1\n");
     expect(live.split("\n").filter((l) => /line \d+/.test(l)).length).toBeLessThanOrEqual(30);
-    await tick(400);
+    finish();
+    await tick(100);
     expect(all(r)).toContain("line 1");
     expect(all(r)).toContain("line 50");
   });

@@ -4,8 +4,9 @@ import { render } from "ink-testing-library";
 import type { PermissionPrompt } from "../agent/events";
 import { ANSWER_GRACE_MS, PermissionDialog, permissionTitle } from "./PermissionDialog";
 import { DARK } from "./theme";
+import { settle } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const armed = () => Bun.sleep(ANSWER_GRACE_MS + 60);
 const TAB = "\t";
 const DOWN = "\x1b[B";
