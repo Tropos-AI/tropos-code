@@ -3,10 +3,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement, useState } = await import("react");
 const { Composer } = await import("@/components/chat/Composer");
-const { connectedStore, withProviders, wait, IDLE } = await import("@/components/chat/chat-test-kit");
+const { connectedStore, withProviders, IDLE } = await import("@/components/chat/chat-test-kit");
 const { ui } = await import("@/lib/ui-store");
 
 afterEach(() => {
@@ -104,7 +104,8 @@ describe("Composer", () => {
   test("@ suggests files from the server and inserts the chosen path", async () => {
     const { socket, box, type, key } = mount({ completeFile: () => ["@web/src/", "@web/vite.config.ts"] });
     type("look at @we");
-    await act(() => wait(150));
+    // The lookup is debounced (90 ms) and answered over the socket: poll for the list instead of sleeping past it.
+    await waitFor(() => expect(screen.queryAllByRole("option").length).toBe(2), { timeout: 3000 });
     expect(socket.rpcs("completeFile")[0]?.params).toEqual({ token: "@we" });
     const options = screen.getAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual(["web/src/", "web/vite.config.ts"]);

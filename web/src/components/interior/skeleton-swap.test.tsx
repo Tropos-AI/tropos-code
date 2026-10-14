@@ -43,10 +43,12 @@ describe("SkeletonSwap", () => {
   });
 
   test("a load that finishes before the delay never flashes the skeleton", async () => {
-    const view = render(createElement(SkeletonSwap, { ready: false, delay: 40, skeleton: createElement("p", null, "Custom placeholder"), children: "Body" }));
+    // Far above the few ms before the load lands, even on a loaded machine; the wait after it goes past the delay.
+    const delay = 300;
+    const view = render(createElement(SkeletonSwap, { ready: false, delay, skeleton: createElement("p", null, "Custom placeholder"), children: "Body" }));
     await act(() => wait(5));
-    view.rerender(createElement(SkeletonSwap, { ready: true, delay: 40, skeleton: createElement("p", null, "Custom placeholder"), children: "Body" }));
-    await act(() => wait(60));
+    view.rerender(createElement(SkeletonSwap, { ready: true, delay, skeleton: createElement("p", null, "Custom placeholder"), children: "Body" }));
+    await act(() => wait(delay + 100));
     expect(screen.queryByText("Custom placeholder")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });

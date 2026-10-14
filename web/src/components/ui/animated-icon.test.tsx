@@ -4,15 +4,22 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement, createRef } = await import("react");
 const { AnimatedIcon, CojeevIcon, StateChevron, isKnownIcon } = await import("@/components/ui/animated-icon");
 const { ICON_NAMES } = await import("@/components/ui/icon-names");
 const { frameData, frameSteps } = await import("motion");
 
 const wait = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-/** Long enough for the shortest (80 ms) motion to finish. */
+/** Lets the shortest (80 ms) motions run, where nothing is asserted on how far they got. */
 const SETTLE = 200;
+/**
+ * The duration (s) of motions a test checks while they play: far above timer jitter, so "still playing" right after the
+ * trigger holds on a loaded CI machine. Whether a motion has painted or finished is polled (`until`), never slept on.
+ */
+const MOTION_S = 0.4;
+/** Retries until the frame loop or a timer has done its work (up to 3 s). Keep assertions cheap: it may run many times. */
+const until = (assertion: () => void) => waitFor(assertion, { timeout: 3000 });
 
 const STEPS = ["setup", "read", "resolveKeyframes", "preUpdate", "update", "preRender", "render", "postRender"] as const;
 
@@ -148,7 +155,7 @@ describe("CojeevIcon", () => {
 
 describe("icon feedback from the owning control", () => {
   function mount(name: string, extra: Record<string, unknown> = {}, wrap: "button" | "label" = "button") {
-    const icon = createElement(CojeevIcon, { name, feedbackDuration: 0.08, ...extra });
+    const icon = createElement(CojeevIcon, { name, feedbackDuration: MOTION_S, ...extra });
     const view =
       wrap === "label"
         ? render(createElement("label", null, createElement("input", { type: "checkbox", "aria-label": "agree" }), icon, "Agree"))
@@ -164,11 +171,10 @@ describe("icon feedback from the owning control", () => {
 
     await act(async () => void fireEvent.pointerEnter(control, { pointerType: "mouse" }));
     expect(svg.dataset.iconFeedback).toBe("hover");
-    await act(() => wait(40));
-    expect(svg.querySelector("[data-icon-part='0']")!.getAttribute("transform")).toMatch(/^translate\(/);
-    await act(() => wait(SETTLE));
-    expect(svg.dataset.iconFeedback).toBeUndefined();
-    expect(svg.querySelector("[data-icon-part='0']")!.hasAttribute("transform")).toBe(false);
+    const part = () => svg.querySelector("[data-icon-part='0']")!;
+    await until(() => expect(/^translate\(/.test(part().getAttribute("transform") ?? "")).toBe(true));
+    await until(() => expect(svg.dataset.iconFeedback).toBeUndefined());
+    expect(part().hasAttribute("transform")).toBe(false);
 
     await act(async () => void fireEvent.pointerEnter(control, { pointerType: "mouse" }));
     await act(async () => void fireEvent.pointerLeave(control));
@@ -195,10 +201,9 @@ describe("icon feedback from the owning control", () => {
       fireEvent.keyUp(control, { key: "Enter" });
       fireEvent.click(control);
     });
-    await act(() => wait(40));
     // The draw motion dashes the check stroke while it plays.
-    expect(svg.querySelector("path")!.getAttribute("stroke-dasharray")).not.toBeNull();
-    await act(() => wait(SETTLE));
+    await until(() => expect(svg.querySelector("path")!.hasAttribute("stroke-dasharray")).toBe(true));
+    await until(() => expect(svg.dataset.iconFeedback).toBeUndefined());
 
     await act(async () => void fireEvent.click(control));
     expect(svg.dataset.iconFeedback).toBe("press");
@@ -234,7 +239,7 @@ describe("icon feedback from the owning control", () => {
     const { control, svg, view } = mount("bell", { feedbackEase: [0.2, 0.8, 0.2, 1] }, "label");
     await act(async () => void fireEvent.pointerEnter(control, { pointerType: "mouse" }));
     expect(svg.dataset.iconFeedback).toBe("hover");
-    await act(() => wait(SETTLE));
+    await until(() => expect(svg.dataset.iconFeedback).toBeUndefined());
     (view.container.querySelector("input") as HTMLInputElement).disabled = true;
     await act(async () => void fireEvent.pointerEnter(control, { pointerType: "mouse" }));
     expect(svg.dataset.iconFeedback).toBeUndefined();
@@ -247,10 +252,9 @@ describe("icon feedback from the owning control", () => {
     cleanup();
 
     const drawn = render(createElement(CojeevIcon, { name: "check", draw: true }));
-    await act(() => wait(60));
-    expect(svgOf(drawn.container).querySelector("path")!.getAttribute("stroke-dashoffset")).not.toBeNull();
-    await act(() => wait(600));
-    expect(svgOf(drawn.container).querySelector("path")!.hasAttribute("stroke-dashoffset")).toBe(false);
+    const stroke = () => svgOf(drawn.container).querySelector("path")!;
+    await until(() => expect(stroke().hasAttribute("stroke-dashoffset")).toBe(true));
+    await until(() => expect(stroke().hasAttribute("stroke-dashoffset")).toBe(false));
   });
 });
 
@@ -288,13 +292,13 @@ describe("AnimatedIcon", () => {
     expect(icons.map((el) => el.getAttribute("data-preset"))).toEqual([...presets, "semantic", "none", "semantic", "semantic"]);
     expect(icons[7]!.hasAttribute("data-animated")).toBe(false);
     expect(icons[8]!.hasAttribute("data-animated")).toBe(false);
-    await act(() => wait(40));
-    expect(icons[1]!.querySelector("[data-icon-part=glyph]")!.getAttribute("transform")).toMatch(/^rotate\(/);
+    // Spin loops while active, so once a frame has painted it stays rotated.
+    await until(() => expect(/^rotate\(/.test(icons[1]!.querySelector("[data-icon-part=glyph]")!.getAttribute("transform") ?? "")).toBe(true));
     await act(() => wait(SETTLE));
   });
 
   test("hover, focus, presses and clicks replay the motion inside a control", async () => {
-    render(createElement("button", { type: "button" }, createElement(AnimatedIcon, { name: "send", duration: 0.08 }), "Send"));
+    render(createElement("button", { type: "button" }, createElement(AnimatedIcon, { name: "send", duration: MOTION_S }), "Send"));
     const button = screen.getByRole("button");
     const host = button.querySelector("[data-slot=animated-icon]")!;
     const animated = () => host.getAttribute("data-animated") === "true";
@@ -324,8 +328,7 @@ describe("AnimatedIcon", () => {
     });
     expect(host.getAttribute("data-icon-replay")).toBe("1");
     expect(animated()).toBe(true);
-    await act(() => wait(SETTLE));
-    expect(animated()).toBe(false);
+    await until(() => expect(animated()).toBe(false));
 
     // A cancelled press, then a bare click (e.g. assistive tech) replays.
     await act(async () => {

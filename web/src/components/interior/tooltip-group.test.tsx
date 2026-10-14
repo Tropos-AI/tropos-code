@@ -5,7 +5,7 @@ import type { HTMLAttributes, ReactElement } from "react";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement, Fragment } = await import("react");
 const { Tooltip, TooltipGroup } = await import("@/components/interior/tooltip-group");
 
@@ -18,7 +18,18 @@ afterEach(() => {
 
 const fire = (fn: () => void) => act(async () => void fn());
 const tip = () => screen.queryByRole("tooltip");
-const timing = { openDelay: 20, closeDelay: 10, skipDelay: 40 };
+/**
+ * Delays far above timer jitter on a loaded CI machine: a check made right after an event ("not open yet", "still
+ * warm") stays true for hundreds of ms, and waits for a timer to fire poll (`until`) instead of sleeping a fixed time.
+ */
+const timing = { openDelay: 200, closeDelay: 150, skipDelay: 600 };
+/** Past the open delay, so a pending open would have fired (timers never run early): for "it never opens" checks. */
+const PAST_OPEN = timing.openDelay + 100;
+/** Retries until a timer has fired and rendered (up to 3 s), instead of a fixed sleep that flakes under load. */
+const until = (assertion: () => void) => waitFor(assertion, { timeout: 3000 });
+// Boolean checks: a failing expect() on an element pretty-prints the element, which is slow in a polling loop.
+const opened = () => until(() => expect(tip() !== null).toBe(true));
+const closed = () => until(() => expect(tip() === null).toBe(true));
 
 function button(name: string, extra: HTMLAttributes<HTMLElement> & { "aria-describedby"?: string } = {}): ReactElement<HTMLAttributes<HTMLElement>> {
   return createElement("button", { type: "button", ...extra }, name);
@@ -34,7 +45,7 @@ describe("Tooltip (solo)", () => {
     expect(tip()).toBeNull();
     // A second enter while the first is pending just restarts the wait.
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 10 }));
-    await act(() => wait(40));
+    await opened();
     const tooltip = tip()!;
     expect(tooltip.textContent).toBe("Save file");
     expect(trigger.getAttribute("aria-describedby")).toBe(`hint ${tooltip.id}`);
@@ -43,8 +54,7 @@ describe("Tooltip (solo)", () => {
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 12 }));
     await fire(() => fireEvent.pointerLeave(trigger));
     expect(tip()).not.toBeNull();
-    await act(() => wait(30));
-    expect(tip()).toBeNull();
+    await closed();
     expect(trigger.getAttribute("aria-describedby")).toBe("hint");
   });
 
@@ -53,7 +63,7 @@ describe("Tooltip (solo)", () => {
     const trigger = screen.getByRole("button");
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 0 }));
     await fire(() => fireEvent.pointerLeave(trigger));
-    await act(() => wait(40));
+    await act(() => wait(PAST_OPEN));
     expect(tip()).toBeNull();
   });
 
@@ -96,12 +106,11 @@ describe("Tooltip (solo)", () => {
     expect(tip()).toBeNull();
 
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 0 }));
-    await act(() => wait(40));
+    await act(() => wait(PAST_OPEN));
     expect(tip()).toBeNull();
     await fire(() => fireEvent.pointerLeave(trigger));
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 0 }));
-    await act(() => wait(40));
-    expect(tip()).not.toBeNull();
+    await opened();
 
     await fire(() => fireEvent.pointerDown(trigger));
     expect(tip()).toBeNull();
@@ -120,7 +129,7 @@ describe("Tooltip (solo)", () => {
     expect(tip()).toBeNull();
     await fire(() => fireEvent.focus(trigger));
     await fire(() => fireEvent.pointerEnter(trigger, { clientX: 0 }));
-    await act(() => wait(40));
+    await act(() => wait(PAST_OPEN));
     expect(tip()).toBeNull();
   });
 
@@ -142,14 +151,14 @@ describe("Tooltip (solo)", () => {
 });
 
 describe("TooltipGroup", () => {
-  function Toolbar({ onWarmChange, skipDelay = 40, closeDelay = 10, className }: { onWarmChange?: (warm: boolean) => void; skipDelay?: number; closeDelay?: number; className?: string }) {
+  function Toolbar({ onWarmChange, skipDelay = timing.skipDelay, closeDelay = timing.closeDelay, className }: { onWarmChange?: (warm: boolean) => void; skipDelay?: number; closeDelay?: number; className?: string }) {
     const tools = createElement(
       Fragment,
       null,
       createElement(Tooltip, { label: "Bold", children: button("B") }),
       createElement(Tooltip, { label: "Italic", children: button("I") }),
     );
-    return createElement(TooltipGroup, { openDelay: 20, closeDelay, skipDelay, onWarmChange, className, children: tools });
+    return createElement(TooltipGroup, { openDelay: timing.openDelay, closeDelay, skipDelay, onWarmChange, className, children: tools });
   }
 
   test("the first tooltip waits; a neighbour opens instantly while warm; the group cools after skipDelay", async () => {
@@ -160,7 +169,8 @@ describe("TooltipGroup", () => {
     const italic = screen.getByRole("button", { name: "I" });
 
     await fire(() => fireEvent.pointerEnter(bold, { clientX: 10 }));
-    await act(() => wait(40));
+    expect(tip()).toBeNull();
+    await opened();
     expect(tip()!.textContent).toBe("Bold");
     expect(warmth.at(-1)).toBe(true);
 
@@ -169,11 +179,10 @@ describe("TooltipGroup", () => {
     expect(tip()!.textContent).toBe("Italic");
 
     await fire(() => fireEvent.pointerLeave(italic));
-    await act(() => wait(25));
-    expect(tip()).toBeNull();
+    // Closed after closeDelay, but still warm: skipDelay (600 ms) only starts counting once it has closed.
+    await closed();
     expect(warmth.at(-1)).toBe(true);
-    await act(() => wait(60));
-    expect(warmth.at(-1)).toBe(false);
+    await until(() => expect(warmth.at(-1)).toBe(false));
   });
 
   test("with no skip delay the group cools as soon as the last tooltip closes", async () => {
@@ -181,7 +190,7 @@ describe("TooltipGroup", () => {
     render(createElement(Toolbar, { onWarmChange: (w: boolean) => warmth.push(w), skipDelay: 0, closeDelay: 0 }));
     const bold = screen.getByRole("button", { name: "B" });
     await fire(() => fireEvent.pointerEnter(bold, { clientX: 0 }));
-    await act(() => wait(40));
+    await opened();
     await fire(() => fireEvent.pointerLeave(bold));
     expect(tip()).toBeNull();
     expect(warmth.at(-1)).toBe(false);
@@ -194,8 +203,7 @@ describe("TooltipGroup", () => {
     const italic = screen.getByRole("button", { name: "I" });
     const openBold = async () => {
       await fire(() => fireEvent.pointerEnter(bold, { clientX: 0 }));
-      await act(() => wait(40));
-      expect(tip()).not.toBeNull();
+      await opened();
     };
 
     await openBold();
@@ -212,7 +220,7 @@ describe("TooltipGroup", () => {
     // Warm but closed: a reset still cools the group.
     await openBold();
     await fire(() => fireEvent.pointerLeave(bold));
-    await act(() => wait(20));
+    await closed();
     expect(warmth.at(-1)).toBe(true);
     await fire(() => window.dispatchEvent(new Event("blur")));
     expect(warmth.at(-1)).toBe(false);
@@ -220,7 +228,8 @@ describe("TooltipGroup", () => {
     // Warm but closed: pressing another trigger dismisses and cools.
     await openBold();
     await fire(() => fireEvent.pointerLeave(bold));
-    await act(() => wait(20));
+    await closed();
+    expect(warmth.at(-1)).toBe(true);
     await fire(() => fireEvent.pointerDown(italic));
     expect(warmth.at(-1)).toBe(false);
   });
@@ -228,7 +237,7 @@ describe("TooltipGroup", () => {
   test("unmounting an open tooltip closes it", async () => {
     const view = render(createElement(Toolbar));
     await fire(() => fireEvent.pointerEnter(screen.getByRole("button", { name: "B" }), { clientX: 0 }));
-    await act(() => wait(40));
+    await opened();
     view.unmount();
     expect(tip()).toBeNull();
   });

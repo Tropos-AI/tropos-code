@@ -1,10 +1,10 @@
 // web/src/components/interior/typing-indicator.test.tsx — TypingIndicator labels/announcements and useTypingPresence timeouts, hold and send hand-off.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act } = await import("@testing-library/react");
+const { render, screen, cleanup, act, waitFor } = await import("@testing-library/react");
 const { createElement } = await import("react");
 const { TypingIndicator, useTypingPresence } = await import("@/components/interior/typing-indicator");
 
@@ -12,6 +12,7 @@ const wait = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 const realMatchMedia = window.matchMedia;
 
 afterEach(() => {
+  jest.useRealTimers();
   cleanup();
   window.matchMedia = realMatchMedia;
 });
@@ -29,6 +30,8 @@ function reduceMotion(): void {
   })) as unknown as typeof window.matchMedia;
 }
 
+/** Retries until a timer has fired and rendered (up to 3 s), instead of a fixed sleep that flakes under load. */
+const until = (assertion: () => void) => waitFor(assertion, { timeout: 3000 });
 const live = () => screen.getByRole("status").textContent;
 /** The visible (aria-hidden) label, as opposed to the live region that can carry the same words. */
 const shownLabel = (text: string) => screen.queryAllByText(text).find((el) => el.getAttribute("role") !== "status") ?? null;
@@ -88,7 +91,14 @@ describe("useTypingPresence", () => {
     return { api: () => api, view };
   }
 
+  /**
+   * Moves the fake clock (timers and Date.now) on by `ms` and renders what changed. The timeout and minVisible tests
+   * check both sides of a window, which real timers on a busy CI machine cannot place reliably.
+   */
+  const advance = (ms: number) => act(async () => void jest.advanceTimersByTime(ms));
+
   test("each ping beats; typists drop off after the timeout", async () => {
+    jest.useFakeTimers();
     const { api } = mount(40, 0);
     await act(async () => api().ping("Ada"));
     expect(api().typists).toEqual(["Ada"]);
@@ -97,17 +107,21 @@ describe("useTypingPresence", () => {
     expect(api().beat).toBe(2);
     await act(async () => api().ping("Bo"));
     expect(api().typists).toEqual(["Ada", "Bo"]);
-    await act(() => wait(90));
+    await advance(39);
+    expect(api().typists).toEqual(["Ada", "Bo"]);
+    await advance(51);
     expect(api().typists).toEqual([]);
     expect(api().beat).toBe(0);
   });
 
   test("once shown, the indicator holds for minVisible even if the typist stops", async () => {
+    jest.useFakeTimers();
     const { api } = mount(10, 80);
     await act(async () => api().ping("Ada"));
-    await act(() => wait(40));
+    // Past the 10 ms timeout, inside the 80 ms minimum.
+    await advance(40);
     expect(api().typists).toEqual(["Ada"]);
-    await act(() => wait(100));
+    await advance(100);
     expect(api().typists).toEqual([]);
   });
 
@@ -139,8 +153,7 @@ describe("useTypingPresence", () => {
     expect(api().sending).toBe(true);
     // A second send restarts the hand-off.
     await act(async () => api().send("Bo"));
-    await act(() => wait(380));
-    expect(api().sending).toBe(false);
+    await until(() => expect(api().sending).toBe(false));
     expect(api().typists).toEqual([]);
 
     await act(async () => {
@@ -148,7 +161,8 @@ describe("useTypingPresence", () => {
       api().ping("Cy");
     });
     await act(async () => api().send("Ada"));
-    await act(() => wait(380));
+    expect(api().sending).toBe(true);
+    await until(() => expect(api().sending).toBe(false));
     expect(api().typists).toEqual(["Cy"]);
   });
 

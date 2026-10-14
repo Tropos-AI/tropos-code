@@ -51,12 +51,15 @@ describe("SkillsPage", () => {
     const pending = deferred<PanelData>();
     const { socket } = await mountPage(SkillsPage, { panel: () => pending.promise });
     expect(socket.callsOf("panel")[0]?.params).toBe("skills");
-    expect(await screen.findByTestId("panel-skeleton")).toBeTruthy();
+    // The skeleton appears after its delay (120 ms) and, once up, stays its minimum time (380 ms) after the data lands:
+    // real timers, so wait well beyond testing-library's 1 s default on a loaded machine.
+    const slow = { timeout: 3000 };
+    expect(await screen.findByTestId("panel-skeleton", undefined, slow)).toBeTruthy();
     await act(async () => pending.resolve(SKILLS));
-    expect(await screen.findByRole("region", { name: /Yours/ })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: /Yours/ }, slow)).toBeTruthy();
     expect(screen.getByRole("region", { name: /This project/ })).toBeTruthy();
     expect(screen.getByText("3 skills")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByTestId("panel-skeleton")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("panel-skeleton") === null).toBe(true), slow);
   });
 
   test("expands a row to show its details and the SKILL.md path with a copy button", async () => {

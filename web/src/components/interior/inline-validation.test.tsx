@@ -4,11 +4,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement, useState } = await import("react");
 const { InlineValidation, useInlineValidation } = await import("@/components/interior/inline-validation");
 
 const wait = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Far above timer jitter on a loaded machine, so "not shown yet" right after typing holds. */
+const DEBOUNCE = 200;
 
 afterEach(() => {
   cleanup();
@@ -18,7 +20,7 @@ const email = (value: string) => (value.includes("@") ? null : "Enter a valid em
 
 function Field({ initial = "", hint, id }: { initial?: string; hint?: string; id?: string }) {
   const [value, setValue] = useState(initial);
-  return createElement(InlineValidation, { label: "Email", value, onChange: setValue, validate: email, hint, id, debounce: 20, required: true });
+  return createElement(InlineValidation, { label: "Email", value, onChange: setValue, validate: email, hint, id, debounce: DEBOUNCE, required: true });
 }
 
 describe("InlineValidation", () => {
@@ -56,14 +58,13 @@ describe("InlineValidation", () => {
 
     await act(async () => void fireEvent.change(input, { target: { value: "ab" } }));
     expect(input.getAttribute("aria-invalid")).toBe("false");
-    await act(() => wait(50));
-    expect(input.getAttribute("aria-invalid")).toBe("true");
+    await waitFor(() => expect(input.getAttribute("aria-invalid")).toBe("true"), { timeout: 3000 });
     expect(screen.getByRole("status").textContent).toBe("Enter a valid email");
 
-    // Still wrong while already invalid: the error stays put.
+    // Still wrong while already invalid: the error stays put, before and after the debounce.
     await act(async () => void fireEvent.change(input, { target: { value: "abc" } }));
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    await act(() => wait(50));
+    await act(() => wait(DEBOUNCE * 2));
     expect(screen.getByRole("status").textContent).toBe("Enter a valid email");
   });
 });

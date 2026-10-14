@@ -4,11 +4,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement } = await import("react");
 const { NewItemsPill, useNewItems } = await import("@/components/interior/new-items-pill");
-
-const wait = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 afterEach(() => {
   cleanup();
@@ -29,8 +27,8 @@ describe("NewItemsPill", () => {
     view.rerender(createElement(NewItemsPill, { count: 3, onJump: () => jumps++ }));
     expect(screen.getByRole("button", { name: "3 new items" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("");
-    await act(() => wait(750));
-    expect(screen.getByRole("status").textContent).toBe("3 new items");
+    // The announcement waits 700 ms for the count to settle; poll for it rather than sleep just past it.
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("3 new items"), { timeout: 3000 });
 
     view.rerender(createElement(NewItemsPill, { count: 0, onJump: () => jumps++ }));
     expect(screen.getByRole("status").textContent).toBe("");
