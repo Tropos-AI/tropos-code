@@ -65,8 +65,16 @@ the context window, 6 a hook blocked the prompt or stopped the turn, 130 interru
 `--output-format json`, `cost_usd` is `null` when a model without a known price answered.
 `tropos -p "/review main"` runs a custom command or skill, as typing it in a session would.
 
-In a session: `shift+tab` cycles permission modes (default → accept edits → plan), `esc`
-interrupts, `\` then enter adds a line, `@` + tab completes paths, `/help` lists commands.
+In a session:
+- Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.
+- The input stays open while Tropos works. What you send then is queued and runs next. `↑` takes
+  queued messages back, and `esc` interrupts the turn (queued messages wait until you send or
+  discard them).
+- `/model` opens a model picker: search, favorites (`ctrl+f`), recent models, and `←`/`→` for effort.
+- `/help`, `/skills`, `/agents`, `/mcp`, `/hooks`, `/plugins`, `/memory` and `/cost` open panels
+  instead of printing into the conversation.
+- `shift+tab` cycles permission modes (default → accept edits → plan), `ctrl+o` shows full tool
+  output, `\` then enter adds a line, and `?` lists shortcuts.
 
 ## Permissions
 
