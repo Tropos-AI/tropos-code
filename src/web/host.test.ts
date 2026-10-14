@@ -96,6 +96,8 @@ describe("session RPCs", () => {
     const { host, seen } = setup({ identity: () => ({ name: "Nova", emoji: "🦊" }) });
     expect(await host.call("panel", "learned")).toMatchObject({ title: "about learned" });
     expect(host.hello().identity).toEqual({ name: "Nova", emoji: "🦊" });
+    // State carries it too, so a name saved mid-session reaches every tab with the next state.
+    expect(host.state().identity).toEqual({ name: "Nova", emoji: "🦊" });
     const hello = seen.find((m) => m.t === "hello");
     expect(hello?.t === "hello" && hello.server.identity).toEqual({ name: "Nova", emoji: "🦊" });
     expect(setup().host.hello().identity).toEqual({});

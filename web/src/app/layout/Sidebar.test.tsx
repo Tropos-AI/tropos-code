@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { PageId } from "@/app/routes";
-import { mountPage, stubMatchMedia, type RpcHandlers } from "@/components/pages/page-test-kit";
+import { mountPage, stubMatchMedia, TEST_STATE, type RpcHandlers } from "@/components/pages/page-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
@@ -70,6 +70,16 @@ describe("SidebarContent", () => {
     await mount({}, {}, { name: "Nova", emoji: "🦊" });
     expect(brandLink().textContent).toContain("🦊 Nova");
     expect(screen.getByText("v0.3.0")).toBeTruthy();
+  });
+
+  test("a name saved mid-session arrives with the next state and replaces the one from hello", async () => {
+    const { socket } = await mount({}, {}, { name: "Nova" });
+    expect(brandLink().textContent).toContain("Nova");
+    await act(async () => {
+      socket.deliver({ t: "state", state: { ...TEST_STATE, identity: { name: "Bob", emoji: "🔧" } } });
+    });
+    expect(brandLink().textContent).toContain("🔧 Bob");
+    expect(brandLink().textContent).not.toContain("Nova");
   });
 
   test("without an identity the brand is just Tropos Code; showBrand=false hides it", async () => {

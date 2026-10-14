@@ -216,6 +216,8 @@ export class ChatAccumulator {
   }
 
   private addText(delta: string): void {
+    // Reasoning streams often interleave `content: ""` chunks; an empty delta is not text.
+    if (!delta) return;
     this.text += delta;
     this.handlers.onText(delta);
   }

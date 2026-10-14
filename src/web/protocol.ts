@@ -32,6 +32,8 @@ export interface SessionState {
   turns: number;
   /** When the running turn started (ms since epoch), for "Worked for 12s" in a tab that joins mid-turn. */
   turnStartedAt?: number;
+  /** The agent's name and emoji, current as of this state: it changes when the Identity tool saves. */
+  identity?: { name?: string; emoji?: string };
 }
 
 /** A saved session as the session list shows it; dates travel as ISO strings. */

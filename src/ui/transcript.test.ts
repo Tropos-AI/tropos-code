@@ -10,6 +10,21 @@ describe("transcript reducer", () => {
     expect(t.live[0]).toMatchObject({ kind: "assistant", text: "Hello" });
   });
 
+  test("empty deltas between thinking deltas don't split the thinking into many items", () => {
+    const t = apply(
+      emptyTranscript,
+      { type: "thinking", delta: "The" },
+      { type: "text", delta: "" },
+      { type: "thinking", delta: " user said hello" },
+      { type: "thinking", delta: "" },
+      { type: "text", delta: "Hi!" },
+    );
+    expect([...t.done, ...t.live].map((i) => [i.kind, "text" in i ? i.text : ""])).toEqual([
+      ["thinking", "The user said hello"],
+      ["assistant", "Hi!"],
+    ]);
+  });
+
   test("a tool start settles the text before it", () => {
     const t = apply(emptyTranscript, { type: "text", delta: "Looking" }, { type: "tool_start", id: "a", name: "Read", summary: "x.ts", input: {} });
     expect(t.done.map((i) => i.kind)).toEqual(["assistant"]);

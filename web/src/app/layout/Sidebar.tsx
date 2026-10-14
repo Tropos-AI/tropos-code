@@ -51,7 +51,8 @@ export function Brand({ version, demo, identity }: { version?: string; demo?: bo
 export function SidebarContent({ page, navigate, onNavigated, showBrand = true, idPrefix }: Props) {
   const store = useAppStore();
   const hello = useHello();
-  const busy = useSessionState()?.busy ?? false;
+  const session = useSessionState();
+  const busy = session?.busy ?? false;
   const reduced = usePrefersReducedMotion();
 
   const newSession = async () => {
@@ -68,7 +69,7 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
     <div className="flex h-full min-h-0 flex-col">
       {showBrand ? (
         <div className="px-4 pb-3 pt-4">
-          <Brand version={hello?.version} demo={store.demo} identity={hello?.identity} />
+          <Brand version={hello?.version} demo={store.demo} identity={session?.identity ?? hello?.identity} />
         </div>
       ) : null}
 

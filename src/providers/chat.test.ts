@@ -85,6 +85,16 @@ describe("ChatAccumulator", () => {
     return { text, thinking, handlers: { onText: (d: string) => text.push(d), onThinking: (d: string) => thinking.push(d) } };
   };
 
+  test("empty content chunks between reasoning chunks are not text (DeepSeek via OpenRouter)", () => {
+    const c = collect();
+    const acc = new ChatAccumulator("deepseek/deepseek-chat", c.handlers);
+    acc.push({ id: "x", choices: [{ delta: { reasoning_content: "The", content: "" } }] });
+    acc.push({ choices: [{ delta: { reasoning_content: " user", content: "" } }] });
+    acc.push({ choices: [{ delta: { content: "Hi" } }] });
+    expect(c.thinking).toEqual(["The", " user"]);
+    expect(c.text).toEqual(["Hi"]);
+  });
+
   test("assembles text, reasoning and interleaved tool-call deltas", () => {
     const c = collect();
     const acc = new ChatAccumulator("deepseek/deepseek-chat", c.handlers);

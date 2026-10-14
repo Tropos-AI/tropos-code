@@ -91,6 +91,7 @@ export class WebHost {
       totalCostUsd: this.usage.totalCostUsd,
       turns: this.turns,
       turnStartedAt: this.turnStartedAt,
+      identity: this.runtime.identity(),
     };
   }
 
