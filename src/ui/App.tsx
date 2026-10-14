@@ -45,6 +45,8 @@ export function App({ runtime }: { runtime: Runtime }) {
       },
       askPermission: (prompt, signal) =>
         new Promise<PermissionAnswer>((resolve) => {
+          // An abort listener never fires for a signal that is already aborted.
+          if (signal.aborted) return resolve({ kind: "deny" });
           let settled = false;
           const answer = (a: PermissionAnswer) => {
             if (settled) return;
@@ -94,32 +96,71 @@ export function App({ runtime }: { runtime: Runtime }) {
   );
 
   const runTurn = useCallback(
-    async (prompt: string, display = prompt) => {
+    async (prompt: string, display = prompt, model?: string) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setTranscript((t) => addUser(t, display));
       setBusy(true);
       const controller = new AbortController();
       abortRef.current = controller;
+      runtime.setTurnModel(model);
       try {
         await agentRef.current!.run(prompt, controller.signal);
       } catch (err) {
         notice("error", (err as Error).message);
       } finally {
+        runtime.setTurnModel(undefined);
         abortRef.current = null;
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [notice],
+    [notice, runtime],
   );
 
-  const submit = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || busyRef.current) return;
-      runtime.recordInput(trimmed);
-      const command = parseCommand(trimmed);
+  /** Expands a custom command or skill (its `` !`cmd` `` may ask permission), then runs it as a turn. */
+  const runCustom = useCallback(
+    async (name: string, args: string, display: string) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let expansion;
+      try {
+        expansion = await runtime.expandCommand(name, args, ui, controller.signal);
+      } catch (err) {
+        expansion = { ok: false as const, reason: (err as Error).message };
+      } finally {
+        abortRef.current = null;
+        busyRef.current = false;
+        setBusy(false);
+      }
+      if (controller.signal.aborted) return notice("info", `/${name} cancelled.`);
+      if (!expansion.ok) return notice("error", `/${name}: ${expansion.reason}`);
+      return runTurn(expansion.prompt, display, expansion.model);
+    },
+    [runtime, ui, notice, runTurn],
+  );
+
+  const undoRedo = useCallback(
+    async (which: "undo" | "redo") => {
+      await exclusive(async () => {
+        const result = await (which === "undo" ? runtime.undo() : runtime.redo());
+        if (!result.ok) return notice("warn", result.reason);
+        const verb = which === "undo" ? "Reverted" : "Re-applied";
+        const shown = result.files.slice(0, 10).join(", ");
+        const more = result.files.length > 10 ? ` and ${result.files.length - 10} more` : "";
+        notice("info", result.files.length ? `${verb} ${result.files.length} file(s): ${shown}${more}` : `${verb}: no files differed.`);
+      });
+    },
+    [runtime, exclusive, notice],
+  );
+
+  /** Runs typed input: a slash command or a prompt for the model. */
+  const dispatch = useCallback(
+    async (trimmed: string) => {
+      const command = parseCommand(trimmed, runtime.extraCommands);
       switch (command.kind) {
         case "none":
           return runTurn(trimmed);
@@ -159,11 +200,28 @@ export function App({ runtime }: { runtime: Runtime }) {
           const cost = total === undefined ? "unknown (a model without a known price answered)" : `$${total.toFixed(4)}`;
           return notice("info", `Session cost ${cost} · context ${usage.contextTokens.toLocaleString()} tokens`);
         }
+        case "custom":
+          return runCustom(command.name, command.args, trimmed);
+        case "list":
+          return notice("info", await runtime.describe(command.what));
+        case "undo":
+        case "redo":
+          return undoRedo(command.kind);
         case "unknown":
           return notice("error", `Unknown command /${command.name}. Type /help for the list.`);
       }
     },
-    [runtime, runTurn, notice, exit, ui, resetScreen, exclusive, usage.contextTokens],
+    [runtime, runTurn, runCustom, undoRedo, notice, exit, ui, resetScreen, exclusive, usage.contextTokens],
+  );
+
+  const submit = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed || busyRef.current) return;
+      runtime.recordInput(trimmed);
+      await dispatch(trimmed);
+    },
+    [runtime, dispatch],
   );
 
   const pickSession = useCallback(
@@ -180,10 +238,20 @@ export function App({ runtime }: { runtime: Runtime }) {
   );
 
   useEffect(() => {
-    if (runtime.initialPrompt) void runTurn(runtime.initialPrompt);
-    else if (runtime.startWithPicker) {
-      void runtime.sessions().then((list) => (list.length > 0 ? setPicker(list) : notice("info", "No saved sessions for this directory.")));
-    }
+    // SessionStart hooks run first, with input locked, so their context reaches the first prompt.
+    busyRef.current = true;
+    setBusy(true);
+    void (async () => {
+      await runtime.start((level, text) => notice(level, text)).catch(() => {});
+      busyRef.current = false;
+      setBusy(false);
+      if (runtime.initialPrompt?.trim()) await dispatch(runtime.initialPrompt.trim());
+      else if (runtime.startWithPicker) {
+        const list = await runtime.sessions();
+        if (list.length > 0) setPicker(list);
+        else notice("info", "No saved sessions for this directory.");
+      }
+    })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useInput(
@@ -253,7 +321,12 @@ export function App({ runtime }: { runtime: Runtime }) {
             onClose={() => setProvidersOpen(false)}
           />
         ) : null}
-        {!busy && !picker && !permission && !providersOpen ? <PromptInput onSubmit={(t) => void submit(t)} history={runtime.inputHistory()} cwd={runtime.cwd} /> : null}
+        {!busy && !picker && !permission && !providersOpen ? <PromptInput
+            onSubmit={(t) => void submit(t)}
+            history={runtime.inputHistory()}
+            cwd={runtime.cwd}
+            commands={runtime.extraCommands.map((c) => c.name)}
+          /> : null}
         <StatusBar mode={settings.mode} contextPct={contextPct} costUsd={usage.totalCostUsd} />
       </Box>
     </ThemeProvider>

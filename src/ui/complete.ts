@@ -28,8 +28,8 @@ export async function completeFile(token: string, cwd: string): Promise<string[]
     .slice(0, MAX_SUGGESTIONS);
 }
 
-export function completeCommand(token: string): string[] {
-  return COMMANDS.map((c) => `/${c.name}`)
+export function completeCommand(token: string, extra: string[] = []): string[] {
+  return [...COMMANDS.map((c) => `/${c.name}`), ...extra.map((name) => `/${name}`)]
     .filter((name) => name.startsWith(token))
     .sort();
 }

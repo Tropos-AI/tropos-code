@@ -6,10 +6,11 @@ import type { Message, Model } from "../api/model";
 import { contextTokens, messageCostUsd } from "../api/pricing";
 import { MalformedToolCallError } from "../providers/chat";
 import type { Effort, Mode } from "../config/constants";
+import type { HookEvent } from "../config/settings";
 import { modeReminder } from "../context/system-prompt";
 import { decide, type PermissionContext } from "../permissions/engine";
 import { danglingToolResults, type MessageParam } from "../session/store";
-import { toolKind, type AnyTool, type ToolContext, type ToolOutput } from "../tools/types";
+import { toolKind, type AnyTool, type ToolContext, type ToolOutput, type ToolResultContent } from "../tools/types";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, ToolStatus, TurnEndReason } from "./events";
 
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -17,6 +18,45 @@ type ToolResult = Anthropic.Beta.BetaToolResultBlockParam;
 
 export const INTERRUPTED = "[interrupted by user]";
 const MAX_JSON_RETRIES = 2;
+/** A Stop hook may send the model back to work this many times per user turn, so a broken hook can't loop forever. */
+const MAX_STOP_CONTINUES = 3;
+
+/** What one hook event decided (see hooks/runner.ts, which implements AgentHooks). */
+export interface HookResult {
+  blocked?: string;
+  permission?: "allow" | "deny" | "ask";
+  permissionReason?: string;
+  updatedInput?: unknown;
+  additionalContext: string[];
+  stop?: string;
+  messages: string[];
+  errors: string[];
+}
+
+export interface AgentHooks {
+  has(event: HookEvent): boolean;
+  run(event: HookEvent, input: Record<string, unknown>, match?: string, signal?: AbortSignal): Promise<HookResult>;
+}
+
+/**
+ * Hook output for the model, marked so it reads as the harness speaking, not the user. The session's
+ * nonce (see context/tags.ts) is what tells it apart from look-alike text in a file or web page.
+ */
+export function hookContext(event: HookEvent, texts: string[], nonce?: string): string {
+  const attr = nonce ? ` nonce="${nonce}"` : "";
+  return `<hook-context event="${event}"${attr}>\n${texts.join("\n")}\n</hook-context>`;
+}
+
+/** Adds text to a tool result, whether its content is a string or a block list. */
+export function appendToContent(content: ToolResultContent, text: string): ToolResultContent {
+  if (typeof content === "string") return content + text;
+  return [...content, { type: "text", text: text.trimStart() }];
+}
+
+function contentText(content: ToolResultContent): string {
+  if (typeof content === "string") return content;
+  return content.map((b) => (b.type === "text" ? b.text : `[${b.type}]`)).join("\n");
+}
 
 export interface AgentOptions {
   model: Model;
@@ -31,6 +71,18 @@ export interface AgentOptions {
   toolContext: Omit<ToolContext, "signal">;
   maxTurns?: number;
   emit(event: AgentEvent): void;
+  /** Hooks from settings and plugins; absent when none are configured. */
+  hooks?: AgentHooks;
+  /** Which hook fires when this agent finishes: Stop for the main agent, SubagentStop for a subagent. */
+  stopEvent?: { event: "Stop" } | { event: "SubagentStop"; agentType: string };
+  /** Runs once per user turn, before its first edit or exec tool (snapshots for /undo). Failures are ignored. */
+  beforeChange?(): Promise<void>;
+  /** Text appended to a successful edit tool's result: formatter notes, language-server errors. */
+  postWrite?(paths: string[], signal: AbortSignal): Promise<string | null>;
+  /** The session's harness nonce, carried by hook-context blocks. */
+  nonce?(): string;
+  /** Runs as each user turn starts (snapshots mark turn boundaries); returns one-shot reminders for its message, such as that the user undid file changes. */
+  startTurn?(): string[];
 }
 
 /** Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left behind). */
@@ -56,6 +108,10 @@ export class Agent {
   totalCostUsd: number | undefined = 0;
   private lastMode: Mode | undefined;
   private askQueue: Promise<unknown> = Promise.resolve();
+  /** Set when this user turn has recorded its pre-change snapshot. */
+  private changeRecorded = false;
+  /** Set when a hook asked to stop the turn (`continue: false`). */
+  private stopRequested: string | undefined;
 
   constructor(
     private readonly opts: AgentOptions,
@@ -70,12 +126,27 @@ export class Agent {
       // A previous run may have ended with tool_use blocks that never got results; close them first.
       const repair = danglingToolResults(this.messages);
       if (repair) await this.push(repair);
+      this.changeRecorded = false;
+      this.stopRequested = undefined;
+      let hookTexts: string[] = [];
+      if (this.opts.hooks?.has("UserPromptSubmit")) {
+        const out = await this.hook("UserPromptSubmit", { prompt }, undefined, signal);
+        const refusal = out.blocked ?? out.stop;
+        if (refusal !== undefined) {
+          this.emit({ type: "notice", level: "error", text: `A UserPromptSubmit hook blocked this prompt: ${refusal}` });
+          this.emit({ type: "turn_end", reason: "blocked" });
+          return "blocked";
+        }
+        hookTexts = out.additionalContext;
+      }
       const content: Anthropic.Beta.BetaTextBlockParam[] = [];
       if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
       const mode = this.opts.permissions().mode;
       const reminder = modeReminder(this.lastMode, mode);
       this.lastMode = mode;
       if (reminder) content.push({ type: "text", text: reminder });
+      for (const text of this.opts.startTurn?.() ?? []) content.push({ type: "text", text });
+      if (hookTexts.length > 0) content.push({ type: "text", text: hookContext("UserPromptSubmit", hookTexts, this.opts.nonce?.()) });
       content.push({ type: "text", text: prompt });
       await this.push({ role: "user", content });
       return await this.loop(signal);
@@ -96,6 +167,29 @@ export class Agent {
     }
   }
 
+  /** Runs a hook event and surfaces its messages and errors as notices. */
+  private async hook(event: HookEvent, input: Record<string, unknown>, match: string | undefined, signal: AbortSignal): Promise<HookResult> {
+    const out = await this.opts.hooks!.run(event, input, match, signal);
+    for (const text of out.messages) this.emit({ type: "notice", level: "info", text });
+    for (const text of out.errors) this.emit({ type: "notice", level: "warn", text: `${event} hook: ${text}` });
+    return out;
+  }
+
+  /**
+   * Fires Stop (or SubagentStop) when the model is done. Returns the reason to keep going when a
+   * hook blocks the stop, or undefined to end the turn.
+   */
+  private async stopHook(message: Message, active: boolean, signal: AbortSignal): Promise<string | undefined> {
+    const stop = this.opts.stopEvent ?? { event: "Stop" as const };
+    if (!this.opts.hooks?.has(stop.event)) return undefined;
+    const last = message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
+    const input: Record<string, unknown> = { stop_hook_active: active, last_assistant_message: last };
+    if (stop.event === "SubagentStop") input.agent_type = stop.agentType;
+    const out = await this.hook(stop.event, input, stop.event === "SubagentStop" ? stop.agentType : undefined, signal);
+    if (out.stop !== undefined) return undefined;
+    return out.blocked;
+  }
+
   /** A misbehaving listener must never break the loop. */
   private emit(event: AgentEvent): void {
     try {
@@ -113,6 +207,7 @@ export class Agent {
     };
     let turns = 0;
     let jsonRetries = 0;
+    let stopContinues = 0;
 
     while (true) {
       if (signal.aborted) return end("aborted");
@@ -205,11 +300,24 @@ export class Agent {
         emit({ type: "notice", level: "error", text: "The response hit the output token limit and was cut off." });
         return end("max_tokens");
       }
-      if (toolUses.length === 0) return end("end_turn");
+      if (toolUses.length === 0) {
+        if (stopContinues >= MAX_STOP_CONTINUES || signal.aborted) return end("end_turn");
+        const reason = await this.stopHook(message, stopContinues > 0, signal);
+        if (reason === undefined || signal.aborted) return end("end_turn");
+        stopContinues++;
+        const event = this.opts.stopEvent?.event ?? "Stop";
+        emit({ type: "notice", level: "info", text: `A ${event} hook asked Tropos to continue: ${reason}` });
+        await this.push({ role: "user", content: [{ type: "text", text: hookContext(event, [reason], this.opts.nonce?.()) }] });
+        continue;
+      }
 
       const results = await this.runTools(toolUses, signal);
       await this.push({ role: "user", content: results });
       if (signal.aborted) return end("aborted");
+      if (this.stopRequested !== undefined) {
+        emit({ type: "notice", level: "warn", text: `A hook stopped the turn: ${this.stopRequested}` });
+        return end("blocked");
+      }
     }
   }
 
@@ -227,7 +335,7 @@ export class Agent {
     for (const block of toolUses) {
       const tool = this.opts.tools.find((t) => t.name === block.name);
       const kind = tool ? toolKind(tool) : undefined;
-      if (kind === "read" || kind === "meta") {
+      if (kind === "read" || kind === "meta" || kind === "net") {
         batch.push(block);
         continue;
       }
@@ -292,10 +400,38 @@ export class Agent {
       const issues = parsed.error.issues.map((i) => `${i.path.join(".") || "(input)"}: ${i.message}`).join("; ");
       return this.finish(block, tool.name, { content: `INVALID_INPUT: ${issues}`, isError: true }, "error");
     }
-    const input = parsed.data;
+    let input = parsed.data;
     const kind = toolKind(tool);
     const summary = tool.summarize(input);
     emit({ type: "tool_start", id: block.id, name: tool.name, summary, input });
+
+    let hookPermission: HookResult["permission"];
+    if (this.opts.hooks?.has("PreToolUse")) {
+      const out = await this.hook("PreToolUse", { tool_name: tool.name, tool_input: input, tool_use_id: block.id }, tool.name, signal);
+      if (out.stop !== undefined) {
+        this.stopRequested = out.stop;
+        return this.finish(block, tool.name, { content: `Not run: a hook stopped the turn (${out.stop}).`, isError: true }, "denied");
+      }
+      if (out.blocked !== undefined) {
+        return this.finish(block, tool.name, { content: `Blocked by a PreToolUse hook: ${out.blocked}`, isError: true }, "denied");
+      }
+      if (out.permission === "deny") {
+        const why = out.permissionReason ? `: ${out.permissionReason}` : ".";
+        return this.finish(block, tool.name, { content: `Denied by a PreToolUse hook${why}`, isError: true }, "denied");
+      }
+      if (out.updatedInput !== undefined) {
+        const reparsed = tool.schema.safeParse(out.updatedInput);
+        if (!reparsed.success) {
+          return this.finish(block, tool.name, { content: "A PreToolUse hook rewrote the input into something invalid; not run.", isError: true }, "error");
+        }
+        input = reparsed.data;
+      }
+      // Hooks run side by side on the original input, so an allow can't be tied to the rewritten one:
+      // a rewritten call goes through the normal permission check.
+      hookPermission = out.updatedInput !== undefined && out.permission === "allow" ? undefined : out.permission;
+      // Esc while the hook ran: the call must not start.
+      if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");
+    }
 
     let subject;
     try {
@@ -304,10 +440,13 @@ export class Agent {
       // e.g. PathResolutionError: fail closed, never run the tool.
       return this.finish(block, tool.name, { content: `${tool.name} refused: ${errorText(err)}`, isError: true }, "error");
     }
-    const decision = decide({ toolName: tool.name, kind, ...subject }, this.opts.permissions());
+    let decision = decide({ toolName: tool.name, kind, ...subject }, this.opts.permissions());
     if (decision.behavior === "deny") {
       return this.finish(block, tool.name, { content: decision.reason, isError: true }, "denied");
     }
+    // A hook's allow answers the prompt but never overrides a deny rule; its ask forces a prompt.
+    if (hookPermission === "allow" && decision.behavior === "ask") decision = { behavior: "allow" };
+    if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };
     if (decision.behavior === "ask") {
       const answer = await this.ask(
         { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion },
@@ -325,6 +464,12 @@ export class Agent {
       if (answer.kind === "allow_always") await this.opts.onAllowAlways?.(answer.rule);
     }
 
+    if ((kind === "edit" || kind === "exec") && !this.changeRecorded && this.opts.beforeChange) {
+      this.changeRecorded = true;
+      await this.opts.beforeChange().catch(() => {});
+      if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");
+    }
+
     let output: ToolOutput;
     try {
       // approvedPaths lets file tools refuse if the path resolves differently at write time (TOCTOU).
@@ -333,11 +478,39 @@ export class Agent {
       const isDenied = (path: string) =>
         decide({ toolName: tool.name, kind, paths: [path] }, permissions).behavior === "deny" ||
         decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
-      output = await raceAbort(tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied }), signal);
+      const progress = (text: string) => emit({ type: "tool_progress", id: block.id, text });
+      output = await raceAbort(
+        tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied, toolUseId: block.id, progress }),
+        signal,
+      );
     } catch (err) {
       output = { content: `${tool.name} failed: ${errorText(err)}`, isError: true };
     }
+    if (signal.aborted) return this.finish(block, tool.name, output, output.isError ? "error" : "done");
+    if (!output.isError && kind === "edit" && this.opts.postWrite && subject.paths.length > 0) {
+      const extra = await this.opts.postWrite(subject.paths, signal).catch(() => null);
+      if (extra) output = { ...output, content: appendToContent(output.content, `\n\n${extra}`) };
+    }
+    output = await this.postToolHooks(tool.name, block.id, input, output, signal);
     return this.finish(block, tool.name, output, output.isError ? "error" : "done");
+  }
+
+  /** PostToolUse / PostToolUseFailure: their context and block reasons are appended to the result. */
+  private async postToolHooks(name: string, id: string, input: unknown, output: ToolOutput, signal: AbortSignal): Promise<ToolOutput> {
+    const event: HookEvent = output.isError ? "PostToolUseFailure" : "PostToolUse";
+    if (!this.opts.hooks?.has(event)) return output;
+    const text = contentText(output.content);
+    const extra = output.isError ? { error: text } : { tool_response: text };
+    const out = await this.hook(event, { tool_name: name, tool_input: input, tool_use_id: id, ...extra }, name, signal);
+    if (out.stop !== undefined) this.stopRequested = out.stop;
+    const texts = [...(out.blocked !== undefined ? [out.blocked] : []), ...out.additionalContext];
+    if (texts.length === 0) return output;
+    return { ...output, content: appendToContent(output.content, `\n\n${hookContext(event, texts, this.opts.nonce?.())}`) };
+  }
+
+  /** Adds a subagent's spend; an unknown price makes the total unknown, as for the agent's own replies. */
+  addCost(costUsd: number | undefined): void {
+    this.totalCostUsd = costUsd === undefined || this.totalCostUsd === undefined ? undefined : this.totalCostUsd + costUsd;
   }
 
   private recordUsage(message: Message, requestedModel: string): void {

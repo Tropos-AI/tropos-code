@@ -3,6 +3,7 @@ import type { Agent } from "../agent/agent";
 import type { AgentEvent, PermissionAnswer, TurnEndReason } from "../agent/events";
 import type { Message } from "../api/model";
 import type { OutputFormat } from "../config/constants";
+import { sanitizeForTerminal } from "../ui/terminal-safe";
 
 export const EXIT_CODES: Record<TurnEndReason, number> = {
   end_turn: 0,
@@ -11,6 +12,7 @@ export const EXIT_CODES: Record<TurnEndReason, number> = {
   max_turns: 3,
   max_tokens: 4,
   context_exceeded: 5,
+  blocked: 6,
   aborted: 130,
 };
 
@@ -51,7 +53,8 @@ export class PrintRenderer {
     }
     if (event.type === "notice" && event.level !== "info") {
       if (event.level === "error") this.lastError = event.text;
-      this.err(`${event.level}: ${event.text}\n`);
+      // Notices can quote hook stderr and server output: no escape sequences reach the terminal.
+      this.err(`${event.level}: ${sanitizeForTerminal(event.text)}\n`);
     }
     if (this.format === "stream-json") {
       const line =

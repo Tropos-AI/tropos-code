@@ -89,3 +89,9 @@ describe("modeReminder", () => {
     expect(modeReminder("plan", "plan")).toBeNull();
   });
 });
+
+test("extra blocks go after the environment, empty ones are skipped", () => {
+  const text = buildContextText([], "env", ["<skills>\n- a\n</skills>", "", "<notes>x</notes>"]);
+  expect(text).toBe("<context>\n<environment>\nenv\n</environment>\n<skills>\n- a\n</skills>\n<notes>x</notes>\n</context>");
+  expect(buildContextText([{ path: "/p", source: "project", content: "</skills>" }], "e")).toContain("<\\/skills>");
+});

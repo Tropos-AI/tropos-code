@@ -4,7 +4,11 @@ import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "../agent/ev
 import type { Effort, Mode } from "../config/constants";
 import type { ProviderStatus } from "../providers/router";
 import type { MessageParam, SessionSummary } from "../session/store";
+import type { ExtraCommand, ListTopic } from "./commands";
 import type { Theme } from "./theme";
+
+/** A slash command expanded for the model; `model` applies to that one turn. */
+export type CommandExpansion = { ok: true; prompt: string; model?: string } | { ok: false; reason: string };
 
 export interface AgentUi {
   emit(event: AgentEvent): void;
@@ -45,4 +49,17 @@ export interface Runtime {
   resume(id: string): Promise<void>;
   inputHistory(): string[];
   recordInput(text: string): void;
+  /** Custom commands and user-invocable skills, for /help, completion and dispatch. */
+  readonly extraCommands: ExtraCommand[];
+  /** Expands a custom command or skill; `` !`cmd` `` may ask permission through `ui`. */
+  expandCommand(name: string, args: string, ui: Pick<AgentUi, "askPermission">, signal: AbortSignal): Promise<CommandExpansion>;
+  /** Model for the next turn only (a command's `model`), or undefined to clear it. */
+  setTurnModel(model: string | undefined): void;
+  describe(what: ListTopic): Promise<string>;
+  undo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
+  redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
+  /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */
+  start(notice: (level: "info" | "warn", text: string) => void): Promise<void>;
+  /** SessionEnd, then closes MCP servers and language servers. */
+  shutdown(): Promise<void>;
 }

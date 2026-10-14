@@ -51,11 +51,17 @@ export interface ToolContext {
   approvedPaths?: string[];
   /** True for paths a deny rule covers; search tools drop them (set by the agent). */
   isDenied?: (absPath: string) => boolean;
+  /** The tool_use id of this call (set by the agent); subagents use it to tag their progress. */
+  toolUseId?: string;
+  /** Shows a one-line progress update on this call's transcript row (set by the agent). */
+  progress?: (text: string) => void;
 }
 
 export interface PermissionSubject {
   command?: string;
   paths: string[];
+  /** What a rule pattern is matched against for tools that act on neither paths nor commands, e.g. "domain:example.com" or a skill name. */
+  target?: string;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {
@@ -64,6 +70,8 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   readonly kind?: ToolKind;
   readonly description: string;
   readonly schema: S;
+  /** Raw JSON Schema sent to the model instead of the zod schema's; for tools defined elsewhere (MCP). */
+  readonly inputSchema?: Anthropic.Beta.BetaTool.InputSchema;
   /** Short label for transcript rows and permission prompts. */
   summarize(input: z.infer<S>): string;
   /** What the permission engine checks. Paths must come from resolveToolPath. */

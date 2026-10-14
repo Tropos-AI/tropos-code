@@ -30,6 +30,12 @@ export function ToolRow({ item }: { item: ToolItem }) {
         <Text bold>{sanitizeForTerminal(item.name)}</Text>
         <Text color={theme.muted}> {truncate(sanitizeForTerminal(item.summary).replace(/\s+/g, " "), 100)}</Text>
       </Text>
+      {item.status === "running" && item.progress ? (
+        <Text color={theme.muted}>
+          {"  ↳ "}
+          {truncate(sanitizeForTerminal(item.progress).replace(/\s+/g, " "), 110)}
+        </Text>
+      ) : null}
       {result ? (
         <Text color={item.status === "error" ? theme.danger : theme.muted}>
           {"  ⎿ "}

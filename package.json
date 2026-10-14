@@ -19,10 +19,12 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "diff": "9.0.0",
     "ink": "8.0.0",
     "marked": "15.0.12",
     "marked-terminal": "7.3.0",
+    "node-html-markdown": "2.0.0",
     "react": "19.3.0",
     "zod": "4.6.7"
   },

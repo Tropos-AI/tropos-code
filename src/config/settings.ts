@@ -26,6 +26,59 @@ export interface Settings {
   /** Background updates (spec §11). Only the user's own layers may set these. */
   autoUpdates: boolean;
   autoUpdatesChannel: "latest" | "stable";
+  /** Commands run on agent events (§ hooks). Only the user's own layers may set these, as for every key below. */
+  hooks: HooksSetting;
+  /** MCP servers whose tools join the session. */
+  mcpServers: Record<string, McpServerSetting>;
+  /** Format files after Write/Edit: true for the built-in formatters found on PATH, or named custom formatters. */
+  formatter: boolean | Record<string, CommandToolSetting>;
+  /** Append language-server errors to Write/Edit results: true for built-in servers found on PATH, or named servers. */
+  lsp: boolean | Record<string, CommandToolSetting>;
+  /** Shadow-git snapshots of the work tree before each turn, for /undo and /redo. */
+  snapshots: boolean;
+  /** The Memory tool and its notes in ~/.tropos/memories. */
+  memory: boolean;
+  /** Plugins under ~/.tropos/plugins that stay off. */
+  disabledPlugins: string[];
+}
+
+export const HOOK_EVENTS = [
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "UserPromptSubmit",
+  "Stop",
+  "SubagentStop",
+  "SessionStart",
+  "SessionEnd",
+] as const;
+export type HookEvent = (typeof HOOK_EVENTS)[number];
+
+export interface HookCommand {
+  type: "command";
+  command: string;
+  /** Seconds; default 60. */
+  timeout?: number;
+}
+
+export interface HookMatcher {
+  /** Tool name, `A|B` list or regex for tool events; empty or "*" matches everything. */
+  matcher?: string;
+  hooks: HookCommand[];
+}
+
+export type HooksSetting = Partial<Record<HookEvent, HookMatcher[]>>;
+
+export type McpServerSetting =
+  | { type?: "stdio"; command: string; args?: string[]; env?: Record<string, string>; cwd?: string; disabled?: boolean }
+  | { type: "http" | "sse"; url: string; headers?: Record<string, string>; disabled?: boolean };
+
+export interface CommandToolSetting {
+  /** Argv; "$FILE" is replaced with the file's path. */
+  command: string[];
+  /** File extensions handled, with the dot: [".ts", ".tsx"]. */
+  extensions: string[];
+  disabled?: boolean;
 }
 
 export interface ProviderSetting {
@@ -49,6 +102,13 @@ export const DEFAULT_SETTINGS: Settings = {
   providers: {},
   autoUpdates: true,
   autoUpdatesChannel: "latest",
+  hooks: {},
+  mcpServers: {},
+  formatter: false,
+  lsp: false,
+  snapshots: true,
+  memory: true,
+  disabledPlugins: [],
 };
 
 export interface SettingsPaths {
@@ -76,6 +136,40 @@ export class SettingsError extends Error {
   }
 }
 
+const hookCommandSchema = z.object({
+  type: z.literal("command"),
+  command: z.string().min(1),
+  timeout: z.number().positive().max(3600).optional(),
+});
+
+export const hooksSchema = z.partialRecord(
+  z.enum(HOOK_EVENTS),
+  z.array(z.object({ matcher: z.string().optional(), hooks: z.array(hookCommandSchema) })),
+);
+
+export const mcpServerSchema = z.union([
+  z.object({
+    type: z.literal("stdio").optional(),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+    disabled: z.boolean().optional(),
+  }),
+  z.object({
+    type: z.enum(["http", "sse"]),
+    url: z.string().url(),
+    headers: z.record(z.string(), z.string()).optional(),
+    disabled: z.boolean().optional(),
+  }),
+]);
+
+const commandToolSchema = z.object({
+  command: z.array(z.string()).min(1),
+  extensions: z.array(z.string().regex(/^\./, "extensions start with a dot")),
+  disabled: z.boolean().optional(),
+});
+
 const layerSchema = z.object({
   model: z.string().min(1).optional(),
   effort: z.enum(EFFORTS).optional(),
@@ -98,6 +192,21 @@ const layerSchema = z.object({
     .optional(),
   autoUpdates: z.boolean().optional(),
   autoUpdatesChannel: z.enum(["latest", "stable"]).optional(),
+  hooks: hooksSchema.optional(),
+  mcpServers: z
+    .record(
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_-]{1,32}$/, "MCP server names are 1-32 letters, digits, _ and -")
+        .refine((name) => !name.includes("__"), "MCP server names can't contain __ (it separates server and tool in tool names)"),
+      mcpServerSchema,
+    )
+    .optional(),
+  formatter: z.union([z.boolean(), z.record(z.string(), commandToolSchema)]).optional(),
+  lsp: z.union([z.boolean(), z.record(z.string(), commandToolSchema)]).optional(),
+  snapshots: z.boolean().optional(),
+  memory: z.boolean().optional(),
+  disabledPlugins: z.array(z.string()).optional(),
 });
 
 function union(a: string[], b: string[] = []): string[] {
@@ -120,7 +229,24 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     providers: { ...base.providers, ...layer.providers },
     autoUpdates: layer.autoUpdates ?? base.autoUpdates,
     autoUpdatesChannel: layer.autoUpdatesChannel ?? base.autoUpdatesChannel,
+    hooks: mergeHooks(base.hooks, layer.hooks),
+    mcpServers: { ...base.mcpServers, ...layer.mcpServers },
+    formatter: layer.formatter ?? base.formatter,
+    lsp: layer.lsp ?? base.lsp,
+    snapshots: layer.snapshots ?? base.snapshots,
+    memory: layer.memory ?? base.memory,
+    disabledPlugins: union(base.disabledPlugins, layer.disabledPlugins),
   };
+}
+
+/** Hooks from every layer run: matchers are appended per event, never replaced. */
+export function mergeHooks(base: HooksSetting, layer: HooksSetting = {}): HooksSetting {
+  const merged: HooksSetting = { ...base };
+  for (const event of HOOK_EVENTS) {
+    const extra = layer[event];
+    if (extra?.length) merged[event] = [...(base[event] ?? []), ...extra];
+  }
+  return merged;
 }
 
 async function readJson(path: string): Promise<unknown | null> {
@@ -170,6 +296,10 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   // A repo that turns updates off or picks the channel could keep its users on an old version.
   if (layer.autoUpdates !== undefined) ignored.push("autoUpdates");
   if (layer.autoUpdatesChannel !== undefined) ignored.push("autoUpdatesChannel");
+  // Hooks, MCP servers, formatters and language servers run programs; plugins choose which run.
+  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins"] as const) {
+    if (layer[key] !== undefined) ignored.push(key);
+  }
   // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic
   // models, but not send the session, and the user's key, to another provider or a local server.
   const model = layer.model !== undefined && !isAnthropicModelId(layer.model) ? undefined : layer.model;
