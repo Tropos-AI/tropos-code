@@ -9,6 +9,8 @@ Commands:
                                    install a release and make it the active tcode
   tcode update                     update to the newest release of your channel (also: upgrade)
   tcode rollback                   return to the previous version
+  tcode web [--port <n>] [--no-open]
+                                   open the browser UI on 127.0.0.1 (same sessions and settings)
   tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- update)
 
 Options:

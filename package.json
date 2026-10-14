@@ -1,7 +1,7 @@
 {
   "name": "tropos-code",
   "version": "0.3.0",
-  "description": "Tropos Code — an agentic coding CLI by Tropos Labs",
+  "description": "Tropos Code \u2014 an agentic coding CLI by Tropos Labs",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -12,10 +12,12 @@
     "dev": "bun src/index.ts",
     "test": "bun test",
     "test:coverage": "bun scripts/check-coverage.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "build": "bun build.ts",
     "build:all": "bun build.ts --all",
-    "install:local": "sh scripts/install-local.sh"
+    "install:local": "sh scripts/install-local.sh",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",
@@ -29,10 +31,25 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@fontsource-variable/tektur": "5.3.0",
+    "@happy-dom/global-registrator": "21.0.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/react": "16.3.3",
     "@types/bun": "^1.4.3",
     "@types/diff": "^8.0.0",
+    "@types/dompurify": "3.2.0",
     "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "clsx": "2.1.1",
+    "dompurify": "3.4.17",
     "ink-testing-library": "4.0.0",
-    "typescript": "5.9"
+    "motion": "14.2.0",
+    "pathe": "2.0.3",
+    "react-dom": "19.3.0",
+    "tailwind-merge": "3.7.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9",
+    "vite": "8.3.4"
   }
 }

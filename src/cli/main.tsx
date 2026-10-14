@@ -33,6 +33,7 @@ import {
   type AppContext,
 } from "./runtime";
 import { USAGE } from "./usage";
+import { runWeb, type RunWebOptions } from "../web/serve";
 
 /** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
 export const EXIT_USAGE = 64;
@@ -47,6 +48,9 @@ export interface MainDeps {
   /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
   execPath?: string;
   engine?: CommandContext["engine"];
+  /** Tests stop `tcode web` themselves and never open a browser. */
+  webUntil?: RunWebOptions["until"];
+  openBrowser?: (url: string) => void;
   /** Tests override terminal detection for the native-session announcement. */
   tty?: { stdin: boolean; stdout: boolean };
 }
@@ -191,12 +195,12 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       err('tcode: print mode needs a prompt, e.g. tcode -p "explain this repo"\n');
       return EXIT_USAGE;
     }
-  } else if (!process.stdin.isTTY || deps.readStdin) {
+  } else if (!opts.web && (!process.stdin.isTTY || deps.readStdin)) {
     err("tcode: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
     return EXIT_USAGE;
   }
 
-  if (!opts.print && picked.rejected) {
+  if (!opts.print && !opts.web && picked.rejected) {
     err(`tcode: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
@@ -298,6 +302,21 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         process.off("SIGINT", onSigint);
         await sessionEnd(hooks, "exit");
       }
+    }
+
+    if (opts.web) {
+      return await runWeb(ctx, {
+        session,
+        history,
+        mode,
+        modes: MODES.filter((m) => m !== "bypass" || opts.dangerouslySkipPermissions),
+        source: resumed ? "resume" : "startup",
+        web: opts.web,
+        out,
+        err,
+        until: deps.webUntil,
+        openBrowser: deps.openBrowser,
+      });
     }
 
     const runtime = await createRuntime(ctx, {
