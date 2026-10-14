@@ -8,3 +8,4 @@ coverage/
 # Terminal-Bench job logs from harbor (large; the scoreboard lines go to eval/results)
 eval/tb-jobs/
 __pycache__/
+web/dist

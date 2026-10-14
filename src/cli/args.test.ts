@@ -1,6 +1,6 @@
 // src/cli/args.test.ts
 import { describe, expect, test } from "bun:test";
-import { CliError, parseCli } from "./args";
+import { CliError, parseCli, parseInvocation } from "./args";
 
 const ID = "3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c";
 
@@ -66,5 +66,21 @@ describe("parseCli", () => {
 
   test("permission mode", () => {
     expect(parseCli(["--permission-mode", "plan"]).permissionMode).toBe("plan");
+  });
+});
+
+describe("tcode web", () => {
+  test("web flags, then the usual session options", () => {
+    const inv = parseInvocation(["web", "--port", "5000", "--no-open", "--model", "claude-sonnet-5-5", "--permission-mode", "plan"]);
+    expect(inv).toMatchObject({ kind: "session", options: { web: { port: 5000, open: false, dev: false }, model: "claude-sonnet-5-5", permissionMode: "plan" } });
+    expect(parseInvocation(["web", "--port=6000", "--dev"])).toMatchObject({ options: { web: { port: 6000, dev: true, open: true } } });
+    expect(parseInvocation(["web"])).toMatchObject({ options: { web: { open: true, dev: false } } });
+  });
+  test("bad ports, prompts and print mode are refused; `tcode -- web` is still a prompt", () => {
+    expect(() => parseInvocation(["web", "--port", "99999"])).toThrow("--port must be a port number");
+    expect(() => parseInvocation(["web", "--port"])).toThrow("--port must be a port number");
+    expect(() => parseInvocation(["web", "hello"])).toThrow("takes no prompt");
+    expect(() => parseInvocation(["web", "-p"])).toThrow("print mode");
+    expect(parseInvocation(["--", "web"])).toMatchObject({ kind: "session", options: { prompt: "web" } });
   });
 });

@@ -67,6 +67,15 @@ the context window, 6 a hook blocked the prompt or stopped the turn, 130 interru
 `--output-format json`, `cost_usd` is `null` when a model without a known price answered.
 `tcode -p "/review main"` runs a custom command or skill, as typing it in a session would.
 
+`tcode web` opens the same agent in your browser, much like OpenClaw's Control UI and Hermes'
+dashboard. It shows chat with live tool calls and diffs, permission prompts, the model picker,
+sessions, and pages for skills, agents, MCP servers, hooks, plugins, memory and provider keys. The
+web app is built into `tcode` and runs on `127.0.0.1` only. The link it prints carries a secret key,
+which becomes an `HttpOnly`, `SameSite=Strict` cookie. Other sites can't reach it: the server checks
+the `Host` and `Origin` headers and sends a strict CSP. Options: `--port <n>` (default 4317, any free
+port if that one is taken), `--no-open`, and the usual session flags (`--model`, `--permission-mode`,
+`-c`, `-r` …).
+
 In a session:
 - Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.
 - The input stays open while Tropos works. What you send then is queued and runs next. `↑` takes
@@ -260,6 +269,11 @@ bun run typecheck
 bun run dev -- -p "hello"
 bun run build:all    # darwin/linux × arm64/x64 binaries
 ```
+
+The web app (`web/`, Vite + React + Tailwind) is built into the binary by `bun run build`. To work on
+it, run `bun run dev -- web --dev --port 4318 --no-open` and `bun run dev:web`, then open
+`http://localhost:5173/auth?token=<the key from the printed link>`. `http://localhost:5173/?demo=1` replays a scripted session without
+a server.
 
 ## License
 

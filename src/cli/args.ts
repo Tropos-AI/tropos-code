@@ -19,6 +19,38 @@ export interface CliOptions {
   addDir: string[];
   help: boolean;
   version: boolean;
+  /** `tcode web`: serve the browser UI instead of the terminal one. */
+  web?: WebOptions;
+}
+
+export interface WebOptions {
+  port?: number;
+  /** Open the browser (default); --no-open only prints the link. */
+  open: boolean;
+  /** Accept the Vite dev server's origin too (`bun run dev:web`). */
+  dev: boolean;
+}
+
+/** `tcode web [--port <n>] [--no-open] [--dev] [session options]`: the web flags, then the usual parser. */
+export function parseWeb(argv: string[]): CliOptions {
+  const rest: string[] = [];
+  const web: WebOptions = { open: true, dev: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--no-open") web.open = false;
+    else if (arg === "--dev") web.dev = true;
+    else if (arg === "--port" || arg.startsWith("--port=")) {
+      const raw = arg === "--port" ? argv[++i] : arg.slice("--port=".length);
+      const port = Number(raw);
+      // 0 asks the system for any free port.
+      if (raw === undefined || raw === "" || !Number.isInteger(port) || port < 0 || port > 65535) throw new CliError(`--port must be a port number (got "${raw ?? ""}")`);
+      web.port = port;
+    } else rest.push(arg);
+  }
+  const options = parseCli(rest);
+  if (options.print) throw new CliError("tcode web serves the browser UI; -p (print mode) doesn't apply");
+  if (options.prompt) throw new CliError(`tcode web takes no prompt (got "${options.prompt}"); type it in the browser`);
+  return { ...options, web };
 }
 
 export class CliError extends Error {}
@@ -164,6 +196,7 @@ export function parseInvocation(argv: string[]): Invocation {
   if (argv[0] !== "--") {
     const command = matchSubcommand(argv);
     if (command) return { kind: "subcommand", command };
+    if (argv[0] === "web") return { kind: "session", options: parseWeb(argv.slice(1)) };
   }
   try {
     return { kind: "session", options: parseCli(argv) };

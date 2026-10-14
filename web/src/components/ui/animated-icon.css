@@ -1,0 +1,64 @@
+/* Animated icon — the parts of the 000h by Cojeev stylesheet (MIT) that the icons need, mapped onto the Tropos Code
+   tokens in styles/globals.css. The original sheet also restyles every [data-slot] element, loads remote fonts and
+   defines its own --shadow-float; none of that is wanted here, so only the icon geometry, tones and motion rules stay. */
+@layer components {
+  :root {
+    /* Tones: "current" (the default) follows the text colour; the named tones are the app's semantic hues. */
+    --v-blue: var(--accent);
+    --v-pink: var(--violet);
+    --v-olive: var(--ok);
+    --v-yellow: var(--warn);
+    --icon-sm: 14px;
+    --icon-md: 16px;
+    --icon-lg: 20px;
+    --icon-stroke: 1.75;
+  }
+
+  [data-slot="icon"].v-icon {
+    width: var(--icon-md);
+    height: var(--icon-md);
+    flex: none;
+    stroke-width: var(--icon-stroke);
+    fill: none;
+    overflow: visible;
+  }
+  [data-slot="icon"].v-icon.-sm {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+  }
+  [data-slot="icon"].v-icon.-lg {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+  }
+
+  [data-slot="animated-icon"],
+  [data-slot="animated-icon"] > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    vertical-align: middle;
+  }
+  [data-slot="animated-icon"] svg {
+    overflow: visible;
+  }
+
+  /* Hit-test the control, not its decorative glyph. */
+  :where(button, a[href], summary, [role="button"], [role="tab"], [role^="menuitem"], [role="option"], [role="radio"])
+    :where([data-slot="icon"][aria-hidden="true"], [data-slot="animated-icon"], [data-slot="state-chevron"]) {
+    pointer-events: none;
+  }
+
+  .v-state-chevron,
+  .v-state-chevron > span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    vertical-align: middle;
+  }
+  .v-state-chevron {
+    width: 16px;
+    height: 16px;
+  }
+}

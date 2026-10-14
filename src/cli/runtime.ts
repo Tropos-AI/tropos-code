@@ -470,6 +470,7 @@ export async function createRuntime(
     },
     newAgent: (ui) => makeAgent(ctx, { session: () => session, history, state: agentState, ui, toolContext, hooks, pending }),
     history: () => history,
+    sessionId: () => session.id,
     clear: async () => {
       await sessionEnd(hooks, "clear");
       session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version });

@@ -94,6 +94,7 @@ export function fakeRuntime(
         history,
       ),
     history: () => history,
+    sessionId: () => "fake-session",
     clear: async () => {
       history = [];
     },

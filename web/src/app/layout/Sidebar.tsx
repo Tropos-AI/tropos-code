@@ -1,0 +1,122 @@
+// web/src/app/layout/Sidebar.tsx — the 272px stone well: brand, New session, sessions, and the page navigation.
+// The same content renders in the desktop <aside> and inside the narrow-screen Drawer.
+import { m } from "motion/react";
+
+import { hrefFor, PAGES, type PageId } from "@/app/routes";
+import { SessionList } from "@/app/layout/SessionList";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
+import { CELL, INSTANT } from "@/lib/springs";
+import { errorMessage, useAppStore, useHello, useSessionState } from "@/lib/store";
+import { cn } from "@/lib/utils";
+
+type Props = {
+  page: PageId;
+  navigate: (page: PageId) => void;
+  /** Called after any navigation (the drawer closes itself). */
+  onNavigated?: () => void;
+  /** The drawer renders its own title; hide the brand row there. */
+  showBrand?: boolean;
+  /** Distinguishes the nav plate's shared-layout id between the aside and the drawer. */
+  idPrefix: string;
+};
+
+export function Brand({ version, demo }: { version?: string; demo?: boolean }) {
+  return (
+    <a href={hrefFor("chat")} className="-mx-1 flex items-center gap-2.5 rounded-[9px] px-1 py-1 outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]">
+      <img src="/brand/tropos-logo.png" alt="" width={26} height={26} className="size-[26px] shrink-0 select-none" draggable={false} />
+      <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">Tropos Code</span>
+      {demo ? (
+        <Badge tone="accent" className="ml-auto">
+          demo
+        </Badge>
+      ) : null}
+      {version && !demo ? <span className="ml-auto rounded-full border border-rule bg-surface px-1.5 py-px font-mono text-[10.5px] text-ink-2">v{version}</span> : null}
+    </a>
+  );
+}
+
+export function SidebarContent({ page, navigate, onNavigated, showBrand = true, idPrefix }: Props) {
+  const store = useAppStore();
+  const hello = useHello();
+  const busy = useSessionState()?.busy ?? false;
+  const reduced = usePrefersReducedMotion();
+
+  const newSession = async () => {
+    try {
+      await store.rpc("clear");
+      navigate("chat");
+      onNavigated?.();
+    } catch (error) {
+      store.toast({ tone: "error", title: "Could not start a new session", description: errorMessage(error) });
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {showBrand ? (
+        <div className="px-4 pb-3 pt-4">
+          <Brand version={hello?.version} demo={store.demo} />
+        </div>
+      ) : null}
+
+      <div className={cn("px-3", showBrand ? "pb-3" : "py-3")}>
+        <Button
+          variant="secondary"
+          icon="plus"
+          block
+          onClick={() => void newSession()}
+          disabled={busy || !hello}
+          title={busy ? "Finish or interrupt the running turn first" : undefined}
+          className="justify-start"
+        >
+          New session
+        </Button>
+      </div>
+
+      <SessionList
+        onResumed={() => {
+          navigate("chat");
+          onNavigated?.();
+        }}
+      />
+
+      <nav aria-label="Pages" className="border-t border-rule px-2 pb-3 pt-2">
+        <ul className="grid grid-cols-2 gap-0.5">
+          {PAGES.map((p) => {
+            const active = p.id === page;
+            return (
+              <li key={p.id} className="relative">
+                {active ? (
+                  <m.span
+                    aria-hidden
+                    layoutId={reduced ? undefined : `${idPrefix}-nav-plate`}
+                    transition={reduced ? INSTANT : CELL}
+                    className="absolute inset-0 rounded-[9px] border border-rule bg-surface shadow-card"
+                  />
+                ) : null}
+                <a
+                  href={hrefFor(p.id)}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => onNavigated?.()}
+                  className={cn(
+                    "relative flex h-9 items-center gap-2 rounded-[9px] px-2.5 text-[13px] outline-none transition-colors duration-150",
+                    "focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]",
+                    active ? "font-medium text-ink" : "text-ink-2 hover:bg-paper-3 hover:text-ink",
+                  )}
+                >
+                  <span className={cn("grid place-items-center", active ? "text-accent-ink" : "text-ink-3")}>
+                    <Icon name={p.icon} />
+                  </span>
+                  {p.label}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+    </div>
+  );
+}

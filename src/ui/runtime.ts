@@ -75,6 +75,8 @@ export interface Runtime {
   newAgent(ui: AgentUi): Agent;
   /** The current session's saved history. */
   history(): MessageParam[];
+  /** The current session's id (changes on /clear and resume). */
+  sessionId(): string;
   /** Starts a new, empty session. */
   clear(): Promise<void>;
   sessions(): Promise<SessionSummary[]>;

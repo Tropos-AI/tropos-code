@@ -1,0 +1,98 @@
+/* web/src/components/chat/chat.css — chat-only styling on top of styles/globals.css tokens: the streaming caret, the
+   Markdown/code segment rhythm and the diff gutter. Motion here is opacity/transform only. */
+@layer components {
+  /* ── Streaming caret (Interior Streaming Text's periwinkle caret, attached to the live text's last line) ── */
+  @keyframes chat-caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    95% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+
+  .chat-caret,
+  .chat-md[data-streaming="true"] > .md-seg:last-child > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+  .chat-md[data-streaming="true"] > .md-seg:last-child > :is(ul, ol):last-child > li:last-child::after,
+  .chat-md[data-streaming="true"] > .md-seg:last-child > blockquote:last-child > p:last-child::after {
+    content: "";
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-left: 3px;
+    vertical-align: -0.16em;
+    border-radius: 1px;
+    background: var(--accent);
+    animation: chat-caret-blink 1.06s linear infinite;
+  }
+
+  /* Segments of one reply: rendered Markdown blocks and React code blocks share the prose rhythm. */
+  .chat-md > .md-seg:first-child > :first-child,
+  .chat-md > :first-child {
+    margin-top: 0;
+  }
+  .chat-md > .md-seg:last-child > :last-child,
+  .chat-md > :last-child {
+    margin-bottom: 0;
+  }
+  .chat-md > .chat-code {
+    margin-block: 0.95em;
+  }
+
+  /* ── Diff rows ── */
+  .chat-diff {
+    font-family: var(--font-mono-stack);
+    font-size: 12px;
+    line-height: 1.6;
+    font-variant-numeric: tabular-nums;
+  }
+  .chat-diff-row {
+    display: grid;
+    grid-template-columns: var(--diff-gutter, 2.75rem) var(--diff-gutter, 2.75rem) 1.25rem minmax(0, 1fr);
+  }
+  .chat-diff-row > .no {
+    padding-inline: 0.5rem;
+    text-align: right;
+    color: var(--ink-3);
+    user-select: none;
+  }
+  .chat-diff-row > .sign {
+    text-align: center;
+    user-select: none;
+  }
+  .chat-diff-row > .code {
+    padding-right: 0.75rem;
+    white-space: pre;
+  }
+  .chat-diff-row[data-kind="add"] {
+    background: var(--diff-add);
+    color: var(--diff-add-ink);
+  }
+  .chat-diff-row[data-kind="add"] > .no {
+    background: color-mix(in srgb, var(--diff-add) 70%, #16a34a 12%);
+    color: var(--diff-add-ink);
+  }
+  .chat-diff-row[data-kind="del"] {
+    background: var(--diff-del);
+    color: var(--diff-del-ink);
+  }
+  .chat-diff-row[data-kind="del"] > .no {
+    background: color-mix(in srgb, var(--diff-del) 70%, #dc2626 12%);
+    color: var(--diff-del-ink);
+  }
+  .chat-diff-row[data-kind="ctx"] {
+    color: var(--ink-2);
+  }
+  .chat-diff-hunk {
+    padding: 0.2rem 0.75rem;
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    font-size: 11.5px;
+    user-select: none;
+  }
+}
