@@ -13,6 +13,7 @@ import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
 import { contextWindow } from "../api/pricing";
 import { COMPACTION_TRIGGER_TOKENS } from "../api/model";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
+import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
 import { LearningLoop, runReviewAgent } from "../learning/review";
 import { loadIdentity } from "../context/identity";
@@ -371,7 +372,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
               .filter((a) => a.source === source)
               .map((a) => ({
                 key: a.name,
-                label: a.name,
+                label: agentLabel(a),
                 hint: firstLine(a.description),
                 aside: a.model,
                 detail: [a.description, `Tools: ${a.tools ? a.tools.join(", ") : "all"}`, ...(a.path ? [a.path] : [])],

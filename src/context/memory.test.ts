@@ -168,6 +168,15 @@ describe("file safety", () => {
     expect((await loadMemory(plain, home)).map((f) => f.content)).toEqual(["plain rules"]);
   });
 
+  test("outside git, a CLAUDE.md in a parent folder is not loaded (it belongs to something else)", async () => {
+    const plain = join(dir, "desktop", "project");
+    await mkdir(plain, { recursive: true });
+    await writeFile(join(dir, "desktop", "CLAUDE.md"), "This file provides guidance to Claude Code");
+    expect(await loadMemory(plain, home)).toEqual([]);
+    await writeFile(join(plain, "AGENTS.md"), "project rules");
+    expect((await loadMemory(plain, home)).map((f) => f.content)).toEqual(["project rules"]);
+  });
+
   test("a directory named TROPOS.md does not block the AGENTS.md fallback", async () => {
     await mkdir(join(repo, "TROPOS.md"));
     await writeFile(join(repo, "AGENTS.md"), "agents");

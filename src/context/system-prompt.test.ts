@@ -104,3 +104,10 @@ test("extra blocks go after the environment, empty ones are skipped", () => {
   expect(text).toBe("<context>\n<environment>\nenv\n</environment>\n<skills>\n- a\n</skills>\n<notes>x</notes>\n</context>");
   expect(buildContextText([{ path: "/p", source: "project", content: "</skills>" }], "e")).toContain("<\\/skills>");
 });
+
+test("the system prompt says it is Tropos Code and where its own agents, skills and commands live", () => {
+  expect(SYSTEM_PROMPT).toContain("You are Tropos Code (the `tcode` command), not Claude Code");
+  expect(SYSTEM_PROMPT).toContain("agents/<name>.md");
+  expect(SYSTEM_PROMPT).toContain("create it with AgentManage");
+  expect(SYSTEM_PROMPT).toContain("Never write to ~/.claude for Tropos.");
+});

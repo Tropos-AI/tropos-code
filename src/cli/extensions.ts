@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { runSubagent, type SubagentDeps } from "../agent/subagent";
 import { HOOK_EVENTS, type HooksSetting, type Settings } from "../config/settings";
+import { createAgentManageTool } from "../extensions/agent-manage";
 import { loadAgents, type AgentDefinition } from "../extensions/agents";
 import { loadCommands, type CustomCommand } from "../extensions/commands";
 import { loadPlugins, pluginRoots, type LoadedPlugin } from "../extensions/plugins";
@@ -36,7 +37,10 @@ export interface Extensions {
   plugins: LoadedPlugin[];
   commands: CustomCommand[];
   skills: Skill[];
+  /** Subagent definitions; refreshed in place by reloadAgents. */
   agents: AgentDefinition[];
+  /** Re-reads the agent folders into `agents` (after AgentManage, or when the Agent tool meets an unknown name). */
+  reloadAgents(): Promise<void>;
   /** Settings hooks plus enabled plugins' hooks. */
   hookConfig: HookRunnerConfig;
   mcp: McpManager | null;
@@ -126,11 +130,18 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
       })
     : null;
 
+  const agentList = agents.agents;
+  const reloadAgents = async () => {
+    const fresh = await loadAgents(dirs("agents"));
+    agentList.splice(0, agentList.length, ...fresh.agents);
+  };
+
   return {
     plugins,
     commands: commands.commands,
     skills: typedSkills,
-    agents: agents.agents,
+    agents: agentList,
+    reloadAgents,
     hookConfig,
     mcp,
     notes: settings.memory ? new NotesStore(home, { ledger }) : null,
@@ -162,7 +173,7 @@ export interface SubagentHolder {
 
 /**
  * The session's tools, in a fixed order: base tools, WebFetch, Skill (when a skill is model-invocable),
- * Agent, Memory and DailyNote (when memory is on), SessionSearch, SkillManage, Identity, then MCP tools.
+ * Agent, Memory and DailyNote (when memory is on), SessionSearch, SkillManage, AgentManage, Identity, then MCP tools.
  */
 export function sessionTools(
   base: AnyTool[],
@@ -176,12 +187,13 @@ export function sessionTools(
       const deps = opts.holder.deps;
       if (!deps) return Promise.resolve({ content: "Subagents aren't available yet in this session.", isError: true });
       return runSubagent(def, prompt, deps, ctx);
-    }),
+    }, ext.reloadAgents),
   );
   if (ext.notes) tools.push(createMemoryTool(ext.notes));
   if (ext.daily) tools.push(createDailyNoteTool(ext.daily));
   tools.push(createSessionSearchTool({ home: opts.home, cwd: opts.cwd, currentSessionId: opts.sessionId, index: ext.searchIndex }));
   tools.push(createSkillManageTool({ home: opts.home, ledger: ext.ledger, tracker: ext.tracker }));
+  tools.push(createAgentManageTool({ home: opts.home, ledger: ext.ledger, onChange: ext.reloadAgents }));
   tools.push(
     createIdentityTool({
       home: opts.home,

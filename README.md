@@ -129,7 +129,7 @@ Wildcard and prefix rules never approve interpreters and shells (`python`, `node
 | `.tropos/settings.json` | project settings (commit it) |
 | `.tropos/settings.local.json` | personal project overrides (same limits as `.tropos/settings.json`) |
 | `~/.tropos/projects/<project>/settings.json` | your per-project settings; "don't ask again" rules land here |
-| `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` or `CLAUDE.md` work too) |
+| `~/.tropos/TROPOS.md`, `TROPOS.md`, `TROPOS.local.md` | instructions loaded into every session (`AGENTS.md` or `CLAUDE.md` work too; in a git repo, from the repo root down to the current folder, otherwise from the current folder only) |
 
 Files inside the repo arrive with the code, so Tropos treats them as untrusted: they can set
 an Anthropic `model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, but not allow rules,
@@ -256,6 +256,9 @@ tools with `mcp__github__get_*`.
   can edit. The identity shows in the terminal header and the web sidebar. It never overrides your
   instructions or permissions. Subagents get their own label (🔎 explore, 🧭 plan, 🛠 general-purpose, or an
   `emoji:` in your agent file), and never see your profile, soul or daily notes.
+- **AgentManage** creates your own subagents in `~/.tropos/agents/<name>.md`, with a role, instructions, tools,
+  a model and an emoji ("make me a researcher called george"). It asks first, and the new agent can be
+  started at once with the Agent tool.
 - **SkillManage** lets the model write skills to `~/.tropos/skills/`, and it asks first. It can only
   change a skill it has loaded in this session. `/learn` asks it to turn the current session into a
   skill.

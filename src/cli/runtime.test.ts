@@ -154,7 +154,8 @@ describe("extensions in the runtime", () => {
     expect(skills.sections[1]).toMatchObject({ title: "Learned on its own (~/.tropos/skills-learned)", items: [{ label: "bun-release", hint: "Release a bun CLI" }] });
     const agents = await rt.panel("agents");
     expect(agents.sections[0]!.title).toBe("Built-in");
-    expect(agents.sections[0]!.items.map((i) => i.label)).toContain("general-purpose");
+    expect(agents.sections[0]!.items.map((i) => i.label)).toContain("🛠 general-purpose");
+    expect(agents.sections[0]!.items.map((i) => i.key)).toContain("general-purpose");
     expect((await rt.panel("hooks")).sections[0]!.items[0]).toMatchObject({ label: "PreToolUse [Bash]", hint: "guard.sh" });
     expect(await rt.panel("mcp")).toMatchObject({ sections: [], empty: expect.stringContaining("No MCP servers") });
     expect((await rt.panel("plugins")).sections[0]!.items[0]).toMatchObject({ label: "kit", hint: "Tools", aside: "1.2.0", status: "ok" });

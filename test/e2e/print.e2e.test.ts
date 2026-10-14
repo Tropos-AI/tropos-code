@@ -76,6 +76,7 @@ describe("compiled binary", () => {
       "DailyNote",
       "SessionSearch",
       "SkillManage",
+      "AgentManage",
       "Identity",
     ]);
     expect(body.tools.every((t: { eager_input_streaming: boolean }) => t.eager_input_streaming)).toBe(true);

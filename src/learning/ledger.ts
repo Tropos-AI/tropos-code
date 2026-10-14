@@ -7,7 +7,7 @@ import { LEARNED_SKILLS_DIR } from "../extensions/sources";
 import { isInside } from "../paths";
 import type { Actor } from "../tools/types";
 
-export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily";
+export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily" | "agent";
 
 /**
  * One change to a learned file. `before` and `after` are sha256 hashes of the file's contents
@@ -68,6 +68,8 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
       return parts.length === 1 && (parts[0] === "IDENTITY.md" || parts[0] === "SOUL.md");
     case "daily":
       return parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!);
+    case "agent":
+      return parts.length === 2 && parts[0] === "agents" && parts[1]!.endsWith(".md") && !parts[1]!.startsWith(".");
     default:
       return false;
   }

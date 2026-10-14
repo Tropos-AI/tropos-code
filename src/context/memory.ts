@@ -1,6 +1,6 @@
 import { constants, existsSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { dirname, join, parse, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 export interface MemoryFile {
   path: string;
@@ -142,7 +142,7 @@ const PROJECT_MEMORY_NAMES = ["TROPOS.md", "AGENTS.md", "CLAUDE.md"];
 
 /**
  * Memory files in load order: ~/.tropos/TROPOS.md, then the first usable PROJECT_MEMORY_NAMES file
- * in each directory from the git root (filesystem root outside git) down to cwd, then
+ * in each directory from the git root down to cwd (only cwd outside git), then
  * TROPOS.local.md. The user file may be a symlink only into the Tropos home. Project files may be
  * symlinks only inside a git repository and only when they resolve inside its root; outside git no
  * project symlink is followed.
@@ -164,12 +164,16 @@ export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[
   if (homeRoot !== null) await add(join(home, "TROPOS.md"), homeRoot, "user");
 
   const gitTop = gitRoot(cwd);
-  const top = gitTop ?? parse(cwd).root;
   const scope = gitTop === null ? null : await canonical(gitTop);
+  // Outside a repo there is no project boundary: only cwd's own file counts, not a CLAUDE.md that happens
+  // to sit in a parent folder (the Desktop, the home) and belongs to something else.
   const chain: string[] = [];
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    chain.unshift(dir);
-    if (dir === top || dirname(dir) === dir) break;
+  if (gitTop === null) chain.push(cwd);
+  else {
+    for (let dir = cwd; ; dir = dirname(dir)) {
+      chain.unshift(dir);
+      if (dir === gitTop || dirname(dir) === dir) break;
+    }
   }
   for (const dir of chain) {
     for (const name of PROJECT_MEMORY_NAMES) {

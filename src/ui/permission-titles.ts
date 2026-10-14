@@ -4,6 +4,7 @@
 const LEARNING_TITLES: Record<string, string> = {
   Memory: "Save to memory",
   SkillManage: "Save a skill",
+  AgentManage: "Change an agent",
   DailyNote: "Add a daily note",
   Identity: "Update identity",
 };

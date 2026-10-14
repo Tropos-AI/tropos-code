@@ -22,10 +22,13 @@ function listing(agents: SubagentDefinition[]): string {
 
 /**
  * The Agent tool: hands a self-contained task to a subagent with its own context window and returns
- * its final report. Its description lists the agents, fixed for the session (prompt caching).
+ * its final report. Its description lists the agents known at the start, fixed for the session (prompt
+ * caching); `agents` is read at call time, and `reload` refreshes it from disk when a name is unknown,
+ * so an agent created mid-session (AgentManage) can be started right away.
  */
-export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent): AnyTool {
-  const byName = new Map(agents.map((a) => [a.name, a]));
+export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent, reload?: () => Promise<void>): AnyTool {
+  const find = (name: string) => agents.find((a) => a.name === name);
+  const initial = [...agents];
   return defineTool({
     name: AGENT_TOOL_NAME,
     kind: "meta",
@@ -34,17 +37,21 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent):
       "research whose details you don't need to keep, or independent pieces of work that can run in parallel (several Agent calls in one response run concurrently). " +
       "The agent can't see this conversation: put everything it needs in the prompt, and say what to report back. " +
       "Its tool calls go through the same permission checks as yours. Its final message comes back as the result; relay what matters to the user.\n\n" +
-      `Available agents:\n${listing(agents)}`,
+      `Available agents:\n${listing(initial)}`,
     schema,
     summarize: (input) => {
       const name = input.subagent_type ?? "general-purpose";
-      const emoji = byName.get(name)?.emoji;
+      const emoji = find(name)?.emoji;
       return `${emoji ? `${emoji} ` : ""}${name}: ${input.description}`;
     },
     subject: (input) => ({ paths: [], target: input.subagent_type ?? "general-purpose" }),
     async run(input, ctx) {
       const name = input.subagent_type ?? "general-purpose";
-      const def = byName.get(name);
+      let def = find(name);
+      if (!def && reload) {
+        await reload().catch(() => {});
+        def = find(name);
+      }
       if (!def) return { content: `Unknown agent "${name}". Available: ${agents.map((a) => a.name).join(", ")}.`, isError: true };
       return run(def, input.prompt, ctx);
     },

@@ -90,9 +90,9 @@ describe("sessionTools", () => {
     const holder = {};
     const base = createTools({ rgPath: null });
     const names = (ext: Extensions) => sessionTools(base, ext, { home, cwd, holder, sessionId: () => "s" }).map((t) => t.name).slice(base.length);
-    expect(names(await load())).toEqual(["WebFetch", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "Identity"]);
+    expect(names(await load())).toEqual(["WebFetch", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
     await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
-    expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "Identity"]);
+    expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
   });
 
   test("Memory, SkillManage, DailyNote and Identity record their writes in the ledger with the actor", async () => {
@@ -249,4 +249,19 @@ describe("writing a file formatters or language servers load code from", () => {
     expect(await postWrite(ext, new ReadState(), [doc], signal)).toBeNull();
     expect(await readFile(doc, "utf8")).toBe("x");
   });
+});
+
+test("reloadAgents picks up an agent file written after startup, in the same list the Agent tool reads", async () => {
+  const ext = await load();
+  const list = ext.agents;
+  expect(list.some((a) => a.name === "george")).toBe(false);
+  await put(join(home, "agents", "george.md"), "---\nname: george\ndescription: Researches\nemoji: \"🔬\"\n---\nYou research.");
+  await ext.reloadAgents();
+  expect(ext.agents).toBe(list);
+  expect(list.find((a) => a.name === "george")).toMatchObject({ emoji: "🔬", source: "user" });
+  // AgentManage, wired by sessionTools, reloads after it writes.
+  const tools = sessionTools([], ext, { home, cwd, holder: {}, sessionId: () => "s" });
+  const { makeToolContext } = await import("../../test/helpers/tool-context");
+  await tools.find((t) => t.name === "AgentManage")!.run({ action: "create", name: "ana", description: "Analyses", prompt: "You analyse." }, makeToolContext());
+  expect(list.some((a) => a.name === "ana")).toBe(true);
 });
