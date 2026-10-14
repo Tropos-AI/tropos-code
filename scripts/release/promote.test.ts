@@ -390,10 +390,21 @@ describe("errors from GitHub propagate (a gate never fails open)", () => {
   test("previousRelease rejects when GitHub cannot be asked", async () => {
     gh.publish("1.0.0");
     await promoteLatest(deps, "1.0.0");
-    gh.latestReleaseTag = async () => {
-      throw new Error("reading the latest release failed (exit 1): gh: API rate limit exceeded (HTTP 403)");
+    const read = gh.readAsset.bind(gh);
+    gh.readAsset = async (tag, name) => {
+      if (tag === "channels") throw new Error("reading release channels failed (exit 1): gh: API rate limit exceeded (HTTP 403)");
+      return read(tag, name);
     };
     await expect(previousRelease(deps, "1.1.0")).rejects.toThrow("HTTP 403");
+  });
+
+  test("previousRelease names the promoted installer even when the API already calls the new release latest (dry run 2026-10-14)", async () => {
+    gh.publish("1.0.0");
+    await promoteLatest(deps, "1.0.0");
+    gh.publish("1.1.0");
+    gh.latestReleaseTag = async () => "v1.1.0";
+    expect(await previousRelease(deps, "1.1.0")).toEqual({ installerTag: "v1.0.0", stable: "1.0.0" });
+    expect(await previousRelease(deps, "1.0.0")).toEqual({ installerTag: null, stable: "1.0.0" }); // a resumed run of the promoted release
   });
 });
 

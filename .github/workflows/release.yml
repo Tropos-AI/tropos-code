@@ -258,7 +258,7 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
 
-  # previousRelease reads channels/stable with this repository's read-only token and public downloads, so
+  # previousRelease reads channels/latest and channels/stable through the API with this repository's read-only token, so
   # Tropos-AI/tropos-code-channels must stay public (ruling 5); a private one makes this job fail, never skip gate c.
   previous:
     needs: [prepare, publish]
