@@ -2,24 +2,27 @@ import { EFFORTS, type Effort } from "../config/constants";
 
 export const COMMANDS = [
   { name: "help", description: "Show commands and shortcuts" },
+  { name: "model", description: "Pick a model, or set one: /model deepseek/deepseek-chat", argumentHint: "[model]" },
+  { name: "effort", description: "Pick how hard the model thinks: low … max", argumentHint: "[level]" },
+  { name: "providers", description: "Connect a provider (OpenAI, xAI, DeepSeek…) and pick a model" },
   { name: "clear", description: "Start a new session" },
   { name: "resume", description: "Resume an earlier session in this directory" },
-  { name: "model", description: "Show or set the model, e.g. /model deepseek/deepseek-chat" },
-  { name: "providers", description: "Connect a provider (OpenAI, xAI, DeepSeek…) and pick a model" },
-  { name: "effort", description: "Show or set effort: low, medium, high, xhigh, max" },
   { name: "cost", description: "Show this session's cost and context size" },
   { name: "init", description: "Create or improve TROPOS.md for this project" },
   { name: "undo", description: "Revert the files Tropos changed in the last turn" },
   { name: "redo", description: "Re-apply the changes /undo reverted" },
-  { name: "skills", description: "List skills (also usable as /skill-name)" },
-  { name: "agents", description: "List subagents the Agent tool can start" },
-  { name: "hooks", description: "List configured hooks" },
-  { name: "mcp", description: "Show MCP servers and their tools" },
-  { name: "plugins", description: "List plugins in ~/.tropos/plugins" },
-  { name: "memory", description: "Show Tropos's notes about you and this work" },
-  { name: "learn", description: "Save what worked in this session as a reusable skill" },
+  { name: "skills", description: "Browse skills (also usable as /skill-name)" },
+  { name: "agents", description: "Browse subagents the Agent tool can start" },
+  { name: "hooks", description: "Browse configured hooks" },
+  { name: "mcp", description: "MCP servers and their tools" },
+  { name: "plugins", description: "Plugins in ~/.tropos/plugins" },
+  { name: "memory", description: "Tropos's notes about you and this work" },
+  { name: "learn", description: "Save what worked in this session as a reusable skill", argumentHint: "[topic]" },
   { name: "exit", description: "Quit Tropos Code" },
-] as const;
+] as const satisfies ReadonlyArray<{ name: string; description: string; argumentHint?: string }>;
+
+/** Commands that change the session or quit: they can't run while a turn is running. */
+export const BLOCKED_WHILE_BUSY = new Set(["clear", "resume", "undo", "redo", "exit", "quit"]);
 
 /** Names custom commands and skills may not take. */
 export const RESERVED_COMMANDS = new Set<string>([...COMMANDS.map((c) => c.name), "quit", "provider"]);
@@ -74,6 +77,7 @@ const SHORTCUTS = [
 
 export function helpText(extra: ExtraCommand[] = []): string {
   const commands = COMMANDS.map((c) => `  /${c.name.padEnd(10)} ${c.description}`);
+  // (Kept for print-mode style output; the interactive /help is the HelpPanel.)
   const custom = extra.map((c) => {
     const name = `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ""}`;
     return `  ${name.padEnd(10)} ${c.description}`;

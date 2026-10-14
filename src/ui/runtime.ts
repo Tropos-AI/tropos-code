@@ -7,6 +7,39 @@ import type { MessageParam, SessionSummary } from "../session/store";
 import type { ExtraCommand, ListTopic } from "./commands";
 import type { Theme } from "./theme";
 
+/** One row of a panel (/skills, /mcp …): what it is, a dim hint, a status glyph, and details shown when selected. */
+export interface PanelItem {
+  key: string;
+  label: string;
+  hint?: string;
+  aside?: string;
+  status?: "ok" | "warn" | "error" | "off";
+  /** Lines shown under the list for the selected row. */
+  detail?: string[];
+}
+
+export interface PanelSection {
+  title?: string;
+  items: PanelItem[];
+}
+
+/** What a list panel shows; App renders it as a Pane with a SelectList. */
+export interface PanelData {
+  title: string;
+  subtitle?: string;
+  sections: PanelSection[];
+  /** Shown when there are no items, e.g. how to add one. */
+  empty?: string;
+}
+
+/** Recently used and favorite models for the /model picker (persisted in ~/.tropos/models.json). */
+export interface ModelPrefsControl {
+  get(): Promise<{ recent: string[]; favorites: string[] }>;
+  recordUse(model: string): Promise<void>;
+  /** Returns whether the model is now a favorite. */
+  toggleFavorite(model: string): Promise<boolean>;
+}
+
 /** A slash command expanded for the model; `model` applies to that one turn. */
 export type CommandExpansion = { ok: true; prompt: string; model?: string } | { ok: false; reason: string };
 
@@ -55,7 +88,9 @@ export interface Runtime {
   expandCommand(name: string, args: string, ui: Pick<AgentUi, "askPermission">, signal: AbortSignal): Promise<CommandExpansion>;
   /** Model for the next turn only (a command's `model`), or undefined to clear it. */
   setTurnModel(model: string | undefined): void;
-  describe(what: ListTopic): Promise<string>;
+  /** Structured data for /skills, /agents, /hooks, /mcp, /plugins and /memory panels. */
+  panel(what: ListTopic): Promise<PanelData>;
+  readonly modelPrefs: ModelPrefsControl;
   undo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
   redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
   /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */

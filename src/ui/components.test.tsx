@@ -8,7 +8,6 @@ import { DiffView } from "./DiffView";
 import { ANSWER_GRACE_MS, PermissionDialog } from "./PermissionDialog";
 import { PromptInput } from "./PromptInput";
 import { SessionPicker } from "./SessionPicker";
-import { StatusBar } from "./StatusBar";
 import { ToolRow } from "./ToolRow";
 import { TodoList } from "./TodoList";
 import { TranscriptRow } from "./TranscriptRow";
@@ -26,38 +25,21 @@ describe("BrandHeader", () => {
   });
 });
 
-describe("StatusBar", () => {
-  test("mode labels, context and cost", () => {
-    const frame = render(<StatusBar mode="plan" contextPct={12} costUsd={0.0412} />).lastFrame()!;
-    expect(frame).toContain("plan mode");
-    expect(frame).toContain("ctx 12%");
-    expect(frame).toContain("$0.04");
-    expect(frame).toContain("shift+tab");
-    expect(render(<StatusBar mode="bypass" contextPct={0} costUsd={0} />).lastFrame()).toContain("bypass permissions");
-  });
-  test("unknown context window and cost say so instead of showing a number", () => {
-    const frame = render(<StatusBar mode="default" contextPct={undefined} costUsd={undefined} />).lastFrame()!;
-    expect(frame).toContain("ctx ?");
-    expect(frame).toContain("cost unknown");
-    expect(frame).not.toContain("$");
-  });
-});
-
 describe("ToolRow", () => {
   test("done edit shows a diff", () => {
     const display = makeDiff("/w/a.ts", "const a = 1;\n", "const a = 2;\n");
     const frame = render(
       <ToolRow item={{ id: "i1", kind: "tool", toolUseId: "t", name: "Edit", summary: "a.ts", status: "done", output: { content: "ok", display, summary: "+1 −1" } }} />,
     ).lastFrame()!;
-    expect(frame).toContain("Edit");
-    expect(frame).toContain("+1 −1");
+    expect(frame).toContain("Update(a.ts)");
+    expect(frame).toContain("Added 1 line, removed 1 line");
     expect(frame).toContain("+const a = 2;");
     expect(frame).toContain("-const a = 1;");
   });
 
   test("denied tool says so", () => {
     const frame = render(<ToolRow item={{ id: "i2", kind: "tool", toolUseId: "t", name: "Bash", summary: "rm -rf x", status: "denied", output: { content: "no", isError: true } }} />).lastFrame()!;
-    expect(frame).toContain("declined");
+    expect(frame).toContain("⎿  no");
   });
 });
 
@@ -66,11 +48,12 @@ describe("PermissionDialog", () => {
 
   test("shows the command and options", () => {
     const frame = render(<PermissionDialog prompt={prompt} onAnswer={() => {}} />).lastFrame()!;
-    expect(frame).toContain("Run this command?");
+    expect(frame).toContain("Bash command");
+    expect(frame).toContain("Do you want to proceed?");
     expect(frame).toContain("bun test");
     expect(frame).toContain("1. Yes");
     expect(frame).toContain("2. Yes, and don't ask again for Bash(bun test:*)");
-    expect(frame).toContain("3. No, tell Tropos what to do instead");
+    expect(frame).toContain("3. No, and tell Tropos what to do differently");
   });
 
   test("number keys and arrows choose", async () => {
@@ -184,7 +167,7 @@ describe("PermissionDialog", () => {
     expect(frame).toContain("│ echo hi");
     expect(frame.match(/^\s*[›]?\s*1\. Yes$/gm)?.length ?? 0).toBe(0);
     expect(frame.match(/1\. Yes/g)!.length).toBe(2);
-    expect(frame.match(/3\. No, tell Tropos/g)!.length).toBe(1);
+    expect(frame.match(/3\. No, and tell Tropos/g)!.length).toBe(1);
   });
 
   test("a long command is capped, warned about, and cannot be allowed permanently", () => {
@@ -194,7 +177,7 @@ describe("PermissionDialog", () => {
     expect(frame).not.toContain("echo line20");
     expect(frame).toContain("… 5 more lines hidden — the full command will run");
     expect(frame).not.toContain("don't ask again");
-    expect(frame).toContain("2. No, tell Tropos what to do instead");
+    expect(frame).toContain("2. No, and tell Tropos what to do differently");
   });
 
   test("a long write is capped too", () => {
@@ -247,7 +230,7 @@ describe("PermissionDialog", () => {
         onAnswer={() => {}}
       />,
     ).lastFrame()!;
-    expect(frame).toContain("Make this edit?");
+    expect(frame).toContain("Edit file");
     expect(frame).toContain("-one");
     expect(frame).toContain("+two");
   });
@@ -407,8 +390,14 @@ describe("TodoList", () => {
         ]}
       />,
     ).lastFrame()!;
-    expect(frame).toContain("☑ write tests");
-    expect(frame).toContain("◐ Fixing the bug");
-    expect(frame).toContain("☐ ship it");
+    expect(frame).toContain("✔ write tests");
+    expect(frame).toContain("◼ Fixing the bug");
+    expect(frame).toContain("◻ ship it");
   });
+});
+
+test("the header keeps the end of a long path", async () => {
+  const { fitPath } = await import("./BrandHeader");
+  expect(fitPath("/short", 20)).toBe("/short");
+  expect(fitPath("/a/very/long/path/to/project", 12)).toBe("…/to/project");
 });

@@ -5,6 +5,7 @@ import { MODES, type Mode } from "../config/constants";
 import { SettingsError, loadSettings, settingsPaths, type Settings } from "../config/settings";
 import { compileRules } from "../permissions/engine";
 import { troposHome } from "../paths";
+import { ModelPrefs } from "../config/model-prefs";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { resolveToolPath } from "../tools/paths";
 import { createTools } from "../tools/registry";
@@ -220,6 +221,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     ext,
     subagents,
     env,
+    modelPrefs: new ModelPrefs(home),
   };
   try {
     return await runSession();

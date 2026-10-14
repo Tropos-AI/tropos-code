@@ -35,6 +35,7 @@ export function fakeRuntime(
     expand?: Runtime["expandCommand"];
     undo?: Runtime["undo"];
     start?: Runtime["start"];
+    modelPrefs?: Runtime["modelPrefs"];
   } = {},
 ): Runtime & { model: FakeModel; inputs: string[]; turnModels: Array<string | undefined>; described: ListTopic[] } {
   const model = new FakeModel(steps);
@@ -61,10 +62,11 @@ export function fakeRuntime(
     setTurnModel: (m) => {
       turnModels.push(m);
     },
-    describe: async (what) => {
+    panel: async (what) => {
       described.push(what);
-      return `about ${what}`;
+      return { title: `about ${what}`, sections: [{ items: [{ key: "a", label: `${what} item`, hint: "hint", status: "ok" as const, detail: ["detail line"] }] }] };
     },
+    modelPrefs: over.modelPrefs ?? { get: async () => ({ recent: [], favorites: [] }), recordUse: async () => {}, toggleFavorite: async () => true },
     undo: over.undo ?? (async () => ({ ok: false, reason: "Nothing to undo." })),
     redo: async () => ({ ok: true, files: [] }),
     start: over.start ?? (async () => {}),

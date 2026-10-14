@@ -10,6 +10,7 @@ import { compileRules } from "../permissions/engine";
 import { SessionStore } from "../session/store";
 import { createTools } from "../tools/registry";
 import { DARK } from "../ui/theme";
+import { ModelPrefs } from "../config/model-prefs";
 import { loadExtensions } from "./extensions";
 import { createRuntime, type AppContext } from "./runtime";
 
@@ -33,6 +34,7 @@ beforeEach(async () => {
     ext: await loadExtensions({ cwd: dir, home: join(dir, ".home"), settings: DEFAULT_SETTINGS, env: {}, connect: false }),
     subagents: {},
     env: {},
+    modelPrefs: new ModelPrefs(join(dir, ".home")),
   };
 });
 afterEach(() => removeDir(dir));
@@ -136,28 +138,29 @@ describe("extensions in the runtime", () => {
     expect(rt.extraCommands.map((c) => c.name)).toEqual(["date", "deploy"]);
   });
 
-  test("listings", async () => {
+  test("panels", async () => {
     await writeFileAt(join(ctx.home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\ndisable-model-invocation: true\n---\nx");
     await writeFileAt(join(ctx.home, "plugins", "kit", "plugin.json"), JSON.stringify({ name: "kit", version: "1.2.0", description: "Tools" }));
     await withExt({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }] }, disabledPlugins: [] });
     const { runtime: rt } = await runtime();
-    expect(await rt.describe("skills")).toContain("deploy (user, user-only, /deploy): Deploy");
-    expect(await rt.describe("agents")).toContain("general-purpose (builtin)");
-    expect(await rt.describe("hooks")).toContain("PreToolUse[Bash] settings: guard.sh");
-    expect(await rt.describe("mcp")).toContain("No MCP servers");
-    expect(await rt.describe("plugins")).toContain("kit 1.2.0: Tools");
+    const skills = await rt.panel("skills");
+    expect(skills.sections[0]).toMatchObject({ title: "Yours (~/.tropos/skills)", items: [{ label: "deploy", hint: "Deploy", aside: "/deploy · you only" }] });
+    const agents = await rt.panel("agents");
+    expect(agents.sections[0]!.title).toBe("Built-in");
+    expect(agents.sections[0]!.items.map((i) => i.label)).toContain("general-purpose");
+    expect((await rt.panel("hooks")).sections[0]!.items[0]).toMatchObject({ label: "PreToolUse [Bash]", hint: "guard.sh" });
+    expect(await rt.panel("mcp")).toMatchObject({ sections: [], empty: expect.stringContaining("No MCP servers") });
+    expect((await rt.panel("plugins")).sections[0]!.items[0]).toMatchObject({ label: "kit", hint: "Tools", aside: "1.2.0", status: "ok" });
     await ctx.ext.notes!.add("memory", "Uses bun");
-    const memory = await rt.describe("memory");
-    expect(memory).toContain("Uses bun");
-    expect(memory).toContain("(empty)");
+    const memory = await rt.panel("memory");
+    expect(memory.sections[0]!.items[0]!.label).toBe("Uses bun");
+    expect(memory.sections[1]!.items).toEqual([]);
     await rm(join(ctx.home, "skills"), { recursive: true });
-    await rm(join(ctx.home, "plugins"), { recursive: true });
     await withExt({ memory: false });
     const { runtime: rt2 } = await runtime();
-    expect(await rt2.describe("memory")).toContain("Memory is off");
-    expect(await rt2.describe("skills")).toContain("No skills");
-    expect(await rt2.describe("hooks")).toContain("No hooks");
-    expect(await rt2.describe("plugins")).toContain("No plugins");
+    expect((await rt2.panel("memory")).empty).toContain("Memory is off");
+    expect((await rt2.panel("skills")).sections).toEqual([]);
+    expect((await rt2.panel("hooks")).sections).toEqual([]);
   });
 
   test("SessionStart context reaches the first prompt; SessionEnd fires on clear and shutdown", async () => {

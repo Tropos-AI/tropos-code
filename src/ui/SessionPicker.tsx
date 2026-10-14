@@ -1,7 +1,9 @@
 // src/ui/SessionPicker.tsx
-import { Box, Text, useInput } from "ink";
+import { Text, useInput } from "ink";
 import { useState } from "react";
 import type { SessionSummary } from "../session/store";
+import { Pane } from "./design/Pane";
+import { windowStart } from "./design/SelectList";
 import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
 
@@ -21,6 +23,7 @@ export function age(date: Date, now = Date.now()): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+/** /resume: saved sessions for this directory, newest first, as a Pane with a `❯` cursor. */
 export function SessionPicker({ sessions, onPick, onCancel }: { sessions: SessionSummary[]; onPick(id: string): void; onCancel(): void }) {
   const theme = useTheme();
   const [selected, setSelected] = useState(0);
@@ -30,18 +33,21 @@ export function SessionPicker({ sessions, onPick, onCancel }: { sessions: Sessio
     if (key.downArrow) return setSelected((s) => Math.min(sessions.length - 1, s + 1));
     if (key.return && sessions[selected]) onPick(sessions[selected]!.id);
   });
-  const first = Math.max(0, Math.min(selected - Math.floor(VISIBLE / 2), sessions.length - VISIBLE));
+  const first = windowStart(selected, sessions.length, VISIBLE);
+  const count = sessions.length === 1 ? "1 session" : `${sessions.length} sessions`;
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginTop={1}>
-      <Text bold color={theme.accent}>
-        Resume a session
-      </Text>
+    <Pane title="Resume a session" aside={count} footer="↑↓ to move · enter to resume · esc to cancel">
+      {sessions.length === 0 ? <Text color={theme.muted}>No saved sessions in this directory yet.</Text> : null}
+      {first > 0 ? <Text color={theme.muted}>{`  ↑ ${first} more`}</Text> : null}
       {sessions.slice(first, first + VISIBLE).map((s, i) => {
         const index = first + i;
+        const active = index === selected;
         return (
-          <Text key={s.id} color={index === selected ? theme.accent : undefined}>
-            {index === selected ? "› " : "  "}
-            {title(s.title)}
+          <Text key={s.id}>
+            <Text color={theme.accent}>{active ? "❯ " : "  "}</Text>
+            <Text color={active ? theme.accent : undefined} bold={active}>
+              {title(s.title)}
+            </Text>
             <Text color={theme.muted}>
               {"  "}
               {age(s.updatedAt)} · {s.messageCount} messages
@@ -49,7 +55,7 @@ export function SessionPicker({ sessions, onPick, onCancel }: { sessions: Sessio
           </Text>
         );
       })}
-      <Text color={theme.muted}>enter to resume · esc to cancel</Text>
-    </Box>
+      {first + VISIBLE < sessions.length ? <Text color={theme.muted}>{`  ↓ ${sessions.length - first - VISIBLE} more`}</Text> : null}
+    </Pane>
   );
 }
