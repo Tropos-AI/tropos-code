@@ -1,3 +1,4 @@
+// src/ui/transcript.ts
 import type { AgentEvent, ToolStatus } from "../agent/events";
 import type { MessageParam } from "../session/store";
 import type { ToolOutput } from "../tools/types";
@@ -13,11 +14,17 @@ export type TranscriptItem =
       name: string;
       summary: string;
       status: "running" | ToolStatus;
+      /** The tool's raw input, so rows can show per-tool headers (paths, patterns, todo lists). */
+      input?: unknown;
       output?: ToolOutput;
       /** Latest progress line while running, e.g. a subagent's current tool. */
       progress?: string;
+      /** How many progress lines arrived; a subagent sends one per tool it starts, so this counts its tool uses. */
+      progressCount?: number;
     }
-  | { id: string; kind: "notice"; level: "info" | "warn" | "error"; text: string };
+  | { id: string; kind: "notice"; level: "info" | "warn" | "error"; text: string }
+  /** The footer after a finished turn: "Worked for 12s". */
+  | { id: string; kind: "turn_done"; seconds: number };
 
 type NewItem = TranscriptItem extends infer T ? (T extends TranscriptItem ? Omit<T, "id"> : never) : never;
 
@@ -68,6 +75,15 @@ export function addNotice(t: Transcript, level: "info" | "warn" | "error", text:
   return pushLive(t, { kind: "notice", level, text });
 }
 
+/** Turns this short or shorter get no footer: a quick reply needs no "Worked for 2s". */
+export const TURN_DONE_MIN_SECONDS = 5;
+
+/** Adds the turn footer after everything the turn produced; a no-op for turns of TURN_DONE_MIN_SECONDS or less. */
+export function addTurnDone(t: Transcript, seconds: number): Transcript {
+  if (!(seconds > TURN_DONE_MIN_SECONDS)) return t;
+  return pushDone(flush(t), { kind: "turn_done", seconds: Math.round(seconds) });
+}
+
 export function reduce(t: Transcript, event: AgentEvent): Transcript {
   switch (event.type) {
     case "text":
@@ -80,7 +96,7 @@ export function reduce(t: Transcript, event: AgentEvent): Transcript {
       return settle(pushLive(t, { kind, text: event.delta }));
     }
     case "tool_start":
-      return settle(pushLive(t, { kind: "tool", toolUseId: event.id, name: event.name, summary: event.summary, status: "running" }));
+      return settle(pushLive(t, { kind: "tool", toolUseId: event.id, name: event.name, summary: event.summary, input: event.input, status: "running" }));
     case "tool_end":
       return settle({
         ...t,
@@ -89,7 +105,9 @@ export function reduce(t: Transcript, event: AgentEvent): Transcript {
     case "tool_progress":
       return {
         ...t,
-        live: t.live.map((i) => (i.kind === "tool" && i.toolUseId === event.id && i.status === "running" ? { ...i, progress: event.text } : i)),
+        live: t.live.map((i) =>
+          i.kind === "tool" && i.toolUseId === event.id && i.status === "running" ? { ...i, progress: event.text, progressCount: (i.progressCount ?? 0) + 1 } : i,
+        ),
       };
     case "notice":
       return addNotice(t, event.level, event.text);
@@ -145,7 +163,7 @@ export function historyToTranscript(messages: MessageParam[]): Transcript {
       } else if (m.role === "assistant" && block.type === "text") {
         t = pushDone(t, { kind: "assistant", text: block.text });
       } else if (m.role === "assistant" && block.type === "tool_use") {
-        t = pushDone(t, { kind: "tool", toolUseId: block.id, name: block.name, summary: summarizeInput(block.input), status: "done" });
+        t = pushDone(t, { kind: "tool", toolUseId: block.id, name: block.name, summary: summarizeInput(block.input), input: block.input, status: "done" });
       }
     }
   }

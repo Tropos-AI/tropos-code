@@ -26,7 +26,7 @@ import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
 import type { AnyTool, ToolContext } from "../tools/types";
 import type { ListTopic } from "../ui/commands";
-import type { AgentUi, CommandExpansion, ProviderControl, Runtime } from "../ui/runtime";
+import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSection, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
 
@@ -46,6 +46,8 @@ export interface AppContext {
   localSettingsPath: string;
   /** Commands, skills, agents, hooks, MCP, snapshots, formatters, memory (phase 2). */
   ext: Extensions;
+  /** Recent and favorite models for the /model picker. */
+  modelPrefs: ModelPrefsControl;
   /** The running agent's subagent dependencies, read by the Agent tool. */
   subagents: SubagentHolder;
   env: NodeJS.ProcessEnv;
@@ -271,61 +273,123 @@ export async function expandSlash(ctx: AppContext, name: string, args: string, i
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const firstLine = (text: string) => text.split("\n")[0] ?? "";
 
-/** Text for /skills, /agents, /hooks, /mcp, /plugins and /memory. */
-export async function describeExtensions(ctx: AppContext, what: ListTopic): Promise<string> {
+/** Structured data for /skills, /agents, /hooks, /mcp, /plugins and /memory, rendered as panels. */
+export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<PanelData> {
   const ext = ctx.ext;
   switch (what) {
     case "skills": {
-      if (ext.skills.length === 0) return "No skills. Add one at .tropos/skills/<name>/SKILL.md or ~/.tropos/skills/<name>/SKILL.md.";
-      const lines = ext.skills.map((s) => {
-        const flags = [s.source, s.modelInvocable ? "" : "user-only", s.userInvocable ? `/${s.name}` : ""].filter(Boolean).join(", ");
-        return `  ${s.name} (${flags}): ${s.description.split("\n")[0]}`;
-      });
-      return [`Skills (${ext.skills.length})`, ...lines].join("\n");
+      const bySource = (source: string) =>
+        ext.skills
+          .filter((s) => (source === "plugin" ? s.source === "plugin" : s.source === source))
+          .map((s) => ({
+            key: s.name,
+            label: s.name,
+            hint: firstLine(s.description),
+            aside: [s.userInvocable ? `/${s.name}` : "", s.modelInvocable ? "" : "you only"].filter(Boolean).join(" · ") || undefined,
+            detail: [s.description, ...(s.whenToUse ? [`When: ${s.whenToUse}`] : []), s.path],
+          }));
+      return {
+        title: "Skills",
+        subtitle: plural(ext.skills.length, "skill"),
+        sections: [
+          { title: "Yours (~/.tropos/skills)", items: bySource("user") },
+          { title: "This project", items: bySource("project") },
+          { title: "Plugins", items: bySource("plugin") },
+        ].filter((section) => section.items.length > 0),
+        empty: "No skills yet. Add one at ~/.tropos/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
+      };
     }
     case "agents":
-      return [
-        `Subagents (${ext.agents.length})`,
-        ...ext.agents.map((a) => `  ${a.name} (${a.source}${a.tools ? `; tools: ${a.tools.join(", ")}` : ""}): ${a.description.split("\n")[0]}`),
-      ].join("\n");
-    case "hooks": {
-      const lines: string[] = [];
-      const add = (from: string, hooks: Extensions["hookConfig"]["hooks"]) => {
-        for (const event of HOOK_EVENTS) {
-          for (const m of hooks[event] ?? []) {
-            for (const h of m.hooks) lines.push(`  ${event}${m.matcher ? `[${m.matcher}]` : ""} ${from}: ${h.command}`);
-          }
-        }
+      return {
+        title: "Agents",
+        subtitle: `${plural(ext.agents.length, "agent")} the Agent tool can start`,
+        sections: (["builtin", "user", "project", "plugin"] as const)
+          .map((source) => ({
+            title: { builtin: "Built-in", user: "Yours (~/.tropos/agents)", project: "This project", plugin: "Plugins" }[source],
+            items: ext.agents
+              .filter((a) => a.source === source)
+              .map((a) => ({
+                key: a.name,
+                label: a.name,
+                hint: firstLine(a.description),
+                aside: a.model,
+                detail: [a.description, `Tools: ${a.tools ? a.tools.join(", ") : "all"}`, ...(a.path ? [a.path] : [])],
+              })),
+          }))
+          .filter((section) => section.items.length > 0),
       };
-      add("settings", ext.hookConfig.hooks);
-      for (const p of ext.hookConfig.plugins ?? []) add(`plugin ${p.name}`, p.hooks);
-      return lines.length ? ["Hooks", ...lines].join("\n") : 'No hooks. Add them under "hooks" in ~/.tropos/settings.json.';
+    case "hooks": {
+      const items = (from: string, hooks: Extensions["hookConfig"]["hooks"]) =>
+        HOOK_EVENTS.flatMap((event) =>
+          (hooks[event] ?? []).flatMap((m, mi) =>
+            m.hooks.map((h, hi) => ({
+              key: `${from}:${event}:${mi}:${hi}`,
+              label: `${event}${m.matcher ? ` [${m.matcher}]` : ""}`,
+              hint: firstLine(h.command),
+              detail: [h.command, `Timeout: ${h.timeout ?? 60}s`],
+            })),
+          ),
+        );
+      return {
+        title: "Hooks",
+        sections: [
+          { title: "Settings (~/.tropos/settings.json)", items: items("settings", ext.hookConfig.hooks) },
+          ...(ext.hookConfig.plugins ?? []).map((p) => ({ title: `Plugin ${p.name}`, items: items(p.name, p.hooks) })),
+        ].filter((section) => section.items.length > 0),
+        empty: 'No hooks. Add them under "hooks" in ~/.tropos/settings.json.',
+      };
     }
     case "mcp": {
       const status = ext.mcp?.status() ?? [];
-      if (status.length === 0) return 'No MCP servers. Add them under "mcpServers" in ~/.tropos/settings.json.';
-      return [
-        "MCP servers",
-        ...status.map((s) => `  ${s.name} (${s.type}): ${s.state}, ${plural(s.tools, "tool")}${s.error ? ` — ${s.error}` : ""}`),
-      ].join("\n");
+      return {
+        title: "MCP servers",
+        subtitle: plural(status.length, "server"),
+        sections: [
+          {
+            items: status.map((s) => ({
+              key: s.name,
+              label: s.name,
+              hint: s.state === "connected" ? `connected · ${plural(s.tools, "tool")}` : s.state,
+              aside: s.type,
+              status: s.state === "connected" ? (s.error ? ("warn" as const) : ("ok" as const)) : s.state === "disabled" ? ("off" as const) : ("error" as const),
+              detail: s.error ? [s.error] : [`${plural(s.tools, "tool")}, named mcp__${s.name}__<tool>`],
+            })),
+          },
+        ].filter((section) => section.items.length > 0),
+        empty: 'No MCP servers. Add them under "mcpServers" in ~/.tropos/settings.json.',
+      };
     }
-    case "plugins": {
-      if (ext.plugins.length === 0) return "No plugins. Put plugin folders in ~/.tropos/plugins/.";
-      return [
-        "Plugins",
-        ...ext.plugins.map((p) => `  ${p.name}${p.version ? ` ${p.version}` : ""}${p.enabled ? "" : " (disabled)"}${p.description ? `: ${p.description}` : ""}`),
-      ].join("\n");
-    }
+    case "plugins":
+      return {
+        title: "Plugins",
+        subtitle: plural(ext.plugins.length, "plugin"),
+        sections: [
+          {
+            items: ext.plugins.map((p) => ({
+              key: p.name,
+              label: p.name,
+              hint: p.description,
+              aside: p.version,
+              status: p.enabled ? ("ok" as const) : ("off" as const),
+              detail: [p.root, p.enabled ? "Enabled" : 'Disabled ("disabledPlugins" in settings)'],
+            })),
+          },
+        ].filter((section) => section.items.length > 0),
+        empty: "No plugins. Put plugin folders in ~/.tropos/plugins/.",
+      };
     case "memory": {
-      if (!ext.notes) return 'Memory is off ("memory": false in settings).';
-      const parts: string[] = [];
+      if (!ext.notes) return { title: "Memory", sections: [], empty: 'Memory is off ("memory": false in settings).' };
+      const sections: PanelSection[] = [];
       for (const target of ["memory", "user"] as const) {
         const entries = await ext.notes.entries(target);
-        const header = `${notesLabel(target)} ${usageHeader(notesSize(entries), MEMORY_LIMITS[target])}`;
-        parts.push([header, ...(entries.length ? entries.map((e) => `  • ${e.replace(/\n/g, "\n    ")}`) : ["  (empty)"])].join("\n"));
+        sections.push({
+          title: `${notesLabel(target)} ${usageHeader(notesSize(entries), MEMORY_LIMITS[target])}`,
+          items: entries.map((e, i) => ({ key: `${target}:${i}`, label: firstLine(e), detail: e.split("\n") })),
+        });
       }
-      return [...parts, `Files: ${ext.notes.dir}`].join("\n\n");
+      return { title: "Memory", subtitle: ext.notes.dir, sections, empty: "No notes yet." };
     }
   }
 }
@@ -427,7 +491,8 @@ export async function createRuntime(
         .catch(() => {});
     },
     expandCommand: (name, args, ui, signal) => expandSlash(ctx, name, args, commandIO(ctx, () => state.mode, toolContext, ui, signal, hooks)),
-    describe: (what) => describeExtensions(ctx, what),
+    panel: (what) => extensionPanel(ctx, what),
+    modelPrefs: ctx.modelPrefs,
     undo: () => ctx.ext.undo.undo(),
     redo: () => ctx.ext.undo.redo(),
     start: async (notice) => {

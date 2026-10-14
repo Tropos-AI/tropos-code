@@ -14,7 +14,8 @@ describe("App", () => {
     const r = render(<App runtime={fakeRuntime([])} />);
     await tick();
     expect(all(r)).toContain("Tropos Code");
-    expect(r.lastFrame()).toContain("default mode");
+    expect(r.lastFrame()).toContain("? for shortcuts");
+    expect(r.lastFrame()).toContain("❯ Ask Tropos");
   });
 
   test("a prompt gets a streamed answer", async () => {
@@ -47,7 +48,7 @@ describe("App", () => {
     await tick();
     r.stdin.write("\r");
     await tick(150);
-    expect(r.lastFrame()).toContain("Run this command?");
+    expect(r.lastFrame()).toContain("Do you want to proceed?");
     await tick(ANSWER_GRACE_MS + 50);
     r.stdin.write("1");
     await tick(150);
@@ -83,7 +84,7 @@ describe("App", () => {
     r.stdin.write("\r");
     await tick();
     expect(runtime.state().model).toBe("deepseek/deepseek-flash");
-    expect(all(r)).toContain("Model set to deepseek/deepseek-flash for this session.");
+    expect(all(r)).toContain("Model set to deepseek/deepseek-flash");
     expect(r.lastFrame()).toContain("deepseek/deepseek-flash");
     r.stdin.write("/providers");
     await tick();
@@ -101,7 +102,12 @@ describe("App", () => {
     await tick();
     r.stdin.write("\r");
     await tick();
-    expect(all(r)).toContain("/clear");
+    expect(r.lastFrame()).toContain("Tropos Code v0.1.0-test");
+    r.stdin.write("\x1b[C"); // → to the Commands tab
+    await tick();
+    expect(r.lastFrame()).toContain("/clear");
+    r.stdin.write("\x1b");
+    await tick();
     r.stdin.write("/effort huge");
     await tick();
     r.stdin.write("\r");
@@ -137,7 +143,7 @@ describe("App", () => {
     expect(runtime.model.requests).toHaveLength(1);
     expect(runtime.history().filter((m) => m.role === "user")).toHaveLength(1);
     expect(all(r)).toContain("done once");
-    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(r.lastFrame()).toContain("? for shortcuts");
   });
 
   test("ctrl+c at a permission dialog denies it and ends the turn without running the tool", async () => {
@@ -148,7 +154,7 @@ describe("App", () => {
     await tick();
     r.stdin.write("\r");
     await tick(150);
-    expect(r.lastFrame()).toContain("Run this command?");
+    expect(r.lastFrame()).toContain("Do you want to proceed?");
     await tick(ANSWER_GRACE_MS + 50);
     r.stdin.write("\x03");
     await tick(200);
@@ -208,10 +214,12 @@ describe("App", () => {
     await tick();
     r.stdin.write("\r");
     await tick(100);
-    expect(r.lastFrame()).not.toContain("Ask Tropos");
+    // The input stays while Tropos works; the footer says how to stop it.
+    expect(r.lastFrame()).toContain("esc to interrupt");
+    expect(r.lastFrame()).toContain("Queue a message");
     r.stdin.write("\x1b");
     await tick(200);
-    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(r.lastFrame()).not.toContain("esc to interrupt");
   });
 
   test("/clear resets the transcript and the cost", async () => {
@@ -229,7 +237,7 @@ describe("App", () => {
     await tick(150);
     expect(runtime.history()).toEqual([]);
     expect(r.lastFrame()).toContain("ctx 0% · $0.00");
-    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(r.lastFrame()).toContain("? for shortcuts");
   });
 
   test("/resume opens the picker and picking a session replays its history", async () => {
@@ -255,7 +263,7 @@ describe("App", () => {
     await tick(200);
     expect(r.lastFrame()).toContain("earlier answer");
     expect(r.lastFrame()).toContain("ctx 0% · $0.00");
-    expect(r.lastFrame()).toContain("Ask Tropos");
+    expect(r.lastFrame()).toContain("? for shortcuts");
     expect(runtime.history()).toEqual(history);
   });
 
@@ -328,23 +336,35 @@ describe("App", () => {
     await tick();
     r.stdin.write("\r");
     await tick(100);
-    expect(all(r)).toContain("Custom commands and skills");
+    r.stdin.write("\x1b[C");
+    await tick();
+    r.stdin.write("\x1b[C");
+    await tick();
+    expect(r.lastFrame()).toContain("/review");
+    expect(r.lastFrame()).toContain("Review the diff");
   });
 
   test("listings, undo and redo show notices", async () => {
     const runtime = fakeRuntime([], { undo: async () => ({ ok: true, files: Array.from({ length: 12 }, (_, i) => `f${i}.ts`) }) });
     const r = render(<App runtime={runtime} />);
     await tick();
-    for (const cmd of ["/mcp", "/undo", "/redo"]) {
+    r.stdin.write("/mcp");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(r.lastFrame()).toContain("about mcp");
+    expect(r.lastFrame()).toContain("mcp item");
+    r.stdin.write("\x1b");
+    await tick();
+    for (const cmd of ["/undo", "/redo"]) {
       r.stdin.write(cmd);
       await tick();
       r.stdin.write("\r");
       await tick(100);
     }
     expect(runtime.described).toEqual(["mcp"]);
-    expect(all(r)).toContain("about mcp");
     expect(all(r)).toContain("Reverted 12 file(s): f0.ts");
-    expect(all(r)).toContain("f9.ts and 2");
+    expect(all(r)).toContain("f5.ts and 6 more");
     expect(all(r)).toContain("Re-applied: no files differed.");
   });
 
@@ -416,6 +436,150 @@ describe("App", () => {
     await tick(100);
     expect(all(r)).toContain("/slow cancelled.");
     expect(runtime.model.requests).toHaveLength(0);
+  });
+
+  test("messages typed during a turn queue, show above the input, and run in order", async () => {
+    const slow: Step = async () => {
+      await Bun.sleep(150);
+      return reply([textBlock("first done")]);
+    };
+    const runtime = fakeRuntime([slow, () => reply([textBlock("second done")])]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("one");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("two");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("❯ two");
+    await tick(400);
+    expect(all(r)).toContain("second done");
+    expect(runtime.model.requests).toHaveLength(2);
+    expect(JSON.stringify(runtime.model.requests[1]!.messages.at(-1))).toContain("two");
+  });
+
+  test("session commands wait for the turn; panels open at once; ↑ takes queued text back", async () => {
+    const hang: Step = (_req, _h, signal) =>
+      new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    const runtime = fakeRuntime([hang]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("work");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("/clear");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("/clear has to wait for the turn to finish");
+    r.stdin.write("/cost");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("Session cost");
+    r.stdin.write("\x1b");
+    await tick();
+    r.stdin.write("later");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("❯ later");
+    // esc interrupts and pauses the queue instead of sending it
+    r.stdin.write("\x1b");
+    await tick(150);
+    expect(r.lastFrame()).toContain("Queued messages are paused");
+    expect(runtime.model.requests).toHaveLength(1);
+    r.stdin.write("\x1b[A"); // ↑ takes it back into the input
+    await tick();
+    expect(r.lastFrame()).not.toContain("paused");
+    expect(r.lastFrame()).toContain("❯ later");
+  });
+
+  test("a second esc on an empty input discards paused queued messages", async () => {
+    const hang: Step = (_req, _h, signal) =>
+      new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    const runtime = fakeRuntime([hang]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("work");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("later");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\x1b");
+    await tick(150);
+    r.stdin.write("\x1b");
+    await tick(100);
+    expect(r.lastFrame()).toContain("Discarded the queued messages.");
+    expect(r.lastFrame()).not.toContain("❯ later");
+  });
+
+  test("/model opens the picker; picking a model and effort applies both", async () => {
+    const runtime = fakeRuntime([], {
+      providers: {
+        status: async () => [
+          {
+            info: { id: "anthropic", name: "Anthropic", api: "anthropic", baseURL: "https://a", keyEnv: ["ANTHROPIC_API_KEY"], keyRequired: false, keyURL: null, capabilities: { maxTokensParam: null, streamUsage: false } },
+            key: { kind: "env", name: "ANTHROPIC_API_KEY" },
+            baseURL: "https://a",
+          },
+        ],
+        connect: async () => {},
+        disconnect: async () => false,
+        models: async () => ["claude-opus-5-5", "claude-sonnet-5-5"],
+      },
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/model");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(r.lastFrame()).toContain("Select model");
+    r.stdin.write("sonnet");
+    await tick(100);
+    r.stdin.write("\x1b[D"); // ← lowers the effort to medium
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(runtime.state()).toMatchObject({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(r.lastFrame()).toContain("Model set to claude-sonnet-5-5 · medium effort");
+  });
+
+  test("/effort without a level opens the picker", async () => {
+    const runtime = fakeRuntime([]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/effort");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    expect(r.lastFrame()).toContain("Effort");
+    r.stdin.write("5");
+    await tick();
+    expect(runtime.state().effort).toBe("max");
+    expect(r.lastFrame()).toContain("Effort: max");
+  });
+
+  test("ctrl+o toggles verbose output", async () => {
+    const runtime = fakeRuntime([
+      () => reply([toolUseBlock("t1", "Shell", { command: "seq 10" })], "tool_use"),
+      () => reply([textBlock("ok")]),
+    ], { mode: "default" });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("\x0f"); // ctrl+o
+    await tick();
+    r.stdin.write("\x0f");
+    await tick();
+    expect(r.lastFrame()).toContain("? for shortcuts");
   });
 });
 

@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { PermissionAnswer, PermissionPrompt } from "../agent/events";
 import { makeDiff, patchBody } from "../tools/diff";
+import { Pane } from "./design/Pane";
 import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
 
@@ -16,17 +17,21 @@ function safe(text: string): string {
   return sanitizeForTerminal(text).replace(HIDDEN, (c) => `⟨U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
 }
 
-function title(prompt: PermissionPrompt): string {
-  if (prompt.kind === "exec") return "Run this command?";
-  if (prompt.toolName === "Edit") return "Make this edit?";
-  if (prompt.kind === "edit") return "Write this file?";
-  if (prompt.kind === "read") return "Read outside the project?";
-  return `Allow ${safe(prompt.toolName)}?`;
+/** The dialog title names the action, the way the transcript names the tool, so the prompt reads at a glance. */
+export function permissionTitle(prompt: PermissionPrompt, newFile?: boolean): string {
+  if (prompt.toolName === "Bash" || prompt.kind === "exec") return "Bash command";
+  if (prompt.toolName === "Write") return newFile ? "Create file" : "Write file";
+  if (prompt.toolName === "Edit" || prompt.kind === "edit") return "Edit file";
+  if (prompt.toolName === "WebFetch") return "Fetch";
+  if (prompt.kind === "read") return "Read outside the project";
+  return `Use ${safe(prompt.toolName)}`;
 }
 
 interface PreviewLine {
   text: string;
   color?: string;
+  /** Full-line background for added and removed diff lines. */
+  background?: string;
 }
 
 interface PreviewData {
@@ -36,7 +41,14 @@ interface PreviewData {
   hiddenNote: string;
 }
 
-function buildPreview(prompt: PermissionPrompt, colors: { add: string; remove: string; muted: string }): PreviewData {
+interface PreviewColors {
+  text: string;
+  addBg: string;
+  removeBg: string;
+  muted: string;
+}
+
+function buildPreview(prompt: PermissionPrompt, colors: PreviewColors): PreviewData {
   const input = (prompt.input ?? {}) as Record<string, unknown>;
   const cap = (lines: PreviewLine[], note: string): PreviewData => ({
     lines: lines.slice(0, PREVIEW_LINES),
@@ -45,7 +57,11 @@ function buildPreview(prompt: PermissionPrompt, colors: { add: string; remove: s
   });
   if (prompt.toolName === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
     const body = patchBody(sanitizeForTerminal(makeDiff(prompt.summary, input.old_string, input.new_string).patch));
-    const lines = body.map((l) => ({ text: safe(l), color: l.startsWith("+") ? colors.add : l.startsWith("-") ? colors.remove : colors.muted }));
+    const lines = body.map((l): PreviewLine => {
+      if (l.startsWith("+")) return { text: safe(l), color: colors.text, background: colors.addBg };
+      if (l.startsWith("-")) return { text: safe(l), color: colors.text, background: colors.removeBg };
+      return { text: safe(l), color: colors.muted };
+    });
     const data = cap(lines, "the full edit will be applied");
     return { ...data, header: `${safe(prompt.summary)}${input.replace_all === true ? " (replace all)" : ""}` };
   }
@@ -57,15 +73,21 @@ function buildPreview(prompt: PermissionPrompt, colors: { add: string; remove: s
   return cap(safe(prompt.summary).split("\n").map((text) => ({ text })), "the full text applies");
 }
 
+/**
+ * The preview sits behind a dim left gutter so that lines in a command or file (say "1. Yes") can never
+ * pass for the dialog's own options. Diff lines get backgrounds padded to the widest line so the
+ * change reads as a block.
+ */
 function Preview({ data }: { data: PreviewData }) {
   const theme = useTheme();
+  const width = Math.max(1, ...data.lines.filter((l) => l.background).map((l) => l.text.length));
   return (
     <Box flexDirection="column">
-      {data.header ? <Text color={theme.muted}>{data.header}</Text> : null}
+      {data.header ? <Text bold>{data.header}</Text> : null}
       <Box flexDirection="column" borderStyle="single" borderColor={theme.muted} borderDimColor borderTop={false} borderBottom={false} borderRight={false} paddingLeft={1}>
         {data.lines.map((line, i) => (
-          <Text key={i} color={line.color}>
-            {line.text}
+          <Text key={i} color={line.color} backgroundColor={line.background}>
+            {line.background ? line.text.padEnd(width) : line.text}
           </Text>
         ))}
       </Box>
@@ -78,15 +100,23 @@ function Preview({ data }: { data: PreviewData }) {
   );
 }
 
-export function PermissionDialog({ prompt, onAnswer }: { prompt: PermissionPrompt; onAnswer(answer: PermissionAnswer): void }) {
+/**
+ * Asks before a tool runs. Options are numbered (1 allow, 2 allow a rule for good when one is offered,
+ * last: decline and tell Tropos what to do instead). Tab on any option opens that feedback line, so an
+ * amendment is always a decline with instructions, never an approval of something unseen. Keys are
+ * ignored for ANSWER_GRACE_MS after a prompt appears, and each prompt is answered at most once.
+ *
+ * `newFile` tells a Write that creates a file from one that overwrites, for the title only.
+ */
+export function PermissionDialog({ prompt, onAnswer, newFile }: { prompt: PermissionPrompt; onAnswer(answer: PermissionAnswer): void; newFile?: boolean }) {
   const theme = useTheme();
-  const preview = buildPreview(prompt, { add: theme.diffAdd, remove: theme.diffRemove, muted: theme.muted });
+  const preview = buildPreview(prompt, { text: theme.text, addBg: theme.diffAddBg, removeBg: theme.diffRemoveBg, muted: theme.muted });
   // A command longer than the preview would run unseen, so it can never be allowed permanently.
   const suggestion = prompt.kind === "exec" && preview.hidden > 0 ? undefined : prompt.suggestion;
   const options: Array<{ label: string; answer: PermissionAnswer | null }> = [
     { label: "Yes", answer: { kind: "allow" } },
     ...(suggestion ? [{ label: `Yes, and don't ask again for ${suggestion}`, answer: { kind: "allow_always", rule: suggestion } as PermissionAnswer }] : []),
-    { label: "No, tell Tropos what to do instead", answer: null },
+    { label: "No, and tell Tropos what to do differently", answer: null },
   ];
   const [selected, setSelected] = useState(0);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -124,39 +154,49 @@ export function PermissionDialog({ prompt, onAnswer }: { prompt: PermissionPromp
       if (key.escape) return answer({ kind: "deny" });
       if (key.return) return answer(feedback.trim() ? { kind: "deny", feedback: feedback.trim() } : { kind: "deny" });
       if (key.backspace || key.delete) return setFeedback(feedback.slice(0, -1));
-      if (input && !key.ctrl && !key.meta) setFeedback(feedback + sanitizeForTerminal(input));
+      if (input && !key.ctrl && !key.meta && !key.tab) setFeedback(feedback + sanitizeForTerminal(input));
       return;
     }
     if (key.escape) return answer({ kind: "deny" });
+    // Tab amends: whatever is highlighted, it opens the "tell Tropos" line and the answer becomes a decline.
+    if (key.tab) return setFeedback("");
     if (key.upArrow) return setSelected((s) => (s - 1 + options.length) % options.length);
-    if (key.downArrow || key.tab) return setSelected((s) => (s + 1) % options.length);
+    if (key.downArrow) return setSelected((s) => (s + 1) % options.length);
     if (key.return) return choose(selected);
     if (input.length === 1 && /^[1-9]$/.test(input)) choose(Number(input) - 1);
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginTop={1}>
-      <Text bold color={theme.accent}>
-        {title(prompt)}
-      </Text>
-      <Box marginY={1} paddingLeft={2} flexDirection="column">
-        <Preview data={preview} />
-      </Box>
-      {prompt.reason ? <Text color={theme.muted}>Why: {safe(prompt.reason)}</Text> : null}
-      {options.map((option, i) => (
-        <Text key={option.label} color={i === selected ? theme.accent : undefined}>
-          {i === selected ? "› " : "  "}
-          {i + 1}. {safe(option.label)}
-        </Text>
-      ))}
-      {feedback !== null ? (
-        <Text>
-          <Text color={theme.muted}>{"  Tell Tropos: "}</Text>
-          {sanitizeForTerminal(feedback)}
-          <Text inverse> </Text>
-        </Text>
+    <Pane title={permissionTitle(prompt, newFile)} footer={feedback === null ? "Esc to cancel · Tab to amend" : "Enter to send · Esc to cancel"}>
+      <Preview data={preview} />
+      {prompt.reason ? (
+        <Box marginTop={1}>
+          <Text color={theme.muted}>Why: {safe(prompt.reason)}</Text>
+        </Box>
       ) : null}
-      <Text color={theme.muted}>esc to decline</Text>
-    </Box>
+      <Box marginTop={1} flexDirection="column">
+        <Text>Do you want to proceed?</Text>
+        {options.map((option, i) => {
+          const active = i === selected && feedback === null;
+          return (
+            <Text key={option.label} color={active ? theme.accent : undefined}>
+              <Text color={theme.accent}>{active ? "❯ " : "  "}</Text>
+              <Text color={active ? theme.accent : theme.muted}>{`${i + 1}. `}</Text>
+              {safe(option.label)}
+            </Text>
+          );
+        })}
+      </Box>
+      {feedback !== null ? (
+        <Box marginTop={1} flexDirection="column">
+          <Text color={theme.muted}>Tell Tropos what to do differently:</Text>
+          <Text>
+            <Text color={theme.accent}>{"❯ "}</Text>
+            {sanitizeForTerminal(feedback)}
+            <Text inverse> </Text>
+          </Text>
+        </Box>
+      ) : null}
+    </Pane>
   );
 }

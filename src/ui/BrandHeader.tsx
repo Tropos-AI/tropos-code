@@ -12,8 +12,18 @@ function shortenHome(path: string): string {
   return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
-export function BrandHeader({ version, model, effort, cwd }: { version: string; model: string; effort: string; cwd: string }) {
+/** Keeps the end of a long path (the part that names the project) and marks the cut with "…". */
+export function fitPath(path: string, max: number): string {
+  if (path.length <= max) return path;
+  return `…${path.slice(path.length - Math.max(1, max - 1))}`;
+}
+
+/** Columns left for the text column: the mark (15), the gap (3) and the padding (2). */
+const TEXT_OFFSET = 20;
+
+export function BrandHeader({ version, model, effort, cwd, width = 80 }: { version: string; model: string; effort: string; cwd: string; width?: number }) {
   const theme = useTheme();
+  const room = Math.max(20, width - TEXT_OFFSET);
   return (
     <Box flexDirection="row" gap={3} paddingX={1} marginBottom={1}>
       <Box flexDirection="column">
@@ -30,7 +40,7 @@ export function BrandHeader({ version, model, effort, cwd }: { version: string; 
         <Text color={theme.muted}>
           {sanitizeForTerminal(model)} · effort {sanitizeForTerminal(effort)}
         </Text>
-        <Text color={theme.muted}>{sanitizeForTerminal(shortenHome(cwd))}</Text>
+        <Text color={theme.muted}>{fitPath(sanitizeForTerminal(shortenHome(cwd)), room)}</Text>
       </Box>
     </Box>
   );

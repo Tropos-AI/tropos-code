@@ -1,7 +1,9 @@
 // src/ui/ProvidersDialog.tsx — /providers: connect a provider with a key, then pick one of its models.
 import { Box, Text, useInput } from "ink";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ProviderStatus } from "../providers/router";
+import { Pane } from "./design/Pane";
+import { windowStart } from "./design/SelectList";
 import type { ProviderControl } from "./runtime";
 import { sanitizeForTerminal } from "./terminal-safe";
 import { useTheme } from "./theme-context";
@@ -20,11 +22,6 @@ export function keyLabel(s: ProviderStatus): string {
 }
 
 const ready = (s: ProviderStatus) => s.key !== null || !s.info.keyRequired;
-
-/** Window of `size` rows that keeps `selected` in view. */
-function windowStart(selected: number, total: number, size: number): number {
-  return Math.max(0, Math.min(selected - Math.floor(size / 2), total - size));
-}
 
 export function ProvidersDialog({
   control,
@@ -137,15 +134,13 @@ export function ProvidersDialog({
     }
   });
 
-  const frame = (title: string, body: React.ReactNode, footer: string) => (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginTop={1}>
-      <Text bold color={theme.accent}>
-        {title}
-      </Text>
-      {body}
-      <Text color={theme.muted}>{footer}</Text>
-    </Box>
+  // Every step shares the Pane frame; only the title, body and key hints change.
+  const frame = (title: string, body: ReactNode, footer: string, aside?: string) => (
+    <Pane title={title} footer={footer} aside={aside}>
+      <Box flexDirection="column">{body}</Box>
+    </Pane>
   );
+  const cursor = (active: boolean) => <Text color={theme.accent}>{active ? "❯ " : "  "}</Text>;
 
   if (step.kind === "key") {
     const { info } = step.status;
@@ -174,7 +169,8 @@ export function ProvidersDialog({
       `${info.name} models`,
       <>
         <Text>
-          Filter: {sanitizeForTerminal(input)}
+          <Text color={theme.muted}>⌕ </Text>
+          {sanitizeForTerminal(input)}
           <Text color={theme.accent}>▏</Text>
         </Text>
         {step.models === null ? <Text color={theme.muted}>Loading models…</Text> : null}
@@ -186,9 +182,11 @@ export function ProvidersDialog({
           const index = first + i;
           const full = `${info.id}/${m}`;
           return (
-            <Text key={m} color={index === selected ? theme.accent : undefined}>
-              {index === selected ? "› " : "  "}
-              {sanitizeForTerminal(m)}
+            <Text key={m}>
+              {cursor(index === selected)}
+              <Text color={index === selected ? theme.accent : undefined} bold={index === selected}>
+                {sanitizeForTerminal(m)}
+              </Text>
               {full === currentModel ? <Text color={theme.muted}> (current)</Text> : null}
             </Text>
           );
@@ -196,6 +194,7 @@ export function ProvidersDialog({
         {filtered.length > VISIBLE ? <Text color={theme.muted}>{filtered.length} models · type to narrow</Text> : null}
       </>,
       "type to filter · enter to use · esc to go back",
+      step.models && step.models.length > 0 ? `${filtered.length} of ${step.models.length}` : undefined,
     );
   }
 
@@ -209,9 +208,11 @@ export function ProvidersDialog({
         const index = first + i;
         const active = currentModel.startsWith(`${s.info.id}/`) || (s.info.id === "anthropic" && !currentModel.includes("/"));
         return (
-          <Text key={s.info.id} color={index === selected ? theme.accent : undefined}>
-            {index === selected ? "› " : "  "}
-            {s.info.name.padEnd(16)}
+          <Text key={s.info.id}>
+            {cursor(index === selected)}
+            <Text color={index === selected ? theme.accent : undefined} bold={index === selected}>
+              {s.info.name.padEnd(16)}
+            </Text>
             <Text color={ready(s) ? theme.success : theme.muted}>{ready(s) ? "●" : "○"} </Text>
             <Text color={theme.muted}>{keyLabel(s)}</Text>
             {active ? <Text color={theme.accent}> · in use</Text> : null}
