@@ -6,7 +6,8 @@ import { compileRules } from "../../src/permissions/engine";
 import type { MessageParam, SessionSummary } from "../../src/session/store";
 import { defineTool, type AnyTool } from "../../src/tools/types";
 import { DARK } from "../../src/ui/theme";
-import type { ProviderControl, Runtime } from "../../src/ui/runtime";
+import type { ExtraCommand, ListTopic } from "../../src/ui/commands";
+import type { CommandExpansion, ProviderControl, Runtime } from "../../src/ui/runtime";
 import { FakeModel, type Step } from "./fake-model";
 import { makeToolContext } from "./tool-context";
 
@@ -24,13 +25,25 @@ export type SavedSession = SessionSummary & { history: MessageParam[] };
 
 export function fakeRuntime(
   steps: Step[],
-  over: { mode?: Mode; sessions?: SavedSession[]; initialPrompt?: string; startWithPicker?: boolean; providers?: ProviderControl } = {},
-): Runtime & { model: FakeModel; inputs: string[] } {
+  over: {
+    mode?: Mode;
+    sessions?: SavedSession[];
+    initialPrompt?: string;
+    startWithPicker?: boolean;
+    providers?: ProviderControl;
+    extraCommands?: ExtraCommand[];
+    expand?: Runtime["expandCommand"];
+    undo?: Runtime["undo"];
+    start?: Runtime["start"];
+  } = {},
+): Runtime & { model: FakeModel; inputs: string[]; turnModels: Array<string | undefined>; described: ListTopic[] } {
   const model = new FakeModel(steps);
   let state = { model: "claude-opus-5-5", effort: "high" as Effort, mode: over.mode ?? ("default" as Mode) };
   let history: MessageParam[] = [];
   const inputs: string[] = [];
   const toolContext = makeToolContext({ root: "/w" });
+  const turnModels: Array<string | undefined> = [];
+  const described: ListTopic[] = [];
   return {
     version: "0.1.0-test",
     cwd: "/w",
@@ -41,6 +54,21 @@ export function fakeRuntime(
     providers: over.providers ?? { status: async () => [], connect: async () => {}, disconnect: async () => false, models: async () => [] },
     model,
     inputs,
+    turnModels,
+    described,
+    extraCommands: over.extraCommands ?? [],
+    expandCommand: over.expand ?? (async (name): Promise<CommandExpansion> => ({ ok: false, reason: `Unknown command /${name}.` })),
+    setTurnModel: (m) => {
+      turnModels.push(m);
+    },
+    describe: async (what) => {
+      described.push(what);
+      return `about ${what}`;
+    },
+    undo: over.undo ?? (async () => ({ ok: false, reason: "Nothing to undo." })),
+    redo: async () => ({ ok: true, files: [] }),
+    start: over.start ?? (async () => {}),
+    shutdown: async () => {},
     state: () => state,
     setMode: (mode) => (state = { ...state, mode }),
     setModel: (m) => (state = { ...state, model: m }),

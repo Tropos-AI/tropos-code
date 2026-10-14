@@ -8,7 +8,18 @@ import { useTheme } from "./theme-context";
 
 const PLACEHOLDER = "Ask Tropos… (/ for commands, @ for files)";
 
-export function PromptInput({ onSubmit, history, cwd }: { onSubmit(text: string): void; history: string[]; cwd: string }) {
+export function PromptInput({
+  onSubmit,
+  history,
+  cwd,
+  commands = [],
+}: {
+  onSubmit(text: string): void;
+  history: string[];
+  cwd: string;
+  /** Custom command and skill names for `/` completion. */
+  commands?: string[];
+}) {
   const theme = useTheme();
   const [state, dispatch] = useReducer(inputReducer, emptyInput);
   const safeHistory = useMemo(() => history.map(sanitizeForTerminal), [history]);
@@ -18,7 +29,7 @@ export function PromptInput({ onSubmit, history, cwd }: { onSubmit(text: string)
     const token = tokenAtCursor(state);
     let items: string[] = [];
     if (token.text.startsWith("@")) items = await completeFile(token.text, cwd);
-    else if (token.start === 0 && token.text.startsWith("/")) items = completeCommand(token.text);
+    else if (token.start === 0 && token.text.startsWith("/")) items = completeCommand(token.text, commands);
     if (items.length === 0) return;
     items = items.map(sanitizeForTerminal);
     const replacement = items.length === 1 ? `${items[0]}${items[0]!.endsWith("/") ? "" : " "}` : commonPrefix(items);

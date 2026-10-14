@@ -6,7 +6,17 @@ export type TranscriptItem =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thinking"; text: string }
-  | { id: string; kind: "tool"; toolUseId: string; name: string; summary: string; status: "running" | ToolStatus; output?: ToolOutput }
+  | {
+      id: string;
+      kind: "tool";
+      toolUseId: string;
+      name: string;
+      summary: string;
+      status: "running" | ToolStatus;
+      output?: ToolOutput;
+      /** Latest progress line while running, e.g. a subagent's current tool. */
+      progress?: string;
+    }
   | { id: string; kind: "notice"; level: "info" | "warn" | "error"; text: string };
 
 type NewItem = TranscriptItem extends infer T ? (T extends TranscriptItem ? Omit<T, "id"> : never) : never;
@@ -76,6 +86,11 @@ export function reduce(t: Transcript, event: AgentEvent): Transcript {
         ...t,
         live: t.live.map((i) => (i.kind === "tool" && i.toolUseId === event.id ? { ...i, status: event.status, output: event.output } : i)),
       });
+    case "tool_progress":
+      return {
+        ...t,
+        live: t.live.map((i) => (i.kind === "tool" && i.toolUseId === event.id && i.status === "running" ? { ...i, progress: event.text } : i)),
+      };
     case "notice":
       return addNotice(t, event.level, event.text);
     case "turn_end":
@@ -94,10 +109,22 @@ function summarizeInput(input: unknown): string {
   return "";
 }
 
-/** Context and mode blocks are injected by the harness; they are not part of what the user typed. */
+const INJECTED_PREFIXES = ["<context>", "<mode>", "<reminder>", "<hook-context"];
+
+/** Context, mode, reminder and hook blocks are injected by the harness; they are not part of what the user typed. */
 function isInjected(text: string): boolean {
   const trimmed = text.trimStart();
-  return trimmed.startsWith("<context>") || trimmed.startsWith("<mode>");
+  return INJECTED_PREFIXES.some((p) => trimmed.startsWith(p));
+}
+
+/** A custom command or skill invocation is shown the way the user typed it: `/name args`. */
+function displayedUserText(text: string): string {
+  const m = /^<(?:command|skill) name="([^"]*)"(?: args="([^"]*)")?/.exec(text.trimStart());
+  if (!m) return text;
+  const unescape = (v: string) => v.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const name = unescape(m[1]!);
+  const args = m[2] ? ` ${unescape(m[2])}` : "";
+  return `${name.startsWith("/") ? name : `/${name}`}${args}`;
 }
 
 /** Rebuilds a read-only transcript from a saved session. */
@@ -106,7 +133,7 @@ export function historyToTranscript(messages: MessageParam[]): Transcript {
   for (const m of messages) {
     if (typeof m.content === "string") {
       if (m.role === "user") {
-        if (!isInjected(m.content)) t = addUser(t, m.content);
+        if (!isInjected(m.content)) t = addUser(t, displayedUserText(m.content));
       } else {
         t = pushDone(t, { kind: "assistant", text: m.content });
       }
@@ -114,7 +141,7 @@ export function historyToTranscript(messages: MessageParam[]): Transcript {
     }
     for (const block of m.content) {
       if (m.role === "user" && block.type === "text" && !isInjected(block.text)) {
-        t = addUser(t, block.text);
+        t = addUser(t, displayedUserText(block.text));
       } else if (m.role === "assistant" && block.type === "text") {
         t = pushDone(t, { kind: "assistant", text: block.text });
       } else if (m.role === "assistant" && block.type === "tool_use") {

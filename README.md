@@ -61,8 +61,9 @@ tropos -r                       # pick a session to resume
 
 Print mode exits 0 only when the answer is complete: 1 error, 2 refusal, 3 `--max-turns` reached,
 4 answer cut off at the output limit (what arrived is still printed), 5 conversation too long for
-the context window, 130 interrupted. With `--output-format json`, `cost_usd` is `null` when a
-model without a known price answered.
+the context window, 6 a hook blocked the prompt or stopped the turn, 130 interrupted. With
+`--output-format json`, `cost_usd` is `null` when a model without a known price answered.
+`tropos -p "/review main"` runs a custom command or skill, as typing it in a session would.
 
 In a session: `shift+tab` cycles permission modes (default → accept edits → plan), `esc`
 interrupts, `\` then enter adds a line, `@` + tab completes paths, `/help` lists commands.
@@ -117,7 +118,98 @@ an Anthropic `model`, `effort`, `theme`, `refusalFallback` and ask/deny rules, b
 session and API key wherever the repo chose. Put those in a file under `~/.tropos/`.
 
 Settings keys: `model`, `effort`, `theme` (`auto`/`dark`/`light`), `permissions`,
-`additionalDirectories`, `refusalFallback`, `env`, `providers`.
+`additionalDirectories`, `refusalFallback`, `env`, `providers`, and for extensions (below; your own
+files only) `hooks`, `mcpServers`, `formatter`, `lsp`, `snapshots`, `memory`, `disabledPlugins`.
+
+## Extending Tropos
+
+Tropos reads the same file formats as Claude Code, so existing commands, skills, agents and hook
+scripts work unchanged. Anything that only adds prompt text (commands, skills, agents) loads from the
+repo as well as from `~/.tropos/`. Anything that runs a program (hooks, MCP servers, plugins,
+formatters, language servers) is configured **only** under `~/.tropos/`, so a cloned repo can't add
+any. Your own commands, skills and agents take precedence over a repo's, a repo can't replace the
+built-in agents, and repo files that link outside the repo are skipped. Two opt-in features do run
+the project's own code once you turn them on: formatters (prettier loads a JavaScript config) and
+language servers. Enable those per project in `~/.tropos/projects/<project>/settings.json` unless you
+trust every repo you open.
+
+| What | Where | Use |
+|---|---|---|
+| Commands | `.tropos/commands/*.md`, `.claude/commands/*.md`, `~/.tropos/commands/*.md` | `/name args`; subfolders give `/folder:name` |
+| Skills | `<dir>/skills/<name>/SKILL.md` in `.tropos`, `.claude`, `.agents` or `~/.tropos` | The model loads them with the Skill tool; you can type `/name` |
+| Subagents | `.tropos/agents/*.md`, `.claude/agents/*.md`, `~/.tropos/agents/*.md` | The model delegates with the Agent tool; built-ins: `general-purpose`, `explore`, `plan` |
+| Hooks | `hooks` in `~/.tropos/settings.json` | Run commands on tool calls, prompts and stops |
+| MCP servers | `mcpServers` in `~/.tropos/settings.json` | Tools named `mcp__<server>__<tool>` |
+| Plugins | `~/.tropos/plugins/<name>/` | Bundles of commands, skills, agents, `hooks/hooks.json` and `.mcp.json` |
+
+A command is markdown with optional frontmatter (`description`, `argument-hint`, `model`, `agent`).
+`$ARGUMENTS` and `$1`…`$9` are replaced, `` !`git diff` `` inlines a command's output (through the
+normal Bash permission check and your PreToolUse hooks), and `@path` inlines a file. Arguments are
+never scanned for `` !` `` or `@`, and inside a `` !` `` command they are shell-quoted:
+
+```markdown
+---
+description: Review the staged diff
+argument-hint: [focus]
+---
+Review this diff, focusing on $ARGUMENTS:
+!`git diff --cached`
+```
+
+A subagent file has `name` and `description` in its frontmatter, plus optional `tools` (a list,
+default all), `disallowedTools`, `model` (`inherit`, `haiku`, `sonnet`, `opus` or an id) and
+`maxTurns`. The body is its instructions. Subagent tool calls go through your permission settings like
+any other, and their prompts appear in your session.
+
+Hooks use Claude Code's contract: JSON on stdin, exit 2 to block (stderr becomes the reason), or JSON
+on stdout (`permissionDecision`, `additionalContext`, `continue`, `systemMessage`). The events are
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStop`,
+`SessionStart` and `SessionEnd`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "~/.tropos/hooks/guard.sh" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "bun test --bail >/dev/null 2>&1 || { echo 'tests fail' >&2; exit 2; }", "timeout": 300 }] }]
+  },
+  "mcpServers": {
+    "github": { "command": "github-mcp-server", "args": ["stdio"], "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" } },
+    "docs": { "type": "http", "url": "https://example.com/mcp" }
+  },
+  "formatter": true,
+  "lsp": true
+}
+```
+
+A hook's `allow` skips the permission prompt but never overrides a deny rule. MCP tools ask before
+running unless a rule allows them; a server's own "read-only" label only lets them run in parallel and
+in plan mode. Allow a whole server with `mcp__github`, or some of its
+tools with `mcp__github__get_*`.
+
+**Built-in extras**
+
+- **WebFetch** fetches a page as markdown. It asks per domain, and "don't ask again" saves
+  `WebFetch(domain:<host>)`. It never follows a redirect to another host, and it may run in plan mode.
+- **`/undo` and `/redo`** revert or re-apply the files changed in Tropos's last turn, using a shadow
+  git repository under `~/.tropos/snapshots/` that never touches your `.git`. This works only in git
+  repos. Turn it off with `"snapshots": false`.
+- **Formatters** (`"formatter": true`) run prettier, biome, gofmt, rustfmt, ruff or black after each
+  Write or Edit. **Language servers** (`"lsp": true`) add typescript-language-server, pyright, gopls
+  or rust-analyzer errors to the result, so the model sees them. Both are off by default because they
+  run programs. Built-ins come from your PATH, never from the repo's `node_modules/.bin`. For anything
+  else, including a project's pinned prettier, add a custom entry:
+  `{"deno": {"command": ["deno", "fmt", "$FILE"], "extensions": [".md"]}}`. Language servers can still
+  load code from the project they analyse, such as its own TypeScript or its Python environment, much
+  like an editor without workspace trust. rust-analyzer's build scripts and proc macros are turned off,
+  and gopls never downloads a toolchain. If you don't trust every repo you open, turn `lsp` on per
+  project in `~/.tropos/projects/<project>/settings.json` instead of globally.
+- **Memory.** Tropos keeps short notes in `~/.tropos/memories/` (about the work and about you, each with
+  a size budget) and sees them at the start of every session. Each write asks first, so a page or
+  file the model read can't plant lasting instructions. Turn this off with `"memory": false`.
+- **SessionSearch** finds earlier conversations in this project, and asks before searching all of them. **SkillManage** lets the model write skills to
+  `~/.tropos/skills/`, and it always asks first. `/learn` asks it to turn the current session into a
+  skill.
+- `/skills`, `/agents`, `/hooks`, `/mcp`, `/plugins` and `/memory` show what's loaded.
 
 ## Security notes
 

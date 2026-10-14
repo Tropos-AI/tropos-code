@@ -16,7 +16,21 @@ import { runInstallCommand, type CommandContext } from "../install/commands";
 import type { Channel } from "../install/channels";
 import { CliError, parseInvocation, type CliOptions } from "./args";
 import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
-import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
+import { parseCommand } from "../ui/commands";
+import { sanitizeForTerminal } from "../ui/terminal-safe";
+import { harnessNonce } from "../context/tags";
+import { extraCommands, loadExtensions, sessionTools, type SubagentHolder } from "./extensions";
+import {
+  commandIO,
+  createRuntime,
+  createToolContext,
+  expandSlash,
+  makeAgent,
+  sessionEnd,
+  sessionHooks,
+  sessionStart,
+  type AppContext,
+} from "./runtime";
 import { USAGE } from "./usage";
 
 /** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
@@ -163,21 +177,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
 
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const router = new ProviderRouter({ home, env, settings: settings.providers });
-  const ctx: AppContext = {
-    cwd,
-    home,
-    version: VERSION,
-    settings,
-    rules,
-    allowedDirs: [cwd, ...settings.additionalDirectories, ...opts.addDir].map((d) => resolveToolPath(d, cwd)),
-    tools: createTools({ rgPath: Bun.which("rg") }),
-    model: deps.model ?? router,
-    providers: router,
-    shell: picked.shell,
-    localSettingsPath: paths.userProject,
-  };
-
-  // Usage errors come before any session file is created.
+  // Usage errors come before any session file is created or extension started.
   if (opts.resume && !opts.resumeId && opts.print) {
     err("tropos: --resume needs a session id in print mode.\n");
     return EXIT_USAGE;
@@ -199,59 +199,121 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     err(`tropos: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
-  let session: SessionStore;
-  let history: MessageParam[] = [];
+  const ext = await loadExtensions({ cwd, home, settings, env });
+  // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
+  for (const warning of ext.warnings) err(`tropos: ${sanitizeForTerminal(warning)}\n`);
+  const subagents: SubagentHolder = {};
+  // The current session, for SessionSearch to skip; set once the session is open below.
+  let sessionId = "";
+  const ctx: AppContext = {
+    cwd,
+    home,
+    version: VERSION,
+    settings,
+    rules,
+    allowedDirs: [cwd, ...settings.additionalDirectories, ...opts.addDir].map((d) => resolveToolPath(d, cwd)),
+    tools: sessionTools(createTools({ rgPath: Bun.which("rg") }), ext, { home, cwd, holder: subagents, sessionId: () => sessionId }),
+    model: deps.model ?? router,
+    providers: router,
+    shell: picked.shell,
+    localSettingsPath: paths.userProject,
+    ext,
+    subagents,
+    env,
+  };
   try {
-    if (opts.continue) {
-      const latest = (await listSessions(home, cwd))[0];
-      if (!latest) {
-        err("tropos: there is no earlier session in this directory to continue.\n");
-        return 1;
-      }
-      ({ store: session, messages: history } = await SessionStore.open(home, cwd, latest.id));
-    } else if (opts.resumeId) {
-      ({ store: session, messages: history } = await SessionStore.open(home, cwd, opts.resumeId));
-    } else {
-      session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION });
-    }
-  } catch (e) {
-    err(`tropos: ${(e as Error).message}\n`);
-    return 1;
+    return await runSession();
+  } finally {
+    await Promise.all([ext.mcp?.close(), ext.lsp?.close()]);
   }
 
-  const mode: Mode = opts.dangerouslySkipPermissions ? "bypass" : (opts.permissionMode ?? "default");
-
-  if (opts.print) {
-    const renderer = new PrintRenderer(opts.outputFormat, out, err, session.id);
-    const state = { model: settings.model, effort: settings.effort, mode };
-    const agent = makeAgent(ctx, {
-      session: () => session,
-      history,
-      state: () => state,
-      ui: { emit: (event) => renderer.emit(event), askPermission: async () => PRINT_DENY },
-      toolContext: createToolContext(ctx),
-      maxTurns: opts.maxTurns,
-    });
-    const controller = new AbortController();
-    const onSigint = () => controller.abort();
-    process.once("SIGINT", onSigint);
+  async function runSession(): Promise<number> {
+    let session: SessionStore;
+    let history: MessageParam[] = [];
     try {
-      return await runPrint(agent, renderer, printPrompt, controller.signal);
-    } finally {
-      process.off("SIGINT", onSigint);
+      if (opts.continue) {
+        const latest = (await listSessions(home, cwd))[0];
+        if (!latest) {
+          err("tropos: there is no earlier session in this directory to continue.\n");
+          return 1;
+        }
+        ({ store: session, messages: history } = await SessionStore.open(home, cwd, latest.id));
+      } else if (opts.resumeId) {
+        ({ store: session, messages: history } = await SessionStore.open(home, cwd, opts.resumeId));
+      } else {
+        session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION });
+      }
+    } catch (e) {
+      err(`tropos: ${(e as Error).message}\n`);
+      return 1;
     }
-  }
 
-  const runtime = await createRuntime(ctx, {
-    session,
-    history,
-    mode,
-    modes: MODES.filter((m) => m !== "bypass" || opts.dangerouslySkipPermissions),
-    theme: resolveTheme(settings.theme, env),
-    initialPrompt: opts.prompt,
-    startWithPicker: opts.resume && !opts.resumeId,
-  });
-  const app = render(<App runtime={runtime} />, { exitOnCtrlC: false });
-  await app.waitUntilExit();
-  return 0;
+    sessionId = session.id;
+    const mode: Mode = opts.dangerouslySkipPermissions ? "bypass" : (opts.permissionMode ?? "default");
+    const resumed = Boolean(opts.continue || opts.resumeId);
+
+    if (opts.print) {
+      const renderer = new PrintRenderer(opts.outputFormat, out, err, session.id);
+      const state = { model: settings.model, effort: settings.effort, mode };
+      const hooks = sessionHooks(ctx, () => session, () => state.mode);
+      const toolContext = createToolContext(ctx);
+      // `tropos -p "/review main"` runs a custom command or skill, as typing it would.
+      const slash = parseCommand(printPrompt, extraCommands(ext));
+      let prompt = printPrompt;
+      if (slash.kind === "custom") {
+        const io = commandIO(ctx, () => state.mode, toolContext, { askPermission: async () => PRINT_DENY }, new AbortController().signal, hooks);
+        const expanded = await expandSlash(ctx, slash.name, slash.args, io);
+        if (!expanded.ok) {
+          err(`tropos: /${slash.name}: ${expanded.reason}\n`);
+          return 1;
+        }
+        prompt = expanded.prompt;
+        if (expanded.model) state.model = expanded.model;
+      }
+      let context = await sessionStart(hooks, resumed ? "resume" : "startup", (_level, text) => err(`tropos: ${sanitizeForTerminal(text)}\n`), harnessNonce(session.id));
+      const agent = makeAgent(ctx, {
+        session: () => session,
+        history,
+        state: () => state,
+        ui: { emit: (event) => renderer.emit(event), askPermission: async () => PRINT_DENY },
+        toolContext,
+        maxTurns: opts.maxTurns,
+        hooks,
+        pending: {
+          take: () => {
+            const text = context;
+            context = null;
+            return text;
+          },
+        },
+      });
+      const controller = new AbortController();
+      const onSigint = () => controller.abort();
+      process.once("SIGINT", onSigint);
+      try {
+        return await runPrint(agent, renderer, prompt, controller.signal);
+      } finally {
+        process.off("SIGINT", onSigint);
+        await sessionEnd(hooks, "exit");
+      }
+    }
+
+    const runtime = await createRuntime(ctx, {
+      session,
+      history,
+      mode,
+      modes: MODES.filter((m) => m !== "bypass" || opts.dangerouslySkipPermissions),
+      theme: resolveTheme(settings.theme, env),
+      initialPrompt: opts.prompt,
+      startWithPicker: opts.resume && !opts.resumeId,
+      source: resumed ? "resume" : "startup",
+    });
+    const app = render(<App runtime={runtime} />, { exitOnCtrlC: false });
+    try {
+      await app.waitUntilExit();
+    } finally {
+      await runtime.shutdown();
+    }
+    return 0;
+  }
 }

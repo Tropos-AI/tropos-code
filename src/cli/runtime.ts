@@ -1,22 +1,34 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Agent } from "../agent/agent";
+import { Agent, hookContext } from "../agent/agent";
+import type { PermissionPrompt } from "../agent/events";
+import { serializeAsks } from "../agent/subagent";
 import type { Model } from "../api/model";
 import type { Effort, Mode } from "../config/constants";
-import { addLocalAllowRule, type Settings } from "../config/settings";
+import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } from "../config/settings";
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
-import type { PermissionRules } from "../permissions/engine";
+import { commandMessage, expandCommand, MAX_EXTENSION_BYTES, type CommandIO } from "../extensions/commands";
+import { renderSkill, skillListing } from "../extensions/skills";
+import type { HookRunner } from "../hooks/runner";
+import { MEMORY_LIMITS, notesLabel, notesSize, usageHeader } from "../memory/notes";
+import { harnessNonce, nonceBlock } from "../context/tags";
+import { isInside } from "../paths";
+import { decide, type PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
+import { bashTool } from "../tools/bash/bash";
 import { JobTable } from "../tools/bash/jobs";
+import { resolveToolPath } from "../tools/paths";
 import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
 import type { AnyTool, ToolContext } from "../tools/types";
-import type { AgentUi, ProviderControl, Runtime } from "../ui/runtime";
+import type { ListTopic } from "../ui/commands";
+import type { AgentUi, CommandExpansion, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
+import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
 
 export interface AppContext {
   cwd: string;
@@ -32,6 +44,11 @@ export interface AppContext {
   providers: ProviderControl;
   shell: string;
   localSettingsPath: string;
+  /** Commands, skills, agents, hooks, MCP, snapshots, formatters, memory (phase 2). */
+  ext: Extensions;
+  /** The running agent's subagent dependencies, read by the Agent tool. */
+  subagents: SubagentHolder;
+  env: NodeJS.ProcessEnv;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -49,6 +66,39 @@ export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> 
   };
 }
 
+/** Hooks for a session; their session id and transcript follow /clear and resume. */
+export function sessionHooks(ctx: AppContext, session: () => SessionStore, mode: () => Mode): HookRunner | undefined {
+  return createHookRunner(ctx.ext, {
+    sessionId: () => session().id,
+    transcriptPath: () => session().path,
+    cwd: ctx.cwd,
+    mode,
+    env: ctx.env,
+    shell: ctx.shell,
+  });
+}
+
+/**
+ * Fires SessionStart and returns its additional context, for the next prompt. Hook messages and
+ * errors are reported through `notice`.
+ */
+export async function sessionStart(
+  hooks: HookRunner | undefined,
+  source: "startup" | "resume" | "clear",
+  notice: (level: "info" | "warn", text: string) => void,
+  nonce: string,
+): Promise<string | null> {
+  if (!hooks?.has("SessionStart")) return null;
+  const out = await hooks.run("SessionStart", { source }, source);
+  for (const text of out.messages) notice("info", text);
+  for (const text of out.errors) notice("warn", `SessionStart hook: ${text}`);
+  return out.additionalContext.length > 0 ? hookContext("SessionStart", out.additionalContext, nonce) : null;
+}
+
+export async function sessionEnd(hooks: HookRunner | undefined, reason: "exit" | "clear"): Promise<void> {
+  if (hooks?.has("SessionEnd")) await hooks.run("SessionEnd", { reason }, reason).catch(() => {});
+}
+
 export function makeAgent(
   ctx: AppContext,
   opts: {
@@ -58,29 +108,208 @@ export function makeAgent(
     ui: AgentUi;
     toolContext: Omit<ToolContext, "signal">;
     maxTurns?: number;
+    hooks?: HookRunner;
+    /** One-shot context for the first turn, such as SessionStart hook output. */
+    pending?: { take(): string | null };
   },
 ): Agent {
-  return new Agent(
+  const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
+  const permissions = () => ({ mode: opts.state().mode, rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs });
+  // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
+  const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
+  const nonce = () => harnessNonce(opts.session().id);
+  const contextText = async () =>
+    buildContextText(await loadMemory(ctx.cwd, ctx.home), await environmentBlock(ctx.cwd, { shell: ctx.shell }), [
+      ...(await contextExtras(ctx.ext, (skills) => skillListing(skills))),
+      nonceBlock(nonce()),
+    ]);
+  const beforeChange = () => ctx.ext.undo.beforeChange();
+  const onAllowAlways = async (rule: string) => {
+    ctx.rules.allow.push(parseRule(rule));
+    await addLocalAllowRule(ctx.localSettingsPath, rule);
+  };
+  // Set below: subagents add their spend to this agent's total.
+  let agent: Agent | undefined;
+  // Only project files: Memory and SkillManage also edit (under ~/.tropos), and no formatter should touch those.
+  const afterWrite = (paths: string[], signal: AbortSignal) =>
+    postWrite(ctx.ext, opts.toolContext.readState, paths.filter((p) => ctx.allowedDirs.some((dir) => isInside(p, dir))), signal);
+  ctx.subagents.deps = {
+    model: ctx.model,
+    tools: ctx.tools,
+    system: SYSTEM_PROMPT,
+    config,
+    permissions,
+    askPermission,
+    contextText,
+    nonce,
+    onAllowAlways,
+    recordCost: (cost) => agent?.addCost(cost),
+    hooks: opts.hooks,
+    beforeChange,
+    postWrite: afterWrite,
+  };
+  agent = new Agent(
     {
       model: ctx.model,
       tools: ctx.tools,
       system: SYSTEM_PROMPT,
-      config: () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback }),
-      permissions: () => ({ mode: opts.state().mode, rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs }),
-      askPermission: (prompt, signal) => opts.ui.askPermission(prompt, signal),
-      onAllowAlways: async (rule) => {
-        ctx.rules.allow.push(parseRule(rule));
-        await addLocalAllowRule(ctx.localSettingsPath, rule);
-      },
-      contextText: async () =>
-        buildContextText(await loadMemory(ctx.cwd, ctx.home), await environmentBlock(ctx.cwd, { shell: ctx.shell })),
+      config,
+      permissions,
+      askPermission,
+      onAllowAlways,
+      contextText,
+      nonce,
       persist: (message) => opts.session().appendMessage(message),
       toolContext: opts.toolContext,
       maxTurns: opts.maxTurns,
       emit: (event) => opts.ui.emit(event),
+      hooks: opts.hooks,
+      beforeChange,
+      postWrite: afterWrite,
+      startTurn: () => {
+        ctx.ext.undo.beginTurn();
+        const undone = ctx.ext.undo.takeReminder()?.replace(/^<reminder>/, `<reminder nonce="${nonce()}">`) ?? null;
+        return [opts.pending?.take() ?? null, undone].filter((t): t is string => t !== null);
+      },
     },
     opts.history,
   );
+  return agent;
+}
+
+/** Strips punctuation that ends a sentence from an `@path` token: "see @src/a.ts," means src/a.ts. */
+function cleanToken(token: string): string {
+  return token.replace(/[),.;:!?'"]+$/, "");
+}
+
+/**
+ * The CommandIO for custom commands: `` !`cmd` `` goes through the Bash permission check (asking
+ * through the UI when needed), and `@path` reads only allowed files no Read deny rule covers.
+ */
+export function commandIO(
+  ctx: AppContext,
+  mode: () => Mode,
+  toolContext: Omit<ToolContext, "signal">,
+  ui: Pick<AgentUi, "askPermission">,
+  signal: AbortSignal,
+  hooks?: HookRunner,
+): CommandIO {
+  const permissions = () => ({ mode: mode(), rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs });
+  return {
+    async runShell(command) {
+      if (signal.aborted) return { ok: false, reason: "interrupted" };
+      // Bash guard hooks see these commands too, exactly as they would a model's Bash call.
+      if (hooks?.has("PreToolUse")) {
+        const out = await hooks.run("PreToolUse", { tool_name: "Bash", tool_input: { command }, tool_use_id: "slash-command" }, "Bash", signal);
+        const refusal = out.blocked ?? out.stop ?? (out.permission === "deny" ? (out.permissionReason ?? "denied by a hook") : undefined);
+        if (refusal !== undefined) return { ok: false, reason: `a PreToolUse hook refused \`${command}\`: ${refusal}` };
+      }
+      const decision = decide({ toolName: "Bash", kind: "exec", command, paths: [] }, permissions());
+      if (decision.behavior === "deny") return { ok: false, reason: decision.reason };
+      if (decision.behavior === "ask") {
+        const prompt: PermissionPrompt = { toolName: "Bash", kind: "exec", summary: command, input: { command }, reason: "a slash command runs this" };
+        const answer = await ui.askPermission(prompt, signal);
+        if (answer.kind === "deny") return { ok: false, reason: `you declined \`${command}\`` };
+        if (signal.aborted) return { ok: false, reason: "interrupted" };
+      }
+      const out = await bashTool.run({ command }, { ...toolContext, signal });
+      const text = typeof out.content === "string" ? out.content : "";
+      if (signal.aborted) return { ok: false, reason: "interrupted" };
+      // A failing command's output still goes in (the user may want to discuss it); only a refusal stops.
+      return { ok: true, output: text };
+    },
+    async readFile(token) {
+      let path: string;
+      try {
+        path = resolveToolPath(cleanToken(token), toolContext.cwd());
+      } catch {
+        return null;
+      }
+      if (!ctx.allowedDirs.some((dir) => isInside(path, dir))) return null;
+      if (decide({ toolName: "Read", kind: "read", paths: [path] }, permissions()).behavior === "deny") return null;
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.size > MAX_EXTENSION_BYTES) return null;
+      const content = await readFile(path, "utf8").catch(() => null);
+      return content === null ? null : { path, content };
+    },
+  };
+}
+
+/** Expands `/name args` for a custom command or a user-invocable skill into the text the model receives. */
+export async function expandSlash(ctx: AppContext, name: string, args: string, io: CommandIO): Promise<CommandExpansion> {
+  const command = ctx.ext.commands.find((c) => c.name === name);
+  if (command) {
+    const expanded = await expandCommand(command, args, io);
+    if (!expanded.ok) return expanded;
+    let prompt = commandMessage(name, expanded.prompt, args, command.source);
+    if (command.agent) prompt += `\n\nRun this with the Agent tool (subagent_type: "${command.agent}") and report its result.`;
+    // A repo's command may pick among Anthropic models only, like repo settings.
+    const model = command.model && (command.source !== "project" || isAnthropicModelId(command.model)) ? command.model : undefined;
+    return { ok: true, prompt, model };
+  }
+  const skill = ctx.ext.skills.find((s) => s.name === name && s.userInvocable);
+  if (skill) return { ok: true, prompt: await renderSkill(skill, args) };
+  return { ok: false, reason: `Unknown command /${name}.` };
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Text for /skills, /agents, /hooks, /mcp, /plugins and /memory. */
+export async function describeExtensions(ctx: AppContext, what: ListTopic): Promise<string> {
+  const ext = ctx.ext;
+  switch (what) {
+    case "skills": {
+      if (ext.skills.length === 0) return "No skills. Add one at .tropos/skills/<name>/SKILL.md or ~/.tropos/skills/<name>/SKILL.md.";
+      const lines = ext.skills.map((s) => {
+        const flags = [s.source, s.modelInvocable ? "" : "user-only", s.userInvocable ? `/${s.name}` : ""].filter(Boolean).join(", ");
+        return `  ${s.name} (${flags}): ${s.description.split("\n")[0]}`;
+      });
+      return [`Skills (${ext.skills.length})`, ...lines].join("\n");
+    }
+    case "agents":
+      return [
+        `Subagents (${ext.agents.length})`,
+        ...ext.agents.map((a) => `  ${a.name} (${a.source}${a.tools ? `; tools: ${a.tools.join(", ")}` : ""}): ${a.description.split("\n")[0]}`),
+      ].join("\n");
+    case "hooks": {
+      const lines: string[] = [];
+      const add = (from: string, hooks: Extensions["hookConfig"]["hooks"]) => {
+        for (const event of HOOK_EVENTS) {
+          for (const m of hooks[event] ?? []) {
+            for (const h of m.hooks) lines.push(`  ${event}${m.matcher ? `[${m.matcher}]` : ""} ${from}: ${h.command}`);
+          }
+        }
+      };
+      add("settings", ext.hookConfig.hooks);
+      for (const p of ext.hookConfig.plugins ?? []) add(`plugin ${p.name}`, p.hooks);
+      return lines.length ? ["Hooks", ...lines].join("\n") : 'No hooks. Add them under "hooks" in ~/.tropos/settings.json.';
+    }
+    case "mcp": {
+      const status = ext.mcp?.status() ?? [];
+      if (status.length === 0) return 'No MCP servers. Add them under "mcpServers" in ~/.tropos/settings.json.';
+      return [
+        "MCP servers",
+        ...status.map((s) => `  ${s.name} (${s.type}): ${s.state}, ${plural(s.tools, "tool")}${s.error ? ` — ${s.error}` : ""}`),
+      ].join("\n");
+    }
+    case "plugins": {
+      if (ext.plugins.length === 0) return "No plugins. Put plugin folders in ~/.tropos/plugins/.";
+      return [
+        "Plugins",
+        ...ext.plugins.map((p) => `  ${p.name}${p.version ? ` ${p.version}` : ""}${p.enabled ? "" : " (disabled)"}${p.description ? `: ${p.description}` : ""}`),
+      ].join("\n");
+    }
+    case "memory": {
+      if (!ext.notes) return 'Memory is off ("memory": false in settings).';
+      const parts: string[] = [];
+      for (const target of ["memory", "user"] as const) {
+        const entries = await ext.notes.entries(target);
+        const header = `${notesLabel(target)} ${usageHeader(notesSize(entries), MEMORY_LIMITS[target])}`;
+        parts.push([header, ...(entries.length ? entries.map((e) => `  • ${e.replace(/\n/g, "\n    ")}`) : ["  (empty)"])].join("\n"));
+      }
+      return [...parts, `Files: ${ext.notes.dir}`].join("\n\n");
+    }
+  }
 }
 
 const INPUT_HISTORY_LIMIT = 200;
@@ -102,14 +331,35 @@ async function loadInputHistory(path: string, cwd: string): Promise<string[]> {
 
 export async function createRuntime(
   ctx: AppContext,
-  init: { session: SessionStore; history: MessageParam[]; mode: Mode; modes: Mode[]; theme: Theme; initialPrompt?: string; startWithPicker?: boolean },
+  init: {
+    session: SessionStore;
+    history: MessageParam[];
+    mode: Mode;
+    modes: Mode[];
+    theme: Theme;
+    initialPrompt?: string;
+    startWithPicker?: boolean;
+    /** SessionStart's source: resume when the session was continued or resumed. */
+    source?: "startup" | "resume";
+  },
 ): Promise<Runtime> {
   let session = init.session;
   let history = init.history;
   let state = { model: ctx.settings.model, effort: ctx.settings.effort, mode: init.mode };
+  let turnModel: string | undefined;
   const toolContext = createToolContext(ctx);
   const historyPath = join(ctx.home, "history.jsonl");
   const inputs = await loadInputHistory(historyPath, ctx.cwd);
+  const hooks = sessionHooks(ctx, () => session, () => state.mode);
+  let pendingContext: string | null = null;
+  const pending = {
+    take: () => {
+      const text = pendingContext;
+      pendingContext = null;
+      return text;
+    },
+  };
+  const agentState = () => (turnModel ? { ...state, model: turnModel } : state);
 
   return {
     version: ctx.version,
@@ -119,6 +369,7 @@ export async function createRuntime(
     initialPrompt: init.initialPrompt,
     startWithPicker: init.startWithPicker,
     providers: ctx.providers,
+    extraCommands: extraCommands(ctx.ext),
     state: () => state,
     setMode: (mode) => {
       state = { ...state, mode };
@@ -132,17 +383,23 @@ export async function createRuntime(
       state = { ...state, effort };
       void session.appendEvent("effort", effort).catch(() => {});
     },
-    newAgent: (ui) => makeAgent(ctx, { session: () => session, history, state: () => state, ui, toolContext }),
+    setTurnModel: (model) => {
+      turnModel = model;
+    },
+    newAgent: (ui) => makeAgent(ctx, { session: () => session, history, state: agentState, ui, toolContext, hooks, pending }),
     history: () => history,
     clear: async () => {
+      await sessionEnd(hooks, "clear");
       session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version });
       history = [];
+      pendingContext = await sessionStart(hooks, "clear", () => {}, harnessNonce(session.id)).catch(() => null);
     },
     sessions: () => listSessions(ctx.home, ctx.cwd),
     resume: async (id) => {
       const opened = await SessionStore.open(ctx.home, ctx.cwd, id);
       session = opened.store;
       history = opened.messages;
+      pendingContext = await sessionStart(hooks, "resume", () => {}, harnessNonce(session.id)).catch(() => null);
     },
     inputHistory: () => inputs,
     recordInput: (text) => {
@@ -150,6 +407,17 @@ export async function createRuntime(
       void mkdir(ctx.home, { recursive: true })
         .then(() => appendFile(historyPath, `${JSON.stringify({ text, cwd: ctx.cwd, ts: new Date().toISOString() })}\n`, { mode: 0o600 }))
         .catch(() => {});
+    },
+    expandCommand: (name, args, ui, signal) => expandSlash(ctx, name, args, commandIO(ctx, () => state.mode, toolContext, ui, signal, hooks)),
+    describe: (what) => describeExtensions(ctx, what),
+    undo: () => ctx.ext.undo.undo(),
+    redo: () => ctx.ext.undo.redo(),
+    start: async (notice) => {
+      pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
+    },
+    shutdown: async () => {
+      await sessionEnd(hooks, "exit");
+      await Promise.all([ctx.ext.mcp?.close(), ctx.ext.lsp?.close()]);
     },
   };
 }

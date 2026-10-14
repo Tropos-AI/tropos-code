@@ -50,3 +50,8 @@ describe("completion stays inside cwd", () => {
     expect(await completeFile("@escape/s", dir)).toEqual([]);
   });
 });
+
+test("command completion includes custom commands", () => {
+  expect(completeCommand("/re", ["review", "kit:ship"])).toEqual(["/redo", "/resume", "/review"]);
+  expect(completeCommand("/kit", ["kit:ship"])).toEqual(["/kit:ship"]);
+});

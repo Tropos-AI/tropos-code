@@ -60,7 +60,22 @@ describe("compiled binary", () => {
       output_config: { effort: "high" },
       fallbacks: "default",
     });
-    expect(body.tools.map((t: { name: string }) => t.name)).toEqual(["Read", "Write", "Edit", "Bash", "BashOutput", "KillShell", "Glob", "Grep", "TodoWrite"]);
+    expect(body.tools.map((t: { name: string }) => t.name)).toEqual([
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "BashOutput",
+      "KillShell",
+      "Glob",
+      "Grep",
+      "TodoWrite",
+      "WebFetch",
+      "Agent",
+      "Memory",
+      "SessionSearch",
+      "SkillManage",
+    ]);
     expect(body.tools.every((t: { eager_input_streaming: boolean }) => t.eager_input_streaming)).toBe(true);
     expect(body.tool_choice).toBeUndefined();
   });

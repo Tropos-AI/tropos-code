@@ -294,6 +294,129 @@ describe("App", () => {
     expect(all(r)).toContain("Unknown command /bogus");
     expect(runtime.model.requests).toHaveLength(0);
   });
+
+  test("a custom command expands, runs with its model for one turn, and shows as typed", async () => {
+    const runtime = fakeRuntime([() => reply([textBlock("Reviewed.")])], {
+      extraCommands: [{ name: "review", description: "Review the diff" }],
+      expand: async (name, args) => ({ ok: true, prompt: `<command name="/${name}">Review ${args}</command>`, model: "claude-haiku-5-5" }),
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/review main");
+    await tick();
+    r.stdin.write("\r");
+    await tick(150);
+    expect(all(r)).toContain("/review main");
+    expect(all(r)).toContain("Reviewed.");
+    expect(JSON.stringify(runtime.model.requests[0]!.messages)).toContain("Review main");
+    expect(runtime.turnModels).toEqual(["claude-haiku-5-5", undefined]);
+  });
+
+  test("a failed expansion is an error notice; /help lists custom commands", async () => {
+    const runtime = fakeRuntime([], {
+      extraCommands: [{ name: "review", description: "Review the diff" }],
+      expand: async () => ({ ok: false, reason: "you declined `git diff`" }),
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/review");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(all(r)).toContain("/review: you declined `git diff`");
+    r.stdin.write("/help");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(all(r)).toContain("Custom commands and skills");
+  });
+
+  test("listings, undo and redo show notices", async () => {
+    const runtime = fakeRuntime([], { undo: async () => ({ ok: true, files: Array.from({ length: 12 }, (_, i) => `f${i}.ts`) }) });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    for (const cmd of ["/mcp", "/undo", "/redo"]) {
+      r.stdin.write(cmd);
+      await tick();
+      r.stdin.write("\r");
+      await tick(100);
+    }
+    expect(runtime.described).toEqual(["mcp"]);
+    expect(all(r)).toContain("about mcp");
+    expect(all(r)).toContain("Reverted 12 file(s): f0.ts");
+    expect(all(r)).toContain("f9.ts and 2");
+    expect(all(r)).toContain("Re-applied: no files differed.");
+  });
+
+  test("a failed undo is a warning", async () => {
+    const r = render(<App runtime={fakeRuntime([])} />);
+    await tick();
+    r.stdin.write("/undo");
+    await tick();
+    r.stdin.write("\r");
+    await tick(100);
+    expect(all(r)).toContain("Nothing to undo.");
+  });
+
+  test("SessionStart runs before the initial prompt and its notices show", async () => {
+    const order: string[] = [];
+    const runtime = fakeRuntime(
+      [
+        () => {
+          order.push("request");
+          return reply([textBlock("ok")]);
+        },
+      ],
+      {
+        initialPrompt: "go",
+        start: async (notice) => {
+          await Bun.sleep(20);
+          order.push("start");
+          notice("info", "hook says hi");
+        },
+      },
+    );
+    const r = render(<App runtime={runtime} />);
+    await tick(200);
+    expect(order).toEqual(["start", "request"]);
+    expect(all(r)).toContain("hook says hi");
+  });
+
+  test("an initial /command is dispatched like a typed one", async () => {
+    const runtime = fakeRuntime([() => reply([textBlock("Reviewed.")])], {
+      initialPrompt: "/review main",
+      extraCommands: [{ name: "review", description: "Review" }],
+      expand: async (_n, args) => ({ ok: true, prompt: `expanded ${args}` }),
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick(200);
+    expect(JSON.stringify(runtime.model.requests[0]!.messages)).toContain("expanded main");
+    expect(all(r)).toContain("Reviewed.");
+  });
+
+  test("input is locked while SessionStart runs; Esc cancels a command expansion", async () => {
+    let release!: () => void;
+    const runtime = fakeRuntime([], {
+      start: () => new Promise<void>((resolve) => (release = resolve)),
+      extraCommands: [{ name: "slow", description: "Slow" }],
+      expand: (_n, _a, _ui, signal) =>
+        new Promise((resolve) => signal.addEventListener("abort", () => resolve({ ok: false, reason: "interrupted" }), { once: true })),
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    expect(r.lastFrame()).not.toContain("Ask Tropos");
+    release();
+    await tick();
+    expect(r.lastFrame()).toContain("Ask Tropos");
+    r.stdin.write("/slow");
+    await tick();
+    r.stdin.write("\r");
+    await tick();
+    r.stdin.write("\x1b");
+    await tick(100);
+    expect(all(r)).toContain("/slow cancelled.");
+    expect(runtime.model.requests).toHaveLength(0);
+  });
 });
 
 /** A reply that reports a million input tokens, so context and cost are clearly non-zero. */

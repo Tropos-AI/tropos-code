@@ -71,3 +71,22 @@ test("history replay filters context and mode blocks in string-content user mess
   ]);
   expect(t.done).toEqual([expect.objectContaining({ kind: "user", text: "fix it" })]);
 });
+
+test("tool progress updates a running row only", () => {
+  let t = reduce(emptyTranscript, { type: "tool_start", id: "a", name: "Agent", summary: "explore: find", input: {} });
+  t = reduce(t, { type: "tool_progress", id: "a", text: "Read src/x.ts" });
+  expect(t.live[0]).toMatchObject({ kind: "tool", progress: "Read src/x.ts" });
+  t = reduce(t, { type: "tool_end", id: "a", name: "Agent", output: { content: "done" }, status: "done" });
+  t = reduce(t, { type: "tool_progress", id: "a", text: "late" });
+  expect(JSON.stringify(t)).not.toContain("late");
+});
+
+test("resumed commands and skills show as typed; hook and reminder blocks are hidden", () => {
+  const t = historyToTranscript([
+    { role: "user", content: [{ type: "text", text: '<command name="/review" args="main &amp; dev">\nReview\n</command>' }] },
+    { role: "user", content: [{ type: "text", text: '<skill name="deploy" dir="/s">\nSteps\n</skill>' }] },
+    { role: "user", content: [{ type: "text", text: "<reminder>undone</reminder>" }, { type: "text", text: '<hook-context event="Stop">x</hook-context>' }] },
+    { role: "user", content: '<command name="/x">\ny\n</command>' },
+  ]);
+  expect(t.done.map((i) => (i.kind === "user" ? i.text : ""))).toEqual(["/review main & dev", "/deploy", "/x"]);
+});
