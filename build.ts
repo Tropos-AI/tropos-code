@@ -64,5 +64,5 @@ if (values.all) {
   if (!allowed.includes(target)) throw new Error(`unknown --target ${values.target}; one of ${allowed.join(", ")}`);
   await build(values.outfile ?? `dist/tropos-${pkg.version}-${target.replace("bun-", "")}`, define, target);
 } else {
-  await build(values.outfile ?? "dist/tropos", define);
+  await build(values.outfile ?? "dist/tcode", define);
 }

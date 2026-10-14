@@ -72,7 +72,7 @@ describe("subcommand shapes", () => {
   });
 
   test("a subcommand word with an unknown flag gets the existing error plus a hint", () => {
-    expect(() => parseInvocation(["install", "--force", "--bogus"])).toThrow("For install, see tropos install --help.");
-    expect(() => parseInvocation(["update", "--background", "-p"])).toThrow("For update, see tropos update --help.");
+    expect(() => parseInvocation(["install", "--force", "--bogus"])).toThrow("For install, see tcode install --help.");
+    expect(() => parseInvocation(["update", "--background", "-p"])).toThrow("For update, see tcode update --help.");
   });
 });

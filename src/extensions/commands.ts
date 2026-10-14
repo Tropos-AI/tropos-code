@@ -230,7 +230,7 @@ export function shellQuote(word: string): string {
 
 /**
  * Expands a command body into the prompt text. The `` !`cmd` `` and `@path` tokens are found in the
- * body as written, before arguments go in, so text the user (or a script calling `tropos -p`) passes
+ * body as written, before arguments go in, so text the user (or a script calling `tcode -p`) passes
  * as arguments can never become a shell command or a file to inline. Inside a shell command,
  * `$ARGUMENTS` and `$1`…`$9` are replaced with shell-quoted words. Neither shell output nor file
  * content is scanned again. Every shell command runs, in order, before any file is read; the first

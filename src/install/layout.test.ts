@@ -25,7 +25,8 @@ describe("resolveLayout", () => {
       locks: "/h/.local/state/tropos/locks",
       log: "/h/.local/state/tropos/update.log",
       binDir: "/h/.local/bin",
-      binLink: "/h/.local/bin/tropos",
+      binLink: "/h/.local/bin/tcode",
+      aliasLinks: ["/h/.local/bin/tropos"],
     });
   });
 

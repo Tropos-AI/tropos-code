@@ -1,5 +1,5 @@
 // test/install/helpers/fixture-release.ts
-// Fake releases: a shell-script "binary" that answers --version like tropos, signed with a test key.
+// Fake releases: a shell-script "binary" that answers --version like tcode, signed with a test key.
 import { chmod, copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { versionPath, type Layout } from "../../../src/install/layout";
@@ -11,7 +11,7 @@ import type { ReleaseServer } from "./release-server";
 import { sha256Hex } from "./zstd-corpus";
 
 export function fakeBinary(version: string, extra = ""): string {
-  return `#!/bin/sh\n${extra}\nif [ "$1" = "--version" ]; then echo "${version} (Tropos Code)"; exit 0; fi\necho "fake tropos ${version} $*"\n`;
+  return `#!/bin/sh\n${extra}\nif [ "$1" = "--version" ]; then echo "${version} (Tropos Code)"; exit 0; fi\necho "fake tcode ${version} $*"\n`;
 }
 
 export interface FixtureRelease {

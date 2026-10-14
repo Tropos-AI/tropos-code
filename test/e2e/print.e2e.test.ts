@@ -11,7 +11,7 @@ let bin: string;
 
 beforeAll(async () => {
   dir = await makeTmpDir();
-  bin = join(dir, "tropos");
+  bin = join(dir, "tcode");
   await Bun.$`bun build.ts --outfile ${bin}`.quiet();
   await writeFile(join(dir, "hello.txt"), "hello world\n");
 }, 120_000);
@@ -138,7 +138,7 @@ describe("compiled binary", () => {
     await symlink(join(dir, "loop-a"), join(dir, "loop-b"));
     const r = await runBinary(["-p", "hi", "--add-dir", join(dir, "loop-a")], []);
     expect(r.code).toBe(1);
-    expect(r.stderr.startsWith("tropos:")).toBe(true);
+    expect(r.stderr.startsWith("tcode:")).toBe(true);
     expect(r.stderr.trim().split("\n")).toHaveLength(1);
     expect(r.stderr).not.toMatch(/\n\s+at /);
   });
@@ -152,7 +152,7 @@ describe("compiled binary", () => {
 
   test("scripts/install-local.sh installs a versioned binary behind a symlink", async () => {
     await Bun.$`HOME=${dir} sh scripts/install-local.sh ${bin}`.quiet();
-    const link = join(dir, ".local", "bin", "tropos");
+    const link = join(dir, ".local", "bin", "tcode");
     expect(await readlink(link)).toBe(join(dir, ".local", "share", "tropos", "versions", pkg.version));
     const proc = Bun.spawn([link, "--version"], { stdout: "pipe" });
     expect(await new Response(proc.stdout).text()).toContain(pkg.version);

@@ -51,7 +51,7 @@ async function obtainManifest(s: EngineSession, version: string, source: Install
   return vm;
 }
 
-/** What the user can do about a foreign ~/.local/bin/tropos; only `tropos install` has a --force. */
+/** What the user can do about a foreign ~/.local/bin/tropos; only `tcode install` has a --force. */
 export type ForeignRemedy = "force" | "install.sh" | "move";
 const FOREIGN_REMEDY: Record<ForeignRemedy, string> = {
   force: "move it away or rerun with --force",
@@ -78,7 +78,7 @@ export function healthNotRun(version: string, detail: string): InstallError {
  * check: a transient result never removes the link or moves back, so `version` stays active (exit 75).
  */
 export function staysActive(version: string): InstallError {
-  return new InstallError("busy", `the health check of ${version} could not be run after switching; ${version} stays active — try \`tropos --version\``);
+  return new InstallError("busy", `the health check of ${version} could not be run after switching; ${version} stays active — try \`tcode --version\``);
 }
 
 /** zst first (verified before decompression), raw as fallback; a raw mismatch is retried twice (spec §10.3 step 4). */
@@ -162,9 +162,9 @@ export async function installVersion(s: EngineSession, version: string, opts: In
         }
         if (d.runningVersion === version) {
           // This very process holds the in-use lock, so rerunning it can never succeed.
-          throw new InstallError("busy", `version ${version} is damaged and this tropos is running from it${fallback ? ` (now using ${fallback})` : ""}; reinstall it with install.sh`);
+          throw new InstallError("busy", `version ${version} is damaged and this tcode is running from it${fallback ? ` (now using ${fallback})` : ""}; reinstall it with install.sh`);
         }
-        throw new InstallError("busy", `version ${version} is damaged and in use by running sessions; close them and run \`tropos install ${version} --force\` again`);
+        throw new InstallError("busy", `version ${version} is damaged and in use by running sessions; close them and run \`tcode install ${version} --force\` again`);
       }
       const aside = join(l.versions, `${(await isManaged(l, version)) ? ".corrupt" : ".unmanaged"}-${version}-${s.now().getTime()}`);
       await rename(target, aside);
@@ -238,7 +238,7 @@ export async function installVersion(s: EngineSession, version: string, opts: In
 /** Progress callbacks of the foreground commands: who holds the install lock, and recovery's report as soon as it exists. */
 export type Hooks = Pick<LockOptions, "onWait" | "onRecovery">;
 
-/** `tropos install [stable|latest|<version>] [--force]`. An explicit install clears the version's skip entry. */
+/** `tcode install [stable|latest|<version>] [--force]`. An explicit install clears the version's skip entry. */
 export async function installTarget(deps: EngineDeps, target: string, force: boolean, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
   const run = await withInstallLock(deps, { wait: true, ...hooks }, async (s) => {
     const version = isChannel(target) ? (await resolveChannel(target, deps)).version : target;
@@ -253,7 +253,7 @@ export async function installTarget(deps: EngineDeps, target: string, force: boo
   return run!;
 }
 
-/** `tropos install --self …`, run by install.sh from its temporary folder (spec §10.3). */
+/** `tcode install --self …`, run by install.sh from its temporary folder (spec §10.3). */
 export async function installSelf(deps: EngineDeps, source: Extract<InstallSource, { kind: "self" }>, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
   const run = await withInstallLock(deps, { wait: true, ...hooks }, (s) => installVersion(s, source.compiledVersion, { force: false, source }));
   return run!;
@@ -275,7 +275,7 @@ async function updateFloor(s: EngineSession): Promise<string | null> {
   return candidates.sort(compareVersions).at(-1) ?? null;
 }
 
-/** `tropos update` and background updates: only ever moves forward, never to a skipped version (spec §11). */
+/** `tcode update` and background updates: only ever moves forward, never to a skipped version (spec §11). */
 export async function updateChannel(deps: EngineDeps, channel: Channel, opts: Hooks & { wait: boolean; background?: boolean }): Promise<LockedRun<UpdateResult> | null> {
   return withInstallLock(deps, opts, async (s, recovery): Promise<UpdateResult> => {
     // Amendment A11: with no verified version active, a background run stops; installing is the user's call.

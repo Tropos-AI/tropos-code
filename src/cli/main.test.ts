@@ -179,7 +179,7 @@ describe("main", () => {
     await symlink(loopA, loopB);
     const r = await cli(["-p", "x", "--add-dir", loopA], [() => reply([textBlock("ok")])]);
     expect(r.code).toBe(1);
-    expect(r.err.startsWith("tropos:")).toBe(true);
+    expect(r.err.startsWith("tcode:")).toBe(true);
     expect(r.err).not.toMatch(/\n\s+at /);
     expect(r.err.trim().split("\n")).toHaveLength(1);
   });

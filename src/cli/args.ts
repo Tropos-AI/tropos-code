@@ -169,7 +169,7 @@ export function parseInvocation(argv: string[]): Invocation {
     return { kind: "session", options: parseCli(argv) };
   } catch (e) {
     const word = argv[0];
-    if (e instanceof CliError && word && SUBCOMMAND_WORDS.has(word)) throw new CliError(`${e.message}\nFor ${word}, see tropos ${word} --help.`);
+    if (e instanceof CliError && word && SUBCOMMAND_WORDS.has(word)) throw new CliError(`${e.message}\nFor ${word}, see tcode ${word} --help.`);
     throw e;
   }
 }

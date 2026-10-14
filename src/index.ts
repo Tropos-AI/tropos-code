@@ -5,6 +5,6 @@ import { errorText } from "./error-text";
 try {
   process.exit(await main(process.argv.slice(2)));
 } catch (e) {
-  process.stderr.write(`tropos: ${errorText(e)}\n`);
+  process.stderr.write(`tcode: ${errorText(e)}\n`);
   process.exit(1);
 }

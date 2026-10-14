@@ -15,7 +15,7 @@ Needs `curl` or `wget`, `sha256sum` or `shasum`, and `ssh-keygen` from OpenSSH 8
 ### What you are trusting
 
 The one-line install trusts GitHub's HTTPS to deliver `install.sh` itself. From then on, every
-release is checked against the Tropos release key pinned inside `install.sh` and inside `tropos`:
+release is checked against the Tropos release key pinned inside `install.sh` and inside `tcode`:
 the manifest's ed25519 signature first, then the binary's size and SHA-256. Nothing is run or
 installed if any check fails.
 
@@ -37,10 +37,10 @@ Release key fingerprint: `SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8` (a
 
 | Command | What it does |
 |---|---|
-| `tropos install [stable\|latest\|<version>] [--force]` | One-time install of a release (no target means `latest`); does not change your update channel. `--force` re-verifies and re-activates a version that is already installed, and replaces a `~/.local/bin/tropos` that Tropos did not create |
-| `tropos update` / `tropos upgrade` | Newest release of your channel; never older |
-| `tropos rollback` | Back to the previous version; updates then skip the one you left |
-| `tropos -- update` | Everything after `--` is a prompt |
+| `tcode install [stable\|latest\|<version>] [--force]` | One-time install of a release (no target means `latest`); does not change your update channel. `--force` re-verifies and re-activates a version that is already installed, and replaces a `~/.local/bin/tcode` that Tropos did not create |
+| `tcode update` / `tcode upgrade` | Newest release of your channel; never older |
+| `tcode rollback` | Back to the previous version; updates then skip the one you left |
+| `tcode -- update` | Everything after `--` is a prompt |
 
 ## Background updates
 
@@ -57,10 +57,10 @@ in the background; the next session prints "Updated to <version>". Set `"autoUpd
 ## Files
 
 `~/.local/share/tropos/versions/<version>` (binaries), `~/.local/share/tropos/manifests/` (signed
-manifests), `~/.local/state/tropos/` (state, locks, `update.log`), `~/.local/bin/tropos` (symlink).
+manifests), `~/.local/state/tropos/` (state, locks, `update.log`), `~/.local/bin/tcode` (symlink) and `~/.local/bin/tropos` (the command's name before 0.3.0, a symlink to `tcode`; an install from before 0.3.0 gains `tcode` the first time the new version runs).
 `XDG_DATA_HOME` and `XDG_STATE_HOME` are honoured when absolute.
 
-Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set). `~/.tropos` holds your settings, saved provider keys, memory and sessions; remove it too only if you want those gone.
+Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tcode ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set). `~/.tropos` holds your settings, saved provider keys, memory and sessions; remove it too only if you want those gone.
 
 ## Exit codes
 

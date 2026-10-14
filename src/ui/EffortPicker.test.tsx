@@ -3,8 +3,9 @@ import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import type { Effort } from "../config/constants";
 import { EffortPicker } from "./EffortPicker";
+import { settle } from "../../test/helpers/wait";
 
-const tick = () => Bun.sleep(30);
+const tick = () => settle(30);
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const ENTER = "\r";

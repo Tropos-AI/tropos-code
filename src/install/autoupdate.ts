@@ -52,7 +52,7 @@ export function announcement(state: InstallState): string | null {
   return a.lastUpdated && !a.announced ? `Updated to ${a.lastUpdated}` : null;
 }
 
-/** Detached `tropos update --background` with the minimal environment; output appended to update.log. */
+/** Detached `tcode update --background` with the minimal environment; output appended to update.log. */
 export function spawnBackgroundUpdate(execPath: string, layout: Layout, env: NodeJS.ProcessEnv, spawn: typeof Bun.spawn = Bun.spawn): boolean {
   try {
     try {
@@ -96,7 +96,7 @@ async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: 
   }
 }
 
-/** `tropos update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always resolves. */
+/** `tcode update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always resolves. */
 export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
   try {
     await backgroundUpdate(deps, channel);

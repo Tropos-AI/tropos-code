@@ -1,10 +1,11 @@
 // src/install/session.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm, symlink, writeFile } from "node:fs/promises";
+import { readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { makeEngineFixture, type EngineFixture } from "../../test/install/helpers/engine";
-import { versionPath } from "./layout";
-import { tryLockVersionExclusive } from "./locks";
-import { startNativeSession, type NativeSessionDeps } from "./session";
+import { LOCK_EX } from "./flock";
+import { installLockPath, versionPath } from "./layout";
+import { tryLock, tryLockVersionExclusive } from "./locks";
+import { migrateCommandLink, startNativeSession, type NativeSessionDeps } from "./session";
 import { emptyState, readState, writeState } from "./state";
 
 let f: EngineFixture;
@@ -36,7 +37,7 @@ describe("startNativeSession", () => {
     expect(tryLockVersionExclusive(f.layout, "1.0.0")).toBeNull();
   });
 
-  test("re-executes through ~/.local/bin/tropos when its binary was removed before it locked", async () => {
+  test("re-executes through ~/.local/bin/tcode when its binary was removed before it locked", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", link: "1.1.0" });
     await rm(versionPath(f.layout, "1.0.0"));
@@ -89,5 +90,29 @@ describe("startNativeSession", () => {
     const spawn = ((cmd: string[]) => (spawned.push(cmd), { unref() {} })) as unknown as typeof Bun.spawn;
     expect(await startNativeSession(deps({ spawn }))).toMatchObject({ kind: "native", version: "1.0.0", updateSpawned: false });
     expect(spawned).toEqual([]);
+  });
+});
+
+describe("the command rename (tropos → tcode)", () => {
+  test("a session started through the old tropos link adds tcode, under the install lock", async () => {
+    f = await makeEngineFixture();
+    await writeFile(versionPath(f.layout, "1.0.0"), "bin");
+    await symlink(versionPath(f.layout, "1.0.0"), f.layout.aliasLinks[0]!);
+    await startNativeSession(deps());
+    expect(await readlink(f.layout.binLink)).toBe(versionPath(f.layout, "1.0.0"));
+    expect(await readlink(f.layout.aliasLinks[0]!)).toBe("tcode");
+  });
+
+  test("a busy install lock leaves the migration for the next run", async () => {
+    f = await makeEngineFixture();
+    await writeFile(versionPath(f.layout, "1.0.0"), "bin");
+    await symlink(versionPath(f.layout, "1.0.0"), f.layout.aliasLinks[0]!);
+    const held = tryLock(installLockPath(f.layout), LOCK_EX)!;
+    try {
+      expect(await migrateCommandLink(f.layout)).toBeNull();
+    } finally {
+      held.release();
+    }
+    expect(await migrateCommandLink(f.layout)).toBe("1.0.0");
   });
 });
