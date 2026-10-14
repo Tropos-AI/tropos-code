@@ -127,8 +127,23 @@ export function installDom(): void {
   rebindScreen();
 }
 
+/** Macrotask turns given to React's scheduler before the window goes away. */
+const DRAIN_TURNS = 5;
+
+/**
+ * Lets work React already scheduled run while the window still exists. The scheduler uses the runtime's timers
+ * (keepRuntimeTimers), so an update queued at the very end of a file (a late RPC answer, a final animation frame)
+ * would otherwise render after unregister() and throw "undefined is not an object (evaluating 'window.event')",
+ * an unhandled error that fails the run on a loaded CI machine.
+ */
+async function drainScheduler(): Promise<void> {
+  for (let i = 0; i < DRAIN_TURNS; i++) await new Promise<void>((resolve) => RUNTIME_TIMERS.setTimeout(resolve, 10));
+}
+
 export async function uninstallDom(): Promise<void> {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  if (!GlobalRegistrator.isRegistered) return;
+  await drainScheduler();
+  await GlobalRegistrator.unregister();
 }
 
 /** Installs happy-dom now and removes it after the calling test file's tests. */
