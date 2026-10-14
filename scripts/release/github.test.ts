@@ -96,13 +96,17 @@ describe("public downloads", () => {
     return { fetch, inits };
   }
 
-  test("readAsset: bytes, null on 404, throws otherwise; every request has a timeout", async () => {
-    const { fetch, inits } = fakeFetch((url) => (url.endsWith("/latest") ? new Response("1.0.0\n") : url.endsWith("/gone") ? new Response("", { status: 404 }) : new Response("", { status: 503 })));
+  test("latestDownloadResolves asks past the edge cache (a unique query string on every request)", async () => {
+    const urls: string[] = [];
+    const fetch: Fetcher = async (url) => {
+      urls.push(url);
+      return new Response(null, { status: 302, headers: { location: "https://github.com/o/r/releases/download/v1.0.0/manifest.json" } });
+    };
     const c = ghClient("o/r", undefined, { fetch });
-    expect(new TextDecoder().decode((await c.readAsset("channels", "latest"))!)).toBe("1.0.0\n");
-    expect(await c.readAsset("channels", "gone")).toBeNull();
-    await expect(c.readAsset("channels", "other")).rejects.toThrow("HTTP 503");
-    expect(inits.every((i) => i.signal instanceof AbortSignal)).toBe(true);
+    expect(await c.latestDownloadResolves("v1.0.0")).toBe(true);
+    expect(await c.latestDownloadResolves("v1.0.0")).toBe(true);
+    expect(urls.every((u) => u.startsWith("https://github.com/o/r/releases/latest/download/manifest.json?nocache="))).toBe(true);
+    expect(new Set(urls).size).toBe(2);
   });
 
   test("latestDownloadResolves follows only the redirect's target, with a timeout", async () => {
@@ -114,5 +118,25 @@ describe("public downloads", () => {
     location = null;
     expect(await c.latestDownloadResolves("v1.0.0")).toBe(false);
     expect(inits.every((i) => i.signal instanceof AbortSignal && i.redirect === "manual")).toBe(true);
+  });
+});
+
+describe("readAsset (through the API, never the cached public download route)", () => {
+  const CH = "repos/o/r/releases/tags/channels";
+  const rel = JSON.stringify({ draft: false, prerelease: true, assets: [{ id: 7, name: "latest" }, { id: 9, name: "stable" }] });
+  test("downloads the asset by id: bytes, null when the release or the asset is absent", async () => {
+    const { run, calls } = fakeGh({ [CH]: ok(rel), "-H": ok("1.0.0\n") });
+    const c = ghClient("o/r", "t", { run, fetch: async () => { throw new Error("no public downloads"); } });
+    expect(new TextDecoder().decode((await c.readAsset("channels", "latest"))!)).toBe("1.0.0\n");
+    expect(calls.at(-1)!.args).toEqual(["api", "-H", "Accept: application/octet-stream", "repos/o/r/releases/assets/7"]);
+    expect(await c.readAsset("channels", "gone")).toBeNull();
+    const { run: none } = fakeGh({ [CH]: notFound });
+    expect(await ghClient("o/r", "t", { run: none }).readAsset("channels", "latest")).toBeNull();
+  });
+  test("an outage reading the release or the asset throws (never 'absent')", async () => {
+    const { run } = fakeGh({ [CH]: httpError(502, "Bad Gateway") });
+    await expect(ghClient("o/r", "t", { run }).readAsset("channels", "latest")).rejects.toThrow("HTTP 502");
+    const { run: run2 } = fakeGh({ [CH]: ok(rel), "-H": httpError(404, "Not Found") });
+    await expect(ghClient("o/r", "t", { run: run2 }).readAsset("channels", "latest")).rejects.toThrow("downloading");
   });
 });

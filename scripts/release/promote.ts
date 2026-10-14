@@ -251,21 +251,20 @@ export async function checkChannels(d: PromoteDeps, repair: boolean): Promise<{ 
 }
 
 /**
- * For smoke-public b/c (spec §7.3 step 7): b (old installer) is skipped when GitHub reports no latest release
- * or reports the release under test itself (a first release; spike D6a); c when the channels release does not exist.
+ * For smoke-public b/c (spec §7.3 step 7). b tests the installer users currently get: the release promoted to
+ * channels/latest, which promotion makes GitHub latest. It is read from channels, not from GitHub's latest flag,
+ * because the API can name a release published with --latest=false as latest (spike D6a; seen again in the
+ * 2026-10-14 dry run for a second release), which would skip b. b is skipped when nothing is promoted yet or the
+ * release under test is the promoted one (a resumed run); c when the channels release does not exist.
  * Errors propagate: a gate must never be skipped because GitHub could not be asked.
  */
 export async function previousRelease(d: PromoteDeps, x: string): Promise<{ installerTag: string | null; stable: string | null }> {
   if (!isVersion(x)) throw new Error(`not a version: ${x}`);
-  const hasChannels = (await d.channels.getRelease("channels")) !== null;
-  const ghLatest = await d.main.latestReleaseTag();
-  const installerTag = ghLatest === `v${x}` ? null : ghLatest;
-  let stable: string | null = null;
-  if (hasChannels) {
-    const slots = await readChannel(d, "stable");
-    stable = higher(slots.primary, slots.backup);
-  }
-  return { installerTag, stable };
+  if ((await d.channels.getRelease("channels")) === null) return { installerTag: null, stable: null };
+  const latest = await readChannel(d, "latest");
+  const stable = await readChannel(d, "stable");
+  const promoted = higher(latest.primary, latest.backup);
+  return { installerTag: promoted === null || promoted === x ? null : `v${promoted}`, stable: higher(stable.primary, stable.backup) };
 }
 
 if (import.meta.main) {

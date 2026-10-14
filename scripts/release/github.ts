@@ -50,10 +50,17 @@ export function ghClient(repo: string, token?: string, io: { run?: GhRunner; fet
       if (r.exitCode !== 0) throw new Error(`creating the channels release in ${repo} failed (the repository needs an initial commit before \`gh release create channels\` works): ${r.stderr}`);
     },
     async readAsset(tag, name) {
-      const res = await get(`https://github.com/${repo}/releases/download/${tag}/${name}`, { redirect: "follow", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`reading ${tag}/${name}: HTTP ${res.status}`);
-      return new Uint8Array(await res.arrayBuffer());
+      // Through the API, never github.com/…/releases/download: that route caches a 404 for about a minute and a
+      // replaced asset's old bytes for about two (dry run, 2026-10-14), so a read-back right after an upload would
+      // see the old value. A replaced asset gets a new id, so downloading by id is never stale.
+      const rel = await gh(["api", `repos/${repo}/releases/tags/${tag}`]);
+      if (isNotFound(rel)) return null;
+      if (rel.exitCode !== 0) throw fail(`reading release ${repo}@${tag}`, rel);
+      const asset = (JSON.parse(rel.stdout) as { assets: Array<{ id: number; name: string }> }).assets.find((a) => a.name === name);
+      if (!asset) return null;
+      const r = await gh(["api", "-H", "Accept: application/octet-stream", `repos/${repo}/releases/assets/${asset.id}`]);
+      if (r.exitCode !== 0) throw fail(`downloading ${repo}@${tag}/${name}`, r);
+      return new TextEncoder().encode(r.stdout);
     },
     async uploadAsset(tag, name, data) {
       const dir = await mkdtemp(join(tmpdir(), "promote-"));
@@ -73,7 +80,9 @@ export function ghClient(repo: string, token?: string, io: { run?: GhRunner; fet
     },
     async latestDownloadResolves(tag) {
       // The public route answers 302 to releases/download/<tag>/<asset>, or 404 before anything is marked latest (spike D6a).
-      const res = await get(`https://github.com/${repo}/releases/latest/download/manifest.json`, { redirect: "manual", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
+      // The query string bypasses the edge cache, which keeps answering the previous target for about two minutes;
+      // this asks whether the route is right now, and users' plain requests follow once the cache expires.
+      const res = await get(`https://github.com/${repo}/releases/latest/download/manifest.json?nocache=${crypto.randomUUID()}`, { redirect: "manual", signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
       const location = res.headers.get("location");
       if (res.status < 300 || res.status >= 400 || !location) return false;
       return new URL(location, "https://github.com").pathname.toLowerCase() === `/${repo}/releases/download/${tag}/manifest.json`.toLowerCase();
