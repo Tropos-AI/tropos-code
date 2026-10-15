@@ -106,9 +106,12 @@ the host, limited to the workspace by the permission engine; a container is not 
 ### 2.5 Pairing
 
 Deny by default. An unknown sender gets a one-time 8-character code (no ambiguous characters), valid for one hour.
-The owner approves it on the machine: `tcode pairing approve telegram <code>`. Five wrong or expired attempts from a
-sender lock that sender out for an hour. `tcode pairing list|revoke` manage approved senders. State lives in
-`~/.tropos/gateway/pairing.json` (0600). Codes are stored hashed.
+The owner approves it on the machine: `tcode pairing approve telegram <code>`. A sender can be issued at most 5
+codes an hour; after that they are ignored without a reply. Five failed approvals on a channel within an hour lock
+approving on that channel for the rest of the hour (a guessing guard for a compromised local shell).
+`tcode pairing list|revoke` manage approved senders. State lives in `~/.tropos/gateway/pairing.json` (0600).
+Codes are stored hashed; a code is shown to the sender once, so after a daemon restart a still-valid code cannot
+be shown again and the sender's next message is given a fresh one.
 
 ### 2.6 Telegram
 
@@ -117,6 +120,16 @@ batched messages (tool calls as one-line summaries, the answer as text, split at
 request becomes a message with **Approve / Deny** inline buttons; an unanswered request denies after 5 minutes. The
 bot token comes from `TROPOS_TELEGRAM_BOT_TOKEN` or `gateway.json`. Commands: `/stop` (interrupt), `/new` (fresh
 session), `/status`.
+
+### 2.7 How the pieces differ from the first sketch
+
+- `WebHost` was not renamed; a pool of them is enough. Chat sessions are built by `createRuntime` with
+  `interactive: false` (no learning, no identity bootstrap, no ↑-history) and `ownsExtensions: false` (closing a chat
+  doesn't close the MCP servers and search index the other sessions share).
+- The permission engine gained `confine` (paths outside the workspace are denied, not asked about) and the app
+  context gained `origin` and `exec`. Subagents inherit `exec`; without that they would get the host shell back.
+- The daemon is the first process to hold several sessions. The undo tracker and snapshots in `ctx.ext` are shared
+  between them, so `/undo` is a single-session feature for now.
 
 ## 3. Errors
 
@@ -135,7 +148,16 @@ session), `/status`.
 - Telegram adapter against an in-process fake Bot API.
 - The existing `eval/` tasks are the regression check that session quality did not change.
 
-## 5. Rollout
+## 5. Known limits
+
+- File tools run on the host, confined to the workspace by the permission engine, not by the container.
+- Hooks configured in `~/.tropos/settings.json` also fire for chat sessions and run on the host: they are the
+  owner's own configuration, but they see chat-originated tool calls.
+- If the container dies mid-session (OOM, `docker stop`) later commands fail until the session is reopened.
+- A command that is signalled in the first milliseconds, before it has written its pid file, can outlive the kill.
+- The local web session is a full-trust `local` session on loopback, protected by the persisted token.
+
+## 6. Rollout
 
 1. `ExecBackend` and the Docker backend, behind `ctx.exec` (no behaviour change for existing users).
 2. Pairing, config, policy.
