@@ -21,6 +21,70 @@ export interface CliOptions {
   version: boolean;
   /** `tcode web`: serve the browser UI instead of the terminal one. */
   web?: WebOptions;
+  /** `tcode gateway`: run as the always-on gateway instead of a session. */
+  gateway?: GatewayOptions;
+}
+
+export interface GatewayOptions {
+  /** The project directory chats work in (default: the current one). */
+  workspace?: string;
+  /** Serve the local web UI too (default); --no-web turns it off. */
+  web: boolean;
+}
+
+/** `tcode gateway [--workspace <dir>] [--no-web]`: the gateway flags, then the usual parser. */
+export function parseGateway(argv: string[]): CliOptions {
+  const rest: string[] = [];
+  const gateway: GatewayOptions = { web: true };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--no-web") gateway.web = false;
+    else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
+      const raw = arg === "--workspace" ? argv[++i] : arg.slice("--workspace=".length);
+      if (!raw) throw new CliError("--workspace needs a directory");
+      gateway.workspace = raw;
+    } else rest.push(arg);
+  }
+  const options = parseCli(rest);
+  if (options.print) throw new CliError("tcode gateway runs until stopped; -p (print mode) doesn't apply");
+  if (options.prompt) throw new CliError(`tcode gateway takes no prompt (got "${options.prompt}")`);
+  return { ...options, gateway };
+}
+
+export type GatewayCommand =
+  | { kind: "gateway-install"; workspace?: string }
+  | { kind: "gateway-uninstall" }
+  | { kind: "gateway-status" }
+  | { kind: "pairing-approve"; channel: string; code: string }
+  | { kind: "pairing-list" }
+  | { kind: "pairing-revoke"; channel: string; senderId: string }
+  | { kind: "help"; command: "gateway" | "pairing" };
+
+/** `tcode gateway install|uninstall|status` and `tcode pairing approve|list|revoke`; null for anything else. */
+export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
+  const [word, sub, ...rest] = argv;
+  if (word === "gateway") {
+    if (sub === "-h" || sub === "--help") return { kind: "help", command: "gateway" };
+    if (sub === "uninstall" && rest.length === 0) return { kind: "gateway-uninstall" };
+    if (sub === "status" && rest.length === 0) return { kind: "gateway-status" };
+    if (sub === "install") {
+      if (rest.length === 0) return { kind: "gateway-install" };
+      if (rest[0] === "--workspace" && rest[1] && rest.length === 2) return { kind: "gateway-install", workspace: rest[1] };
+      if (rest.length === 1 && rest[0]!.startsWith("--workspace=") && rest[0]!.length > "--workspace=".length) {
+        return { kind: "gateway-install", workspace: rest[0]!.slice("--workspace=".length) };
+      }
+      throw new CliError("usage: tcode gateway install [--workspace <dir>]");
+    }
+    return null;
+  }
+  if (word === "pairing") {
+    if (sub === undefined || sub === "-h" || sub === "--help") return { kind: "help", command: "pairing" };
+    if (sub === "list" && rest.length === 0) return { kind: "pairing-list" };
+    if (sub === "approve" && rest.length === 2) return { kind: "pairing-approve", channel: rest[0]!, code: rest[1]! };
+    if (sub === "revoke" && rest.length === 2) return { kind: "pairing-revoke", channel: rest[0]!, senderId: rest[1]! };
+    throw new CliError("usage: tcode pairing approve <channel> <code> | list | revoke <channel> <sender-id>");
+  }
+  return null;
 }
 
 export interface WebOptions {
@@ -162,7 +226,10 @@ export type InstallCommand =
   | { kind: "rollback" }
   | { kind: "help"; command: "install" | "update" | "upgrade" | "rollback" };
 
-export type Invocation = { kind: "subcommand"; command: InstallCommand } | { kind: "session"; options: CliOptions };
+export type Invocation =
+  | { kind: "subcommand"; command: InstallCommand }
+  | { kind: "gateway-command"; command: GatewayCommand }
+  | { kind: "session"; options: CliOptions };
 
 const SUBCOMMAND_WORDS = new Set(["install", "update", "upgrade", "rollback"]);
 
@@ -197,6 +264,9 @@ export function parseInvocation(argv: string[]): Invocation {
     const command = matchSubcommand(argv);
     if (command) return { kind: "subcommand", command };
     if (argv[0] === "web") return { kind: "session", options: parseWeb(argv.slice(1)) };
+    const gatewayCommand = matchGatewayCommand(argv);
+    if (gatewayCommand) return { kind: "gateway-command", command: gatewayCommand };
+    if (argv[0] === "gateway") return { kind: "session", options: parseGateway(argv.slice(1)) };
   }
   try {
     return { kind: "session", options: parseCli(argv) };

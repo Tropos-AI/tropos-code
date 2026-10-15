@@ -11,6 +11,11 @@ Commands:
   tcode rollback                   return to the previous version
   tcode web [--port <n>] [--no-open]
                                    open the browser UI on 127.0.0.1 (same sessions and settings)
+  tcode gateway [--workspace <dir>] [--no-web]
+                                   run the always-on gateway: chats from your phone (Telegram) work in
+                                   a sandbox, plus the local web UI. See: tcode gateway --help
+  tcode pairing approve <channel> <code> | list | revoke <channel> <sender-id>
+                                   decide who may talk to the gateway
   tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- update)
 
 Options:
@@ -65,4 +70,31 @@ version you rolled back from until a newer release appears.
 
 Options:
   -h, --help     show this help
+`;
+
+export const GATEWAY_HELP = `Usage: tcode gateway [--workspace <dir>] [--no-web]
+       tcode gateway install [--workspace <dir>]   start the gateway at login (macOS launchd)
+       tcode gateway uninstall
+       tcode gateway status
+
+Runs Tropos as a long-lived process that owns agent sessions. A message from Telegram opens a session in the
+workspace; its commands run in a Docker container that sees only that directory (no home, no credentials,
+no network unless you allow it), and every edit or command asks you first, as buttons in the chat.
+Nobody can talk to it until you approve them: tcode pairing approve telegram <code>.
+
+Setup: create a bot with @BotFather, then set TROPOS_TELEGRAM_BOT_TOKEN (or telegram.botToken in
+~/.tropos/gateway.json, which is kept private) and make sure Docker is running.
+
+Options:
+      --workspace <dir>   the project chats work in (default: the current directory)
+      --no-web            don't serve the local web UI
+  -h, --help              show this help
+`;
+
+export const PAIRING_HELP = `Usage: tcode pairing approve <channel> <code>
+       tcode pairing list
+       tcode pairing revoke <channel> <sender-id>
+
+A person who messages the bot without being approved is given a one-time code. Approve it here, on this
+machine, to let them in. Codes expire after an hour.
 `;

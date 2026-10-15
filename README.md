@@ -87,6 +87,47 @@ In a session:
 - `shift+tab` cycles permission modes (default → accept edits → plan), `ctrl+o` shows full tool
   output, `\` then enter adds a line, and `?` lists shortcuts.
 
+## Gateway: work from your phone
+
+`tcode gateway` keeps Tropos running in the background, like OpenClaw's Gateway and Hermes' messaging
+gateway, so you can send it a task from Telegram and approve its tool calls from your phone.
+
+```bash
+export TROPOS_TELEGRAM_BOT_TOKEN=...      # a bot from @BotFather (or telegram.botToken in ~/.tropos/gateway.json)
+tcode gateway --workspace ~/code/app      # run it in the foreground
+tcode gateway install                     # or start it at login (macOS launchd)
+tcode gateway status                      # what's running, and the local web link
+tcode pairing approve telegram <code>     # let a person in
+```
+
+It is built so that a message from a chat can't do what a person at the keyboard can:
+
+- **Nobody is in by default.** An unknown sender gets a one-time code (valid for an hour) and nothing
+  they write reaches the agent until you approve the code on this machine. `tcode pairing list` and
+  `revoke` manage who is in.
+- **Commands run in a Docker container.** It sees only the workspace (mounted at the same path), starts with an
+  empty environment, has no network (set `sandbox.network` to `bridge` in `gateway.json` to allow it), a
+  read-only root filesystem, no capabilities and memory, CPU and process limits. Your home directory,
+  `~/.ssh`, `~/.tropos` and your credentials are not in it, and neither can `.git/hooks`, `.git/config` or
+  `.husky` be changed from inside (nor the same under submodules), since your next `git` command would run
+  them. Run `git init` in the workspace first: without a `.git` there is nothing to protect, and the gateway
+  warns. If Docker isn't running, the
+  chat is told so and nothing runs: there is no fallback to your shell. A workspace that is your home directory,
+  a parent of it, or `~/.tropos` is refused.
+- **Every edit and command asks you first**, as Approve / Deny buttons in the chat. Your own "allow" rules
+  don't apply there, a chat can't grant "always allow", can't use bypass or accept-edits mode, and its file
+  tools are confined to the workspace (a path outside it, or a symlink out of it, is refused, not asked about).
+  A request too long to show in full is denied rather than put behind a button. MCP tools always ask. A chat
+  has no WebFetch and no session search (your other transcripts), and formatters and language servers are off.
+- **It doesn't learn from chats.** The background learning review is off for chat sessions, because what a
+  chat says is untrusted and notes and skills outlive it.
+
+What it does not do: the file tools (Read, Write, Edit, Glob, Grep) run on your machine, kept to the workspace
+by the permission engine rather than by the container, and a container is not a perfect boundary. Treat the
+workspace as the thing a chat can damage. A command that you approve can still edit `package.json` scripts or
+a Makefile, which run when you next use them: read what you approve. The TUI is not yet a client of the daemon; `tcode` still runs on its
+own. Design: `docs/superpowers/specs/2026-10-15-gateway-core-design.md`.
+
 ## Permissions
 
 | Mode | Reads | File edits | Shell commands |

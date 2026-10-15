@@ -92,6 +92,26 @@ describe("runSubagent", () => {
     expect(c.cwd()).toBe("/work");
   });
 
+  test("a subagent runs commands on the parent's exec backend, never the host's", async () => {
+    const seen: { exec?: ToolContext["exec"] } = {};
+    const probe = defineTool({
+      name: "Probe",
+      kind: "read",
+      description: "Probe",
+      schema: z.object({}),
+      summarize: () => "",
+      subject: () => ({ paths: [] }),
+      run: async (_i, c) => {
+        seen.exec = c.exec;
+        return { content: "ok" };
+      },
+    }) as AnyTool;
+    const backend = { kind: "docker" } as ToolContext["exec"];
+    const d = deps([() => reply([toolUseBlock("t1", "Probe", {})], "tool_use"), () => reply([textBlock("done")])], { tools: [probe] });
+    await runSubagent(def, "go", d, ctx({ exec: backend }));
+    expect(seen.exec).toBe(backend);
+  });
+
   test("permission asks go through the shared function", async () => {
     const asked: PermissionPrompt[] = [];
     const d = deps([() => reply([toolUseBlock("t1", "Bash", {})], "tool_use"), () => reply([textBlock("could not")])], {

@@ -1,10 +1,9 @@
 // src/tools/bash/bash.ts
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { constants, tmpdir } from "node:os";
-import { join } from "node:path";
+import { constants } from "node:os";
 import { z } from "zod";
+import { localBackend } from "../../exec/local";
 import { isInside } from "../../paths";
 import { defineTool } from "../types";
 import { OutputBuffer } from "./output-buffer";
@@ -75,53 +74,36 @@ export const bashTool = defineTool({
   subject: (input) => ({ command: input.command, paths: [] }),
   async run(input, ctx) {
     const startDir = ctx.cwd();
+    const exec = ctx.exec ?? localBackend;
     if (input.run_in_background) {
-      const child = spawn(ctx.shell, ["-c", `cd ${quote(startDir)} || exit 1\n${input.command}\n`], {
+      const child = exec.spawn({
+        shell: ctx.shell,
+        script: `cd ${quote(startDir)} || exit 1\n${input.command}\n`,
         cwd: startDir,
         env: childEnv(),
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
       });
-      const id = ctx.jobs.add(input.command, child);
+      const id = ctx.jobs.add(input.command, child, exec);
       return { content: `Started background job ${id}. Read its output with BashOutput and stop it with KillShell.`, summary: id };
     }
-    const cwdFile = join(tmpdir(), `tropos-cwd-${randomUUID()}`);
-    const script = `cd ${quote(startDir)} || exit 1\n${input.command}\n__tropos_status=$?\npwd -P > ${quote(cwdFile)} 2>/dev/null\nexit $__tropos_status\n`;
+    const marker = exec.cwdMarker(randomUUID());
+    const cwdFile = marker.host;
+    const script = `cd ${quote(startDir)} || exit 1\n${input.command}\n__tropos_status=$?\npwd -P > ${quote(marker.inside)} 2>/dev/null\nexit $__tropos_status\n`;
 
-    const child = spawn(ctx.shell, ["-c", script], {
-      cwd: startDir,
-      env: childEnv(),
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = exec.spawn({ shell: ctx.shell, script, cwd: startDir, env: childEnv() });
     const stdout = new OutputBuffer(STREAM_LIMIT);
     const stderr = new OutputBuffer(STREAM_LIMIT);
     const collectOut = (d: string) => stdout.push(d);
     const collectErr = (d: string) => stderr.push(d);
-    child.stdout.setEncoding("utf8").on("data", collectOut);
-    child.stderr.setEncoding("utf8").on("data", collectErr);
+    child.stdout!.setEncoding("utf8").on("data", collectOut);
+    child.stderr!.setEncoding("utf8").on("data", collectErr);
     // Registered now, not after exit: in Bun "exit" and "close" can fire in the same tick.
     const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
 
     let timedOut = false;
     let aborted = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
-    const groupAlive = (): boolean => {
-      try {
-        if (!child.pid) return false;
-        process.kill(-child.pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const signalGroup = (sig: NodeJS.Signals) => {
-      try {
-        if (child.pid) process.kill(-child.pid, sig);
-      } catch {
-        // already gone
-      }
-    };
+    const groupAlive = (): boolean => exec.alive(child);
+    const signalGroup = (sig: NodeJS.Signals) => exec.signal(child, sig);
     const terminate = () => {
       signalGroup("SIGTERM");
       killTimer ??= setTimeout(() => {
@@ -164,8 +146,8 @@ export const bashTool = defineTool({
     clearTimeout(drainTimer);
     // Leave the pipes open but drained, so a background job that writes later doesn't die on a broken pipe.
     for (const [stream, collect] of [[child.stdout, collectOut], [child.stderr, collectErr]] as const) {
-      stream.off("data", collect);
-      stream.on("data", () => {});
+      stream!.off("data", collect);
+      stream!.on("data", () => {});
       (stream as unknown as { unref?: () => void }).unref?.();
     }
     child.unref();

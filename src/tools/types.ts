@@ -2,6 +2,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { z } from "zod";
 import type { ToolKind } from "../config/constants";
+import type { ExecBackend } from "../exec/backend";
 import type { JobTable } from "./bash/jobs";
 import type { ReadState } from "./read-state";
 
@@ -46,6 +47,8 @@ export interface ToolContext {
   /** Background jobs started with Bash run_in_background. */
   jobs: JobTable;
   shell: string;
+  /** Where Bash runs; the host when unset. Channel sessions set a sandbox. */
+  exec?: ExecBackend;
   signal: AbortSignal;
   /** Canonical paths the permission engine approved for this call (set by the agent). */
   approvedPaths?: string[];

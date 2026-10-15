@@ -38,6 +38,8 @@ export interface PermissionContext {
   cwd: string;
   home: string;
   allowedDirs: string[];
+  /** Paths outside allowedDirs are denied, not asked about: sessions started from a messaging channel. */
+  confine?: boolean;
 }
 
 export type Decision =
@@ -145,6 +147,10 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   const budget = createRestrictBudget();
   const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true, budget));
   if (denied) return { behavior: "deny", reason: `Blocked by the deny rule ${formatRule(denied)}.` };
+  if (ctx.confine) {
+    const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));
+    if (outside) return { behavior: "deny", reason: `This session is confined to the workspace; ${outside} is outside it.` };
+  }
   if (ctx.mode === "bypass") return { behavior: "allow" };
   if (ctx.mode === "plan" && (req.kind === "edit" || req.kind === "exec")) {
     return { behavior: "deny", reason: PLAN_MODE_REASON };

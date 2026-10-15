@@ -386,3 +386,30 @@ describe("decide — targets, network and MCP tools", () => {
     expect(decide(mcp("mcp__db__query"), ctx())).toEqual({ behavior: "ask", suggestion: "mcp__db__query" });
   });
 });
+
+describe("decide — confine (sessions from a messaging channel)", () => {
+  const confined = (over: Parameters<typeof ctx>[0] = {}): PermissionContext => ({ ...ctx(over), confine: true });
+  test("a path outside the workspace is denied instead of asked about", () => {
+    expect(decide(read("/etc/passwd"), confined())).toEqual({
+      behavior: "deny",
+      reason: "This session is confined to the workspace; /etc/passwd is outside it.",
+    });
+    expect(decide(edit("/home/u/.ssh/config"), confined()).behavior).toBe("deny");
+  });
+  test("bypass mode and allow rules don't lift it", () => {
+    expect(decide(read("/etc/passwd"), confined({ mode: "bypass" })).behavior).toBe("deny");
+    expect(decide(read("/etc/passwd"), confined({ allow: ["Read"] })).behavior).toBe("deny");
+  });
+  test("inside the workspace nothing changes", () => {
+    expect(decide(read("/work/app/a.ts"), confined())).toEqual({ behavior: "allow" });
+    expect(decide(edit("/work/app/src/a.ts"), confined()).behavior).toBe("ask");
+  });
+  test("an ask rule outranks an allow rule, so WebFetch and MCP can be forced to ask", () => {
+    const rules = confined({ allow: ["WebFetch", "mcp__gh__list"], ask: ["WebFetch", "mcp__*"] });
+    expect(decide({ toolName: "WebFetch", kind: "exec", paths: [], target: "domain:example.com" }, rules).behavior).toBe("ask");
+    expect(decide({ toolName: "mcp__gh__list", kind: "exec", paths: [] }, rules).behavior).toBe("ask");
+  });
+  test("without confine the same path asks, as before", () => {
+    expect(decide(read("/etc/passwd"), ctx()).behavior).toBe("ask");
+  });
+});

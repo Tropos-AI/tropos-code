@@ -108,6 +108,8 @@ export async function runSubagent(def: SubagentDefinition, prompt: string, deps:
     todos: new MemoryTodoStore(),
     jobs: ctx.jobs,
     shell: ctx.shell,
+    // A sandboxed session's subagents must not get the host shell back.
+    exec: ctx.exec,
   };
   let toolUses = 0;
   let turns = 0;

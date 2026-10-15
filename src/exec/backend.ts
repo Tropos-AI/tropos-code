@@ -1,0 +1,39 @@
+// src/exec/backend.ts — where Bash-tool commands run: on the host, or in a sandbox.
+import type { ChildProcess } from "node:child_process";
+
+export interface ExecSpawn {
+  /** The POSIX shell to run (`ctx.shell`); a sandbox may substitute its own. */
+  shell: string;
+  /** The full script, passed as `-c`. */
+  script: string;
+  /** Where the command starts; always inside the project. */
+  cwd: string;
+  /** The environment the command gets. The local backend uses it as is; a sandbox starts from an empty one. */
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * A file the script writes its final directory to, so the tool can track `cd`. `inside` is the path as the
+ * script sees it, `host` the same file as the tool reads it.
+ */
+export interface CwdMarker {
+  inside: string;
+  host: string;
+}
+
+export interface ExecBackend {
+  readonly kind: "local" | "docker";
+  /**
+   * Starts the script. The child is detached, with stdin ignored and stdout/stderr piped, and it can be
+   * handed to the job table: the same contract as `child_process.spawn` has had in bash.ts.
+   */
+  spawn(opts: ExecSpawn): ChildProcess;
+  /** A fresh marker for one command; `id` is unique per call. */
+  cwdMarker(id: string): CwdMarker;
+  /** Signals the command a `spawn` started, and everything it started. Never throws. */
+  signal(child: ChildProcess, sig: NodeJS.Signals): void;
+  /** Whether the command (or anything it started) is still running. */
+  alive(child: ChildProcess): boolean;
+  /** Releases what the backend holds (a container); idempotent. */
+  close(): Promise<void>;
+}

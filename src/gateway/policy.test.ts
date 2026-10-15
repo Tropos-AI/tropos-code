@@ -1,0 +1,104 @@
+// src/gateway/policy.test.ts
+import { describe, expect, test } from "bun:test";
+import { decide, compileRules } from "../permissions/engine";
+import type { AppContext } from "../cli/runtime";
+import type { ExecBackend } from "../exec/backend";
+import { CHANNEL_MODES, channelContext, workspaceProblem } from "./policy";
+
+const exec = { kind: "docker" } as ExecBackend;
+
+function base(over: Partial<{ allow: string[]; ask: string[]; deny: string[] }> = {}): AppContext {
+  const { rules } = compileRules({ allow: over.allow ?? [], ask: over.ask ?? [], deny: over.deny ?? [] });
+  return {
+    cwd: "/work/app",
+    home: "/h/.tropos",
+    rules,
+    tools: ["Read", "Bash", "SessionSearch", "WebFetch", "mcp__gh__list"].map((name) => ({ name })),
+    ext: { formatters: {}, lsp: {}, skills: [] },
+    allowedDirs: ["/work/app", "/work/other"],
+    settings: { learning: { review: true, interval: 10, flushAt: 0.8, curator: true } },
+    origin: "local",
+  } as unknown as AppContext;
+}
+
+describe("channelContext", () => {
+  test("is marked as a channel origin with the sandbox backend", () => {
+    const ctx = channelContext(base(), exec);
+    expect(ctx.origin).toBe("channel");
+    expect(ctx.exec).toBe(exec);
+  });
+
+  test("only the workspace is allowed, not the extra directories", () => {
+    expect(channelContext(base(), exec).allowedDirs).toEqual(["/work/app"]);
+  });
+
+  test("the learning loop is off", () => {
+    expect(channelContext(base(), exec).settings.learning).toMatchObject({ review: false, curator: false });
+  });
+
+  test("the owner's allow rules don't carry over, so chat commands and writes ask", () => {
+    const ctx = channelContext(base({ allow: ["Bash(npm:*)", "Edit", "Write"] }), exec);
+    expect(ctx.rules.allow).toHaveLength(0);
+    const permission = { mode: "default" as const, rules: ctx.rules, cwd: ctx.cwd, home: "/h", allowedDirs: ctx.allowedDirs, confine: true };
+    expect(decide({ toolName: "Bash", kind: "exec", command: "npm test", paths: [] }, permission).behavior).toBe("ask");
+    expect(decide({ toolName: "Edit", kind: "edit", paths: ["/work/app/a.ts"] }, permission).behavior).toBe("ask");
+    expect(decide({ toolName: "Read", kind: "read", paths: ["/work/app/a.ts"] }, permission).behavior).toBe("allow");
+  });
+
+  test("a chat gets neither SessionSearch (the owner's transcripts) nor the host-side WebFetch", () => {
+    const names = channelContext(base(), exec).tools.map((t) => t.name);
+    expect(names).toEqual(["Read", "Bash", "mcp__gh__list"]);
+  });
+
+  test("formatters and language servers, which run on the host, are off", () => {
+    const b = base();
+    const ctx = channelContext(b, exec);
+    expect(ctx.ext.formatters).toBeNull();
+    expect(ctx.ext.lsp).toBeNull();
+    expect(b.ext.formatters).not.toBeNull();
+  });
+
+  test("the base context is left alone", () => {
+    const b = base({ allow: ["WebFetch"] });
+    channelContext(b, exec);
+    expect(b.rules.ask).toHaveLength(0);
+    expect(b.rules.allow).toHaveLength(1);
+    expect(b.tools).toHaveLength(5);
+    expect(b.allowedDirs).toHaveLength(2);
+    expect(b.settings.learning.review).toBe(true);
+  });
+
+  test("MCP tools ask, however the owner's rules read", () => {
+    const ctx = channelContext(base({ allow: ["mcp__gh__list"], ask: [] }), exec);
+    const permission = { mode: "default" as const, rules: { ...ctx.rules, allow: compileRules({ allow: ["mcp__gh__list"], ask: [], deny: [] }).rules.allow }, cwd: ctx.cwd, home: "/h", allowedDirs: ctx.allowedDirs, confine: true };
+    expect(decide({ toolName: "mcp__gh__list", kind: "exec", paths: [] }, permission).behavior).toBe("ask");
+  });
+
+  test("a deny rule of the user's still denies", () => {
+    const ctx = channelContext(base({ deny: ["Read(.env)"] }), exec);
+    const permission = { mode: "default" as const, rules: ctx.rules, cwd: ctx.cwd, home: "/h", allowedDirs: ctx.allowedDirs, confine: true };
+    expect(decide({ toolName: "Read", kind: "read", paths: ["/work/app/.env"] }, permission).behavior).toBe("deny");
+  });
+});
+
+test("a chat can never be in bypass or accept-edits mode", () => {
+  expect(CHANNEL_MODES).toEqual(["default", "plan"]);
+});
+
+describe("workspaceProblem", () => {
+  const userHome = "/Users/me";
+  const tropos = "/Users/me/.tropos";
+  test("a project directory is fine, even under the home directory", () => {
+    expect(workspaceProblem("/Users/me/code/app", tropos, userHome)).toBeUndefined();
+    expect(workspaceProblem("/srv/app", tropos, userHome)).toBeUndefined();
+  });
+  test("the home directory, its parents and the root would put ~/.ssh and ~/.tropos in the container", () => {
+    expect(workspaceProblem("/Users/me", tropos, userHome)).toMatch(/home directory/);
+    expect(workspaceProblem("/Users", tropos, userHome)).toMatch(/home directory/);
+    expect(workspaceProblem("/", tropos, userHome)).toMatch(/root/);
+  });
+  test("Tropos's own data directory is never a workspace", () => {
+    expect(workspaceProblem(tropos, "/Users/me/.tropos", userHome)).toBeDefined();
+    expect(workspaceProblem("/Users/me/.tropos/projects/x", tropos, userHome)).toMatch(/data directory/);
+  });
+});

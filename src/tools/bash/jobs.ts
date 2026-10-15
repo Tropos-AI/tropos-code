@@ -1,5 +1,7 @@
 // src/tools/bash/jobs.ts
 import type { ChildProcess } from "node:child_process";
+import type { ExecBackend } from "../../exec/backend";
+import { localBackend } from "../../exec/local";
 import { OutputBuffer } from "./output-buffer";
 
 /** Unread output kept per stream between two reads; the middle is dropped beyond this. */
@@ -17,6 +19,8 @@ interface Job {
   id: string;
   command: string;
   child: ChildProcess;
+  /** Signals and liveness checks go through the backend that started the child. */
+  backend: ExecBackend;
   status: JobStatus;
   stdout: OutputBuffer;
   stderr: OutputBuffer;
@@ -60,7 +64,7 @@ export class JobTable {
   constructor(private readonly limit = UNREAD_LIMIT) {}
 
   /** Takes over a spawned, detached child with piped stdout/stderr and returns its job id. */
-  add(command: string, child: ChildProcess): string {
+  add(command: string, child: ChildProcess, backend: ExecBackend = localBackend): string {
     const id = `bash-${this.nextId++}`;
     let exitedResolve!: () => void;
     const exited = new Promise<void>((resolve) => (exitedResolve = resolve));
@@ -69,6 +73,7 @@ export class JobTable {
       id,
       command,
       child,
+      backend,
       status: { state: "running" },
       stdout: new OutputBuffer(this.limit),
       stderr: new OutputBuffer(this.limit),
@@ -126,12 +131,12 @@ export class JobTable {
   async kill(id: string, graceMs = KILL_GRACE_MS): Promise<JobStatus | undefined> {
     const job = this.jobs.get(id);
     if (!job) return undefined;
-    const pid = job.child.pid;
-    if (pid !== undefined && groupAlive(pid)) {
-      signalGroup(pid, "SIGTERM");
-      if (!(await waitForGroupExit(pid, graceMs))) {
-        signalGroup(pid, "SIGKILL");
-        await waitForGroupExit(pid, 1_000);
+    const { child, backend } = job;
+    if (backend.alive(child)) {
+      backend.signal(child, "SIGTERM");
+      if (!(await waitForGroupExit(job, graceMs))) {
+        backend.signal(child, "SIGKILL");
+        await waitForGroupExit(job, 1_000);
       }
     }
     await Promise.race([job.exited, Bun.sleep(1_000)]);
@@ -141,7 +146,7 @@ export class JobTable {
   /** Synchronous so it can run from an exit handler: SIGTERM to every job's process group. */
   killAll(): void {
     for (const job of this.jobs.values()) {
-      if (job.child.pid !== undefined) signalGroup(job.child.pid, "SIGTERM");
+      if (job.child.pid !== undefined) job.backend.signal(job.child, "SIGTERM");
     }
     this.unwatch();
   }
@@ -161,26 +166,9 @@ export class JobTable {
   }
 }
 
-function signalGroup(pid: number, sig: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, sig);
-  } catch {
-    // already gone
-  }
-}
-
-function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForGroupExit(pid: number, ms: number): Promise<boolean> {
+async function waitForGroupExit(job: Job, ms: number): Promise<boolean> {
   const end = Date.now() + ms;
-  while (groupAlive(pid)) {
+  while (job.backend.alive(job.child)) {
     if (Date.now() >= end) return false;
     await Bun.sleep(POLL_MS);
   }

@@ -34,6 +34,11 @@ import {
 } from "./runtime";
 import { USAGE } from "./usage";
 import { runWeb, type RunWebOptions } from "../web/serve";
+import { runGatewayCommand } from "../gateway/commands";
+import { GatewayConfigError, configPermissionWarning, gatewayDir, loadGatewayConfig } from "../gateway/config";
+import { runGateway, type GatewayRun } from "../gateway/daemon";
+import { FilePairing } from "../gateway/pairing";
+import { join } from "node:path";
 
 /** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
 export const EXIT_USAGE = 64;
@@ -53,6 +58,9 @@ export interface MainDeps {
   openBrowser?: (url: string) => void;
   /** Tests override terminal detection for the native-session announcement. */
   tty?: { stdin: boolean; stdout: boolean };
+  /** Tests stop `tcode gateway` themselves and fake what it talks to. */
+  gatewayUntil?: GatewayRun["until"];
+  gatewaySeams?: GatewayRun["seams"];
 }
 
 const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
@@ -123,6 +131,16 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         engine: deps.engine,
       });
     }
+    if (invocation.kind === "gateway-command") {
+      return await runGatewayCommand(invocation.command, {
+        out,
+        err,
+        env: deps.env ?? process.env,
+        cwd: deps.cwd ?? process.cwd(),
+        execPath: deps.execPath ?? process.execPath,
+        scriptPath: process.argv[1],
+      });
+    }
     opts = invocation.options;
   } catch (e) {
     if (e instanceof CliError) {
@@ -141,7 +159,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
 
   const env = deps.env ?? process.env;
-  const cwd = resolveToolPath(".", deps.cwd ?? process.cwd());
+  const cwd = resolveToolPath(opts.gateway?.workspace ?? ".", deps.cwd ?? process.cwd());
   const home = troposHome(env);
   const paths = settingsPaths(cwd, home);
 
@@ -195,12 +213,12 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       err('tcode: print mode needs a prompt, e.g. tcode -p "explain this repo"\n');
       return EXIT_USAGE;
     }
-  } else if (!opts.web && (!process.stdin.isTTY || deps.readStdin)) {
+  } else if (!opts.web && !opts.gateway && (!process.stdin.isTTY || deps.readStdin)) {
     err("tcode: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
     return EXIT_USAGE;
   }
 
-  if (!opts.print && !opts.web && picked.rejected) {
+  if (!opts.print && !opts.web && !opts.gateway && picked.rejected) {
     err(`tcode: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
@@ -228,9 +246,48 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     modelPrefs: new ModelPrefs(home),
   };
   try {
-    return await runSession();
+    return opts.gateway ? await runGatewayMode(opts.gateway.web) : await runSession();
   } finally {
     await Promise.all([ext.mcp?.close(), ext.lsp?.close()]);
+  }
+
+  async function runGatewayMode(web: boolean): Promise<number> {
+    let config;
+    try {
+      config = await loadGatewayConfig(home);
+    } catch (e) {
+      if (e instanceof GatewayConfigError) {
+        err(`tcode: ${e.message}\n`);
+        return 1;
+      }
+      throw e;
+    }
+    const warning = await configPermissionWarning(home);
+    if (warning) err(`tcode: ${warning}\n`);
+    const rgPath = Bun.which("rg");
+    // Each chat gets its own subagent holder and tools over the shared extensions (MCP, skills, memory).
+    const newSessionContext = () => {
+      const holder: SubagentHolder = {};
+      let current = "";
+      return {
+        ctx: { ...ctx, subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
+        setSessionId: (id: string) => {
+          current = id;
+        },
+      };
+    };
+    return await runGateway({
+      ctx,
+      newSessionContext,
+      config,
+      pairing: new FilePairing({ path: join(gatewayDir(home), "pairing.json") }),
+      env,
+      out,
+      err,
+      web,
+      until: deps.gatewayUntil,
+      seams: deps.gatewaySeams,
+    });
   }
 
   async function runSession(): Promise<number> {

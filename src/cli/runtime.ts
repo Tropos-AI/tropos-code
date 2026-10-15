@@ -28,6 +28,7 @@ import { decide, type PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { bashTool } from "../tools/bash/bash";
+import type { ExecBackend } from "../exec/backend";
 import { JobTable } from "../tools/bash/jobs";
 import { resolveToolPath } from "../tools/paths";
 import { ReadState } from "../tools/read-state";
@@ -59,6 +60,10 @@ export interface AppContext {
   /** The running agent's subagent dependencies, read by the Agent tool. */
   subagents: SubagentHolder;
   env: NodeJS.ProcessEnv;
+  /** Where the session came from; "channel" (a messaging chat) is untrusted input and is confined (src/gateway/policy.ts). */
+  origin?: "local" | "channel";
+  /** Where Bash runs; the host when unset. */
+  exec?: ExecBackend;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -73,6 +78,7 @@ export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> 
     todos: new MemoryTodoStore(),
     jobs: new JobTable(),
     shell: ctx.shell,
+    exec: ctx.exec,
   };
 }
 
@@ -133,7 +139,7 @@ export function makeAgent(
   },
 ): Agent {
   const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
-  const permissions = () => ({ mode: opts.state().mode, rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs });
+  const permissions = () => ({ mode: opts.state().mode, rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs, confine: ctx.origin === "channel" });
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
   const nonce = () => harnessNonce(opts.session().id);
@@ -145,6 +151,8 @@ export function makeAgent(
   const contextText = contextFor("main");
   const beforeChange = () => ctx.ext.undo.beforeChange();
   const onAllowAlways = async (rule: string) => {
+    // A rule saved from a messaging chat would outlive it and apply to every later session.
+    if (ctx.origin === "channel") return;
     ctx.rules.allow.push(parseRule(rule));
     await addLocalAllowRule(ctx.localSettingsPath, rule);
   };
@@ -255,7 +263,7 @@ export function commandIO(
   signal: AbortSignal,
   hooks?: HookRunner,
 ): CommandIO {
-  const permissions = () => ({ mode: mode(), rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs });
+  const permissions = () => ({ mode: mode(), rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs, confine: ctx.origin === "channel" });
   return {
     async runShell(original) {
       let command = original;
@@ -513,6 +521,13 @@ export async function createRuntime(
     startWithPicker?: boolean;
     /** SessionStart's source: resume when the session was continued or resumed. */
     source?: "startup" | "resume";
+    /** False for sessions from a messaging channel: no learning review, no first-run identity note. Default true. */
+    interactive?: boolean;
+    /**
+     * False when other sessions share ctx.ext (the gateway's chats): shutting this one down must not close the
+     * MCP servers, language servers and search index under the others. Default true.
+     */
+    ownsExtensions?: boolean;
   },
 ): Promise<Runtime> {
   let session = init.session;
@@ -583,7 +598,7 @@ export async function createRuntime(
         toolContext,
         hooks,
         pending,
-        interactive: true,
+        interactive: init.interactive ?? true,
         onLearning: (loop) => {
           learning = loop;
         },
@@ -611,6 +626,8 @@ export async function createRuntime(
     },
     inputHistory: () => inputs,
     recordInput: (text) => {
+      // A chat's messages are not the terminal's ↑ history.
+      if (init.interactive === false) return;
       inputs.push(text);
       void mkdir(ctx.home, { recursive: true })
         .then(() => appendFile(historyPath, `${JSON.stringify({ text, cwd: ctx.cwd, ts: new Date().toISOString() })}\n`, { mode: 0o600 }))
@@ -631,7 +648,7 @@ export async function createRuntime(
     start: async (notice) => {
       pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
       // Archive learned skills nobody used for a month (at most once a week; never deletes).
-      if (ctx.settings.learning.curator) {
+      if (ctx.settings.learning.curator && (init.interactive ?? true)) {
         void runCurator(ctx.home, { ledger: ctx.ext.ledger, skillsDir: join(ctx.home, LEARNED_SKILLS_DIR) })
           .then(({ archived }) => {
             if (archived.length > 0) {
@@ -643,8 +660,9 @@ export async function createRuntime(
     },
     shutdown: async () => {
       await stopLearning();
-      ctx.ext.searchIndex?.close();
       await sessionEnd(hooks, "exit");
+      if (init.ownsExtensions === false) return;
+      ctx.ext.searchIndex?.close();
       await Promise.all([ctx.ext.mcp?.close(), ctx.ext.lsp?.close()]);
     },
   };

@@ -13,6 +13,8 @@ export const EXEMPT: Record<string, string> = {
   "src/index.ts": "entry shim; exercised by the compiled-binary e2e tests",
   "src/agent/events.ts": "type-only module",
   "src/ui/runtime.ts": "type-only module",
+  "src/exec/backend.ts": "type-only module",
+  "src/gateway/types.ts": "type-only module",
   "src/install/build-flags.ts": "test-build branches run only in compiled e2e binaries (amendment A3)",
 };
 

@@ -1,6 +1,7 @@
 // src/tools/bash/jobs.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
+import { localBackend } from "../../exec/local";
 import { JobTable } from "./jobs";
 
 const tables: JobTable[] = [];
@@ -135,5 +136,27 @@ describe("JobTable", () => {
         return true;
       }
     });
+  });
+
+  test("kill() and killAll() signal through the backend the job was added with", async () => {
+    const calls: string[] = [];
+    let running = true;
+    const backend = {
+      ...localBackend,
+      kind: "docker" as const,
+      signal: (_c: unknown, sig: string) => {
+        calls.push(sig);
+        if (sig === "SIGKILL") running = false;
+      },
+      alive: () => running,
+    } as unknown as import("../../exec/backend").ExecBackend;
+    const t = table();
+    const child = spawn("/bin/bash", ["-c", "sleep 0.2"], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const id = t.add("fake", child, backend);
+    await t.kill(id, 50);
+    expect(calls).toEqual(["SIGTERM", "SIGKILL"]);
+    t.killAll();
+    expect(calls.at(-1)).toBe("SIGTERM");
+    child.kill("SIGKILL");
   });
 });
