@@ -125,7 +125,7 @@ It is built so that a message from a chat can't do what a person at the keyboard
 What it does not do: the file tools (Read, Write, Edit, Glob, Grep) run on your machine, kept to the workspace
 by the permission engine rather than by the container, and a container is not a perfect boundary. Treat the
 workspace as the thing a chat can damage. A command that you approve can still edit `package.json` scripts or
-a Makefile, which run when you next use them: read what you approve. The TUI is not yet a client of the daemon; `tcode` still runs on its
+a Makefile, which run when you next use them, or `AGENTS.md`, which later sessions read as instructions: read what you approve. The TUI is not yet a client of the daemon; `tcode` still runs on its
 own. Design: `docs/superpowers/specs/2026-10-15-gateway-core-design.md`.
 
 ## Permissions
