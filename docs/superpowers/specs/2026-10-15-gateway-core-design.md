@@ -82,7 +82,10 @@ A `channel` session is built by `policy.ts` and differs as follows:
 | Bash | host shell | **must** run in the sandbox backend; if it cannot start, the session is refused (fail closed) |
 | Modes | as configured, `bypass` possible | `default` or `plan` only; `bypass` never |
 | Allowed dirs | cwd + additional dirs | the workspace only |
-| WebFetch, MCP tools | per rules | **always ask**, even with an allow rule (an `ask` rule is added; ask outranks allow) |
+| WebFetch, SessionSearch | per rules | **not available** (WebFetch runs on the host with no SSRF guard; SessionSearch reads the owner's other transcripts) |
+| MCP tools | per rules | **always ask**, even with an allow rule (an `ask` rule is added; ask outranks allow) |
+| The owner's allow rules | applied | **not applied**: edits and commands ask |
+| Formatters, language servers | per settings | **off** (they run on the host and load project config the sandbox can write) |
 | "Always allow" answers | saved to local settings | refused: Approve / Deny only |
 | Learning loop, identity bootstrap | on | **off** |
 | Skills / plugin install | per today | not offered |
@@ -97,6 +100,8 @@ today). The Docker backend:
   the invoking uid:gid, the workspace bind-mounted **at the same path** as on the host (so paths in output and the
   tracked cwd mean the same thing), plus one small writable run dir for cwd tracking.
 - Nothing else of the host is visible: no home, no `~/.ssh`, no `~/.tropos`. The environment starts **empty**.
+- `.git/hooks`, `.git/config` and `.husky` inside the workspace are mounted read-only: the owner's next `git` command would run what a container wrote there.
+- The workspace may not be `/`, the home directory or a parent of it, or `~/.tropos`.
 - Commands run with `docker exec`; the container is removed at session end and by a startup sweep of leftovers.
 - Timeouts and interrupts kill the `docker exec` client and the command's process inside the container.
 
@@ -117,7 +122,7 @@ be shown again and the sender's next message is given a fresh one.
 
 Long polling with `fetch` (no new dependency). Text becomes a `prompt`; the agent's events are rendered as short,
 batched messages (tool calls as one-line summaries, the answer as text, split at 4096 characters). A permission
-request becomes a message with **Approve / Deny** inline buttons; an unanswered request denies after 5 minutes. The
+request becomes a message with **Approve / Deny** inline buttons (a request that doesn't fit in the message in full is denied, not shown truncated); an unanswered request denies after 5 minutes. The
 bot token comes from `TROPOS_TELEGRAM_BOT_TOKEN` or `gateway.json`. Commands: `/stop` (interrupt), `/new` (fresh
 session), `/status`.
 
@@ -151,9 +156,17 @@ session), `/status`.
 ## 5. Known limits
 
 - File tools run on the host, confined to the workspace by the permission engine, not by the container.
+- A PreToolUse hook that answers `allow` overrides the forced `ask` for MCP tools in a chat: hooks are the owner's own configuration.
+- `DockerBackend.alive()` shells out synchronously (up to 5 s) while polling a job's exit, which would stall the daemon if the container wedged.
+- The sandbox image is referenced by tag (`alpine:3.22`), not by digest.
+- An approved command can still edit `package.json` scripts, a Makefile or similar that the owner runs later.
 - Hooks configured in `~/.tropos/settings.json` also fire for chat sessions and run on the host: they are the
   owner's own configuration, but they see chat-originated tool calls.
 - If the container dies mid-session (OOM, `docker stop`) later commands fail until the session is reopened.
+- Confinement checks the canonical path at decision time (symlinks are resolved by `resolveToolPath`, so a link
+  inside the workspace that points outside is refused). A link swapped between that check and the file being opened
+  — for instance by a background job in the container — is a narrow race that is not closed; the fix would be
+  opening with `O_NOFOLLOW` or re-checking the real path at open time.
 - A command that is signalled in the first milliseconds, before it has written its pid file, can outlive the kill.
 - The local web session is a full-trust `local` session on loopback, protected by the persisted token.
 
