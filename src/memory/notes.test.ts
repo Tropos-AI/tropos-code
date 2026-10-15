@@ -22,6 +22,10 @@ test("an empty store has no entries and no context", async () => {
   expect(await notesContext(store)).toBe("");
 });
 
+test("a § line with CRLF endings is refused like any other", async () => {
+  expect(await store.add("user", "a\r\n§\r\nb")).toMatchObject({ ok: false });
+});
+
 test("add writes entries separated by § lines, owner-only", async () => {
   expect(await store.add("memory", "  uses bun  ")).toEqual({ ok: true, entries: ["uses bun"] });
   await store.add("memory", "tests are colocated");

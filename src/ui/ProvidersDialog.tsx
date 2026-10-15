@@ -85,6 +85,7 @@ export function ProvidersDialog({
         void control
           .disconnect(current.info.id)
           .then(refresh)
+          .catch((e: Error) => setLoadError(e.message))
           .finally(() => setBusy(false));
       }
       return;
@@ -100,9 +101,13 @@ export function ProvidersDialog({
           async () => {
             setBusy(false);
             setInput("");
-            const all = await control.status();
-            setStatuses(all);
-            openModels(all.find((s) => s.info.id === step.status.info.id) ?? step.status);
+            try {
+              const all = await control.status();
+              setStatuses(all);
+              openModels(all.find((s) => s.info.id === step.status.info.id) ?? step.status);
+            } catch (e) {
+              setStep({ ...step, error: (e as Error).message });
+            }
           },
           (e: Error) => {
             setBusy(false);

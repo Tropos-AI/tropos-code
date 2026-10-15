@@ -248,20 +248,21 @@ export class WebHost {
           messageCount: s.messageCount,
         })) as RpcMap[M]["result"];
       case "resume":
-        this.needIdle();
         if (typeof params !== "string") throw new RpcError("Which session?");
-        await r.resume(params);
-        return this.resetAgent() as RpcMap[M]["result"];
+        // exclusive: these await slow work, and a prompt must not start on the agent being replaced.
+        return (await this.exclusive(async () => {
+          await r.resume(params);
+          return this.resetAgent();
+        })) as RpcMap[M]["result"];
       case "clear":
-        this.needIdle();
-        await r.clear();
-        return this.resetAgent() as RpcMap[M]["result"];
+        return (await this.exclusive(async () => {
+          await r.clear();
+          return this.resetAgent();
+        })) as RpcMap[M]["result"];
       case "undo":
-        this.needIdle();
-        return (await r.undo()) as RpcMap[M]["result"];
+        return (await this.exclusive(() => r.undo())) as RpcMap[M]["result"];
       case "redo":
-        this.needIdle();
-        return (await r.redo()) as RpcMap[M]["result"];
+        return (await this.exclusive(() => r.redo())) as RpcMap[M]["result"];
       case "learned.undo": {
         this.needIdle();
         if (params !== undefined && typeof params !== "string") throw new RpcError("Which change?");

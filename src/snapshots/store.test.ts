@@ -27,6 +27,19 @@ async function openStore(cwd = repo): Promise<SnapshotStore> {
 }
 
 describe("SnapshotStore.open", () => {
+  test("clears an index.lock left by a killed git, but not a fresh one", async () => {
+    const first = await openStore();
+    const lock = join(first.dir, "index.lock");
+    writeFileSync(lock, "");
+    await openStore();
+    expect(existsSync(lock)).toBe(true);
+    const old = new Date(Date.now() - 5 * 60_000);
+    utimesSync(lock, old, old);
+    const store = await openStore();
+    expect(existsSync(lock)).toBe(false);
+    expect(await store.track()).not.toBeNull();
+  });
+
   test("returns null outside a git work tree", async () => {
     const plain = await makeTmpDir("tropos-snap-plain-");
     try {

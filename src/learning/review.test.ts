@@ -552,6 +552,17 @@ describe("LearningLoop", () => {
     expect(calls[2]!.kind).toBe(calls[0]!.kind);
   });
 
+  test("a failed review gives back only the counters it consumed", async () => {
+    const { loop, calls } = harness({ interval: 3 });
+    for (let i = 0; i < 2; i++) loop.onToolEnd("Read", "done");
+    turns(loop, 3); // memory review fires (3 turns); skill counter is 2 tools, below interval
+    expect(calls[0]!.kind).toBe("memory");
+    calls[0]!.reject(new Error("down"));
+    await loop.whenIdle();
+    turns(loop, 1); // memory counter is back at 3; a doubled skill counter (4) would make this "combined"
+    expect(calls[1]!.kind).toBe("memory");
+  });
+
   test("errors are swallowed, sync or async, aborted or not", async () => {
     const { loop, calls, notices } = harness();
     turns(loop, 3);

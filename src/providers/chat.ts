@@ -232,6 +232,11 @@ export class ChatAccumulator {
    * `keepReasoning` stores the reasoning as an unsigned thinking block so it can be sent back later.
    * Gemini thought signatures are always stored: the next request fails without them.
    */
+  /** True once a choice carried a finish_reason; a stream that ends without one was cut off. */
+  get finished(): boolean {
+    return this.finish !== null;
+  }
+
   finalMessage(opts: { keepReasoning?: boolean } = {}): Message {
     const content: Array<Record<string, unknown>> = [];
     const calls = [...this.calls.entries()].sort(([a], [b]) => a - b).map(([, c]) => c);

@@ -1,6 +1,6 @@
 // src/install/installer.ts
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { chmod, copyFile, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { isChannel, resolveChannel, type Channel } from "./channels";
@@ -146,6 +146,8 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   const target = versionPath(l, version);
 
   let exclusive: LockHandle | null = null;
+  /** Where the damaged file goes once its replacement is staged; moving it earlier strands the link on a failed download. */
+  let aside: string | null = null;
   try {
     const existing = await checkFileAgainst(target, entry, d.user);
     if (!existing.ok && existing.reason !== "missing") {
@@ -166,9 +168,7 @@ export async function installVersion(s: EngineSession, version: string, opts: In
         }
         throw new InstallError("busy", `version ${version} is damaged and in use by running sessions; close them and run \`tcode install ${version} --force\` again`);
       }
-      const aside = join(l.versions, `${(await isManaged(l, version)) ? ".corrupt" : ".unmanaged"}-${version}-${s.now().getTime()}`);
-      await rename(target, aside);
-      s.log(`moved the unverifiable ${target} to ${aside}`);
+      aside = join(l.versions, `${(await isManaged(l, version)) ? ".corrupt" : ".unmanaged"}-${version}-${s.now().getTime()}`);
     }
     if (existing.ok) {
       await storeManifest(l, version, vm);
@@ -182,9 +182,14 @@ export async function installVersion(s: EngineSession, version: string, opts: In
         throw e;
       }
       try {
+        if (aside !== null) {
+          await rename(target, aside);
+          s.log(`moved the unverifiable ${target} to ${aside}`);
+        }
         await rename(staged, target);
       } catch (e) {
         await rm(staged, { force: true });
+        if (aside !== null && !existsSync(target)) await rename(aside, target).catch(() => {});
         throw new InstallError("local", `installing ${target}: ${(e as Error).message}`, { cause: e });
       }
       await fsyncDir(l.versions);

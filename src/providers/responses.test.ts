@@ -140,6 +140,13 @@ describe("models without reasoning", () => {
     expect(bodies.map((b) => "reasoning" in b)).toEqual([true, false, false]);
   });
 
+  test("Responses: a stream that ends without response.completed is an error", async () => {
+    const fetchImpl = (async () =>
+      sse({ type: "response.output_item.done", item: { type: "message", content: [{ type: "output_text", text: "half" }] } })) as unknown as typeof fetch;
+    const model = new ResponsesModel(endpoint, { summaries: true, encryptedReasoning: true }, fetchImpl);
+    await expect(model.send(req(), quiet, new AbortController().signal)).rejects.toThrow("ended the response early");
+  });
+
   test("Chat Completions: the same for effort fields; other 400s are not retried", async () => {
     let calls = 0;
     const fetchImpl = (async (_url: string, init: RequestInit) => {

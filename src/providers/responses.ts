@@ -120,6 +120,7 @@ interface ResponsesEvent {
 export class ResponsesAccumulator {
   private readonly items: OutputItem[] = [];
   private status = "completed";
+  private done = false;
   private incomplete: string | undefined;
   private usage: ResponsesUsage = {};
   private refused = false;
@@ -143,6 +144,7 @@ export class ResponsesAccumulator {
         return;
       case "response.completed":
       case "response.incomplete":
+        this.done = true;
         this.status = event.response?.status ?? (event.type === "response.completed" ? "completed" : "incomplete");
         this.incomplete = event.response?.incomplete_details?.reason;
         this.usage = event.response?.usage ?? {};
@@ -152,6 +154,11 @@ export class ResponsesAccumulator {
       case "error":
         throw new ProviderError(`The provider reported an error mid-response: ${event.message ?? JSON.stringify(event)}`, null, true);
     }
+  }
+
+  /** True once response.completed or response.incomplete arrived; a stream that ends without one was cut off. */
+  get finished(): boolean {
+    return this.done;
   }
 
   finalMessage(): Message {
@@ -213,6 +220,7 @@ export class ResponsesModel implements Model {
     if (!res.body) throw new ProviderError(`${this.endpoint.name} sent an empty response.`, res.status, true);
     const acc = new ResponsesAccumulator(req.model, handlers);
     for await (const event of sseJson(res.body)) acc.push(event as ResponsesEvent);
+    if (!acc.finished) throw new ProviderError(`${this.endpoint.name} ended the response early.`, null, true);
     return acc.finalMessage();
   }
 }

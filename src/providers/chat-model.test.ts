@@ -122,6 +122,11 @@ describe("ChatCompletionsModel", () => {
     await expect(new ChatCompletionsModel(endpoint(), f.fetch).send(request(), handlers(), new AbortController().signal)).rejects.toThrow("overloaded");
   });
 
+  test("a stream that ends before any finish_reason is an error, not a complete answer", async () => {
+    const f = fakeFetch([sse({ choices: [{ delta: { content: "half an ans" } }] })]);
+    await expect(new ChatCompletionsModel(endpoint(), f.fetch).send(request(), handlers(), new AbortController().signal)).rejects.toThrow("ended the response early");
+  });
+
   test("an unreachable provider is reported after the retries", async () => {
     const f = fakeFetch([new Error("ECONNREFUSED"), new Error("ECONNREFUSED"), new Error("ECONNREFUSED")]);
     const err = await new ChatCompletionsModel(endpoint(), f.fetch).send(request(), handlers(), new AbortController().signal).catch((e) => e);

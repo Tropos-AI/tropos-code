@@ -240,9 +240,13 @@ export function App({ runtime }: { runtime: Runtime }) {
             resetScreen(emptyTranscript);
           });
         case "resume": {
-          const list = await runtime.sessions();
-          if (list.length === 0) return showToast("info", "No saved sessions for this directory.");
-          return setOverlay({ kind: "sessions", list });
+          try {
+            const list = await runtime.sessions();
+            if (list.length === 0) return showToast("info", "No saved sessions for this directory.");
+            return setOverlay({ kind: "sessions", list });
+          } catch (err) {
+            return showToast("error", (err as Error).message);
+          }
         }
         case "model":
           if (!command.model) return setOverlay({ kind: "model" });
@@ -260,13 +264,21 @@ export function App({ runtime }: { runtime: Runtime }) {
         case "custom":
           return runCustom(command.name, command.args, trimmed);
         case "list":
-          return setOverlay({ kind: "list", data: await runtime.panel(command.what) });
+          try {
+            return setOverlay({ kind: "list", data: await runtime.panel(command.what) });
+          } catch (err) {
+            return showToast("error", (err as Error).message);
+          }
         case "undo":
         case "redo":
           return undoRedo(command.kind);
         case "learned_undo": {
-          const result = await runtime.undoLearned();
-          return showToast(result.ok ? "success" : "warn", result.ok ? `Undid ${result.summary}` : result.reason);
+          try {
+            const result = await runtime.undoLearned();
+            return showToast(result.ok ? "success" : "warn", result.ok ? `Undid ${result.summary}` : result.reason);
+          } catch (err) {
+            return showToast("error", (err as Error).message);
+          }
         }
         case "unknown":
           return showToast("error", `Unknown command /${command.name}. Type / to see the list.`);
@@ -341,11 +353,15 @@ export function App({ runtime }: { runtime: Runtime }) {
       await runtime.start((level, text) => notice(level, text)).catch(() => {});
       busyRef.current = false;
       setBusy(false);
-      if (runtime.initialPrompt?.trim()) await dispatch(runtime.initialPrompt.trim());
-      else if (runtime.startWithPicker) {
-        const list = await runtime.sessions();
-        if (list.length > 0) setOverlay({ kind: "sessions", list });
-        else showToast("info", "No saved sessions for this directory.");
+      try {
+        if (runtime.initialPrompt?.trim()) await dispatch(runtime.initialPrompt.trim());
+        else if (runtime.startWithPicker) {
+          const list = await runtime.sessions();
+          if (list.length > 0) setOverlay({ kind: "sessions", list });
+          else showToast("info", "No saved sessions for this directory.");
+        }
+      } catch (err) {
+        showToast("error", (err as Error).message);
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

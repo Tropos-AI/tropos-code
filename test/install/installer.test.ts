@@ -175,6 +175,21 @@ describe("--force and damaged versions (R5.1–R5.3)", () => {
     expect((await readdir(f.layout.versions)).some((n) => n.startsWith(".corrupt-1.0.0-"))).toBe(true);
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
   });
+
+  test("a failed download leaves the damaged file in place instead of stranding the link", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await installTarget(f.deps, "1.0.0", false);
+    await appendFile(versionPath(f.layout, "1.0.0"), "damage");
+    for (const p of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "windows-x64"]) {
+      f.srv.remove("v1.0.0", `tropos-${p}`);
+      f.srv.remove("v1.0.0", `tropos-${p}.zst`);
+    }
+    const e = await err(installTarget(f.deps, "1.0.0", true));
+    expect(e).toBeInstanceOf(InstallError);
+    expect((await readdir(f.layout.versions)).filter((n) => n.startsWith(".corrupt-") || n.startsWith(".unmanaged-"))).toEqual([]);
+    expect((await stat(versionPath(f.layout, "1.0.0"))).isFile()).toBe(true);
+  });
 });
 
 describe("install --self (R1.1–R1.3)", () => {

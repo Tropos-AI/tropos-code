@@ -11,6 +11,10 @@ export const TRACK_TIMEOUT_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const PRUNE_STAMP = "tropos-last-prune";
+/** After SIGTERM a timed-out git gets this long to remove its lock files before it is SIGKILLed. */
+const KILL_GRACE_MS = 2_000;
+/** An index.lock older than this belongs to a git that died without cleaning up. */
+const STALE_LOCK_MS = 60_000;
 
 interface GitResult {
   code: number;
@@ -63,9 +67,12 @@ async function spawnGit(argv: string[], env: Record<string, string>, cwd: string
     return { code: -1, stdout: "", stderr: String(err) };
   }
   let timedOut = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill("SIGKILL");
+    // SIGTERM lets git delete index.lock; a SIGKILL would leave it and break every later call.
+    proc.kill("SIGTERM");
+    killTimer = setTimeout(() => proc.kill("SIGKILL"), KILL_GRACE_MS);
   }, timeout);
   try {
     const [stdout, stderr, code] = await Promise.all([
@@ -76,6 +83,7 @@ async function spawnGit(argv: string[], env: Record<string, string>, cwd: string
     return timedOut ? { code: -1, stdout, stderr: `timed out\n${stderr}` } : { code, stdout, stderr };
   } finally {
     clearTimeout(timer);
+    clearTimeout(killTimer);
   }
 }
 
@@ -122,11 +130,19 @@ export class SnapshotStore {
         const init = await store.run(["init", "-q", "--template="]);
         if (init.code !== 0) return null;
       }
+      await store.clearStaleLock();
       await store.writeExclude();
     } catch {
       return null;
     }
     return store;
+  }
+
+  /** Removes an index.lock left by a git that was killed mid-write; a recent one may be another session's. */
+  private async clearStaleLock(): Promise<void> {
+    const lock = join(this.dir, "index.lock");
+    const info = await stat(lock).catch(() => null);
+    if (info !== null && Date.now() - info.mtimeMs > STALE_LOCK_MS) await rm(lock, { force: true });
   }
 
   /** Keeps `.git` (and the store itself, should the Tropos home live inside the project) out of snapshots. */

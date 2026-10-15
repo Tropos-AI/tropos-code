@@ -106,10 +106,16 @@ export class LearningLoop {
     this.turnsSinceMemory++;
     const settings = this.deps.settings();
     if (reason !== "end_turn" || !settings.review || this.running || history.length === 0) return;
-    const before = { turnsSinceMemory: this.turnsSinceMemory, toolsSinceSkill: this.toolsSinceSkill, flushArmed: this.flushArmed };
+    const pre = { turnsSinceMemory: this.turnsSinceMemory, toolsSinceSkill: this.toolsSinceSkill, flushArmed: this.flushArmed };
     const kind = this.pickKind(settings);
     if (!kind) return;
-    this.start(kind, [...history], before);
+    // Only what pickKind consumed is put back on failure: restoring a counter it left alone would double it.
+    const consumed = {
+      turnsSinceMemory: pre.turnsSinceMemory - this.turnsSinceMemory,
+      toolsSinceSkill: pre.toolsSinceSkill - this.toolsSinceSkill,
+      flushArmed: pre.flushArmed && !this.flushArmed,
+    };
+    this.start(kind, [...history], consumed);
   }
 
   /** Aborts the running review; called when a new user turn starts so the review never competes with it. */

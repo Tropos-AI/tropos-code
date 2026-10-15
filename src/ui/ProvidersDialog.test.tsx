@@ -168,6 +168,21 @@ describe("ProvidersDialog", () => {
     expect(closed()).toBe(1);
   });
 
+  test("a failing disconnect shows its error instead of an unhandled rejection", async () => {
+    const { control } = fakeControl();
+    control.disconnect = async () => {
+      throw new Error("keychain locked");
+    };
+    const { r } = open(control);
+    await tick();
+    r.stdin.write(DOWN);
+    await tick();
+    r.stdin.write("d");
+    await tick();
+    await tick();
+    expect(r.lastFrame()).toContain("keychain locked");
+  });
+
   test("marks the provider and model in use", async () => {
     const { r } = open(fakeControl({ deepseek: ["deepseek-chat", "deepseek-reasoner"] }).control, "deepseek/deepseek-chat");
     await tick();

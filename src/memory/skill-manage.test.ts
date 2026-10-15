@@ -262,3 +262,9 @@ test("the permission preview shows the text a skill will hold", () => {
   expect(skillPreview({ action: "delete", name: "r" }, "/s/r")).toEqual({ header: "/s/r", text: "Delete the skill r and every file in its folder." });
   expect(skillPreview({ action: "create", name: "r" }, "/s/r").text).toBe("");
 });
+
+test("write_file to a differently-cased skill.md is validated like SKILL.md (case-insensitive filesystems)", async () => {
+  const tool = await make();
+  const out = await tool.run({ action: "write_file", name: "release", file_path: "skill.md", file_content: "no frontmatter here" }, ctx());
+  expect(out.isError).toBe(true);
+});

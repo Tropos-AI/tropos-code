@@ -169,7 +169,7 @@ async function patch(input: Input, at: Layout, env: Env): Promise<ToolOutput> {
     updated = original.slice(0, i) + input.new_string + original.slice(i + input.old_string.length);
   }
   if (updated.length > MAX_SKILL_FILE_CHARS) return fail(`The result would be over ${MAX_SKILL_FILE_CHARS.toLocaleString("en-US")} chars.`);
-  if (at.rel === "SKILL.md") {
+  if (at.rel.toLowerCase() === "skill.md") {
     const problem = skillFileProblem(updated);
     if (problem) return fail(`Not saved: ${problem}`);
   }
@@ -190,7 +190,7 @@ async function writeFileAction(input: Input, at: Layout, env: Env): Promise<Tool
   if (input.file_path === undefined || input.file_content === undefined) return fail("write_file needs file_path and file_content.");
   if (input.file_content.length > MAX_SKILL_FILE_CHARS) return fail(`file_content is over ${MAX_SKILL_FILE_CHARS.toLocaleString("en-US")} chars.`);
   await requireSkill(input, at);
-  if (at.rel === "SKILL.md") {
+  if (at.rel.toLowerCase() === "skill.md") {
     const problem = skillFileProblem(input.file_content);
     if (problem) return fail(`Not saved: ${problem}`);
   }

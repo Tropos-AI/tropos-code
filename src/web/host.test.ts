@@ -59,6 +59,18 @@ describe("session RPCs", () => {
     await expect(host.call("resume", 3 as never)).rejects.toThrow("Which session?");
   });
 
+  test("a prompt can't start while resume, clear, undo or redo is still working", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { host } = setup({ undo: async () => (await gate, { ok: true, files: [] }) });
+    const pending = host.call("undo", undefined);
+    await expect(host.call("prompt", { text: "hi" })).rejects.toThrow("busy");
+    await expect(host.call("clear", undefined)).rejects.toThrow("busy");
+    release();
+    await pending;
+    expect(host.state().busy).toBe(false);
+  });
+
   test("undo and redo pass through", async () => {
     const { host } = setup({ undo: async () => ({ ok: true, files: ["a.ts"] }) });
     expect(await host.call("undo", undefined)).toEqual({ ok: true, files: ["a.ts"] });

@@ -179,6 +179,7 @@ export class ChatCompletionsModel implements Model {
       if (error) throw new ProviderError(`${this.endpoint.name} reported an error mid-response: ${error.message ?? JSON.stringify(error)}`, null, true);
       acc.push(chunk as Parameters<ChatAccumulator["push"]>[0]);
     }
+    if (!acc.finished) throw new ProviderError(`${this.endpoint.name} ended the response early.`, null, true);
     return acc.finalMessage({ keepReasoning: this.endpoint.capabilities.keepReasoning });
   }
 }

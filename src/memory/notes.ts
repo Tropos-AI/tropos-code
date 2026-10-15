@@ -60,7 +60,7 @@ function splitEntries(text: string): string[] {
 
 /** A "§" line inside an entry would split it in two on the next read. */
 function hasSeparatorLine(text: string): boolean {
-  return /(^|\n)[ \t]*§[ \t]*(\n|$)/.test(text);
+  return /(^|\n)[ \t]*§[ \t]*(\r?\n|$)/.test(text);
 }
 
 /** Writes via a temp file and rename, so a crash or a concurrent reader never sees a half-written file. */
