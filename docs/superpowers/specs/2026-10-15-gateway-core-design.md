@@ -159,6 +159,7 @@ session), `/status`.
 - A PreToolUse hook that answers `allow` overrides the forced `ask` for MCP tools in a chat: hooks are the owner's own configuration.
 - `DockerBackend.alive()` shells out synchronously (up to 5 s) while polling a job's exit, which would stall the daemon if the container wedged.
 - The sandbox image is referenced by tag (`alpine:3.22`), not by digest.
+- Repo settings cannot run code (hooks, MCP, formatters, LSP, env, providers and allow rules are dropped from repo layers, and `.mcp.json` is read only inside plugins), so a container writing `.tropos/settings.json` changes at most the model, effort and ask/deny rules. Files that later sessions read as *instructions* (`AGENTS.md`, `TROPOS.md`, `.tropos/commands`, skills) can be changed by an approved command and then steer a future session; they are not made read-only because editing them from a chat is legitimate.
 - An approved command can still edit `package.json` scripts, a Makefile or similar that the owner runs later.
 - Hooks configured in `~/.tropos/settings.json` also fire for chat sessions and run on the host: they are the
   owner's own configuration, but they see chat-originated tool calls.
