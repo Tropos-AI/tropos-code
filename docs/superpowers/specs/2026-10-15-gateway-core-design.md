@@ -100,7 +100,7 @@ today). The Docker backend:
   the invoking uid:gid, the workspace bind-mounted **at the same path** as on the host (so paths in output and the
   tracked cwd mean the same thing), plus one small writable run dir for cwd tracking.
 - Nothing else of the host is visible: no home, no `~/.ssh`, no `~/.tropos`. The environment starts **empty**.
-- `.git/hooks`, `.git/config` and `.husky` inside the workspace are mounted read-only: the owner's next `git` command would run what a container wrote there.
+- `.git/hooks`, `.git/config` (also under `.git/modules/**`), a `.git` gitfile and `.husky` inside the workspace are mounted read-only: the owner's next `git` command would run what a container wrote there. Missing hooks dirs and config files are created empty first so a mount can cover them. A workspace with no `.git` can't be protected this way (a command could `git init` one), so the daemon warns.
 - The workspace may not be `/`, the home directory or a parent of it, or `~/.tropos`.
 - Commands run with `docker exec`; the container is removed at session end and by a startup sweep of leftovers.
 - Timeouts and interrupts kill the `docker exec` client and the command's process inside the container.
