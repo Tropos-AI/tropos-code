@@ -8,7 +8,7 @@ edits and runs code in your project through Claude, and asks before it does anyt
 ## Install
 
 ```bash
-curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh
+curl -fsSL https://troposlabs.com/install.sh | sh
 ```
 
 Other channels, verifying the installer first, updates and uninstalling: [docs/install.md](docs/install.md).

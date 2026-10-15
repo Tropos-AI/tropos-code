@@ -3,9 +3,9 @@
 ## Install
 
 ```sh
-curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh
-curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh -s -- stable
-curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh -s -- 0.3.0
+curl -fsSL https://troposlabs.com/install.sh | sh
+curl -fsSL https://troposlabs.com/install.sh | sh -s -- stable
+curl -fsSL https://troposlabs.com/install.sh | sh -s -- 0.3.0
 ```
 
 Needs `curl` or `wget`, `sha256sum` or `shasum`, and `ssh-keygen` from OpenSSH 8.1 or newer
@@ -23,8 +23,8 @@ installed if any check fails.
 
 ```sh
 v=0.3.0
-curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh"
-curl -fsSLO "https://github.com/Tropos-AI/tropos-code/releases/download/v$v/install.sh.sig"
+curl -fsSLO "https://troposlabs.com/releases/$v/install.sh"
+curl -fsSLO "https://troposlabs.com/releases/$v/install.sh.sig"
 printf 'tropos-release %s\n' "<the `ssh-ed25519 <base64>` part of the key line in release/allowed_signers>" > allowed_signers
 ssh-keygen -lf allowed_signers          # must print SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
 ssh-keygen -Y verify -f allowed_signers -I tropos-release -n tropos-installer -s install.sh.sig < install.sh

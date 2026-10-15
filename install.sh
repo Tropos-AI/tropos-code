@@ -1,7 +1,7 @@
 #!/bin/sh
 # Tropos Code installer — https://github.com/Tropos-AI/tropos-code
 #
-#   curl -fsSL https://github.com/Tropos-AI/tropos-code/releases/latest/download/install.sh | sh
+#   curl -fsSL https://troposlabs.com/install.sh | sh
 #   curl -fsSL …/install.sh | sh -s -- stable        (or an exact version, e.g. 0.3.0)
 #
 # Verifies the release manifest's ed25519 signature with ssh-keygen against the key pinned below,
