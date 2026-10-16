@@ -11,11 +11,47 @@ edits and runs code in your project through Claude, and asks before it does anyt
 curl -fsSL https://troposlabs.com/install.sh | sh
 ```
 
-Other channels, verifying the installer first, updates and uninstalling: [docs/install.md](docs/install.md).
+The installer verifies a signed manifest and the binary's checksum before it runs anything, puts the binary under
+`~/.local/share/tropos`, links it as `~/.local/bin/tcode`, adds `~/.local/bin` to your shell's PATH (one marked
+block in the rc file, which `tcode uninstall` removes again), writes a log to `~/.local/state/tropos/install.log`,
+and on a fresh install with a terminal hands over to `tcode onboard`. Useful flags: `--dry-run` (print the plan,
+change nothing), `--no-onboard`, `--no-modify-path`, `--verbose`, `--non-interactive`; a channel or version as the
+first argument (`stable`, `latest`, `0.3.1`). Re-running it upgrades in place, runs `tcode doctor --fix`, and restarts
+the gateway if it is installed. Details, verifying the installer first, updates: [docs/install.md](docs/install.md).
 
 Release key fingerprint: SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
 
-To build from source you need [Bun](https://bun.sh) 1.4+:
+### Set up
+
+```bash
+tcode onboard        # connect a provider, pick a model, optionally Telegram, the sandbox, run-at-login
+tcode dashboard      # open the web UI; everything below is also there under Setup, Status, Config …
+```
+
+`tcode onboard` checks your key with a real request before saving it, only asks about what is not set up yet, and is
+safe to run again. Without a terminal: `tcode onboard --non-interactive --accept-risk --provider anthropic
+--api-key-env ANTHROPIC_API_KEY`. Coming from OpenClaw or Hermes? `tcode migrate openclaw` (or `hermes`) brings over
+identity, memory and skills (`--dry-run` first; keys only with `--migrate-secrets`).
+
+### Look after it
+
+| Command | What it does |
+|---|---|
+| `tcode status [--deep]` | what is running, whether it is healthy |
+| `tcode doctor [--fix] [--lint]` | checks the install, settings, keys, Docker and the gateway; repairs what is safe |
+| `tcode security audit` | flags risky settings |
+| `tcode logs [gateway\|install\|update] [-f]` | show or follow a log |
+| `tcode config get\|set\|unset\|show\|validate` | change settings.json / gateway.json safely (validated, backed up) |
+| `tcode backup create\|list\|verify\|restore` | archive or restore settings, keys, memory, sessions |
+| `tcode update` / `rollback` | move to the newest release of your channel, or back |
+| `tcode reset [--scope …]` | start over without reinstalling |
+| `tcode uninstall [--all] [--dry-run]` | remove the service and binary (and with `--data`, `~/.tropos`) |
+
+Destructive commands take `--dry-run` and `--yes`, and make a backup first unless told not to.
+
+### Build from source
+
+You need [Bun](https://bun.sh) 1.4+:
 
 ```bash
 bun install
@@ -23,7 +59,7 @@ bun run build        # → dist/tropos (single self-contained binary)
 bun run install:local  # → ~/.local/bin/tcode (local build)
 ```
 
-Set credentials with `export ANTHROPIC_API_KEY=…` or `ant auth login`.
+Credentials: `tcode onboard`, or `export ANTHROPIC_API_KEY=…` / `ant auth login`.
 
 ### Other providers
 
@@ -90,15 +126,20 @@ In a session:
 ## Gateway: work from your phone
 
 `tcode gateway` keeps Tropos running in the background, like OpenClaw's Gateway and Hermes' messaging
-gateway, so you can send it a task from Telegram and approve its tool calls from your phone.
+gateway, so you can send it a task from Telegram and approve its tool calls from your phone. It needs no
+workspace to be named: a managed project at `~/.tropos/workspace` is always there, and you add your real
+projects from the web UI (Projects) or with `tcode projects add <path>`; in a chat, `/project` switches.
 
 ```bash
-export TROPOS_TELEGRAM_BOT_TOKEN=...      # a bot from @BotFather (or telegram.botToken in ~/.tropos/gateway.json)
-tcode gateway --workspace ~/code/app      # run it in the foreground
-tcode gateway install                     # or start it at login (macOS launchd)
+tcode gateway install                     # runs at login (launchd on macOS, a systemd user unit on Linux)
 tcode gateway status                      # what's running, and the local web link
-tcode pairing approve telegram <code>     # let a person in
+tcode dashboard                           # open the web UI: Telegram token, pairing, projects, schedule, logs …
+tcode pairing approve telegram <code>     # let a person in (also in the web UI under Channels)
 ```
+
+Scheduled work: ask the agent in a chat ("every weekday at 9, summarise the open PRs") or use Schedule in the web
+UI / `tcode cron add`. Each run is a fresh sandboxed session in its project; the result is delivered to your chat.
+A run has nobody to ask, so a command runs only if the job lists a rule for it (`allowCommands`).
 
 It is built so that a message from a chat can't do what a person at the keyboard can:
 
@@ -110,8 +151,8 @@ It is built so that a message from a chat can't do what a person at the keyboard
   read-only root filesystem, no capabilities and memory, CPU and process limits. Your home directory,
   `~/.ssh`, `~/.tropos` and your credentials are not in it, and neither can `.git/hooks`, `.git/config` or
   `.husky` be changed from inside (nor the same under submodules), since your next `git` command would run
-  them. Run `git init` in the workspace first: without a `.git` there is nothing to protect, and the gateway
-  warns. If Docker isn't running, the
+  them. Run `git init` in a project first: without a `.git` there is nothing to protect, and the gateway warns
+  (the managed default project is initialised for you). If Docker isn't running, the
   chat is told so and nothing runs: there is no fallback to your shell. A workspace that is your home directory,
   a parent of it, or `~/.tropos` is refused.
 - **Every edit and command asks you first**, as Approve / Deny buttons in the chat. Your own "allow" rules
@@ -126,7 +167,7 @@ What it does not do: the file tools (Read, Write, Edit, Glob, Grep) run on your 
 by the permission engine rather than by the container, and a container is not a perfect boundary. Treat the
 workspace as the thing a chat can damage. A command that you approve can still edit `package.json` scripts or
 a Makefile, which run when you next use them, or `AGENTS.md`, which later sessions read as instructions: read what you approve. The TUI is not yet a client of the daemon; `tcode` still runs on its
-own. Design: `docs/superpowers/specs/2026-10-15-gateway-core-design.md`.
+own. Design: `docs/superpowers/specs/2026-10-15-gateway-core-design.md` and `2026-10-15-control-plane-design.md`.
 
 ## Permissions
 
