@@ -89,7 +89,8 @@ describe("gateway install / status / uninstall", () => {
     expect(plist).toContain("<string>/bin/tcode</string>\n    <string>gateway</string>");
     expect(plist).toContain(`<key>WorkingDirectory</key>\n  <string>${home}</string>`);
     expect(res.calls.map((c) => c[0])).toEqual(["bootout", "bootstrap"]);
-    expect(res.out).toContain("No Telegram bot token yet");
+    expect(res.out).toContain("No Telegram bot yet: connect one in the dashboard (tcode dashboard) or ask me to connect it.");
+    expect(res.out).not.toContain("gateway.json");
     expect((await loadGatewayConfig(home)).projects).toEqual([]);
   });
 
@@ -106,7 +107,7 @@ describe("gateway install / status / uninstall", () => {
 
   test("install doesn't nag when a token is set, and never writes it into the plist", async () => {
     const res = await run({ kind: "gateway-install" }, { env: { TROPOS_HOME: home, TROPOS_TELEGRAM_BOT_TOKEN: "123:secret" } });
-    expect(res.out).not.toContain("No Telegram bot token");
+    expect(res.out).not.toContain("No Telegram bot yet");
     expect(await Bun.file(plistPath(userHome)).text()).not.toContain("secret");
   });
 

@@ -45,8 +45,8 @@ export function productionEngineDeps(env: NodeJS.ProcessEnv, version: string, lo
 export function oneTimeInstallNotice(target: string, settings: CommandContext["settings"]): string | null {
   if (!settings.autoUpdates || target === settings.autoUpdatesChannel) return null;
   const lead = `Background updates follow the '${settings.autoUpdatesChannel}' channel and may move you to a newer version.`;
-  if (target === "latest" || target === "stable") return `${lead} To stay on '${target}', set "autoUpdatesChannel": "${target}" in ~/.tropos/settings.json.`;
-  return `${lead} To stay on ${target}, set "autoUpdates": false in ~/.tropos/settings.json.`;
+  if (target === "latest" || target === "stable") return `${lead} To stay on '${target}', switch the update channel to '${target}' in the dashboard (tcode dashboard).`;
+  return `${lead} To stay on ${target}, turn background updates off in the dashboard (tcode dashboard).`;
 }
 
 const HELP = { install: INSTALL_HELP, update: UPDATE_HELP, upgrade: UPDATE_HELP, rollback: ROLLBACK_HELP } as const;

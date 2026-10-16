@@ -30,8 +30,8 @@ function ctx(overrides: Partial<CommandContext> = {}) {
 
 describe("oneTimeInstallNotice (spec §11)", () => {
   test.each([
-    ["stable", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 'stable', set "autoUpdatesChannel": "stable" in ~/.tropos/settings.json.`],
-    ["1.2.3", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 1.2.3, set "autoUpdates": false in ~/.tropos/settings.json.`],
+    ["stable", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 'stable', switch the update channel to 'stable' in the dashboard (tcode dashboard).`],
+    ["1.2.3", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 1.2.3, turn background updates off in the dashboard (tcode dashboard).`],
     ["stable", { autoUpdates: true, autoUpdatesChannel: "stable" }, null],
     ["1.2.3", { autoUpdates: false, autoUpdatesChannel: "latest" }, null],
   ])("%s with %j", (target, settings, expected) => {

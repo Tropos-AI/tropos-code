@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { makeFixture, runOne, type Fixture } from "../testing";
+import { byId, makeFixture, runOne, type Fixture } from "../testing";
 import { settingsCheck } from "./settings";
 
 let fx: Fixture;
@@ -32,4 +33,32 @@ test("a broken user file and a broken project file are both reported with file a
   const p = r.findings.find((f) => f.id === "settings.parse.project")!;
   expect(p.message).toContain(project);
   expect(p.detail).toContain("theme");
+});
+
+test("--fix moves a broken user settings file aside and keeps its valid keys", async () => {
+  fx = await makeFixture();
+  const path = await fx.write("settings.json", JSON.stringify({ theme: "dark", effort: "turbo" }));
+  const plain = await runOne(fx, settingsCheck);
+  expect(byId(plain, "settings.parse.user")).toMatchObject({ fixable: true, safe: false, data: { path } });
+  const r = await runOne(fx, settingsCheck, { fix: true });
+  expect(byId(r, "settings.parse.user")).toMatchObject({ fixed: true });
+  expect(byId(r, "settings.parse.user")!.fixMessage).toContain("kept the valid settings; the old file is at ");
+  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark" });
+  expect((await readdir(fx.home)).some((n) => /^settings\.json\.broken-\d{14}$/.test(n))).toBe(true);
+});
+
+test("unparsable user settings become {} with a backup; a broken repo file is not fixable", async () => {
+  fx = await makeFixture();
+  const path = await fx.write("settings.json", "{ nope");
+  const project = join(fx.root, ".tropos", "settings.json");
+  await Bun.write(project, JSON.stringify({ theme: "purple" }));
+  const r = await runOne(fx, settingsCheck, { fix: true });
+  expect(byId(r, "settings.parse.user")).toMatchObject({ fixed: true });
+  expect(await readFile(path, "utf8")).toBe("{}\n");
+  const backup = (await readdir(fx.home)).find((n) => n.startsWith("settings.json.broken-"))!;
+  expect(await readFile(join(fx.home, backup), "utf8")).toBe("{ nope");
+  const p = byId(r, "settings.parse.project")!;
+  expect(p.fixable).toBeUndefined();
+  expect(p.fixed).toBeUndefined();
+  expect(await readFile(project, "utf8")).toContain("purple");
 });

@@ -196,7 +196,7 @@ describe("extensions in the runtime", () => {
     expect(agents.sections[0]!.items.map((i) => i.label)).toContain("🛠 general-purpose");
     expect(agents.sections[0]!.items.map((i) => i.key)).toContain("general-purpose");
     expect((await rt.panel("hooks")).sections[0]!.items[0]).toMatchObject({ label: "PreToolUse [Bash]", hint: "guard.sh" });
-    expect(await rt.panel("mcp")).toMatchObject({ sections: [], empty: expect.stringContaining("No MCP servers") });
+    expect(await rt.panel("mcp")).toMatchObject({ sections: [], empty: "No MCP servers. Ask me to add one, or add it in the dashboard (tcode dashboard → Extensions)." });
     expect((await rt.panel("plugins")).sections[0]!.items[0]).toMatchObject({ label: "kit", hint: "Tools", aside: "1.2.0", status: "ok" });
     await ctx.ext.notes!.add("memory", "Uses bun");
     const memory = await rt.panel("memory");
@@ -206,9 +206,13 @@ describe("extensions in the runtime", () => {
     await rm(join(ctx.home, "skills-learned"), { recursive: true });
     await withExt({ memory: false });
     const { runtime: rt2 } = await runtime();
-    expect((await rt2.panel("memory")).empty).toContain("Memory is off");
-    expect((await rt2.panel("skills")).sections).toEqual([]);
-    expect((await rt2.panel("hooks")).sections).toEqual([]);
+    expect((await rt2.panel("memory")).empty).toBe("Memory is off. Turn it on in the dashboard's settings (tcode dashboard).");
+    const emptySkills = await rt2.panel("skills");
+    expect(emptySkills.sections).toEqual([]);
+    expect(emptySkills.empty).toBe("No skills yet. Ask me to make one, or I'll write them as I learn what you need.");
+    const emptyHooks = await rt2.panel("hooks");
+    expect(emptyHooks.sections).toEqual([]);
+    expect(emptyHooks.empty).toBe("No hooks. Add them in the dashboard (tcode dashboard → Extensions).");
   });
 
   test("SessionStart context reaches the first prompt; SessionEnd fires on clear and shutdown", async () => {

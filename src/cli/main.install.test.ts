@@ -49,7 +49,7 @@ describe("main dispatches install subcommands (spec §12)", () => {
     await writeFile(settingsPath, settingsText);
     const r = await run(["install", "stable"], versionPath(f.layout, "1.0.0"));
     expect(r.code).toBe(0);
-    expect(r.out).toContain("To stay on 'stable', set \"autoUpdatesChannel\": \"stable\"");
+    expect(r.out).toContain("To stay on 'stable', switch the update channel to 'stable' in the dashboard (tcode dashboard).");
     expect(await readFile(settingsPath, "utf8")).toBe(settingsText);
   });
 

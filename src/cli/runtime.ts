@@ -416,7 +416,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
           { title: "This project", items: bySource("project") },
           { title: "Plugins", items: bySource("plugin") },
         ].filter((section) => section.items.length > 0),
-        empty: "No skills yet. Add one at ~/.tropos/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
+        empty: "No skills yet. Ask me to make one, or I'll write them as I learn what you need.",
       };
     }
     case "agents":
@@ -456,7 +456,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
           { title: "Settings (~/.tropos/settings.json)", items: items("settings", ext.hookConfig.hooks) },
           ...(ext.hookConfig.plugins ?? []).map((p) => ({ title: `Plugin ${p.name}`, items: items(p.name, p.hooks) })),
         ].filter((section) => section.items.length > 0),
-        empty: 'No hooks. Add them under "hooks" in ~/.tropos/settings.json.',
+        empty: "No hooks. Add them in the dashboard (tcode dashboard → Extensions).",
       };
     }
     case "mcp": {
@@ -476,7 +476,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
             })),
           },
         ].filter((section) => section.items.length > 0),
-        empty: 'No MCP servers. Add them under "mcpServers" in ~/.tropos/settings.json.',
+        empty: "No MCP servers. Ask me to add one, or add it in the dashboard (tcode dashboard → Extensions).",
       };
     }
     case "plugins":
@@ -498,7 +498,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         empty: "No plugins. Put plugin folders in ~/.tropos/plugins/.",
       };
     case "memory": {
-      if (!ext.notes) return { title: "Memory", sections: [], empty: 'Memory is off ("memory": false in settings).' };
+      if (!ext.notes) return { title: "Memory", sections: [], empty: "Memory is off. Turn it on in the dashboard's settings (tcode dashboard)." };
       const sections: PanelSection[] = [];
       for (const target of ["memory", "user"] as const) {
         const entries = await ext.notes.entries(target);

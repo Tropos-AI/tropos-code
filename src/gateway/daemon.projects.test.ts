@@ -189,7 +189,11 @@ describe("projects in chats", () => {
     server.pushMessage(CHAT, CHAT, "/project bad");
     await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to Bad")));
     server.pushMessage(CHAT, CHAT, "hello");
-    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes('settings of project "Bad" are invalid')));
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes('because its settings have a problem')));
+    const reply1 = server.textsTo(CHAT).find((t) => t.includes("because its settings have a problem"))!;
+    expect(reply1).toBe('I can\'t start a session in "Bad" because its settings have a problem. The owner can fix it with tcode doctor --fix or in the dashboard.');
+    expect(reply1).not.toContain("{not json");
+    expect(gw.err.join("")).toContain("tcode: bad: Invalid settings file");
     expect(gw.model.requests).toHaveLength(0);
 
     // The way out works even though the current project can't start.

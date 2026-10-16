@@ -89,7 +89,7 @@ export async function runGatewayCommand(command: GatewayCommand, c: GatewayComma
         c.out(`Projects: chats start in ${added ? `${added.name} (${added.id})` : "the default workspace (~/.tropos/workspace)"}. Add more with: tcode projects add <path>\n`);
         if (hint) c.out(`${hint}\n`);
         if (!telegramToken(config, c.env)) {
-          c.out("No Telegram bot token yet: put it in ~/.tropos/gateway.json as telegram.botToken (or run with TROPOS_TELEGRAM_BOT_TOKEN), then: tcode gateway restart\n");
+          c.out("No Telegram bot yet: connect one in the dashboard (tcode dashboard) or ask me to connect it.\n");
         }
         c.out("Logs: tcode gateway logs · Status: tcode gateway status\n");
         return 0;

@@ -184,7 +184,11 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       },
       (e: unknown) => {
         // Not cached: once the file is fixed, the next message works without restarting the gateway.
-        if (e instanceof SettingsError) throw new UserFacingError(`The settings of project "${project.name}" are invalid, so I can't start a session there: ${e.message}`);
+        // The chat never sees file paths or parse detail; the log does.
+        if (e instanceof SettingsError) {
+          run.err(`tcode: ${project.id}: ${e.message}\n`);
+          throw new UserFacingError(`I can't start a session in "${project.name}" because its settings have a problem. The owner can fix it with tcode doctor --fix or in the dashboard.`);
+        }
         throw e;
       },
     ),
@@ -432,7 +436,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     run.out(
       [
         `Tropos gateway running${oneOff ? ` in ${oneOff.path}` : ""}`,
-        adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : "  channels: none (set TROPOS_TELEGRAM_BOT_TOKEN or telegram.botToken in ~/.tropos/gateway.json)",
+        adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : "  channels: none (connect Telegram in the dashboard: tcode dashboard, or ask me in the terminal)",
         `  projects: ${projects.map((p) => p.id).join(", ")} (default: ${await source.defaultId()})`,
         // The link carries the web UI's key. On a terminal it is printed for you; under launchd/systemd stdout goes to a
         // log file that gets copied into bug reports, so there it stays out (`tcode dashboard` opens the real link).
