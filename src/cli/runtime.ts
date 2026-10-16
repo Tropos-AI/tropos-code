@@ -751,7 +751,10 @@ export async function createRuntime(
       } else {
         const all = loops();
         for (const l of all) l.cancel();
-        await Promise.all(all.map((l) => l.whenIdle()));
+        // A review that ignores the abort must not hold the session's end: the same bound as a final review's.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([Promise.all(all.map((l) => l.whenIdle())), new Promise<void>((resolve) => (timer = setTimeout(resolve, FINAL_REVIEW_TIMEOUT_MS)))]);
+        clearTimeout(timer);
       }
       await savingCounters;
       await sessionEnd(hooks, "exit");

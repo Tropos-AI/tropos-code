@@ -774,6 +774,44 @@ describe("learning and identity", () => {
     expect(await readCounters()).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
   });
 
+  test("shutdown({ finalReview: false }) waits at most 30 s for a review that ignores the abort", async () => {
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((r) => (markStarted = r));
+    let aborted = false;
+    // A review whose model call never ends, abort or not.
+    const stuck: Step = (_req, _handlers, abort) => {
+      abort.addEventListener("abort", () => void (aborted = true));
+      markStarted();
+      return new Promise(() => {});
+    };
+    await setup([text("a"), text("b"), stuck]);
+    let closed = 0;
+    ctx.ext.searchIndex = { close: () => void closed++ } as unknown as SearchIndex;
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    await started;
+    const flush = async () => {
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    };
+    jest.useFakeTimers();
+    try {
+      let done = false;
+      const closing = rt.shutdown({ finalReview: false }).then(() => void (done = true));
+      await flush();
+      expect(aborted).toBe(true);
+      jest.advanceTimersByTime(29_999);
+      await flush();
+      expect(done).toBe(false);
+      jest.advanceTimersByTime(1);
+      await closing;
+    } finally {
+      jest.useRealTimers();
+    }
+    expect(closed).toBe(1);
+  });
+
   test("skipFinalReview during shutdown aborts the final review at once; the rest of shutdown still runs", async () => {
     const final = hanging();
     await setup([text("a"), text("b"), final.step], LONG);
