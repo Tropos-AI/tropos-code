@@ -47,37 +47,64 @@ test("--fix moves a broken user settings file aside and keeps its valid keys", a
   expect((await readdir(fx.home)).some((n) => /^settings\.json\.broken-\d{14}$/.test(n))).toBe(true);
 });
 
-test("unparsable user settings become {} with a backup; a broken repo file is not fixable", async () => {
+test("unparsable user settings are not rewritten: the fix refuses and says why; a broken repo file is not fixable", async () => {
   fx = await makeFixture();
   const path = await fx.write("settings.json", "{ nope");
   const project = join(fx.root, ".tropos", "settings.json");
   await Bun.write(project, JSON.stringify({ theme: "purple" }));
   const r = await runOne(fx, settingsCheck, { fix: true });
-  expect(byId(r, "settings.parse.user")).toMatchObject({ fixed: true });
-  expect(await readFile(path, "utf8")).toBe("{}\n");
-  const backup = (await readdir(fx.home)).find((n) => n.startsWith("settings.json.broken-"))!;
-  expect(await readFile(join(fx.home, backup), "utf8")).toBe("{ nope");
+  const u = byId(r, "settings.parse.user")!;
+  expect(u.fixed).toBeFalsy();
+  expect(u.fixMessage).toContain("isn't valid JSON");
+  expect(await readFile(path, "utf8")).toBe("{ nope");
+  expect((await readdir(fx.home)).some((n) => n.startsWith("settings.json.broken-"))).toBe(false);
   const p = byId(r, "settings.parse.project")!;
   expect(p.fixable).toBeUndefined();
   expect(p.fixed).toBeUndefined();
   expect(await readFile(project, "utf8")).toContain("purple");
 });
 
-test("the fix message names the dropped keys; a nested bad entry drops its top-level key and unknown keys survive", async () => {
+test("one malformed deny rule drops only that rule: the other deny and ask rules stay", async () => {
   fx = await makeFixture();
-  const path = await fx.write("settings.json", JSON.stringify({ theme: "dark", futureKey: 1, hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command" }] }] } }));
+  const path = await fx.write("settings.json", JSON.stringify({ theme: "dark", permissions: { deny: ["Bash(rm:*)", 5, "WebFetch"], ask: ["Edit"], allow: ["Read"] } }));
   const r = await runOne(fx, settingsCheck, { fix: true });
   const f = byId(r, "settings.parse.user")!;
   expect(f.fixed).toBe(true);
-  expect(f.fixMessage).toContain("dropped: hooks. The original is in ");
-  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark", futureKey: 1 });
+  expect(f.fixMessage).toContain("dropped: permissions.deny[1]. The original is in ");
+  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark", permissions: { deny: ["Bash(rm:*)", "WebFetch"], ask: ["Edit"], allow: ["Read"] } });
+});
+
+test("deny or ask rules that would have to go as a whole are never dropped: the fix refuses and leaves the file", async () => {
+  for (const permissions of [{ deny: "Bash(rm:*)" }, { ask: { Edit: true } }, "deny everything"]) {
+    fx = await makeFixture();
+    const text = JSON.stringify({ theme: "dark", permissions });
+    const path = await fx.write("settings.json", text);
+    const r = await runOne(fx, settingsCheck, { fix: true });
+    const f = byId(r, "settings.parse.user")!;
+    expect(f.fixed).toBeFalsy();
+    expect(f.fixMessage).toContain("permission rules");
+    expect(await readFile(path, "utf8")).toBe(text);
+    expect((await readdir(fx.home)).some((n) => n.startsWith("settings.json.broken-"))).toBe(false);
+    await fx.close();
+  }
+});
+
+test("the fix message names what it dropped; a nested bad entry drops only that entry and unknown keys survive", async () => {
+  fx = await makeFixture();
+  const good = { matcher: "Edit", hooks: [{ type: "command", command: "fmt" }] };
+  const path = await fx.write("settings.json", JSON.stringify({ theme: "dark", futureKey: 1, hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command" }] }, good] } }));
+  const r = await runOne(fx, settingsCheck, { fix: true });
+  const f = byId(r, "settings.parse.user")!;
+  expect(f.fixed).toBe(true);
+  expect(f.fixMessage).toContain("dropped: hooks.PreToolUse[0].hooks[0]. The original is in ");
+  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark", futureKey: 1, hooks: { PreToolUse: [{ matcher: "Bash", hooks: [] }, good] } });
 });
 
 test("fixing twice in one second does not overwrite the first backup", async () => {
   fx = await makeFixture();
-  const path = await fx.write("settings.json", "{ nope");
+  const path = await fx.write("settings.json", JSON.stringify({ effort: "turbo" }));
   await runOne(fx, settingsCheck, { fix: true });
-  await Bun.write(path, "{ again");
+  await Bun.write(path, JSON.stringify({ effort: "warp" }));
   await runOne(fx, settingsCheck, { fix: true });
   expect((await readdir(fx.home)).filter((n) => n.startsWith("settings.json.broken-"))).toHaveLength(2);
 });
