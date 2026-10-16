@@ -76,7 +76,7 @@ export function protectedPaths(workspace: string): string[] {
     info = undefined;
   }
   if (info?.isDirectory()) {
-    for (const gitDir of [git, ...submoduleGitDirs(join(git, "modules"), 0)]) {
+    for (const gitDir of [git, ...submoduleGitDirs(resolve(join(git, "modules")), 0)]) {
       const hooks = resolve(join(gitDir, "hooks"));
       const config = resolve(join(gitDir, "config"));
       mkdirSync(hooks, { recursive: true });

@@ -55,6 +55,9 @@ describe("protectedPaths", () => {
       await symlink(outside, join(ws, ".git", "config"));
       expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
       await removeDir(join(ws, ".git", "config"));
+      await symlink(outside, join(ws, ".git", "modules"));
+      expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
+      await removeDir(join(ws, ".git", "modules"));
       await symlink(outside, join(ws, ".husky"));
       expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
     } finally {
