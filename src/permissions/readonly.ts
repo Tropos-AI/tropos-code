@@ -4,7 +4,7 @@
 // What this classifier cannot see, and what covers it instead:
 // - Symlinks: paths are resolved lexically, so a repo symlink (`link -> ~/.ssh`) passes.
 // - Git config: repo or user config can make plain `git diff` / `git log` run programs
-//   (per-driver textconv, core.fsmonitor, core.pager, diff.external).
+//   (per-driver textconv, core.fsmonitor, core.pager, diff.external, log.showSignature).
 // - Shell start-up files (`.zshenv`): options, cdpath, functions this file does not model.
 // The execution layer covers these: the confinement profile (no secret reads, no writes to
 // .git/config or hooks) and the chat environment's git overrides (P2 Task 5).
@@ -33,18 +33,30 @@ const FIND_FORBIDDEN: ReadonlySet<string> = new Set([
 
 const GIT_GLOBAL: ReadonlySet<string> = new Set(["--no-pager", "-P"]);
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
-  "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "blame", "shortlog", "describe", "cat-file", "grep",
+  "status", "diff", "log", "show", "rev-parse", "ls-files", "ls-tree", "blame", "shortlog", "describe",
 ]);
 const GIT_BRANCH_ARGS: ReadonlySet<string> = new Set([
   "-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--list", "--show-current", "--no-color", "--color",
 ]);
 /** `--output` writes a file, `--ext-diff` runs a configured program, `--exec` runs a command. */
-/** `--textconv` runs the diff driver's conversion program. */
-const GIT_FORBIDDEN_LONG = ["--output*", "--ext-diff", "--exec*", "--textconv"];
-/** Exact option names git matches before abbreviations, which only look like forbidden ones. */
-const GIT_SAFE_LONG: ReadonlySet<string> = new Set([
+/**
+ * `--textconv` runs the diff driver's conversion program, `--filters` the clean/smudge drivers,
+ * `--show-signature` gpg.program. All are matched with their abbreviations.
+ */
+const GIT_FORBIDDEN_LONG = ["--output*", "--ext-diff", "--exec*", "--textconv", "--filters", "--show-signature"];
+/**
+ * Diff options that only look like an abbreviation of a forbidden one. git matches an exact
+ * name first, so they are safe only where the subcommand defines them: elsewhere `--text`
+ * abbreviates `--textconv` (`git cat-file --text` runs textconv).
+ */
+const GIT_DIFF_SAFE_LONG: ReadonlySet<string> = new Set([
   "--output-indicator-new", "--output-indicator-old", "--output-indicator-context", "--text",
 ]);
+const GIT_SAFE_LONG: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["diff", GIT_DIFF_SAFE_LONG], ["log", GIT_DIFF_SAFE_LONG], ["show", GIT_DIFF_SAFE_LONG],
+]);
+/** `git cat-file` options that print an object without running filters or textconv. */
+const GIT_CAT_FILE_OPTIONS: ReadonlySet<string> = new Set(["-t", "-s", "-p", "-e"]);
 
 /** The only redirects a read-only part may carry (besides `<file`, checked separately). */
 const SAFE_REDIRECTS: ReadonlySet<string> = new Set(["2>&1", ">&2", ">/dev/null", "2>/dev/null", "&>/dev/null"]);
@@ -137,8 +149,12 @@ function gitReadOnly(args: readonly string[]): boolean {
   }
   const sub = args[i];
   const rest = args.slice(i + 1);
-  const forbidden = (a: string): boolean => hasLong(a, GIT_FORBIDDEN_LONG) && !GIT_SAFE_LONG.has(a.split("=")[0]!);
-  if (sub === undefined || args.some(forbidden)) return false;
+  if (sub === undefined) return false;
+  const safe = GIT_SAFE_LONG.get(sub);
+  const forbidden = (a: string): boolean => hasLong(a, GIT_FORBIDDEN_LONG) && !safe?.has(a.split("=")[0]!);
+  // `%G?`, `%GS` ... in a pretty format (also with a `+`, `-` or space modifier) verify signatures, which runs gpg.program.
+  if (args.some((a) => forbidden(a) || /%[-+ ]?G/.test(a))) return false;
+  if (sub === "cat-file") return rest.every((a) => !a.startsWith("-") || GIT_CAT_FILE_OPTIONS.has(a));
   // `git grep -O<cmd>` opens the matches with a command of the caller's choosing.
   if (sub === "grep") return !rest.some((a) => hasShort(a, "O") || hasLong(a, ["--open-files-in-pager*"]));
   if (GIT_SUBCOMMANDS.has(sub)) return true;

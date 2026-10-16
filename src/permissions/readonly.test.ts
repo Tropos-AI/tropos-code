@@ -116,3 +116,29 @@ describe("isReadOnlyCommand — shell state and git config-driven execution", ()
   test.each(["git log -p --output-indicator-new=+", "git diff --output-indicator-old=- --output-indicator-context=' '", "git diff --text",
     "git diff --no-textconv", "git log --no-ext-diff"])("allowed git: %p", (c) => expect(isReadOnlyCommand(c)).toBe(true));
 });
+
+describe("isReadOnlyCommand — git options that only exist on some subcommands", () => {
+  // `--text` is exact only where the diff options define it; elsewhere getopt reads it as an abbreviation of `--textconv`.
+  test.each(["git cat-file --text HEAD:a", "git blame --text a", "git grep --text a", "git log --output-indicator-new=+ --textconv",
+    "git cat-file --output-indicator-new=+ HEAD:a", "git blame --output-indicator-new=+ a"])("refused: %p", (c) =>
+    expect(isReadOnlyCommand(c)).toBe(false),
+  );
+  test.each(["git diff --text", "git log -p --text", "git show --text HEAD", "git show --output-indicator-context=' ' HEAD"])("allowed: %p", (c) =>
+    expect(isReadOnlyCommand(c)).toBe(true),
+  );
+});
+
+describe("isReadOnlyCommand — git options that run configured programs", () => {
+  // --filters runs clean/smudge drivers; signature checks run gpg.program; %G placeholders verify signatures too.
+  test.each([
+    "git cat-file --filters HEAD:a", "git cat-file --filt HEAD:a", "git cat-file --textconv HEAD:a", "git cat-file --batch",
+    "git cat-file --batch-check", "git cat-file -x HEAD", "git log --show-signature", "git show --show-signature HEAD",
+    "git log --show-sig", "git log --format='%G?'", "git log --pretty=format:%GS", "git show -s --format=%GK HEAD", "git log --format=%+GS", "git log --format=%-G?", "git log --format='% GG'", "git shortlog --format=%GG",
+    "git verify-commit HEAD", "git verify-tag v1", "git notes show", "git notes add -m x", "git for-each-ref", "git tag -v v1",
+    "git difftool", "git archive HEAD",
+  ])("refused: %p", (c) => expect(isReadOnlyCommand(c)).toBe(false));
+  test.each(["git cat-file -t HEAD", "git cat-file -s HEAD:a", "git cat-file -p HEAD:a", "git cat-file -e HEAD", "git cat-file blob HEAD:a",
+    "git log --format=%H", "git log --show-notes", "git log --first-parent", "git branch --show-current"])("allowed: %p", (c) =>
+    expect(isReadOnlyCommand(c)).toBe(true),
+  );
+});
