@@ -486,7 +486,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     );
     // A revoked sender's open sessions and scheduled jobs stop within a few seconds.
     const reaper = setInterval(() => {
-      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k, opts) => pool.close(k, opts), isApproved: (c, s) => run.pairing.isApproved(c, s), isOwner: (c, s) => run.pairing.isOwner(c, s), roleOf: (k) => roles.get(k), cron: cronStore })
+      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k, opts) => pool.close(k, opts), isApproved: (c, s) => run.pairing.isApproved(c, s), isOwner: (c, s) => run.pairing.isOwner(c, s), roleOf: (k) => roles.get(k), cron: cronStore, log: (m) => run.err(`gateway: revocation: ${m}\n`) })
         .then((r) => {
           if (r.sessions.length || r.jobs.length) run.err(`gateway: revoked sender: closed ${r.sessions.length} session(s), disabled ${r.jobs.length} job(s)\n`);
         })

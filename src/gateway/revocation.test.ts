@@ -72,3 +72,34 @@ test("a demoted owner's session closes without a final review: it would still ru
     await removeDir(dir);
   }
 });
+
+test("a pairing check that throws for one key is logged and skipped; the rest of the pass still runs", async () => {
+  const closed: string[] = [];
+  const disabled: string[] = [];
+  const logged: string[] = [];
+  const out = await reapRevoked({
+    sessionKeys: () => ["telegram:1@default", "telegram:2@default", "telegram:3@default"],
+    closeSession: async (k) => void closed.push(k),
+    isApproved: async (_c, s) => {
+      if (s === "1") throw new Error("pairing file busy");
+      return s === "3";
+    },
+    isOwner: async () => {
+      throw new Error("owner lookup failed");
+    },
+    roleOf: (k) => (k === "telegram:3@default" ? "owner" : "guest"),
+    cron: {
+      list: () => [job("a", "telegram:1"), job("b", "telegram:2")] as never,
+      setEnabled: (id) => void disabled.push(id) as never,
+    },
+    log: (m) => logged.push(m),
+  });
+  expect(closed).toEqual(["telegram:2@default"]);
+  expect(disabled).toEqual(["b"]);
+  expect(out).toEqual({ sessions: ["telegram:2@default"], jobs: ["b"] });
+  expect(logged).toEqual([
+    "couldn't check telegram:1@default: pairing file busy",
+    "couldn't check telegram:3@default: owner lookup failed",
+    "couldn't check job a: pairing file busy",
+  ]);
+});

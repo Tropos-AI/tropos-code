@@ -18,27 +18,40 @@ export interface ReapOptions {
   /** The role a session was created with. */
   roleOf: (key: string) => SessionRole | undefined;
   cron: Pick<CronStore, "list" | "setEnabled">;
+  /** Where a key that couldn't be checked is reported; the pass goes on with the others. */
+  log?: (message: string) => void;
 }
 
 /** Returns what it stopped, for logging. */
 export async function reapRevoked(o: ReapOptions): Promise<{ sessions: string[]; jobs: string[] }> {
   const sessions: string[] = [];
   const jobs: string[] = [];
+  // One key that can't be checked must not keep the others (still revoked) running until the next pass.
+  const failed = (what: string, e: unknown) => o.log?.(`couldn't check ${what}: ${e instanceof Error ? e.message : String(e)}`);
   for (const key of o.sessionKeys()) {
     const sender = privateTelegramSender(parseSessionKey(key)?.chatKey ?? "");
     if (sender === undefined) continue;
-    const revoked = !(await o.isApproved("telegram", sender));
-    // An owner session carries the owner's privileges; once the owner is changed it must not outlive the change.
-    const demoted = !revoked && o.roleOf(key) === "owner" && !(await o.isOwner("telegram", sender));
-    if (!revoked && !demoted) continue;
-    await o.closeSession(key, { finalReview: false });
-    sessions.push(key);
+    try {
+      const revoked = !(await o.isApproved("telegram", sender));
+      // An owner session carries the owner's privileges; once the owner is changed it must not outlive the change.
+      const demoted = !revoked && o.roleOf(key) === "owner" && !(await o.isOwner("telegram", sender));
+      if (!revoked && !demoted) continue;
+      await o.closeSession(key, { finalReview: false });
+      sessions.push(key);
+    } catch (e) {
+      failed(key, e);
+    }
   }
   for (const job of o.cron.list()) {
     const sender = privateTelegramSender(job.deliver);
-    if (!job.enabled || sender === undefined || (await o.isApproved("telegram", sender))) continue;
-    o.cron.setEnabled(job.id, false);
-    jobs.push(job.id);
+    if (!job.enabled || sender === undefined) continue;
+    try {
+      if (await o.isApproved("telegram", sender)) continue;
+      o.cron.setEnabled(job.id, false);
+      jobs.push(job.id);
+    } catch (e) {
+      failed(`job ${job.id}`, e);
+    }
   }
   return { sessions, jobs };
 }
