@@ -44,7 +44,9 @@ test("metadata, name validation and subject paths", () => {
   expect(tool.schema.safeParse({ action: "create", name: "ok-2" }).success).toBe(true);
   expect(tool.subject({ action: "create", name: "ok" }, "/")).toEqual({ paths: [join(home, "skills", "ok", "SKILL.md")] });
   expect(tool.subject({ action: "patch", name: "ok", file_path: "ref/a.md" }, "/")).toEqual({ paths: [join(home, "skills", "ok", "ref", "a.md")] });
-  expect(tool.subject({ action: "delete", name: "ok" }, "/")).toEqual({ paths: [join(home, "skills", "ok")] });
+  // A delete takes supporting files the ledger can't restore: never an automatic store save.
+  expect(tool.subject({ action: "delete", name: "ok" }, "/")).toEqual({ paths: [join(home, "skills", "ok")], destructive: true });
+  expect(tool.subject({ action: "delete", name: "../x" } as never, "/")).toMatchObject({ destructive: true });
   expect(tool.subject({ action: "write_file", name: "ok", file_path: "../x" }, "/")).toEqual({ paths: [join(home, "skills", "ok")] });
 });
 

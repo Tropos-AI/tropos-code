@@ -70,6 +70,8 @@ export interface PermissionSubject {
   paths: string[];
   /** What a rule pattern is matched against for tools that act on neither paths nor commands, e.g. "domain:example.com" or a skill name. */
   target?: string;
+  /** The action can't be fully undone (deleting a skill folder): it is never one of the owner's unasked store saves. */
+  destructive?: boolean;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

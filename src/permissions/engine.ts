@@ -27,6 +27,8 @@ export interface PermissionRequest {
   paths: string[];
   /** Matched by rule patterns for tools without paths or a command (WebFetch domains, skill names). */
   target?: string;
+  /** Can't be fully undone, so never a store save (src/tools/types.ts PermissionSubject). */
+  destructive?: boolean;
 }
 
 export interface PermissionRules {
@@ -153,10 +155,11 @@ const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
 
 /**
  * True when a store tool saves only inside Tropos's stores. Each path is resolved again on disk, so a link inside a
- * store that points elsewhere doesn't count; a path that won't resolve doesn't either.
+ * store that points elsewhere doesn't count; a path that won't resolve doesn't either. A destructive action (a skill
+ * delete, whose supporting files the ledger can't bring back) is not a save: it keeps asking.
  */
 export function isStoreSave(req: PermissionRequest, ctx: PermissionContext): boolean {
-  if (!STORE_TOOL_NAMES.has(req.toolName) || req.paths.length === 0 || !ctx.stores) return false;
+  if (!STORE_TOOL_NAMES.has(req.toolName) || req.destructive || req.paths.length === 0 || !ctx.stores) return false;
   const stores = ctx.stores.paths;
   return req.paths.every((p) => {
     let real: string;

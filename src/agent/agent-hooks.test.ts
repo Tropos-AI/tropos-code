@@ -1,5 +1,8 @@
 // src/agent/agent-hooks.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { troposStorePaths } from "../learning/stores";
 import { z } from "zod";
 import { FakeModel, assertToolPairs, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeToolContext } from "../../test/helpers/tool-context";
@@ -121,6 +124,47 @@ describe("PreToolUse", () => {
     });
     await ask.agent.run("go", signal());
     expect(ask.prompts[0]!.reason).toBe("a PreToolUse hook asked for confirmation");
+  });
+
+  describe("the owner's store saves", () => {
+    let home: string;
+    beforeAll(async () => {
+      home = await makeTmpDir();
+    });
+    afterAll(() => removeDir(home));
+    const memory = defineTool({
+      name: "Memory",
+      kind: "edit",
+      description: "memory",
+      schema: z.object({}),
+      summarize: () => "add",
+      subject: () => ({ paths: [join(home, "memories", "MEMORY.md")] }),
+      run: async () => ({ content: "saved" }),
+    });
+    const run = async (hooks?: AgentHooks) => {
+      const t = make([() => reply([toolUseBlock("t1", "Memory", {})], "tool_use"), () => reply([textBlock("done")])], {
+        tools: [memory] as AnyTool[],
+        permissions: () => ({
+          mode: "default",
+          rules: compileRules({ allow: [], ask: [], deny: [] }).rules,
+          cwd: "/work",
+          home: "/h",
+          allowedDirs: ["/work"],
+          role: "owner",
+          stores: { paths: troposStorePaths(home), askBeforeSaving: false },
+        }),
+        hooks,
+      });
+      await t.agent.run("go", signal());
+      return t.prompts;
+    };
+
+    test("a hook that asks turns the save's allow into a prompt", async () => {
+      // Positive control: without the hook the save runs unasked.
+      expect(await run()).toHaveLength(0);
+      const prompts = await run(fakeHooks({ PreToolUse: () => ({ permission: "ask" }) }));
+      expect(prompts.map((p) => [p.toolName, p.reason])).toEqual([["Memory", "a PreToolUse hook asked for confirmation"]]);
+    });
   });
 
   test("updatedInput is re-validated and used", async () => {

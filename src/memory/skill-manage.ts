@@ -260,11 +260,13 @@ export function createSkillManageTool(opts: SkillManageOptions): AnyTool {
     summarize: (input) => `${input.action} ${input.name}${input.file_path ? `/${input.file_path}` : ""}`,
     preview: (input) => skillPreview(input, join(skillsBase(opts), input.name)),
     subject: (input) => {
+      // A delete takes the supporting files too, which the ledger can't restore: the owner is always asked.
+      const destructive = input.action === "delete" ? { destructive: true } : {};
       try {
-        return { paths: [layout(skillsBase(opts), input).target] };
+        return { paths: [layout(skillsBase(opts), input).target], ...destructive };
       } catch {
         // Invalid input: name the skills folder so the call still asks; run reports the real problem.
-        return { paths: [join(skillsBase(opts), input.name)] };
+        return { paths: [join(skillsBase(opts), input.name)], ...destructive };
       }
     },
     async run(input, ctx) {

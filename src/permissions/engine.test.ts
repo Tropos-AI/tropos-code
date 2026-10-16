@@ -4,6 +4,7 @@ import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { troposStorePaths } from "../learning/stores";
+import { createSkillManageTool } from "../memory/skill-manage";
 import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, isStoreSave, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
 
 const cwd = "/work/app";
@@ -479,6 +480,20 @@ describe("decide — saving to Tropos's stores", () => {
     expect(decide(memory(m), owner({ deny: ["Memory"] })).behavior).toBe("deny");
     expect(decide(memory(m), owner({ ask: ["Memory"] })).behavior).toBe("ask");
     expect(decide(memory(m), owner({ confine: true, ask: ["Edit"] })).behavior).toBe("ask");
+  });
+  test("askBeforeSaving in the owner's chat asks, neither allowing nor denying", () => {
+    expect(decide(memory(m), owner({ confine: true, stores: { paths: troposStorePaths(home), askBeforeSaving: true } })).behavior).toBe("ask");
+  });
+  test("SkillManage delete by the owner still asks", () => {
+    const tool = createSkillManageTool({ home });
+    const subject = (input: Record<string, unknown>) => tool.subject(input as never, "/");
+    const del: PermissionRequest = { toolName: "SkillManage", kind: "edit", ...subject({ action: "delete", name: "deploy" }) };
+    expect(isStoreSave(del, owner())).toBe(false);
+    expect(decide(del, owner()).behavior).toBe("ask");
+    expect(decide(del, owner({ confine: true })).behavior).toBe("deny");
+    // Positive control: the same tool's create in the same folder is a save.
+    const create: PermissionRequest = { toolName: "SkillManage", kind: "edit", ...subject({ action: "create", name: "deploy" }) };
+    expect(decide(create, owner())).toEqual({ behavior: "allow" });
   });
   test("plan mode still refuses a store save", () => {
     expect(decide(memory(m), owner({ mode: "plan" }))).toEqual({ behavior: "deny", reason: PLAN_MODE_REASON });
