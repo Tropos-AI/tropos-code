@@ -453,6 +453,15 @@ describe("learning and identity", () => {
     expect(entries[0]).toMatchObject({ actor: "agent", kind: "user" });
   });
 
+  test("a subagent's Memory save in an owner session asks first: only the owner's own agent saves without a prompt", async () => {
+    const agentCall: Step = () => reply([toolUseBlock("a1", "Agent", { description: "save a note", prompt: "remember it" })], "tool_use");
+    await setup([agentCall, memoryAdd("m1"), text("saved"), text("ok")]);
+    const asked: PermissionPrompt[] = [];
+    const { agent } = await agentFor({ ask: async (p) => (asked.push(p), { kind: "allow" }) });
+    await agent.run("delegate", signal());
+    expect(asked.map((p) => p.toolName)).toEqual(["Memory"]);
+  });
+
   test("with learning.askBeforeSaving the same save asks first", async () => {
     await setup([memoryAdd("m1"), text("ok")], { askBeforeSaving: true });
     const asked: PermissionPrompt[] = [];
@@ -534,6 +543,23 @@ describe("learning and identity", () => {
     const main = JSON.stringify(model.requests[0]!.messages[0]);
     expect(main).toContain("Prefers bun");
     expect(main).toContain("Nova");
+  });
+
+  test("guest chats and scheduled runs get none of the owner's notes or journal; the owner's chat does", async () => {
+    const model = await setup([text("a"), text("b"), text("c")]);
+    await ctx.ext.notes!.add("user", "Prefers bun");
+    await ctx.ext.notes!.add("memory", "Tests are colocated");
+    await ctx.ext.daily!.append("Shipped the gateway");
+    const exec = {} as Parameters<typeof channelContext>[1];
+    for (const role of ["owner", "guest", "scheduled"] as const) {
+      await (await agentFor({ ctx: channelContext(ctx, exec, { role }) })).agent.run("hi", signal());
+    }
+    const first = (i: number) => JSON.stringify(model.requests[i]!.messages[0]);
+    for (const note of ["Prefers bun", "Tests are colocated", "Shipped the gateway"]) {
+      expect(first(0)).toContain(note);
+      expect(first(1)).not.toContain(note);
+      expect(first(2)).not.toContain(note);
+    }
   });
 
   test("an Identity save tells the runtime to refresh the header identity", async () => {

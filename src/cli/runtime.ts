@@ -198,7 +198,12 @@ export function makeAgent(
     tools: ctx.tools,
     system: SYSTEM_PROMPT,
     config,
-    permissions,
+    // Without the role and stores: a subagent's saves to Tropos's stores ask through the shared queue, because
+    // its tool results never reach the user as a learned notice.
+    permissions: () => {
+      const { role: _role, stores: _stores, ...rest } = permissions();
+      return rest;
+    },
     askPermission,
     contextText: contextFor("subagent"),
     nonce,
