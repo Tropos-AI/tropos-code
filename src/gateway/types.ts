@@ -4,6 +4,9 @@ import type { SessionState } from "../web/protocol";
 import type { GatewayConfig } from "./config";
 import type { Project, ProjectSource } from "./projects";
 
+/** Who a session answers to: the owner at their own chat, a paired guest, or a scheduled run. */
+export type SessionRole = "owner" | "guest" | "scheduled";
+
 /** What a channel adapter receives from one chat's session. */
 export interface ChatSink {
   event(event: AgentEvent): void;

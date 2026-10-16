@@ -86,6 +86,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     subagents: {},
     env,
     modelPrefs: new ModelPrefs(home),
+    role: "owner",
   };
   const newSessionContext = (): SessionContext => {
     const holder: SubagentHolder = {};

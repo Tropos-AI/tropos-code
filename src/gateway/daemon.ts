@@ -32,7 +32,7 @@ import {
 import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
 import { reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
-import { CHANNEL_MODES, channelContext, workspaceProblem } from "./policy";
+import { CHANNEL_MODES, channelContext, chatRole, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
 import { AdminError } from "../web/admin/context";
@@ -41,7 +41,7 @@ import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
-import type { ChannelAdapter, ChatProjects, GatewayService, GatewayServiceDeps, Pairing } from "./types";
+import type { ChannelAdapter, ChatProjects, GatewayService, GatewayServiceDeps, Pairing, SessionRole } from "./types";
 
 export type { SessionContext } from "../cli/context";
 
@@ -200,6 +200,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const check = run.seams?.sandboxCheck ?? dockerCheck();
   if (run.seams?.sweep !== false && !run.seams?.backend) await sweepLeftoverContainers().catch(() => 0);
 
+  // The role each open session was created with, so the reaper can close an owner session when ownership moves.
+  const roles = new Map<string, SessionRole>();
   const pool = new SessionPool({
     statePath: join(dir, "sessions.json"),
     idleMs: config.idleMinutes * 60_000,
@@ -221,7 +223,9 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         run.seams?.backend?.(cwd) ??
         new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
       const { ctx: base, setSessionId } = pc.newSessionContext();
-      const sessionCtx = channelContext(base, backend);
+      const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
+      const sessionCtx = channelContext(base, backend, { role });
+      roles.set(key, role);
       // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
       // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
       const chatKey = parseSessionKey(key)?.chatKey;
@@ -381,7 +385,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     );
     // A revoked sender's open sessions and scheduled jobs stop within a few seconds.
     const reaper = setInterval(() => {
-      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k) => pool.close(k), isApproved: (c, s) => run.pairing.isApproved(c, s), cron: cronStore })
+      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k) => pool.close(k), isApproved: (c, s) => run.pairing.isApproved(c, s), isOwner: (c, s) => run.pairing.isOwner(c, s), roleOf: (k) => roles.get(k), cron: cronStore })
         .then((r) => {
           if (r.sessions.length || r.jobs.length) run.err(`gateway: revoked sender: closed ${r.sessions.length} session(s), disabled ${r.jobs.length} job(s)\n`);
         })

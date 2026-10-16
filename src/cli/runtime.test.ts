@@ -40,6 +40,7 @@ beforeEach(async () => {
     subagents: {},
     env: {},
     modelPrefs: new ModelPrefs(join(dir, ".home")),
+    role: "owner",
   };
 });
 afterEach(() => removeDir(dir));

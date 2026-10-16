@@ -287,6 +287,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     subagents,
     env,
     modelPrefs: new ModelPrefs(home),
+    role: "owner",
   };
   try {
     return await runSession();

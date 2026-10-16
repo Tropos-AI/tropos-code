@@ -33,6 +33,7 @@ import { JobTable } from "../tools/bash/jobs";
 import { resolveToolPath } from "../tools/paths";
 import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
+import type { SessionRole } from "../gateway/types";
 import type { AnyTool, ToolContext } from "../tools/types";
 import type { ListTopic } from "../ui/commands";
 import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSection, ProviderControl, Runtime } from "../ui/runtime";
@@ -62,6 +63,8 @@ export interface AppContext {
   env: NodeJS.ProcessEnv;
   /** Where the session came from; "channel" (a messaging chat) is untrusted input and is confined (src/gateway/policy.ts). */
   origin?: "local" | "channel";
+  /** Who the session answers to; local sessions are the owner's. */
+  role: SessionRole;
   /** Where Bash runs; the host when unset. */
   exec?: ExecBackend;
 }

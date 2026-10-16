@@ -7,16 +7,27 @@ import { isInside } from "../paths";
 import { compileRules } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
+import { privateTelegramSender } from "./revocation";
+import type { Pairing, SessionRole } from "./types";
 
 /** The only modes a chat can be in: never `bypass`, and nothing that silently accepts edits. */
 export const CHANNEL_MODES: Mode[] = ["default", "plan"];
 
 /**
- * Tools a chat doesn't get. SessionSearch reads the owner's other transcripts (terminal, web and other chats share the
- * project's session folder), none of which is the chat's business. WebFetch runs on the host with no guard against
- * loopback, LAN and metadata addresses; until web access goes through the sandbox, a chat has none.
+ * Tools no chat gets. WebFetch runs on the host with no guard against loopback, LAN and metadata addresses; until web
+ * access goes through the sandbox, a chat has none.
  */
-const WITHHELD_TOOLS = new Set(["SessionSearch", "WebFetch"]);
+const WITHHELD_TOOLS = new Set(["WebFetch"]);
+
+/** SessionSearch reads the owner's other transcripts, which are nobody else's business. */
+const OWNER_ONLY_TOOLS = new Set(["SessionSearch"]);
+
+/** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups included). */
+export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner">): Promise<SessionRole> {
+  if (chatKey.startsWith("project:")) return "scheduled";
+  const sender = privateTelegramSender(chatKey);
+  return sender !== undefined && (await pairing.isOwner("telegram", sender)) ? "owner" : "guest";
+}
 
 /**
  * Tools whose effects leave the sandbox. They always ask in a chat, even when the user's own settings
@@ -28,13 +39,15 @@ const ALWAYS_ASK = ["mcp__*"];
  * The context for one chat's session: the gateway's workspace context, narrowed. It never widens anything:
  * the base rules and settings are the user's own, and what is changed only restricts.
  */
-export function channelContext(base: AppContext, exec: ExecBackend): AppContext {
+export function channelContext(base: AppContext, exec: ExecBackend, opts: { role: SessionRole }): AppContext {
+  const { role } = opts;
   const forced = compileRules({ allow: [], ask: ALWAYS_ASK, deny: [] }).rules;
   return {
     ...base,
     origin: "channel",
+    role,
     exec,
-    tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name)),
+    tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name) && (role === "owner" || !OWNER_ONLY_TOOLS.has(t.name))),
     // Formatters and language servers run on the host and load config from the project, which a sandboxed command can
     // write without the write guard noticing.
     ext: { ...base.ext, formatters: null, lsp: null },
@@ -49,8 +62,9 @@ export function channelContext(base: AppContext, exec: ExecBackend): AppContext 
     allowedDirs: [base.cwd],
     settings: {
       ...base.settings,
-      // The background review writes notes and skills from what the chat said; chat text is untrusted.
-      learning: { ...base.settings.learning, review: false, curator: false },
+      // The owner's own chat keeps the background review; a guest's or a scheduled run's text is untrusted. The curator
+      // is never per chat: the gateway runs it as a service.
+      learning: role === "owner" ? { ...base.settings.learning, curator: false } : { ...base.settings.learning, review: false, curator: false },
     },
   };
 }
