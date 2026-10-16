@@ -38,6 +38,26 @@ async function until(check: () => boolean, ms = 10_000) {
 }
 
 describe("protectedPaths", () => {
+  test("links that leave the workspace are ignored and nothing is created through them", async () => {
+    const ws = await makeTmpDir("tropos-prot-");
+    const outside = await makeTmpDir("tropos-out-");
+    try {
+      await symlink(outside, join(ws, ".git"));
+      expect(protectedPaths(ws)).toEqual([]);
+      expect(existsSync(join(outside, "hooks"))).toBe(false);
+      await removeDir(join(ws, ".git"));
+      await mkdir(join(ws, ".git"));
+      await symlink(join(outside, "missing"), join(ws, ".git", "hooks"));
+      expect(protectedPaths(ws)).toEqual([]);
+      expect(existsSync(join(outside, "missing"))).toBe(false);
+      await symlink(outside, join(ws, ".husky"));
+      expect(protectedPaths(ws)).toEqual([]);
+    } finally {
+      await removeDir(ws);
+      await removeDir(outside);
+    }
+  });
+
   test("symlinks are followed: a linked .git, hooks dir and .husky protect their real targets", async () => {
     const ws = await makeTmpDir("tropos-prot-");
     try {
