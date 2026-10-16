@@ -41,6 +41,8 @@ export interface Extensions {
   agents: AgentDefinition[];
   /** Re-reads the agent folders into `agents` (after AgentManage, or when the Agent tool meets an unknown name). */
   reloadAgents(): Promise<void>;
+  /** Re-reads commands, skills and agents, replacing the contents of `commands`, `skills` and `agents` in place. */
+  reload(): Promise<void>;
   /** Settings hooks plus enabled plugins' hooks. */
   hookConfig: HookRunnerConfig;
   mcp: McpManager | null;
@@ -89,15 +91,24 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
   const roots = pluginRoots(plugins);
   const dirs = (kind: "commands" | "skills" | "agents") => extensionDirs(kind, { cwd, home, plugins: roots });
 
-  const [commands, skills, agents] = await Promise.all([
-    loadCommands(dirs("commands"), RESERVED_COMMANDS),
-    loadSkills(dirs("skills")),
-    loadAgents(dirs("agents")),
-  ]);
-  warnings.push(...commands.warnings, ...skills.warnings, ...agents.warnings);
-  // A skill named like a built-in or a custom command can still be loaded by the model, just not typed.
-  const commandNames = new Set([...RESERVED_COMMANDS, ...commands.commands.map((c) => c.name)]);
-  const typedSkills = skills.skills.map((s) => (s.userInvocable && commandNames.has(s.name) ? { ...s, userInvocable: false } : s));
+  const readAll = async () => {
+    const [commands, skills, agents] = await Promise.all([
+      loadCommands(dirs("commands"), RESERVED_COMMANDS),
+      loadSkills(dirs("skills")),
+      loadAgents(dirs("agents")),
+    ]);
+    // A skill named like a built-in or a custom command can still be loaded by the model, just not typed.
+    const commandNames = new Set([...RESERVED_COMMANDS, ...commands.commands.map((c) => c.name)]);
+    const typedSkills = skills.skills.map((s) => (s.userInvocable && commandNames.has(s.name) ? { ...s, userInvocable: false } : s));
+    return {
+      commands: commands.commands,
+      skills: typedSkills,
+      agents: agents.agents,
+      warnings: [...commands.warnings, ...skills.warnings, ...agents.warnings],
+    };
+  };
+  const first = await readAll();
+  warnings.push(...first.warnings);
 
   const enabled = plugins.filter((p) => p.enabled);
   const hookConfig: HookRunnerConfig = {
@@ -130,7 +141,15 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
       })
     : null;
 
-  const agentList = agents.agents;
+  const commandList = first.commands;
+  const skillList = first.skills;
+  const agentList = first.agents;
+  const reload = async () => {
+    const fresh = await readAll();
+    commandList.splice(0, commandList.length, ...fresh.commands);
+    skillList.splice(0, skillList.length, ...fresh.skills);
+    agentList.splice(0, agentList.length, ...fresh.agents);
+  };
   const reloadAgents = async () => {
     const fresh = await loadAgents(dirs("agents"));
     agentList.splice(0, agentList.length, ...fresh.agents);
@@ -138,10 +157,11 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
 
   return {
     plugins,
-    commands: commands.commands,
-    skills: typedSkills,
+    commands: commandList,
+    skills: skillList,
     agents: agentList,
     reloadAgents,
+    reload,
     hookConfig,
     mcp,
     notes: settings.memory ? new NotesStore(home, { ledger }) : null,
@@ -172,7 +192,7 @@ export interface SubagentHolder {
 }
 
 /**
- * The session's tools, in a fixed order: base tools, WebFetch, Skill (when a skill is model-invocable),
+ * The session's tools, in a fixed order: base tools, WebFetch, Skill,
  * Agent, Memory and DailyNote (when memory is on), SessionSearch, SkillManage, AgentManage, Identity, then MCP tools.
  */
 export function sessionTools(
@@ -181,7 +201,8 @@ export function sessionTools(
   opts: { home: string; cwd: string; holder: SubagentHolder; sessionId(): string },
 ): AnyTool[] {
   const tools: AnyTool[] = [...base, webFetchTool as AnyTool];
-  if (ext.skills.some((s) => s.modelInvocable)) tools.push(createSkillTool(ext.skills, { home: opts.home, tracker: ext.tracker, reviewTracker: ext.reviewTracker }));
+  // Always present: a skill written later in the session can still be loaded (the tool reloads on an unknown name).
+  tools.push(createSkillTool(ext.skills, { home: opts.home, tracker: ext.tracker, reviewTracker: ext.reviewTracker, reload: ext.reload }));
   tools.push(
     createAgentTool(ext.agents, (def, prompt, ctx) => {
       const deps = opts.holder.deps;

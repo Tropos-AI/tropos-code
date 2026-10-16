@@ -2,6 +2,7 @@
 // `tcode` builds the same pieces inline in main.tsx (it also needs the CLI overrides and the update/re-exec handling);
 // the gateway builds one of these per project, since each project has its own settings, skills, memory and MCP servers.
 import type { Model } from "../api/model";
+import { errorText } from "../error-text";
 import { ModelPrefs } from "../config/model-prefs";
 import { SettingsError, loadSettings, settingsPaths } from "../config/settings";
 import { compileRules } from "../permissions/engine";
@@ -35,8 +36,8 @@ export interface SessionContext {
 
 export interface ProjectContext {
   ctx: AppContext;
-  /** A fresh context for one session: its own subagent holder and tools over the project's shared extensions. */
-  newSessionContext(): SessionContext;
+  /** A fresh context for one session: its own subagent holder and tools over the project's shared extensions, re-read first so new skills, commands and agents show. */
+  newSessionContext(): Promise<SessionContext>;
   /** Settings and extension warnings, for the caller to show. */
   warnings: string[];
   /** Closes what the project's extensions hold open (MCP servers, language servers, the search index). */
@@ -88,7 +89,8 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     modelPrefs: new ModelPrefs(home),
     role: "owner",
   };
-  const newSessionContext = (): SessionContext => {
+  const newSessionContext = async (): Promise<SessionContext> => {
+    await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));
     const holder: SubagentHolder = {};
     let current = "";
     return {

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { DEFAULT_SETTINGS, type Settings } from "../config/settings";
 import { skillListing } from "../extensions/skills";
@@ -85,12 +86,48 @@ describe("loadExtensions", () => {
   });
 });
 
+describe("reload", () => {
+  test("picks up a skill, a command and an agent written after loading, in the same arrays", async () => {
+    const ext = await load();
+    const { skills, commands, agents } = ext;
+    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+    await put(join(home, "commands", "ship.md"), "Ship it");
+    await put(join(home, "agents", "reviewer.md"), "---\nname: reviewer\ndescription: Reviews\n---\nReview.");
+    await ext.reload();
+    expect(ext.skills).toBe(skills);
+    expect(ext.commands).toBe(commands);
+    expect(ext.agents).toBe(agents);
+    expect(skills.map((s) => s.name)).toContain("deploy");
+    expect(commands.map((c) => c.name)).toContain("ship");
+    expect(agents.map((a) => a.name)).toContain("reviewer");
+  });
+
+  test("a skill named like a command still can't be typed after a reload", async () => {
+    const ext = await load();
+    await put(join(home, "commands", "ship.md"), "Ship it");
+    await put(join(home, "skills", "ship", "SKILL.md"), "---\ndescription: Ship\n---\nx");
+    await ext.reload();
+    expect(ext.skills.find((s) => s.name === "ship")!.userInvocable).toBe(false);
+  });
+
+  test("the Skill tool of a session made before the skill existed loads it", async () => {
+    const ext = await load();
+    const base = createTools({ rgPath: null });
+    const tools = sessionTools(base, ext, { home, cwd, holder: {}, sessionId: () => "s" });
+    const skill = tools.find((t) => t.name === "Skill")!;
+    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+    await ext.reload();
+    const out = await skill.run({ skill: "deploy" }, makeToolContext({ root: cwd }));
+    expect(out.isError).toBeUndefined();
+  });
+});
+
 describe("sessionTools", () => {
-  test("fixed order; Skill only when a skill is model-invocable; Memory and DailyNote only when on", async () => {
+  test("fixed order; Skill always (skills may appear later); Memory and DailyNote only when on", async () => {
     const holder = {};
     const base = createTools({ rgPath: null });
     const names = (ext: Extensions) => sessionTools(base, ext, { home, cwd, holder, sessionId: () => "s" }).map((t) => t.name).slice(base.length);
-    expect(names(await load())).toEqual(["WebFetch", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
+    expect(names(await load())).toEqual(["WebFetch", "Skill", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
     await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
     expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
   });

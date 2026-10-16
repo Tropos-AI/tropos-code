@@ -222,7 +222,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const backend =
         run.seams?.backend?.(cwd) ??
         new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
-      const { ctx: base, setSessionId } = pc.newSessionContext();
+      const { ctx: base, setSessionId } = await pc.newSessionContext();
       const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
       const sessionCtx = channelContext(base, backend, { role });
       roles.set(key, role);
@@ -294,7 +294,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       // The local web UI works in the default project.
       const project = (await source.get(await source.defaultId())) ?? builtinProject(home);
       const { ctx, newSessionContext } = await contextFor(project);
-      const { ctx: localCtx, setSessionId } = newSessionContext();
+      const { ctx: localCtx, setSessionId } = await newSessionContext();
       const session = await SessionStore.create(home, { cwd: ctx.cwd, model: ctx.settings.model, version });
       setSessionId(session.id);
       const runtime = await createRuntime(localCtx, {

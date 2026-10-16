@@ -22,9 +22,12 @@ const schema = z.object({
  * `reviewTracker`, and not as a use: the review reading a skill must neither unlock it for the main agent
  * nor keep it from being archived.
  */
-export function createSkillTool(skills: Skill[], opts: { home?: string; tracker?: SkillTracker; reviewTracker?: SkillTracker } = {}): AnyTool {
-  const byName = new Map(skills.filter((s) => s.modelInvocable).map((s) => [s.name, s]));
-  const userOnly = new Set(skills.filter((s) => !s.modelInvocable).map((s) => s.name));
+export function createSkillTool(skills: Skill[], opts: { home?: string; tracker?: SkillTracker; reviewTracker?: SkillTracker; reload?: () => Promise<void> } = {}): AnyTool {
+  // Built per call: `skills` is refreshed in place, so a skill written after the session began is found.
+  const lookup = () => ({
+    byName: new Map(skills.filter((s) => s.modelInvocable).map((s) => [s.name, s])),
+    userOnly: new Set(skills.filter((s) => !s.modelInvocable).map((s) => s.name)),
+  });
   const strip =(name: string) => name.trim().replace(/^\//, "");
   return defineTool({
     name: "Skill",
@@ -39,6 +42,12 @@ export function createSkillTool(skills: Skill[], opts: { home?: string; tracker?
     subject: (input) => ({ paths: [], target: strip(input.skill) }),
     async run(input, ctx) {
       const name = strip(input.skill);
+      let { byName, userOnly } = lookup();
+      if (!byName.has(name) && opts.reload) {
+        // One reload for a name we don't know: the skill may have been created since the session began.
+        await opts.reload().catch(() => {});
+        ({ byName, userOnly } = lookup());
+      }
       const skill = byName.get(name);
       if (!skill) {
         const available = [...byName.keys()].sort();

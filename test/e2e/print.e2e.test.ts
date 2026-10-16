@@ -71,6 +71,7 @@ describe("compiled binary", () => {
       "Grep",
       "TodoWrite",
       "WebFetch",
+      "Skill",
       "Agent",
       "Memory",
       "DailyNote",

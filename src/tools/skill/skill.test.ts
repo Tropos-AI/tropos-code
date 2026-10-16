@@ -91,3 +91,40 @@ test("a load by the learning review counts only in its own tracker, and not as a
   await Bun.sleep(30);
   expect((await readSkillUsage(dir)).deploy).toBeUndefined();
 });
+
+test("a skill added after the tool was made loads after one reload", async () => {
+  const list: Skill[] = [skills[0]!];
+  let reloads = 0;
+  const tool = createSkillTool(list, {
+    reload: async () => {
+      reloads++;
+      list.push({ ...skills[0]!, name: "ship" });
+    },
+  });
+  const ctx = makeToolContext({ root: dir });
+  const out = await tool.run({ skill: "ship" }, ctx);
+  expect(out.isError).toBeUndefined();
+  expect(reloads).toBe(1);
+  await tool.run({ skill: "deploy" }, ctx);
+  expect(reloads).toBe(1);
+});
+
+test("an unknown name after reload still lists what exists now", async () => {
+  const list: Skill[] = [];
+  let reloads = 0;
+  const tool = createSkillTool(list, {
+    reload: async () => {
+      reloads++;
+      list.push(skills[0]!);
+    },
+  });
+  const out = await tool.run({ skill: "nope" }, makeToolContext({ root: dir }));
+  expect(out).toEqual({ content: 'Unknown skill "nope". Available skills: deploy', isError: true });
+  expect(reloads).toBe(1);
+});
+
+test("a failing reload doesn't break the lookup", async () => {
+  const tool = createSkillTool([], { reload: async () => { throw new Error("disk"); } });
+  const out = await tool.run({ skill: "x" }, makeToolContext({ root: dir }));
+  expect(out.content).toBe('Unknown skill "x". No skills are available.');
+});
