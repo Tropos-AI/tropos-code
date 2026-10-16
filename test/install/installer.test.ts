@@ -8,6 +8,7 @@ import { InstallError } from "../../src/install/errors";
 import { installSelf, installTarget, updateChannel } from "../../src/install/installer";
 import { versionPath } from "../../src/install/layout";
 import { readLink } from "../../src/install/link";
+import { PLATFORMS } from "../../src/install/platform";
 import { lockVersionShared } from "../../src/install/locks";
 import { writeState } from "../../src/install/state";
 import { fakeBinary } from "./helpers/fixture-release";
@@ -181,7 +182,7 @@ describe("--force and damaged versions (R5.1–R5.3)", () => {
     await f.release("1.0.0");
     await installTarget(f.deps, "1.0.0", false);
     await appendFile(versionPath(f.layout, "1.0.0"), "damage");
-    for (const p of ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "windows-x64"]) {
+    for (const p of [...PLATFORMS, "windows-x64"]) {
       f.srv.remove("v1.0.0", `tropos-${p}`);
       f.srv.remove("v1.0.0", `tropos-${p}.zst`);
     }

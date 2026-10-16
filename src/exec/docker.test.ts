@@ -11,7 +11,13 @@ import { bashTool } from "../tools/bash/bash";
 import { DockerBackend, protectedPaths, sweepLeftoverContainers } from "./docker";
 
 const IMAGE = "alpine:3.22";
-const dockerUp = Bun.spawnSync(["docker", "info"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+const dockerUp = (() => {
+  try {
+    return Bun.spawnSync(["docker", "info"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  } catch {
+    return false; // no docker binary on this machine: the real-container tests are skipped
+  }
+})();
 const imagePresent = dockerUp && Bun.spawnSync(["docker", "image", "inspect", IMAGE], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 if (!imagePresent) console.warn(`[docker.test] SKIPPED: needs a running Docker daemon with ${IMAGE} present (docker info ${dockerUp ? "ok" : "failed"})`);
 const d = imagePresent ? describe : describe.skip;
