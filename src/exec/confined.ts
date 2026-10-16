@@ -19,7 +19,16 @@ import type { Confinement, CwdMarker, ExecBackend, ExecSpawn } from "./backend";
 import { bwrapArgs } from "./bwrap-args";
 import { ConfinementError, type ConfinementPaths, confinementPaths } from "./confinement-paths";
 import { chatEnv } from "./env";
-import { type CommondirSnapshot, commondirSnapshot, enforceCommondir, enforceNewGitDirs, type GitDirsSnapshot, gitDirsSnapshot } from "./git-integrity";
+import {
+  type CommondirSnapshot,
+  commondirSnapshot,
+  enforceCommondir,
+  enforceNewGitDirs,
+  type GitDirsSnapshot,
+  gitDirsSnapshot,
+  OWNER_HOOK_LINKS,
+  writableLinks,
+} from "./git-integrity";
 import { LocalBackend } from "./local";
 import { type SandboxProfile, sandboxProfile } from "./sandbox-profile";
 
@@ -76,6 +85,11 @@ export class ConfinedBackend implements ExecBackend {
   /** Started commands whose process group may still run something, with how each reports a finding. */
   private readonly running = new Map<ChildProcess, (message: string | null) => void>();
   private readonly closed = new WeakSet<ChildProcess>();
+  /**
+   * Links into sandbox-writable paths that were in `.git` before this backend ran anything: the owner's, so never
+   * removed. While any is left, commands are refused instead. Null until the first baseline; it only shrinks.
+   */
+  private ownerLinks: Set<string> | null = null;
 
   constructor(opts: ConfinedBackendOptions) {
     const platform = opts.platform ?? process.platform;
@@ -117,14 +131,23 @@ export class ConfinedBackend implements ExecBackend {
         command = [this.bwrap, ...bwrapArgs(this.paths, opts.cwd), ...vars.flatMap(([k, v]) => ["--setenv", k, v]), "--", opts.shell, "-c", opts.script];
       } catch (err) {
         // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare.
-        const message = `tropos sandbox: ${(err as Error).message}`;
-        return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
+        return failed(`tropos sandbox: ${(err as Error).message}`, options);
       }
     }
     // Before it runs: with nothing confined running, the current `.git` becomes the baseline (the owner's own changes
     // since included). Otherwise something still running (a background job) may have planted since the last check,
     // so this command first gets that check, and its result reports what it found.
-    const pre = this.anyRunning() ? this.verify() : ((this.baseline = this.snapshot()), null);
+    let pre: string | null = null;
+    if (this.anyRunning()) pre = this.verify();
+    else {
+      this.baseline = this.snapshot();
+      const links = this.baseline.gitDirs ? writableLinks(this.baseline.gitDirs) : [];
+      const owner: Set<string> = this.ownerLinks ?? new Set(links);
+      this.ownerLinks = new Set(links.filter((link) => owner.has(link)));
+      if (this.ownerLinks.size > 0) {
+        return failed(`tropos sandbox: ${OWNER_HOOK_LINKS}\nLinked: ${[...this.ownerLinks].join(", ")}`, options);
+      }
+    }
     const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", ...command], { ...options, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     // Each message is the host's own, so it is always reported when the host acted: the command's output can't be
     // trusted to say whether it already was. Both listeners come before bash.ts's, so the message lands in the
@@ -259,6 +282,11 @@ export function confinementAvailable(): Promise<Confinement | null> {
     }
   });
   return available;
+}
+
+/** A command that only prints why it was refused and exits 126; nothing confined runs. */
+function failed(message: string, options: { cwd: string; env: NodeJS.ProcessEnv; detached: boolean }): ChildProcess {
+  return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 /** Undoes what a command planted in `.git` (see git-integrity.ts); the message to fail it with, or null. */

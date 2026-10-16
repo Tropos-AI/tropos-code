@@ -19,6 +19,8 @@ export const commondirUnsafe = (path: string): string =>
   `tropos sandbox: a command tried to redirect git's hooks (.git/commondir); it could not be undone safely; check ${path}`;
 export const GIT_METADATA_TAMPERED = "tropos sandbox: a command created git metadata with hooks/config; it was undone";
 export const GIT_LINK_REMOVED = "tropos sandbox: a link in .git pointed into a folder chat commands can write; it was removed";
+export const OWNER_HOOK_LINKS =
+  "This repo links git hooks into the project, which a chat could change. Switch to `git config core.hooksPath <dir>` and try again.";
 export const gitMetadataUnsafe = (path: string): string =>
   `tropos sandbox: a command created git metadata with hooks/config; it could not be undone safely; check ${path}`;
 
@@ -303,12 +305,23 @@ export function enforceNewGitDirs(snap: GitDirsSnapshot): CommondirCheck {
       removeHooksDir(path, removed, unsafe);
     }
   }
-  if (snap.writable.length > 0) {
-    const candidates = [...found.links, ...[snap.gitRoot, ...found.gitDirs].flatMap(gitDirCodePaths)];
-    for (const path of new Set(candidates)) if (pointsInto(path, snap.writable)) unlinkIfSafe(path, removedLinks);
-  }
+  for (const path of linksIntoWritable(snap, found)) unlinkIfSafe(path, removedLinks);
   const lines = unsafe.length > 0 ? unsafe.map(gitMetadataUnsafe) : [...(removed.length > 0 ? [GIT_METADATA_TAMPERED] : []), ...(removedLinks.length > 0 ? [GIT_LINK_REMOVED] : [])];
   return { removed: [...removed, ...removedLinks], unsafe, message: lines.length > 0 ? lines.join("\n") : null };
+}
+
+/**
+ * The links in `.git` a confined command could redirect: in `modules/` and `worktrees/`, and as (or in) any git dir's
+ * hooks, or as its config or commondir, when they point into a sandbox-writable path. Nothing is changed.
+ */
+export function writableLinks(snap: GitDirsSnapshot): string[] {
+  return linksIntoWritable(snap, findNestedGitDirs(snap.gitRoot, snap.maxVisits));
+}
+
+function linksIntoWritable(snap: GitDirsSnapshot, found: NestedGitDirs): string[] {
+  if (snap.writable.length === 0) return [];
+  const candidates = new Set([...found.links, ...[snap.gitRoot, ...found.gitDirs].flatMap(gitDirCodePaths)]);
+  return [...candidates].filter((path) => pointsInto(path, snap.writable));
 }
 
 /** A git dir's code paths, and the entries of its hooks dir when that is a real directory. */

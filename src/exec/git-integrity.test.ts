@@ -16,6 +16,7 @@ import {
   GIT_METADATA_TAMPERED,
   gitDirsSnapshot,
   gitMetadataUnsafe,
+  writableLinks,
 } from "./git-integrity";
 
 let fx: string;
@@ -254,4 +255,15 @@ test("a dangling link whose path would land in a writable dir is removed too", (
   symlinkSync(join(writable, "not-yet"), join(git, "modules", "lib", "config"));
   const snap = gitDirsSnapshot(git, { writable: [writable] })!;
   expect(enforceNewGitDirs(snap)).toEqual({ removed: [join(git, "modules", "lib", "config")], unsafe: [], message: GIT_LINK_REMOVED });
+});
+
+test("writableLinks lists the links into writable dirs without touching them", () => {
+  const writable = join(fx, "writable");
+  mkdirSync(writable);
+  mkdirSync(join(git, "hooks"));
+  symlinkSync(join(writable, "pre-commit"), join(git, "hooks", "pre-commit"));
+  symlinkSync(outside, join(git, "worktrees"));
+  const snap = gitDirsSnapshot(git, { writable: [writable] })!;
+  expect(writableLinks(snap)).toEqual([join(git, "hooks", "pre-commit")]);
+  expect(lstatSync(join(git, "hooks", "pre-commit")).isSymbolicLink()).toBe(true);
 });

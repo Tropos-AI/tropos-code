@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, TRUSTED_PATH, unconfinedBackend } from "./confined";
 import { ConfinementError } from "./confinement-paths";
-import { COMMONDIR_TAMPERED, GIT_LINK_REMOVED, GIT_METADATA_TAMPERED, gitMetadataUnsafe } from "./git-integrity";
+import { COMMONDIR_TAMPERED, GIT_LINK_REMOVED, GIT_METADATA_TAMPERED, gitMetadataUnsafe, OWNER_HOOK_LINKS } from "./git-integrity";
 
 const until = async (check: () => boolean, ms = 5000) => {
   const end = Date.now() + ms;
@@ -201,6 +201,22 @@ describe.skipIf(available === null)("with real confinement", () => {
     rmSync(evil(), { recursive: true });
   });
 
+  test("an owner's .git/modules link into the temp dir, there before any command, refuses commands and stays", async () => {
+    const own = fixture();
+    try {
+      mkdirSync(join(own.fx, "tmp", "mods"));
+      symlinkSync(join(own.fx, "tmp", "mods"), join(own.project, ".git", "worktrees"));
+      const b = confinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env });
+      const r = await collect(b.spawn({ shell: "/bin/sh", script: "echo ran > ran.txt", cwd: own.project, env: {} }));
+      expect(r.code).toBe(126);
+      expect(r.err).toContain(OWNER_HOOK_LINKS);
+      expect(existsSync(join(own.project, "ran.txt"))).toBe(false);
+      expect(lstatSync(join(own.project, ".git", "worktrees")).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
   test("a killed command's planted link is still removed on the host, with the message", async () => {
     const child = backend.spawn({ shell: "/bin/sh", script: `${plantLinkedWorktrees}; sleep 30`, cwd: f.project, env: {} });
     const result = collect(child);
@@ -392,6 +408,35 @@ describe("the bwrap backend (fake bwrap)", () => {
       expect(readFileSync(join(owner, "commondir"), "utf8")).toBe("../..");
     } finally {
       rmSync(join(f.project, ".git", "worktrees"), { recursive: true });
+    }
+  });
+
+  test("the owner's own hook link into the project refuses every command and is never removed", async () => {
+    const own = fixture();
+    try {
+      mkdirSync(join(own.project, "scripts"));
+      writeFileSync(join(own.project, "scripts", "pre-commit"), "owner's hook");
+      symlinkSync("../../scripts/pre-commit", join(own.project, ".git", "hooks", "pre-commit"));
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const run = (script: string) => collect(b.spawn({ shell: "/bin/sh", script, cwd: own.project, env: {} }));
+      for (let i = 0; i < 2; i++) {
+        const r = await run("echo ran > ran.txt");
+        expect(r.code).toBe(126);
+        expect(r.err).toContain(OWNER_HOOK_LINKS);
+        expect(r.err).toContain(join(own.project, ".git", "hooks", "pre-commit"));
+        expect(existsSync(join(own.project, "ran.txt"))).toBe(false); // it never ran
+        expect(lstatSync(join(own.project, ".git", "hooks", "pre-commit")).isSymbolicLink()).toBe(true);
+      }
+      // Once the owner switches away from the link, commands run; a link a command plants is removed as before.
+      rmSync(join(own.project, ".git", "hooks", "pre-commit"));
+      expect((await run("echo ran > ran.txt")).code).toBe(0);
+      const planted = await run("ln -s ../../scripts/pre-commit .git/hooks/post-commit");
+      expect(planted.code).toBe(1);
+      expect(planted.err).toContain(GIT_LINK_REMOVED);
+      expect(() => lstatSync(join(own.project, ".git", "hooks", "post-commit"))).toThrow();
+      expect(readFileSync(join(own.project, "scripts", "pre-commit"), "utf8")).toBe("owner's hook");
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
     }
   });
 
