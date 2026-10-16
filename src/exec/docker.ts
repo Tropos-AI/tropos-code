@@ -44,7 +44,16 @@ const OWNER_LABEL = "tropos.pid";
  */
 export function protectedPaths(workspace: string): string[] {
   const out: string[] = [];
-  const git = join(workspace, ".git");
+  // A symlink is followed to what it really points at: that is what git (and a hook) uses, so that is what must be
+  // read-only. Protecting only the link's own path would leave a symlinked `.git/hooks` or `.husky` target writable.
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const git = real(join(workspace, ".git"));
   let info: ReturnType<typeof lstatSync> | undefined;
   try {
     info = lstatSync(git);
@@ -55,13 +64,13 @@ export function protectedPaths(workspace: string): string[] {
     for (const gitDir of [git, ...submoduleGitDirs(join(git, "modules"), 0)]) {
       mkdirSync(join(gitDir, "hooks"), { recursive: true });
       writeFileSync(join(gitDir, "config"), "", { flag: "a" });
-      out.push(join(gitDir, "hooks"), join(gitDir, "config"));
+      out.push(real(join(gitDir, "hooks")), real(join(gitDir, "config")));
     }
   } else if (info?.isFile()) {
     out.push(git);
   }
   const husky = join(workspace, ".husky");
-  if (existsSync(husky)) out.push(husky);
+  if (existsSync(husky)) out.push(real(husky));
   return out;
 }
 

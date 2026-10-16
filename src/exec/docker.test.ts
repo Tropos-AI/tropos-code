@@ -1,8 +1,8 @@
 // src/exec/docker.test.ts — integration tests against a REAL container. Skipped when Docker (or the image) is unavailable.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
@@ -38,6 +38,23 @@ async function until(check: () => boolean, ms = 10_000) {
 }
 
 describe("protectedPaths", () => {
+  test("symlinks are followed: a linked .git, hooks dir and .husky protect their real targets", async () => {
+    const ws = await makeTmpDir("tropos-prot-");
+    try {
+      await mkdir(join(ws, ".gitdata", "realhooks"), { recursive: true });
+      await symlink(join(ws, ".gitdata"), join(ws, ".git"));
+      await symlink(join(ws, ".gitdata", "realhooks"), join(ws, ".gitdata", "hooks"));
+      await mkdir(join(ws, "realhusky"));
+      await symlink(join(ws, "realhusky"), join(ws, ".husky"));
+      const paths = protectedPaths(ws).map((p) => realpathSync(p));
+      expect(paths).toContain(realpathSync(join(ws, ".gitdata", "realhooks")));
+      expect(paths).toContain(realpathSync(join(ws, ".gitdata", "config")));
+      expect(paths).toContain(realpathSync(join(ws, "realhusky")));
+    } finally {
+      await removeDir(ws);
+    }
+  });
+
   test("a repo's hooks and config, created empty when missing so a mount can cover them", async () => {
     const ws = await makeTmpDir("tropos-prot-");
     try {

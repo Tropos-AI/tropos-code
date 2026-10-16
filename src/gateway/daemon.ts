@@ -30,6 +30,7 @@ import {
   type Project,
 } from "./projects";
 import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
+import { reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { CHANNEL_MODES, channelContext, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
@@ -355,6 +356,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
   const startedServices: GatewayService[] = [];
+  let stopReaper = (): void => {};
   try {
     for (const adapter of adapters) await adapter.start();
     for (const service of [cron, ...(run.services ?? [])]) {
@@ -377,8 +379,19 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         "Press ctrl+c to stop.\n",
       ].join("\n"),
     );
+    // A revoked sender's open sessions and scheduled jobs stop within a few seconds.
+    const reaper = setInterval(() => {
+      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k) => pool.close(k), isApproved: (c, s) => run.pairing.isApproved(c, s), cron: cronStore })
+        .then((r) => {
+          if (r.sessions.length || r.jobs.length) run.err(`gateway: revoked sender: closed ${r.sessions.length} session(s), disabled ${r.jobs.length} job(s)\n`);
+        })
+        .catch(() => {});
+    }, 5000);
+    reaper.unref();
+    stopReaper = () => clearInterval(reaper);
     await (run.until ? run.until({ webUrl }) : untilSignal());
   } finally {
+    stopReaper();
     await Promise.all(startedServices.map((s) => s.stop().catch(() => {})));
     await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
     await pool.closeAll();
