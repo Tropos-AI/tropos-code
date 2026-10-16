@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { CwdMarker, ExecBackend, ExecSpawn } from "./backend";
-import { absentCommondirs, COMMONDIR_TAMPERED } from "./git-integrity";
+import { COMMONDIR_MARKER, type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
 
 export interface DockerBackendOptions {
   workspace: string;
@@ -155,6 +155,8 @@ export class DockerBackend implements ExecBackend {
   private attempt = 0;
   private closing: Promise<void> | undefined;
   private readonly runs = new WeakMap<ChildProcess, Run>();
+  /** Commands whose `commondir` check hasn't run yet (see spawn). */
+  private readonly pendingChecks = new Set<CommondirSnapshot>();
 
   constructor(opts: DockerBackendOptions) {
     this.workspace = opts.workspace;
@@ -177,7 +179,7 @@ export class DockerBackend implements ExecBackend {
 
   spawn(opts: ExecSpawn): ChildProcess {
     // Taken before the command can run: the `commondir`s that don't exist and so can't be mounted read-only.
-    const absent = absentCommondirs(this.workspaceGitDirs());
+    const snap = commondirSnapshot(join(this.workspace, ".git"), this.workspaceGitDirs());
     const attempt = this.begin();
     const id = randomBytes(8).toString("hex");
     const insidePid = `${INSIDE_RUN}/pid-${id}`;
@@ -192,7 +194,7 @@ export class DockerBackend implements ExecBackend {
       `${quote(this.bin)} exec -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
       "status=$?",
       // A planted commondir would point the owner's next host `git` at hooks the container wrote: undo it and fail.
-      ...absent.map((p) => `if [ -e ${quote(p)} ] || [ -L ${quote(p)} ]; then rm -rf ${quote(p)}; echo ${quote(COMMONDIR_TAMPERED)} >&2; status=1; fi`),
+      ...(snap ? commondirGuardShell(snap, quote) : []),
       'exit "$status"',
     ].join("\n");
     const child = spawn("/bin/sh", ["-c", wrapper], {
@@ -202,7 +204,31 @@ export class DockerBackend implements ExecBackend {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
+    // Host-side fallback for when the wrapper never gets to its check (its process group was SIGKILLed): checked on
+    // any exit, and again in close() for a command still running then. Registered before bash.ts's listeners, so the
+    // message lands in the command's stderr before its result is read, unless the wrapper already reported it.
+    if (snap) {
+      this.pendingChecks.add(snap);
+      let reported = false;
+      child.stderr?.on("data", (d: Buffer | string) => {
+        if (String(d).includes(COMMONDIR_MARKER)) reported = true;
+      });
+      child.once("close", () => {
+        this.pendingChecks.delete(snap);
+        const message = this.enforce(snap);
+        if (message && !reported) child.stderr?.emit("data", `\n${message}\n`);
+      });
+    }
     return child;
+  }
+
+  /** Undoes a planted `commondir` where that is safe; the message to report, or null when nothing changed. */
+  private enforce(snap: CommondirSnapshot): string | null {
+    try {
+      return enforceCommondir(snap).message;
+    } catch {
+      return null; // workspace gone; nothing to undo
+    }
   }
 
   cwdMarker(id: string): CwdMarker {
@@ -266,6 +292,8 @@ export class DockerBackend implements ExecBackend {
     this.closing ??= (async () => {
       await this.starting?.catch(() => {});
       await run(this.bin, ["rm", "-f", this.name], 60_000);
+      for (const check of this.pendingChecks) this.enforce(check);
+      this.pendingChecks.clear();
       if (this.ownsRunDir) rmSync(this.runDir, { recursive: true, force: true });
       this.started = false;
     })();

@@ -2,14 +2,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { bashTool } from "../tools/bash/bash";
 import { DockerBackend, protectedPaths, sweepLeftoverContainers } from "./docker";
-import { COMMONDIR_TAMPERED } from "./git-integrity";
+import { COMMONDIR_TAMPERED, commondirUnsafe } from "./git-integrity";
 
 const IMAGE = "alpine:3.22";
 const dockerUp = (() => {
@@ -195,6 +195,61 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     expect(r.err).toContain(COMMONDIR_TAMPERED);
     expect(r.code).toBe(1);
     expect(() => lstatSync(join(ws, ".git", "commondir"))).toThrow();
+  });
+
+  test("a SIGKILLed command that planted commondir is still caught on the host, with the message in its stderr", async () => {
+    const child = backend.spawn({ shell: "/bin/sh", script: "echo x > .git/commondir; sleep 30", cwd: ws, env: {} });
+    const result = collect(child);
+    await until(() => existsSync(join(ws, ".git", "commondir")));
+    backend.signal(child, "SIGKILL"); // the escalation path: the wrapper dies before its own check
+    const r = await result;
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain(COMMONDIR_TAMPERED);
+    expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
+  });
+
+  test("close() undoes a commondir planted by a command still running", async () => {
+    const other = new DockerBackend({ workspace: ws, dockerBin: join(fx, "docker"), runDir: join(fx, "run2") });
+    const child = other.spawn({ shell: "/bin/sh", script: "echo x > .git/commondir; sleep 30", cwd: ws, env: {} });
+    const result = collect(child);
+    try {
+      await until(() => existsSync(join(ws, ".git", "commondir")));
+      await other.close(); // the fake `rm -f` leaves the command running
+      expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
+    } finally {
+      if (child.pid) process.kill(-child.pid, "SIGKILL");
+      await result;
+    }
+  });
+
+  test("a commondir planted as a directory fails the command and is left in place, not deleted recursively", async () => {
+    try {
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script: "mkdir .git/commondir && echo x > .git/commondir/f", cwd: ws, env: {} }));
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(commondirUnsafe(join(ws, ".git", "commondir")));
+      expect(existsSync(join(ws, ".git", "commondir", "f"))).toBe(true);
+    } finally {
+      await rm(join(ws, ".git", "commondir"), { recursive: true, force: true });
+    }
+  });
+
+  test("a submodule dir swapped for a link to a host dir: nothing outside is touched and the command fails", async () => {
+    const sub = join(ws, ".git", "modules", "lib");
+    const outside = join(fx, "outside");
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, "HEAD"), "ref: refs/heads/main\n");
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, "commondir"), "precious");
+    try {
+      const script = `mv .git/modules/lib .git/modules/old && ln -s '${outside}' .git/modules/lib`;
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script, cwd: ws, env: {} }));
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(commondirUnsafe(join(sub, "commondir")));
+      expect(r.err).not.toContain(COMMONDIR_TAMPERED);
+      expect(readFileSync(join(outside, "commondir"), "utf8")).toBe("precious");
+    } finally {
+      await rm(join(ws, ".git", "modules"), { recursive: true, force: true });
+    }
   });
 
   test("an ordinary command keeps its exit status and gets no message", async () => {
