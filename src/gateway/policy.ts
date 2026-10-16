@@ -74,6 +74,11 @@ export function channelContext(base: AppContext, exec: ExecBackend, opts: { role
   };
 }
 
+/** A runtime the gateway hosts outside a chat (the dashboard's) never runs the curator: the gateway's service owns it. */
+export function gatewayHosted(ctx: AppContext): AppContext {
+  return { ...ctx, settings: { ...ctx.settings, learning: { ...ctx.settings.learning, curator: false } } };
+}
+
 const real = (path: string): string => {
   try {
     return realpathSync(path);

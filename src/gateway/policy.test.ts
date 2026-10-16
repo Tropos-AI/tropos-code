@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { decide, compileRules } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
-import { CHANNEL_MODES, channelContext, chatRole, workspaceProblem } from "./policy";
+import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
 
 const exec = { kind: "docker" } as ExecBackend;
 
@@ -99,6 +99,14 @@ describe("channelContext", () => {
 
 test("a chat can never be in bypass or accept-edits mode", () => {
   expect(CHANNEL_MODES).toEqual(["default", "plan"]);
+});
+
+test("a gateway-hosted runtime (the dashboard's chat) never runs the curator itself; the rest of learning and the base stay", () => {
+  const b = base();
+  const hosted = gatewayHosted(b);
+  expect(hosted.settings.learning).toMatchObject({ review: true, interval: 10, curator: false });
+  expect(b.settings.learning.curator).toBe(true);
+  expect(hosted.rules).toBe(b.rules);
 });
 
 describe("workspaceProblem", () => {

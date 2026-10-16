@@ -35,7 +35,7 @@ import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./route
 import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { ownerCronTool } from "../tools/cron/owner-cron";
-import { CHANNEL_MODES, channelContext, chatRole, workspaceProblem } from "./policy";
+import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
 import { AdminError } from "../web/admin/context";
@@ -362,7 +362,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const dashboardRuntime = async (resume?: { sessionId: string; mode: Mode }): Promise<{ runtime: Runtime; cwd: string; release(): void }> => {
         const { pc, release } = await contexts.acquire(project);
         try {
-          const { ctx: localCtx, setSessionId } = await pc.newSessionContext();
+          const { ctx: sessionCtx, setSessionId } = await pc.newSessionContext();
+          const localCtx = gatewayHosted(sessionCtx);
           const opened = resume ? await SessionStore.open(home, localCtx.cwd, resume.sessionId) : undefined;
           const session = opened?.store ?? (await SessionStore.create(home, { cwd: localCtx.cwd, model: localCtx.settings.model, version }));
           setSessionId(session.id);
