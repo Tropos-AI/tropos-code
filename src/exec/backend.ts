@@ -1,6 +1,9 @@
 // src/exec/backend.ts — where Bash-tool commands run: on the host, or in a sandbox.
 import type { ChildProcess } from "node:child_process";
 
+/** The OS facility that confines a host command to its project: macOS sandbox-exec or Linux bubblewrap. */
+export type Confinement = "sandbox-exec" | "bwrap";
+
 export interface ExecSpawn {
   /** The POSIX shell to run (`ctx.shell`); a sandbox may substitute its own. */
   shell: string;

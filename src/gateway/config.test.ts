@@ -1,6 +1,7 @@
 // src/gateway/config.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { GatewayConfigError, configPermissionWarning, gatewayConfigPath, loadGatewayConfig, saveGatewayConfig, telegramToken } from "./config";
 
@@ -13,8 +14,9 @@ afterEach(async () => {
 });
 
 describe("loadGatewayConfig", () => {
-  test("a missing file is the defaults: closed network, small sandbox", async () => {
+  test("a missing file is the defaults: closed network, small sandbox, host chats at balanced", async () => {
     const config = await loadGatewayConfig(home);
+    expect(config.chat).toEqual({ autonomy: "balanced", backend: "host" });
     expect(config.sandbox).toEqual({ image: "alpine:3.22", network: "none", memory: "1g", cpus: "2" });
     expect(config.idleMinutes).toBe(30);
     expect(config.projects).toEqual([]);
@@ -76,5 +78,53 @@ describe("configPermissionWarning", () => {
     expect(await configPermissionWarning(home)).toContain("chmod 600");
     await chmod(gatewayConfigPath(home), 0o600);
     expect(await configPermissionWarning(home)).toBeUndefined();
+  });
+
+  const APPROVED = JSON.stringify({ version: 2, approved: [{ channel: "telegram", senderId: "7", approvedAt: 1 }] });
+  const EXISTING = { autonomy: "ask", backend: "docker" } as const;
+  test("a file without chat on an install with an approved sender is an existing install: ask and docker, until the user changes it", async () => {
+    await mkdir(join(home, "gateway"), { recursive: true });
+    await writeFile(join(home, "gateway", "pairing.json"), APPROVED);
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ idleMinutes: 5 }));
+    expect((await loadGatewayConfig(home)).chat).toEqual(EXISTING);
+  });
+  test("no gateway.json but a pairing file with an approved sender (token from the environment) is an existing install too", async () => {
+    await mkdir(join(home, "gateway"), { recursive: true });
+    await writeFile(join(home, "gateway", "pairing.json"), APPROVED);
+    expect((await loadGatewayConfig(home)).chat).toMatchObject(EXISTING);
+  });
+  test("setup finished before (onboarding.json has dismissedAt) is an existing install", async () => {
+    await writeFile(join(home, "onboarding.json"), JSON.stringify({ dismissedAt: "2026-10-01T00:00:00.000Z" }));
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ idleMinutes: 5 }));
+    expect((await loadGatewayConfig(home)).chat).toEqual(EXISTING);
+  });
+  test("a scheduled job already on disk makes an install existing", async () => {
+    await mkdir(join(home, "gateway", "cron"), { recursive: true });
+    await writeFile(join(home, "gateway", "cron", "jobs.json"), JSON.stringify({ jobs: [{ id: "a" }] }));
+    expect((await loadGatewayConfig(home)).chat).toEqual(EXISTING);
+  });
+  test("an empty job list does not", async () => {
+    await mkdir(join(home, "gateway", "cron"), { recursive: true });
+    await writeFile(join(home, "gateway", "cron", "jobs.json"), JSON.stringify({ jobs: [] }));
+    expect((await loadGatewayConfig(home)).chat.autonomy).toBe("balanced");
+  });
+  test("a bot token in gateway.json makes an install existing", async () => {
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ telegram: { botToken: "1:a" } }));
+    expect((await loadGatewayConfig(home)).chat).toEqual(EXISTING);
+  });
+  test("a fresh install whose gateway.json the projects step wrote, with no pairing and no finished setup, is balanced/host", async () => {
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ projects: [{ id: "app", name: "app", path: "/w/app" }] }));
+    expect((await loadGatewayConfig(home)).chat).toEqual({ autonomy: "balanced", backend: "host" });
+  });
+  test("a file that has chat keeps it, whatever the install", async () => {
+    await mkdir(join(home, "gateway"), { recursive: true });
+    await writeFile(join(home, "gateway", "pairing.json"), APPROVED);
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ chat: { autonomy: "autonomous", backend: "host" } }));
+    expect((await loadGatewayConfig(home)).chat).toEqual({ autonomy: "autonomous", backend: "host" });
+  });
+  test("projects keep autonomy and pinned tests", async () => {
+    const base = await loadGatewayConfig(home);
+    await saveGatewayConfig(home, { ...base, projects: [{ id: "app", name: "app", path: "/w/app", autonomy: "autonomous", testCommands: ["bun test"] }] });
+    expect((await loadGatewayConfig(home)).projects[0]).toEqual({ id: "app", name: "app", path: "/w/app", autonomy: "autonomous", testCommands: ["bun test"] });
   });
 });

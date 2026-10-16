@@ -15,10 +15,18 @@ const sandboxSchema = z
 /** Ids the gateway gives out itself: the managed default project and a one-off `--workspace`. */
 export const RESERVED_PROJECT_IDS = ["default", "cwd"] as const;
 
+/** How freely a chat's agent may act without asking: never, inside the confined project, or everywhere it can reach. */
+export const AUTONOMY_LEVELS = ["ask", "balanced", "autonomous"] as const;
+export type Autonomy = (typeof AUTONOMY_LEVELS)[number];
+
 const projectSchema = z.object({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "project ids are lowercase letters, digits and dashes"),
   name: z.string().min(1).max(80),
   path: z.string().min(1),
+  /** Overrides `chat.autonomy` for chats working in this project. */
+  autonomy: z.enum(AUTONOMY_LEVELS).optional(),
+  /** Test commands the owner confirmed; the agent may run these unasked at `balanced`. */
+  testCommands: z.array(z.string().min(1)).max(10).optional(),
 });
 export type ProjectEntry = z.infer<typeof projectSchema>;
 
@@ -45,6 +53,15 @@ const schema = z.object({
   defaultProject: z.string().min(1).default("default"),
   telegram: z.object({ botToken: z.string().min(1).optional() }).default({}),
   sandbox: sandboxSchema,
+  /** How chats run commands and how freely they act. */
+  chat: z
+    .object({
+      autonomy: z.enum(AUTONOMY_LEVELS).default("balanced"),
+      backend: z.enum(["host", "docker"]).default("host"),
+      /** The owner accepted that, with no sandbox-exec or bwrap, chat commands run unconfined as them. */
+      allowUnconfined: z.boolean().optional(),
+    })
+    .default({ autonomy: "balanced", backend: "host" }),
   /** Minutes without a message before a chat's session (and its container) is closed. */
   idleMinutes: z.number().int().min(1).max(24 * 60).default(30),
   /** Port of the local web UI; unset picks the default and falls back to a free one. */
@@ -88,6 +105,32 @@ function migrateLegacy(json: unknown): unknown {
   return { ...rest, projects, defaultProject: rest.defaultProject ?? id };
 }
 
+async function readJson(path: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether this home was in use before chats got autonomy settings: someone is approved, setup was finished or
+ * dismissed, a scheduled job exists, or a bot token was saved. Such an install keeps `ask` + `docker` until the
+ * owner changes it. A gateway.json holding only projects (the wizard's projects step) does not count.
+ */
+export async function existingInstall(home: string): Promise<boolean> {
+  const pairing = (await readJson(join(gatewayDir(home), "pairing.json"))) as { approved?: unknown } | undefined;
+  if (Array.isArray(pairing?.approved) && pairing.approved.length > 0) return true;
+  const onboarding = (await readJson(join(home, "onboarding.json"))) as { dismissedAt?: unknown } | undefined;
+  if (onboarding?.dismissedAt) return true;
+  const jobs = (await readJson(join(gatewayDir(home), "cron", "jobs.json"))) as { jobs?: unknown } | undefined;
+  if (Array.isArray(jobs?.jobs) && jobs.jobs.length > 0) return true;
+  const gateway = (await readJson(gatewayConfigPath(home))) as { telegram?: { botToken?: unknown } } | undefined;
+  return typeof gateway?.telegram?.botToken === "string" && gateway.telegram.botToken !== "";
+}
+
+const EXISTING_INSTALL_CHAT = { autonomy: "ask", backend: "docker" } as const;
+
 /** Reads the file; a missing one is the defaults, an unreadable or invalid one is an error naming the file. */
 export async function loadGatewayConfig(home: string): Promise<GatewayConfig> {
   const path = gatewayConfigPath(home);
@@ -95,7 +138,7 @@ export async function loadGatewayConfig(home: string): Promise<GatewayConfig> {
   try {
     raw = await readFile(path, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return schema.parse({});
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return schema.parse((await existingInstall(home)) ? { chat: EXISTING_INSTALL_CHAT } : {});
     throw new GatewayConfigError(`Cannot read ${path}: ${(err as Error).message}`);
   }
   let json: unknown;
@@ -104,7 +147,12 @@ export async function loadGatewayConfig(home: string): Promise<GatewayConfig> {
   } catch {
     throw new GatewayConfigError(`${path} is not valid JSON.`);
   }
-  const parsed = schema.safeParse(migrateLegacy(json));
+  let migrated = migrateLegacy(json);
+  // No chat key yet: an install that predates the setting keeps its old rules (docker, ask) until the owner changes them.
+  if (migrated && typeof migrated === "object" && !Array.isArray(migrated) && !("chat" in migrated) && (await existingInstall(home))) {
+    migrated = { ...migrated, chat: EXISTING_INSTALL_CHAT };
+  }
+  const parsed = schema.safeParse(migrated);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new GatewayConfigError(`Invalid ${path}: ${issue ? `${issue.path.join(".") || "(root)"}: ${issue.message}` : "unknown problem"}`);
