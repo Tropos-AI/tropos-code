@@ -54,8 +54,14 @@ export const settingsCheck: Check = {
   },
 };
 
-/** Whole permission lists: dropping one could let run what the user blocked or wanted to be asked about. */
-const KEEP_WHOLE = new Set(["permissions", "permissions.deny", "permissions.ask"]);
+/**
+ * Settings whose entries can go one at a time: the file itself, and maps keyed by name. Anything else goes as a whole
+ * array element or map entry, never one key inside an object: a hook group without its `matcher` would run for every
+ * tool.
+ */
+const MAPS = new Set(["", "permissions", "env", "providers", "mcpServers", "hooks", "formatter", "lsp"]);
+/** Never dropped, nor anything holding them: losing a deny or ask rule, or askBeforeSaving, lets run what was guarded. */
+const GUARDED: Path[] = [["permissions", "deny"], ["permissions", "ask"], ["learning", "askBeforeSaving"]];
 /** More invalid entries than this is not a file worth repairing by dropping. */
 const MAX_DROPS = 500;
 
@@ -63,6 +69,8 @@ type Path = readonly PropertyKey[];
 
 const pathLabel = (path: Path): string =>
   path.map((k, i) => (typeof k === "number" ? `[${k}]` : `${i === 0 ? "" : "."}${String(k)}`)).join("");
+
+const startsWith = (path: Path, prefix: Path): boolean => prefix.length <= path.length && prefix.every((k, i) => path[i] === k);
 
 function child(value: unknown, key: PropertyKey): { found: boolean; value?: unknown } {
   if (Array.isArray(value)) return typeof key === "number" && key < value.length ? { found: true, value: value[key] } : { found: false };
@@ -88,10 +96,28 @@ function remove(root: unknown, path: Path): void {
   else delete (parent as Record<PropertyKey, unknown>)[last];
 }
 
+/** The whole array element or map entry that holds `path`. */
+function entryOf(path: Path): Path {
+  for (let n = path.length; n > 1; n--) {
+    if (typeof path[n - 1] === "number" || MAPS.has(pathLabel(path.slice(0, n - 1)))) return path.slice(0, n);
+  }
+  return path.slice(0, 1);
+}
+
+/** Why `target` can't be dropped, or undefined when it can. */
+function guarded(value: unknown, target: Path): string | undefined {
+  if (pathLabel(target) === "permissions") return "permissions is not valid, and doctor never drops permission rules";
+  for (const g of GUARDED) {
+    if (startsWith(target, g) || (startsWith(g, target) && exists(value, g))) {
+      return `${pathLabel(target)} is not valid, and doctor never drops anything holding ${pathLabel(g)}`;
+    }
+  }
+  return undefined;
+}
+
 /**
- * Drops each invalid entry at its full path (one array element, one nested key), one at a time since an array
- * removal shifts the paths after it. A required key that is missing takes the entry holding it. Never drops the whole
- * file or a whole permission list.
+ * Drops each invalid entry as a whole (an array element, a named map entry, a top-level setting), one at a time since
+ * an array removal shifts the paths after it. Never drops the whole file, a permission rule or askBeforeSaving.
  */
 function dropInvalid(raw: unknown): { ok: true; value: unknown; dropped: string[] } | { ok: false; reason: string } {
   const value = structuredClone(raw);
@@ -101,14 +127,14 @@ function dropInvalid(raw: unknown): { ok: true; value: unknown; dropped: string[
     if (parsed.success) return { ok: true, value, dropped };
     const issue = parsed.error.issues[0]!;
     let path: Path = issue.path;
+    // A required key that is missing: the entry that should hold it.
     while (path.length > 0 && !exists(value, path)) path = path.slice(0, -1);
     if (path.length === 0) return { ok: false, reason: `the file isn't a settings object (${issue.message})` };
-    const label = pathLabel(path);
-    if (KEEP_WHOLE.has(label)) {
-      return { ok: false, reason: `${label} is not valid (${issue.message}), and doctor never drops permission rules as a whole` };
-    }
-    remove(value, path);
-    dropped.push(label);
+    const target = entryOf(path);
+    const refused = guarded(value, target);
+    if (refused) return { ok: false, reason: `${refused} (${issue.message})` };
+    remove(value, target);
+    dropped.push(pathLabel(target));
   }
   return { ok: false, reason: "too many invalid entries to repair one by one" };
 }
