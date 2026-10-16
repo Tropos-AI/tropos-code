@@ -1,10 +1,14 @@
 // src/gateway/daemon.projects.test.ts — projects and services in the running gateway: Telegram and the model are fakes.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { FakeTelegramServer } from "../../test/helpers/telegram-fake-server";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { makeToolContext } from "../../test/helpers/tool-context";
+import { createSessionSearchTool } from "../memory/session-search";
+import { projectDir } from "../session/store";
 import { main } from "../cli/main";
 import { localBackend } from "../exec/local";
 import type { ExecBackend } from "../exec/backend";
@@ -145,6 +149,30 @@ describe("chat roles reach the session", () => {
     };
     expect(await roleOf(CHAT)).toBe("owner");
     expect(await roleOf(GUEST)).toBe("guest");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a guest chat resuming an older transcript without a role marks it guest, and owner search leaves it out", async () => {
+    const gw = startGateway([() => reply([textBlock("hello again")])]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT);
+    await pair(GUEST);
+    const workspace = realpathSync(join(home, "workspace"));
+    const id = "00000000-0000-4000-8000-000000000001";
+    const transcript = join(projectDir(home, workspace), `${id}.jsonl`);
+    await mkdir(projectDir(home, workspace), { recursive: true });
+    await Bun.write(
+      transcript,
+      `${JSON.stringify({ type: "meta", sessionId: id, cwd: workspace })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "the zebra password is hunter2" }, ts: "2026-10-01T00:00:00Z" })}\n`,
+    );
+    await Bun.write(join(home, "gateway", "sessions.json"), JSON.stringify({ [`telegram:${GUEST}@default`]: id }));
+    server.pushMessage(GUEST, GUEST, "again");
+    await server.waitFor(() => server.textsTo(GUEST).includes("hello again"));
+    const metas = (await readFile(transcript, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === "meta");
+    expect(metas.map((m) => m.role).filter(Boolean)).toEqual(["guest"]);
+    const search = createSessionSearchTool({ home, cwd: workspace, index: null });
+    expect(String((await search.run({ query: "zebra" }, makeToolContext())).content)).not.toContain("hunter2");
     gw.stop();
     expect(await gw.done).toBe(0);
   });

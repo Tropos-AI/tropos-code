@@ -168,6 +168,11 @@ export class SessionStore {
     }
   }
 
+  /** Records who the session answers to from now on: a resumed chat whose role changed, or an older transcript without one. */
+  async recordRole(role: SessionRole): Promise<void> {
+    await this.write({ type: "meta", role });
+  }
+
   async appendEvent(name: string, value: unknown): Promise<void> {
     await this.write({ type: "event", name, value, ts: new Date().toISOString() });
   }

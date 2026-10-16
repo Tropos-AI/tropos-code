@@ -268,7 +268,10 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     let resumed = false;
     try {
       if (saved) {
-        ({ store: session, messages: history } = await SessionStore.open(home, cwd, saved));
+        let meta: { role?: SessionRole };
+        ({ store: session, messages: history, meta } = await SessionStore.open(home, cwd, saved));
+        // The transcript says who it answers to now, so search can leave out a guest's words (older ones have no role).
+        if (meta.role !== role) await session.recordRole(role);
         resumed = true;
       } else {
         session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version, role });

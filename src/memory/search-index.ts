@@ -64,7 +64,8 @@ export function parseSession(text: string): ParsedSession {
     if (line.type === "meta") {
       if (typeof line.title === "string") out.title = line.title;
       if (typeof line.cwd === "string") out.cwd = line.cwd;
-      if (typeof line.role === "string") out.role = line.role;
+      // Once a guest's, always: their earlier words stay in the transcript whatever the chat's role later became.
+      if (typeof line.role === "string" && out.role !== "guest") out.role = line.role;
       continue;
     }
     const message = line.message;
