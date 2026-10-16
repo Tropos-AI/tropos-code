@@ -217,4 +217,17 @@ describe("FilePairing", () => {
     expect(await p.revoke("telegram", "u2")).toBe(true); // had a pending code
     expect(await p.approve("telegram", pending)).toMatchObject({ ok: false });
   });
+
+  test("pending lists unexpired requests without the code or the sender", async () => {
+    const p = make();
+    const code = await codeOf(p, "u1");
+    const listed = await p.pending();
+    expect(listed).toEqual([{ channel: "telegram", requestedAt: t, expiresAt: t + HOUR }]);
+    expect(JSON.stringify(listed)).not.toContain(code);
+    expect(JSON.stringify(listed)).not.toContain("u1");
+    t += HOUR + 1;
+    expect(await p.pending()).toEqual([]);
+    await p.approve("telegram", await codeOf(p, "u2"));
+    expect(await p.pending()).toEqual([]);
+  });
 });

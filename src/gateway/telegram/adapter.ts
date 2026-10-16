@@ -2,7 +2,7 @@
 import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/events";
 import { UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
-import type { ChannelAdapter, ChatSession, Pairing, SessionProvider } from "../types";
+import type { ChannelAdapter, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
   assistantText,
@@ -10,8 +10,11 @@ import {
   HELP_TEXT,
   oneLine,
   parseCallbackData,
+  parseProjectCallback,
   permissionKeyboard,
   permissionView,
+  projectKeyboard,
+  projectListText,
   renderToolBatch,
   splitMessage,
   statusText,
@@ -27,6 +30,8 @@ export interface TelegramAdapterOptions {
   api: TelegramApi;
   sessions: SessionProvider;
   pairing: Pairing;
+  /** Lets chats see and switch their project (/project). Without it the command says it isn't available. */
+  projects?: ChatProjects;
   allowGroups?: boolean;
   /** Unanswered permission requests are denied after this long. Default 5 minutes. */
   askTimeoutMs?: number;
@@ -86,6 +91,11 @@ interface Chat {
   errorSent: boolean;
 }
 
+/** `/Project@MyBot arg` -> `project`. */
+function commandWord(text: string): string {
+  return (text.split(/\s+/)[0] ?? "").slice(1).split("@")[0]?.toLowerCase() ?? "";
+}
+
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();
@@ -104,6 +114,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly api: TelegramApi;
   private readonly sessions: SessionProvider;
   private readonly pairing: Pairing;
+  private readonly projects: ChatProjects | undefined;
   private readonly allowGroups: boolean;
   private readonly askTimeoutMs: number;
   private readonly minIntervalMs: number;
@@ -125,6 +136,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.api = opts.api;
     this.sessions = opts.sessions;
     this.pairing = opts.pairing;
+    this.projects = opts.projects;
     this.allowGroups = opts.allowGroups ?? false;
     this.askTimeoutMs = opts.askTimeoutMs ?? 300_000;
     this.minIntervalMs = opts.minIntervalMs ?? 1000;
@@ -166,6 +178,31 @@ export class TelegramAdapter implements ChannelAdapter {
     this.opening.clear();
   }
 
+  /** Sends text to `telegram:<chat id>`, split to Telegram's message size. */
+  async deliver(chatKey: string, text: string): Promise<void> {
+    const id = /^telegram:(-?\d{1,20})$/.exec(chatKey)?.[1];
+    if (id === undefined) throw new Error(`"${chatKey}" is not a Telegram chat`);
+    const chatId = Number(id);
+    const chat = this.chats.get(chatKey);
+    for (const part of splitMessage(text)) {
+      // Through the chat's outbox when it has one, so the send keeps its place in line and the rate limit.
+      if (chat) {
+        let failure: unknown;
+        const sent = await chat.outbox.run(async () => {
+          try {
+            return (await this.api.sendMessage(chatId, part)).message_id;
+          } catch (e) {
+            failure = e;
+            throw e;
+          }
+        });
+        if (sent === undefined) throw failure instanceof Error ? failure : new Error("send failed");
+      } else {
+        await this.api.sendMessage(chatId, part);
+      }
+    }
+  }
+
   private async poll(): Promise<void> {
     let failures = 0;
     while (!this.stopped) {
@@ -203,10 +240,15 @@ export class TelegramAdapter implements ChannelAdapter {
       await this.handleStranger(msg.chat.id, senderId);
       return;
     }
-    const chat = await this.chatFor(msg.chat.id, senderId);
-    if (!chat) return;
     const text = msg.text.trim();
     if (!text) return;
+    // Before the session is opened: switching away from a project whose session can't start must still work.
+    if (text.startsWith("/") && /^project(s)?$/.test(commandWord(text))) {
+      await this.handleProjectCommand(msg.chat.id, text);
+      return;
+    }
+    const chat = await this.chatFor(msg.chat.id, senderId);
+    if (!chat) return;
     if (text.startsWith("/")) {
       await this.handleCommand(chat, text);
       return;
@@ -382,6 +424,11 @@ export class TelegramAdapter implements ChannelAdapter {
   private async handleCallback(cb: TgCallbackQuery): Promise<void> {
     const chatId = cb.message?.chat.id;
     if (chatId === undefined) return;
+    const projectId = parseProjectCallback(cb.data);
+    if (projectId !== undefined) {
+      await this.handleProjectButton(cb, chatId, projectId);
+      return;
+    }
     const chat = this.chats.get(`${CHANNEL}:${chatId}`);
     // Only the approved sender of that chat may answer; anyone else is ignored without a reply.
     if (!chat || chat.senderId !== String(cb.from.id) || !(await this.pairing.isApproved(CHANNEL, chat.senderId))) return;
@@ -440,6 +487,77 @@ export class TelegramAdapter implements ChannelAdapter {
     this.drain(chat);
   }
 
+  private async currentProject(chat: Chat): Promise<{ id: string; name: string } | undefined> {
+    return this.projects?.current(`${CHANNEL}:${chat.chatId}`).catch(() => undefined);
+  }
+
+  // ---- projects ----
+
+  /** A reply outside any chat session (the session may be exactly what can't start). */
+  private async reply(chatId: number, text: string, replyMarkup?: ReturnType<typeof projectKeyboard>): Promise<void> {
+    for (const [i, part] of splitMessage(text).entries()) {
+      await this.api.sendMessage(chatId, part, i === 0 && replyMarkup ? { replyMarkup } : {}).catch((e) => this.log("send failed", e));
+    }
+  }
+
+  private async handleProjectCommand(chatId: number, text: string): Promise<void> {
+    if (!this.projects) {
+      await this.reply(chatId, "Projects aren't available here.");
+      return;
+    }
+    const key = `${CHANNEL}:${chatId}`;
+    const wanted = text.split(/\s+/)[1];
+    try {
+      if (wanted === undefined) {
+        const [projects, current] = await Promise.all([this.projects.list(), this.projects.current(key)]);
+        await this.reply(chatId, projectListText(projects, current.id), projectKeyboard(projects, current.id));
+        return;
+      }
+      await this.reply(chatId, await this.switchProject(chatId, wanted.toLowerCase()));
+    } catch (e) {
+      this.log("project command failed", e);
+      await this.reply(chatId, e instanceof UserFacingError ? e.message : "Could not do that right now.");
+    }
+  }
+
+  private async handleProjectButton(cb: TgCallbackQuery, chatId: number, projectId: string): Promise<void> {
+    const senderId = String(cb.from.id);
+    // Only an approved sender, and only in their own chat (a private chat's id is the sender's).
+    if (!this.projects || !(await this.pairing.isApproved(CHANNEL, senderId))) return;
+    if (!this.allowGroups && chatId !== cb.from.id) return;
+    let note: string;
+    try {
+      note = await this.switchProject(chatId, projectId);
+    } catch (e) {
+      this.log("project switch failed", e);
+      note = e instanceof UserFacingError ? e.message : "Could not switch right now.";
+    }
+    await this.api.answerCallbackQuery(cb.id, oneLine(note, 190)).catch((err) => this.log("callback answer failed", err));
+    await this.reply(chatId, note);
+  }
+
+  /**
+   * Points the chat at another project. The old project's session is left alone (it stays resumable and closes when
+   * idle); the next message opens the new one. A turn in progress blocks the switch, since its questions and answer
+   * would have nowhere to go.
+   */
+  private async switchProject(chatId: number, projectId: string): Promise<string> {
+    const projects = this.projects!;
+    const key = `${CHANNEL}:${chatId}`;
+    const current = await projects.current(key);
+    if (current.id === projectId) return `Already in ${current.name} (${current.id}).`;
+    const open = this.chats.get(key);
+    if (open && (open.running || open.queue.length > 0 || open.session.state().busy)) return "A turn is still running. Send /stop first, then switch.";
+    const next = await projects.select(key, projectId);
+    if (open) {
+      for (const ask of open.asks.values()) clearTimeout(ask.timer);
+      open.detach();
+      this.chats.delete(key);
+    }
+    this.opening.delete(key);
+    return `Switched to ${next.name} (${next.id}). Your next message continues there.`;
+  }
+
   private async handleCommand(chat: Chat, text: string): Promise<void> {
     const command = (text.split(/\s+/)[0] ?? "").slice(1).split("@")[0]?.toLowerCase();
     switch (command) {
@@ -459,7 +577,7 @@ export class TelegramAdapter implements ChannelAdapter {
         }
         break;
       case "status":
-        this.sendAll(chat, `${statusText(chat.session.state())}\nQueued: ${chat.queue.length}`);
+        this.sendAll(chat, `${statusText(chat.session.state(), await this.currentProject(chat))}\nQueued: ${chat.queue.length}`);
         break;
       case "start":
         this.sendAll(chat, HELP_TEXT);

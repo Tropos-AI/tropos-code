@@ -141,12 +141,20 @@ export class TelegramApi {
     await this.call("answerCallbackQuery", { callback_query_id: id, ...(text ? { text } : {}) });
   }
 
+  /** Who the token belongs to; the cheapest call that proves the token works. */
+  async getMe(signal?: AbortSignal): Promise<{ username: string; name: string }> {
+    const parsed = z.object({ username: z.string().optional(), first_name: z.string().optional() }).safeParse(await this.call("getMe", {}, signal));
+    if (!parsed.success) throw new TelegramError("getMe: unexpected response", 200, "unexpected response");
+    return { username: parsed.data.username ?? "", name: parsed.data.first_name ?? "" };
+  }
+
   async setMyCommands(commands: { command: string; description: string }[]): Promise<void> {
     await this.call("setMyCommands", { commands });
   }
 
   private async call(method: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
     const url = `${this.baseUrl}/bot${this.token}/${method}`;
+    let retriedConnection = false;
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       try {
@@ -159,6 +167,12 @@ export class TelegramApi {
       } catch (e) {
         if (signal?.aborted) throw e;
         const msg = e instanceof Error ? e.message : String(e);
+        // A pooled keep-alive connection the other end has already dropped fails on first use; one fresh try fixes it.
+        if (!retriedConnection) {
+          retriedConnection = true;
+          await this.sleep(100, signal);
+          continue;
+        }
         throw new TelegramError(`${method} failed: ${this.redact(msg)}`, 0, this.redact(msg));
       }
       let envelope: z.infer<typeof Envelope> | undefined;

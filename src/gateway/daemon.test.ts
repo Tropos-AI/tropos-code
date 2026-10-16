@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { FakeModel } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
+import { loadGatewayConfig } from "./config";
 import { dockerCheck, persistentToken, readGatewayState } from "./daemon";
 
 let dir: string;
@@ -90,16 +91,31 @@ describe("tcode gateway", () => {
     await second.done;
   });
 
-  test("warns when the workspace has no .git, which a mount can't protect", async () => {
+  test("needs no workspace: it creates ~/.tropos/workspace with a .git and a README, and doesn't warn about it", async () => {
+    const run = start(["--no-web"]);
+    await Bun.sleep(400);
+    const workspace = join(dir, "home", "workspace");
+    expect((await stat(workspace)).isDirectory()).toBe(true);
+    if (Bun.which("git")) expect((await stat(join(workspace, ".git"))).isDirectory()).toBe(true);
+    expect(await readFile(join(workspace, "README.md"), "utf8")).toContain("Tropos");
+    expect(run.err.join("")).not.toContain("not a git repository");
+    expect(run.out.join("")).toContain("projects: default (default: default)");
+    run.stop();
+    expect(await run.done).toBe(0);
+  });
+
+  test("--workspace is a one-off project named cwd; it warns when it has no .git, and isn't saved", async () => {
     await mkdir(join(dir, "project"));
-    const plain = start(["--no-web"]);
+    const plain = start(["--no-web", "--workspace", join(dir, "project")]);
     await Bun.sleep(300);
     expect(plain.err.join("")).toContain("is not a git repository");
+    expect(plain.out.join("")).toContain("projects: default, cwd (default: cwd)");
     plain.stop();
     await plain.done;
+    expect((await loadGatewayConfig(join(dir, "home"))).projects).toEqual([]);
 
     await mkdir(join(dir, "project", ".git"));
-    const repo = start(["--no-web"]);
+    const repo = start(["--no-web", "--workspace", join(dir, "project")]);
     await Bun.sleep(300);
     expect(repo.err.join("")).not.toContain("not a git repository");
     repo.stop();
@@ -109,8 +125,35 @@ describe("tcode gateway", () => {
   test("refuses a workspace that holds Tropos's data directory", async () => {
     const home = join(dir, "home");
     await mkdir(home, { recursive: true });
-    const run = start(["--no-web"], { cwd: dir });
+    const run = start(["--no-web", "--workspace", dir]);
     expect(await run.done).toBe(1);
     expect(run.err.join("")).toMatch(/pick a project directory/);
+  });
+});
+
+describe("the web link in the gateway's output", () => {
+  const run = async () => {
+    const out: string[] = [];
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    await mkdir(join(dir, "project"), { recursive: true });
+    const done = main(["gateway"], {
+      model: new FakeModel([]),
+      out: (s) => out.push(s),
+      err: () => {},
+      env: { TROPOS_HOME: join(dir, "home"), SHELL: "/bin/bash" },
+      cwd: join(dir, "project"),
+      gatewayUntil: async () => void (await stopped),
+      gatewaySeams: { sweep: false, assets: new Map() },
+    });
+    await Bun.sleep(400);
+    stop();
+    await done;
+    return out.join("");
+  };
+  test("without a terminal (under a service) the output has the address but not the key", async () => {
+    const text = await run();
+    expect(text).toMatch(/web: http:\/\/127\.0\.0\.1:\d+\/ \(open it with: tcode dashboard\)/);
+    expect(text).not.toContain("token=");
   });
 });

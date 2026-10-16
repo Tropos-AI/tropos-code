@@ -10,6 +10,24 @@ function setup() {
   return { server, api: new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} }) };
 }
 
+describe("TelegramApi connection errors", () => {
+  const ok = () => new Response(JSON.stringify({ ok: true, result: true }), { headers: { "content-type": "application/json" } });
+  test("one dropped connection is retried once, as a pooled keep-alive socket that went stale needs", async () => {
+    let calls = 0;
+    const api = new TelegramApi({ token: "1:abc", sleep: async () => {}, fetch: (async () => (++calls === 1 ? Promise.reject(new Error("The socket connection was closed unexpectedly")) : ok())) as unknown as typeof fetch });
+    await api.setMyCommands([]);
+    expect(calls).toBe(2);
+  });
+  test("a second failure is an error, and the token is not in it", async () => {
+    let calls = 0;
+    const api = new TelegramApi({ token: "123456:SECRET-token", sleep: async () => {}, fetch: (async () => (++calls, Promise.reject(new Error("connect failed to /bot123456:SECRET-token/setMyCommands")))) as unknown as typeof fetch });
+    const error = await api.setMyCommands([]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TelegramError);
+    expect((error as Error).message).not.toContain("SECRET-token");
+    expect(calls).toBe(2);
+  });
+});
+
 describe("TelegramApi", () => {
   test("sends and edits messages and parses updates, ignoring unknown fields", async () => {
     const { server, api } = setup();

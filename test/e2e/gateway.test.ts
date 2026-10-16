@@ -57,7 +57,7 @@ function startGateway(steps: Step[], opts: { sandboxProblem?: string; backend?: 
   let stop!: () => void;
   const stopped = new Promise<void>((r) => (stop = r));
   const backends: ExecBackend[] = [];
-  const done = main(["gateway", "--no-web"], {
+  const done = main(["gateway", "--no-web", "--workspace", project], {
     model,
     out: (s) => out.push(s),
     err: (s) => err.push(s),
@@ -197,6 +197,39 @@ describe("tcode gateway", () => {
     expect(JSON.stringify(gw.model.requests.at(-1)!.messages)).not.toContain("top secret");
     gw.stop();
     await gw.done;
+  });
+
+  test("a scheduled job runs in a sandboxed session and its result is delivered to the chat", async () => {
+    await mkdir(join(home, "gateway", "cron"), { recursive: true });
+    const soon = Date.now() + 700;
+    await Bun.write(
+      join(home, "gateway", "cron", "jobs.json"),
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "job-1",
+            name: "morning",
+            schedule: { kind: "at", at: new Date(soon).toISOString() },
+            prompt: "say hello to the team",
+            project: "default",
+            deliver: `telegram:${CHAT}`,
+            enabled: true,
+            createdAt: Date.now(),
+            createdBy: "user",
+            nextRunAt: soon,
+          },
+        ],
+      }),
+    );
+    const gw = startGateway([() => reply([textBlock("Hello team, all quiet.")])]);
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("morning") && t.includes("Hello team, all quiet.")), 8_000);
+    // Nobody paired: the delivery goes to the chat the job names, and the run is on record.
+    const runs = (await readFile(join(home, "gateway", "cron", "runs.jsonl"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { jobId: string; status: string });
+    expect(runs).toEqual([expect.objectContaining({ jobId: "job-1", status: "ok" })]);
+    expect(gw.backends).toHaveLength(1); // its Bash would have gone through the sandbox backend
+    gw.stop();
+    expect(await gw.done).toBe(0);
   });
 
   test("with the sandbox unavailable the chat is told so and nothing runs", async () => {

@@ -17,14 +17,39 @@ describe("loadGatewayConfig", () => {
     const config = await loadGatewayConfig(home);
     expect(config.sandbox).toEqual({ image: "alpine:3.22", network: "none", memory: "1g", cpus: "2" });
     expect(config.idleMinutes).toBe(30);
-    expect(config.workspace).toBeUndefined();
+    expect(config.projects).toEqual([]);
+    expect(config.defaultProject).toBe("default");
   });
   test("reads what was saved, privately", async () => {
-    await saveGatewayConfig(home, { ...(await loadGatewayConfig(home)), workspace: "/work/app", telegram: { botToken: "123:abc" } });
+    await saveGatewayConfig(home, { ...(await loadGatewayConfig(home)), projects: [{ id: "app", name: "App", path: "/work/app" }], defaultProject: "app", telegram: { botToken: "123:abc" } });
     const config = await loadGatewayConfig(home);
-    expect(config.workspace).toBe("/work/app");
+    expect(config.projects).toEqual([{ id: "app", name: "App", path: "/work/app" }]);
+    expect(config.defaultProject).toBe("app");
     expect(config.telegram.botToken).toBe("123:abc");
     if (process.platform !== "win32") expect((await stat(gatewayConfigPath(home))).mode & 0o777).toBe(0o600);
+  });
+  test("an old file with a workspace key becomes a project and the default, and the key is gone after a save", async () => {
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ workspace: "/work/My App", idleMinutes: 5 }));
+    const config = await loadGatewayConfig(home);
+    expect(config.projects).toEqual([{ id: "my-app", name: "My App", path: "/work/My App" }]);
+    expect(config.defaultProject).toBe("my-app");
+    expect(config.idleMinutes).toBe(5);
+    expect("workspace" in config).toBe(false);
+    await saveGatewayConfig(home, config);
+    expect(JSON.parse(await Bun.file(gatewayConfigPath(home)).text()).workspace).toBeUndefined();
+  });
+  test("a workspace already listed as a project isn't added twice, and an explicit default is kept", async () => {
+    await writeFile(
+      gatewayConfigPath(home),
+      JSON.stringify({ workspace: "/w/a", projects: [{ id: "a", name: "A", path: "/w/a" }], defaultProject: "default" }),
+    );
+    const config = await loadGatewayConfig(home);
+    expect(config.projects).toHaveLength(1);
+    expect(config.defaultProject).toBe("default");
+  });
+  test("a legacy workspace named like a reserved id gets another id", async () => {
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ workspace: "/w/default" }));
+    expect((await loadGatewayConfig(home)).projects[0]?.id).toBe("default-2");
   });
   test("invalid JSON and invalid values are errors that name the file", async () => {
     await writeFile(gatewayConfigPath(home), "{nope");

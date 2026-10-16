@@ -125,6 +125,14 @@ export class FilePairing implements Pairing {
     return this.run(async (s) => s.approved.map((a) => ({ ...a })), false);
   }
 
+  /** Codes handed out and still valid, without the sender or the code: the owner sees that someone asked, not who. */
+  pending(): Promise<{ channel: string; requestedAt: number; expiresAt: number }[]> {
+    return this.run(async (s) => {
+      const now = this.now();
+      return s.pending.filter((p) => p.expiresAt > now).map((p) => ({ channel: p.channel, requestedAt: p.issuedAt, expiresAt: p.expiresAt }));
+    }, false);
+  }
+
   revoke(channel: string, senderId: string): Promise<boolean> {
     return this.run(async (s) => {
       const before = s.approved.length + s.pending.length;

@@ -1,10 +1,13 @@
 // src/gateway/daemon.ts — `tcode gateway`: the session pool, the channel adapters and the local web UI, until stopped.
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { AppContext } from "../cli/runtime";
+import { basename, join } from "node:path";
+import type { Model } from "../api/model";
+import { loadProjectContext, type ProjectContext } from "../cli/context";
 import { createRuntime } from "../cli/runtime";
+import { SettingsError } from "../config/settings";
+import { VERSION } from "../version";
 import { DockerBackend, sweepLeftoverContainers } from "../exec/docker";
 import type { ExecBackend } from "../exec/backend";
 import { SessionStore } from "../session/store";
@@ -16,31 +19,50 @@ import { DEFAULT_PORT } from "../web/protocol";
 import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { telegramToken, gatewayDir, type GatewayConfig } from "./config";
-import { SandboxUnavailableError } from "./errors";
+import { SandboxUnavailableError, UserFacingError } from "./errors";
+import {
+  DEFAULT_PROJECT_ID,
+  TEMPORARY_PROJECT_ID,
+  builtinProject,
+  ensureDefaultProject,
+  fileProjectSource,
+  withTemporaryProject,
+  type Project,
+} from "./projects";
+import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
 import { SessionPool, type HostHandle } from "./pool";
 import { CHANNEL_MODES, channelContext, workspaceProblem } from "./policy";
+import { homedir } from "node:os";
+import { createAdmin } from "../web/admin";
+import { AdminError } from "../web/admin/context";
+import { createCronTool } from "../tools/cron/cron-tool";
+import { CronStore } from "./cron/store";
+import { createCronGatewayService } from "./cron/service";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
-import type { ChannelAdapter, Pairing } from "./types";
+import type { ChannelAdapter, ChatProjects, GatewayService, GatewayServiceDeps, Pairing } from "./types";
 
-export interface SessionContext {
-  ctx: AppContext;
-  /** Tells the SessionSearch tool which session is current, so it skips it. */
-  setSessionId(id: string): void;
-}
+export type { SessionContext } from "../cli/context";
 
 export interface GatewayRun {
-  /** The gateway's workspace context: settings, rules, extensions. Chats get narrowed copies. */
-  ctx: AppContext;
-  /** A fresh context for one session: its own subagent holder and tools over the shared extensions. */
-  newSessionContext(): SessionContext;
+  /** Tropos's data directory. */
+  home: string;
+  env: NodeJS.ProcessEnv;
+  version?: string;
+  /** Tests pass a fake model; otherwise each project's provider router answers. */
+  model?: Model;
   config: GatewayConfig;
   pairing: Pairing;
-  env: NodeJS.ProcessEnv;
   out(text: string): void;
   err(text: string): void;
   /** Serve the local web UI (default true). */
   web?: boolean;
+  /** `--workspace <dir>`: a one-off project (id `cwd`) that is the default for this run only. Nothing is saved. */
+  workspace?: string;
+  /** Background services (a scheduler, say), started after the channels and stopped before them. */
+  services?: GatewayService[];
+  /** Print the web UI link with its key (default: only when stdout is a terminal). */
+  showLink?: boolean;
   /** Tests stop the gateway themselves instead of waiting for a signal. */
   until?: (info: { webUrl?: string }) => Promise<void>;
   /** Test seams. */
@@ -53,6 +75,8 @@ export interface GatewayRun {
     telegramOptions?: Partial<TelegramAdapterOptions>;
     assets?: AssetMap;
     sweep?: boolean;
+    /** Replaces `git init` for the managed default project. */
+    git?: (dir: string) => Promise<void>;
   };
 }
 
@@ -111,20 +135,67 @@ export async function readGatewayState(home: string): Promise<GatewayState | und
   }
 }
 
+const real = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};
+
 export async function runGateway(run: GatewayRun): Promise<number> {
-  const { ctx, config } = run;
-  const problem = workspaceProblem(ctx.cwd, ctx.home);
-  if (problem) {
-    run.err(`tcode: gateway: ${problem}\n`);
-    return 1;
-  }
-  const dir = gatewayDir(ctx.home);
+  const { home, config } = run;
+  const version = run.version ?? VERSION;
+  const dir = gatewayDir(home);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  if (!existsSync(join(ctx.cwd, ".git"))) {
-    // A mount can't protect a path that doesn't exist: a command could `git init` here and plant a hook or config
-    // that runs the next time you use git in this directory.
-    run.err(`tcode: gateway: ${ctx.cwd} is not a git repository. Run \`git init\` there first, or a chat's command could create a .git with hooks in it.\n`);
+
+  // The managed default project exists before anything asks for it: the sandbox relies on its .git.
+  await ensureDefaultProject(home, { git: run.seams?.git });
+
+  let oneOff: Project | undefined;
+  if (run.workspace) {
+    const path = real(run.workspace);
+    const problem = workspaceProblem(path, home);
+    if (problem) {
+      run.err(`tcode: gateway: ${problem}\n`);
+      return 1;
+    }
+    oneOff = { id: TEMPORARY_PROJECT_ID, name: basename(path) || "workspace", path };
+    if (!existsSync(join(path, ".git"))) warnNoGit(run, path);
   }
+  const source = withTemporaryProject(fileProjectSource(home), oneOff);
+  const router = new ChatRouter({ home, source });
+
+  // One context per project directory, built the first time something needs it: settings, skills, memory and MCP
+  // servers are per project, and a broken settings file in one must not stop the others.
+  const contexts = new Map<string, Promise<ProjectContext>>();
+  const warned = new Set<string>();
+  const contextFor = (project: Project): Promise<ProjectContext> => {
+    let pending = contexts.get(project.path);
+    if (!pending) {
+      pending = loadProjectContext({ cwd: project.path, home, env: run.env, version, model: run.model }).then(
+        (pc) => {
+          for (const w of pc.warnings) run.err(`tcode: ${project.id}: ${w}\n`);
+          if (!project.builtin && !warned.has(project.path) && !existsSync(join(pc.ctx.cwd, ".git"))) warnNoGit(run, pc.ctx.cwd);
+          warned.add(project.path);
+          return pc;
+        },
+        (e: unknown) => {
+          // Not cached: once the file is fixed, the next message works without restarting the gateway.
+          contexts.delete(project.path);
+          if (e instanceof SettingsError) throw new UserFacingError(`The settings of project "${project.name}" are invalid, so I can't start a session there: ${e.message}`);
+          throw e;
+        },
+      );
+      contexts.set(project.path, pending);
+    }
+    return pending;
+  };
+
+  // The scheduler: jobs run in fresh sandboxed sessions of their project and are delivered through the channels.
+  const cron = createCronGatewayService({ log: (m) => run.err(`gateway: cron: ${m}\n`) });
+  const cronStore = new CronStore(home);
+
   const check = run.seams?.sandboxCheck ?? dockerCheck();
   if (run.seams?.sweep !== false && !run.seams?.backend) await sweepLeftoverContainers().catch(() => 0);
 
@@ -132,27 +203,43 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     statePath: join(dir, "sessions.json"),
     idleMs: config.idleMinutes * 60_000,
     create: async (key, saved): Promise<HostHandle> => {
+      const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
+      const project = await source.get(projectId);
+      if (!project) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");
+      if (project.builtin) await ensureDefaultProject(home, { git: run.seams?.git });
+      else {
+        const problem = workspaceProblem(project.path, home);
+        if (problem) throw new UserFacingError(`Project "${project.name}" can't be used: ${problem}`);
+      }
       // Fail closed: a chat's commands run in the sandbox or not at all.
       const sandboxProblem = await check();
       if (sandboxProblem) throw new SandboxUnavailableError(sandboxProblem);
+      const pc = await contextFor(project);
+      const cwd = pc.ctx.cwd;
       const backend =
-        run.seams?.backend?.(ctx.cwd) ??
-        new DockerBackend({ workspace: ctx.cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
-      const { ctx: base, setSessionId } = run.newSessionContext();
+        run.seams?.backend?.(cwd) ??
+        new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
+      const { ctx: base, setSessionId } = pc.newSessionContext();
       const sessionCtx = channelContext(base, backend);
+      // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
+      // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
+      const chatKey = parseSessionKey(key)?.chatKey;
+      if (chatKey && !chatKey.startsWith("project:")) {
+        sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
+      }
       let session: SessionStore;
       let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
       let resumed = false;
       try {
         if (saved) {
-          ({ store: session, messages: history } = await SessionStore.open(ctx.home, ctx.cwd, saved));
+          ({ store: session, messages: history } = await SessionStore.open(home, cwd, saved));
           resumed = true;
         } else {
-          session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: ctx.settings.model, version: ctx.version });
+          session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
         }
       } catch {
         // The remembered session is gone: start over rather than fail the chat.
-        session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: ctx.settings.model, version: ctx.version });
+        session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
       }
       setSessionId(session.id);
       try {
@@ -180,11 +267,15 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     },
   });
 
+  const sessions = new RoutedSessions(router, pool);
+  const chatProjects: ChatProjects = { current: (k) => router.current(k), list: () => source.list(), select: (k, id) => router.select(k, id) };
   const adapters: ChannelAdapter[] = [];
   const token = telegramToken(config, run.env);
   if (token) {
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    adapters.push(new TelegramAdapter({ api, sessions: pool, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions }));
+    adapters.push(
+      new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions }),
+    );
   }
 
   let webStop: (() => Promise<void>) | undefined;
@@ -192,46 +283,115 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let webUrl: string | undefined;
   let webPort: number | undefined;
   if (run.web !== false) {
-    const { ctx: localCtx, setSessionId } = run.newSessionContext();
-    const session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: ctx.settings.model, version: ctx.version });
-    setSessionId(session.id);
-    const runtime = await createRuntime(localCtx, {
-      session,
-      history: [],
-      mode: "default",
-      modes: MODES.filter((m) => m !== "bypass"),
-      theme: DARK,
-      ownsExtensions: false,
-    });
-    webHost = new WebHost(runtime);
-    await webHost.start();
-    const assets = run.seams?.assets ?? (await loadAssets());
-    const server = await startWebServer({ host: webHost, assets, token: await persistentToken(dir), port: config.webPort ?? DEFAULT_PORT });
-    webStop = () => server.stop();
-    webUrl = server.url;
-    webPort = server.port;
+    try {
+      // The local web UI works in the default project.
+      const project = (await source.get(await source.defaultId())) ?? builtinProject(home);
+      const { ctx, newSessionContext } = await contextFor(project);
+      const { ctx: localCtx, setSessionId } = newSessionContext();
+      const session = await SessionStore.create(home, { cwd: ctx.cwd, model: ctx.settings.model, version });
+      setSessionId(session.id);
+      const runtime = await createRuntime(localCtx, {
+        session,
+        history: [],
+        mode: "default",
+        modes: MODES.filter((m) => m !== "bypass"),
+        theme: DARK,
+        ownsExtensions: false,
+      });
+      webHost = new WebHost(runtime);
+      await webHost.start();
+      const assets = run.seams?.assets ?? (await loadAssets());
+      const admin = createAdmin({
+        home,
+        userHome: homedir(),
+        env: run.env,
+        version,
+        execPath: process.execPath,
+        scriptPath: process.argv[1],
+        cwd: ctx.cwd,
+        now: Date.now,
+        fetch,
+        gateway: {
+          // Starts the job and answers at once; a job that cannot start (already running, unknown) is reported.
+          runCronNow: async (id) => {
+            const started = cron.runNow(id);
+            started.catch(() => {});
+            await Promise.race([started.then(() => undefined), new Promise<void>((r) => setTimeout(r, 150))]).catch((e: unknown) => {
+              throw new AdminError(e instanceof Error ? e.message : "The job could not be started.");
+            });
+          },
+          reload: async () => {},
+        },
+      });
+      const server = await startWebServer({ host: webHost, admin, assets, token: await persistentToken(dir), port: config.webPort ?? DEFAULT_PORT });
+      webStop = () => server.stop();
+      webUrl = server.url;
+      webPort = server.port;
+    } catch (e) {
+      // Chats don't depend on the web UI, and a broken default project shouldn't take them down.
+      if (!(e instanceof UserFacingError)) throw e;
+      run.err(`tcode: gateway: the local web UI is off: ${e.message}\n`);
+    }
   }
 
-  const state: GatewayState = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };
-  await writeFile(stateFile(ctx.home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
+  const deliver = async (target: string, text: string): Promise<void> => {
+    const adapter = adapters.find((a) => target.startsWith(`${a.name}:`));
+    if (!adapter?.deliver) throw new Error(`No channel can deliver to "${target}".`);
+    await adapter.deliver(target, text);
+  };
+  const serviceDeps: GatewayServiceDeps = {
+    home,
+    config,
+    projects: source,
+    deliver,
+    openSession: async (target) => {
+      if (target.includes(":")) return sessions.open(target);
+      if (!(await source.get(target))) throw new UserFacingError(`There is no project "${target}".`);
+      return pool.open(sessionKey(`project:${target}`, target));
+    },
+  };
 
+  const state: GatewayState = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };
+  await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
+
+  const startedServices: GatewayService[] = [];
   try {
     for (const adapter of adapters) await adapter.start();
+    for (const service of [cron, ...(run.services ?? [])]) {
+      try {
+        await service.start(serviceDeps);
+        startedServices.push(service);
+      } catch (e) {
+        run.err(`gateway: service ${service.name} failed to start: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    }
+    const projects = await source.list();
     run.out(
       [
-        `Tropos gateway running in ${ctx.cwd}`,
+        `Tropos gateway running${oneOff ? ` in ${oneOff.path}` : ""}`,
         adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : "  channels: none (set TROPOS_TELEGRAM_BOT_TOKEN or telegram.botToken in ~/.tropos/gateway.json)",
-        webUrl ? `  web: ${webUrl}` : "  web: off",
+        `  projects: ${projects.map((p) => p.id).join(", ")} (default: ${await source.defaultId()})`,
+        // The link carries the web UI's key. On a terminal it is printed for you; under launchd/systemd stdout goes to a
+        // log file that gets copied into bug reports, so there it stays out (`tcode dashboard` opens the real link).
+        webUrl ? `  web: ${(run.showLink ?? Boolean(process.stdout.isTTY)) ? webUrl : `${webUrl.split("?")[0]} (open it with: tcode dashboard)`}` : "  web: off",
         "Press ctrl+c to stop.\n",
       ].join("\n"),
     );
     await (run.until ? run.until({ webUrl }) : untilSignal());
   } finally {
+    await Promise.all(startedServices.map((s) => s.stop().catch(() => {})));
     await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
     await pool.closeAll();
     await webStop?.().catch(() => {});
     await webHost?.shutdown().catch(() => {});
-    await rm(stateFile(ctx.home), { force: true });
+    // Sessions are closed first; then what the projects' extensions hold open (MCP servers, language servers).
+    await Promise.all([...contexts.values()].map((p) => p.then((pc) => pc.close()).catch(() => {})));
+    await rm(stateFile(home), { force: true });
   }
   return 0;
+}
+
+/** A mount can't protect a path that doesn't exist: a command could `git init` there and plant a hook or config. */
+function warnNoGit(run: GatewayRun, path: string): void {
+  run.err(`tcode: gateway: ${path} is not a git repository. Run \`git init\` there first, or a chat's command could create a .git with hooks in it.\n`);
 }

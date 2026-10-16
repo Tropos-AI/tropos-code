@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SandboxUnavailableError } from "../errors";
+import { SandboxUnavailableError, UserFacingError } from "../errors";
+import type { ChatProjects } from "../types";
+import type { Project } from "../projects";
 import { TelegramApi } from "./api";
 import { TelegramAdapter } from "./adapter";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
@@ -12,7 +14,27 @@ afterEach(async () => {
   cleanup = [];
 });
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean } = {}) {
+/** Two projects, each chat in `default` until it picks. */
+function fakeProjects() {
+  const all: Project[] = [
+    { id: "default", name: "Default workspace", path: "/h/workspace", builtin: true },
+    { id: "app", name: "App", path: "/w/app" },
+  ];
+  const chosen = new Map<string, string>();
+  const projects: ChatProjects = {
+    current: async (k) => all.find((p) => p.id === (chosen.get(k) ?? "default"))!,
+    list: async () => all,
+    select: async (k, id) => {
+      const p = all.find((x) => x.id === id);
+      if (!p) throw new UserFacingError(`There is no project "${id}".`);
+      chosen.set(k, id);
+      return p;
+    },
+  };
+  return { projects, chosen };
+}
+
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -24,6 +46,7 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
     sessions,
     pairing,
     allowGroups: opts.allowGroups,
+    projects: opts.projects,
     askTimeoutMs: opts.askTimeoutMs,
     minIntervalMs: 0,
     backoffBaseMs: 5,
@@ -136,10 +159,11 @@ describe("TelegramAdapter", () => {
       return "end_turn";
     };
     server.pushMessage(CHAT, CHAT, "big");
-    await server.waitFor(() => server.sent.filter((m) => m.text.startsWith("row ")).length >= 2);
-    const parts = server.sent.filter((m) => m.text.startsWith("row ") || m.text.includes("\nrow "));
+    const parts = () => server.sent.filter((m) => m.text.startsWith("row ") || m.text.includes("\nrow "));
+    // All the parts, not just the first: wait until together they are the whole answer.
+    await server.waitFor(() => parts().length >= 2 && parts().map((p) => p.text).join("\n") === long);
     for (const p of server.sent) expect(p.text.length).toBeLessThanOrEqual(4096);
-    expect(parts.map((p) => p.text).join("\n")).toBe(long);
+    expect(parts().map((p) => p.text).join("\n")).toBe(long);
   });
 
   test("busy rejection queues the text and runs it when the other turn ends", async () => {
@@ -318,5 +342,106 @@ describe("TelegramAdapter", () => {
     server.failGetUpdates = 2;
     await server.waitFor(() => logs.length >= 1);
     expect(logs.join("\n")).not.toContain("SECRET");
+  });
+
+  test("/project lists the projects with buttons, without opening a session", async () => {
+    const { projects } = fakeProjects();
+    const { server, sessions } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "/project");
+    const msg = await server.waitFor(() => server.sent.find((m) => m.text.startsWith("Project: Default workspace (default)")));
+    expect(msg.text).toContain("• default  Default workspace");
+    expect(msg.text).toContain("  app  App");
+    expect(msg.replyMarkup!.inline_keyboard.flat()).toEqual([
+      { text: "• Default workspace", callback_data: "p:default" },
+      { text: "App", callback_data: "p:app" },
+    ]);
+    expect(sessions.opens).toBe(0);
+  });
+
+  test("/projects is an alias, and /project <id> switches: the next message goes to the new project's session", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server, sessions } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hi"));
+    const before = sessions.sessions.get(`telegram:${CHAT}`) as FakeSession;
+    server.pushMessage(CHAT, CHAT, "/projects");
+    await server.waitFor(() => server.sent.some((m) => m.text.startsWith("Project:")));
+
+    server.pushMessage(CHAT, CHAT, "/project APP");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to App (app)")));
+    expect(chosen.get(`telegram:${CHAT}`)).toBe("app");
+    expect(before.attached).toBe(0); // detached, but not closed or cleared
+    expect(before.cleared).toBe(0);
+
+    server.pushMessage(CHAT, CHAT, "again");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: again"));
+    expect(sessions.opens).toBe(2);
+  });
+
+  test("an unknown project and the current one are answered without switching", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "/project nope");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes('no project "nope"')));
+    server.pushMessage(CHAT, CHAT, "/project default");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Already in Default workspace")));
+    expect(chosen.size).toBe(0);
+  });
+
+  test("a switch is refused while a turn is running", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server, session } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "x");
+    await server.waitFor(() => session());
+    let release!: () => void;
+    session().onPrompt = () => new Promise((r) => (release = () => r("end_turn")));
+    server.pushMessage(CHAT, CHAT, "long job");
+    await server.waitFor(() => session().prompts.includes("long job"));
+    server.pushMessage(CHAT, CHAT, "/project app");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("Send /stop first")));
+    expect(chosen.size).toBe(0);
+    release();
+  });
+
+  test("a project button switches too, only for the approved sender in their own chat", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "/project");
+    const msg = await server.waitFor(() => server.sent.find((m) => m.replyMarkup));
+    // Someone else pressing it is ignored.
+    server.pushCallback(999, CHAT, msg.messageId, "p:app");
+    await Bun.sleep(100);
+    expect(chosen.size).toBe(0);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "p:app");
+    // The callback is answered first and the confirmation message follows, so wait for the message itself.
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to App")));
+    expect(chosen.get(`telegram:${CHAT}`)).toBe("app");
+  });
+
+  test("/status shows the project, and without project support /project says so", async () => {
+    const { projects } = fakeProjects();
+    const withProjects = await setup({ projects });
+    withProjects.server.pushMessage(CHAT, CHAT, "/status");
+    await withProjects.server.waitFor(() => withProjects.server.textsTo(CHAT).some((t) => t.includes("Project: Default workspace (default)")));
+
+    const without = await setup();
+    without.server.pushMessage(CHAT, CHAT, "/project");
+    await without.server.waitFor(() => without.server.textsTo(CHAT).some((t) => t.includes("aren't available")));
+  });
+
+  test("deliver() sends to the chat id in the key, split at 4096, and rejects other keys", async () => {
+    const { server, adapter } = await setup();
+    await adapter.deliver(`telegram:${CHAT}`, `${"a".repeat(3000)}\n\n${"b".repeat(3000)}`);
+    expect(server.textsTo(CHAT).map((t) => t.length)).toEqual([3000, 3000]);
+    await expect(adapter.deliver("slack:1", "x")).rejects.toThrow(/not a Telegram chat/);
+    await expect(adapter.deliver("telegram:abc", "x")).rejects.toThrow(/not a Telegram chat/);
+  });
+
+  test("help and the bot's command menu mention /project", async () => {
+    const { server } = await setup();
+    const cmds = await server.waitFor(() => server.commands.length > 0 && server.commands);
+    expect(cmds.map((c) => c.command)).toContain("project");
+    server.pushMessage(CHAT, CHAT, "/start");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("/project")));
   });
 });

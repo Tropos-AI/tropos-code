@@ -1,6 +1,8 @@
 // src/gateway/types.ts — the contracts between the gateway's parts. Type-only: no runtime imports.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import type { SessionState } from "../web/protocol";
+import type { GatewayConfig } from "./config";
+import type { Project, ProjectSource } from "./projects";
 
 /** What a channel adapter receives from one chat's session. */
 export interface ChatSink {
@@ -57,5 +59,36 @@ export interface ChannelAdapter {
   readonly name: string;
   start(): Promise<void>;
   /** Stops polling and releases connections; idempotent. */
+  stop(): Promise<void>;
+  /** Sends text to a chat of this channel (`chatKey` is `<name>:<id>`), e.g. a scheduled job's result. */
+  deliver?(chatKey: string, text: string): Promise<void>;
+}
+
+/** What a channel needs to show and change the project a chat is working in. */
+export interface ChatProjects {
+  current(chatKey: string): Promise<Project>;
+  list(): Promise<Project[]>;
+  /** Rejects with a user-facing error when the project doesn't exist. */
+  select(chatKey: string, projectId: string): Promise<Project>;
+}
+
+/** What a background service (the scheduler, say) gets from the gateway when it starts. */
+export interface GatewayServiceDeps {
+  home: string;
+  config: GatewayConfig;
+  projects: ProjectSource;
+  /**
+   * A session to run something in. A chat key (`telegram:123`) is that chat's session in its current project; a
+   * project id (`my-app`) is a session of its own in that project, which the caller may `clear()` for a fresh start.
+   */
+  openSession(target: string): Promise<ChatSession>;
+  /** Sends text to a chat key through the channel that owns it; rejects when no channel can. */
+  deliver(target: string, text: string): Promise<void>;
+}
+
+/** A long-running part of the gateway besides the channels. Started after the adapters, stopped before they are. */
+export interface GatewayService {
+  readonly name: string;
+  start(deps: GatewayServiceDeps): Promise<void>;
   stop(): Promise<void>;
 }

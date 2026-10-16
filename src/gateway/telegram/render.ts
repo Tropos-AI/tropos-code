@@ -60,6 +60,33 @@ export function parseCallbackData(data: string | undefined): { id: number; appro
   return m ? { id: Number(m[1]), approve: m[2] === "y" } : undefined;
 }
 
+/** callback_data: `p:<project id>` — ids are at most 40 characters, so well under Telegram's 64 bytes. */
+export function projectCallbackData(id: string): string {
+  return `p:${id}`;
+}
+
+export function parseProjectCallback(data: string | undefined): string | undefined {
+  return /^p:([a-z0-9][a-z0-9-]{0,39})$/.exec(data ?? "")?.[1];
+}
+
+/** One button per project; the current one is marked and does nothing new. */
+export function projectKeyboard(projects: { id: string; name: string }[], currentId: string): InlineKeyboard {
+  return {
+    inline_keyboard: projects.map((p) => [{ text: `${p.id === currentId ? "• " : ""}${oneLine(p.name, 40)}`, callback_data: projectCallbackData(p.id) }]),
+  };
+}
+
+/** The /project message: where the chat is and what else it can switch to. */
+export function projectListText(projects: { id: string; name: string }[], currentId: string): string {
+  const current = projects.find((p) => p.id === currentId);
+  return [
+    `Project: ${current ? `${oneLine(current.name, 60)} (${current.id})` : currentId}`,
+    "",
+    "Switch with a button, or /project <id>:",
+    ...projects.map((p) => `${p.id === currentId ? "•" : " "} ${p.id}  ${oneLine(p.name, 60)}`),
+  ].join("\n");
+}
+
 export function permissionKeyboard(id: number): InlineKeyboard {
   return {
     inline_keyboard: [
@@ -120,21 +147,23 @@ export function turnEndNote(reason: TurnEndReason): string | undefined {
   }
 }
 
-export function statusText(s: SessionState): string {
+export function statusText(s: SessionState, project?: { id: string; name: string }): string {
   const cost = s.totalCostUsd === undefined ? "unknown" : `$${s.totalCostUsd.toFixed(4)}`;
-  return [`Model: ${s.model}`, `Mode: ${s.mode}`, `Busy: ${s.busy ? "yes" : "no"}`, `Turns: ${s.turns}`, `Cost: ${cost}`].join("\n");
+  return [...(project ? [`Project: ${oneLine(project.name, 60)} (${project.id})`] : []), `Model: ${s.model}`, `Mode: ${s.mode}`, `Busy: ${s.busy ? "yes" : "no"}`, `Turns: ${s.turns}`, `Cost: ${cost}`].join("\n");
 }
 
 export const HELP_TEXT = [
   "Send a message to talk to the agent.",
   "/stop  stop the running turn",
   "/new  start a fresh session",
-  "/status  model, mode and cost",
+  "/status  project, model, mode and cost",
+  "/project  show the project, or /project <id> to switch",
 ].join("\n");
 
 export const BOT_COMMANDS = [
   { command: "stop", description: "Stop the running turn" },
   { command: "new", description: "Start a fresh session" },
-  { command: "status", description: "Model, mode and cost" },
+  { command: "status", description: "Project, model, mode and cost" },
+  { command: "project", description: "Show or switch the project" },
   { command: "start", description: "Show help" },
 ];
