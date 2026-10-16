@@ -108,6 +108,58 @@ describe("learning in the owner's chat", () => {
   });
 });
 
+describe("chat roles reach the session", () => {
+  const GUEST = 5151;
+  async function pair(chat: number) {
+    const before = server.sent.length;
+    server.pushMessage(chat, chat, "hello?");
+    const sent = await server.waitFor(() => server.sent.slice(before).find((m) => m.chatId === chat && m.text.includes("approve telegram")));
+    const code = /approve telegram ([A-Z0-9]{8})/.exec(sent.text)![1]!;
+    expect(await main(["pairing", "approve", "telegram", code], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
+  }
+
+  test("the owner's chat runs the background review; a guest's chat never does", async () => {
+    await mkdir(home, { recursive: true });
+    await Bun.write(join(home, "settings.json"), JSON.stringify({ learning: { interval: 2 } }));
+    const answer = (t: string): Step => () => reply([textBlock(t)]);
+    const gw = startGateway([answer("owner a"), answer("owner b"), answer("NOTHING"), answer("guest c"), answer("guest d")]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT); // the first approval is the owner
+    await pair(GUEST);
+    server.pushMessage(CHAT, CHAT, "one");
+    await server.waitFor(() => server.textsTo(CHAT).includes("owner a"));
+    server.pushMessage(CHAT, CHAT, "two");
+    // The owner's second turn starts a review: a third model request.
+    await server.waitFor(() => gw.model.requests.length === 3);
+    server.pushMessage(GUEST, GUEST, "three");
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest c"));
+    server.pushMessage(GUEST, GUEST, "four");
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest d"));
+    await Bun.sleep(200);
+    expect(gw.model.requests).toHaveLength(5);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("the reaper closes a revoked owner's chat without the final review", async () => {
+    const answer = (t: string): Step => () => reply([textBlock(t)]);
+    const gw = startGateway([answer("a"), answer("b"), answer("NOTHING")]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "one");
+    await server.waitFor(() => server.textsTo(CHAT).includes("a"));
+    server.pushMessage(CHAT, CHAT, "two");
+    await server.waitFor(() => server.textsTo(CHAT).includes("b"));
+    // Two turns: a final review would be due if the session closed normally.
+    expect(await main(["pairing", "revoke", "telegram", String(CHAT)], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
+    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"), 8_000);
+    await Bun.sleep(200);
+    expect(gw.model.requests).toHaveLength(2);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  }, 15_000);
+});
+
 describe("scheduling from chats", () => {
   test("an owner's Cron tool lists every chat's jobs; a guest's lists only their own", async () => {
     const job = new CronStore(home).add({ name: "elsewhere", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:555", createdBy: "agent" });

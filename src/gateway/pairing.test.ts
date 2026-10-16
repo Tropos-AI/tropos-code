@@ -260,6 +260,18 @@ describe("owner", () => {
     expect(JSON.parse(await readFile(path, "utf8")).version).toBe(2);
   });
 
+  test("a version-2 file with exactly one approved sender and no owner gets no owner on load (the migration is v1 only)", async () => {
+    await mkdir(join(dir, "gateway"), { recursive: true });
+    const text = JSON.stringify({ version: 2, salt: "0123456789abcdef0123456789abcdef", approved: [approvedAt("7")], pending: [], issued: [], failures: [] });
+    await writeFile(path, text);
+    const p = make();
+    expect(await p.isApproved("telegram", "7")).toBe(true);
+    expect(await p.owner()).toBeNull();
+    expect(await p.isOwner("telegram", "7")).toBe(false);
+    expect(p.ownerNow()).toBeUndefined();
+    expect(await readFile(path, "utf8")).toBe(text);
+  });
+
   test("revoking the owner clears it and the remaining single sender is not promoted", async () => {
     await v1([approvedAt("7"), approvedAt("8")]);
     const p = make();
