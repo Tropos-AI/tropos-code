@@ -619,16 +619,45 @@ describe("autonomy in chats and scheduled runs", () => {
     expect(await gw.done).toBe(0);
   });
 
-  test("without confinement or consent, a level raised in gateway.json still asks", async () => {
+  test("without confinement or consent, the owner's chat is told so and nothing runs, whatever the level", async () => {
     await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host" } });
-    // No backend seam: the gateway picks the real one, and with no confinement that is the bare host.
-    const gw = startGateway([bash("b1", "ls"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
+    // No backend seam: the gateway picks the real one, and with no confinement there is none it may use.
+    const gw = startGateway([bash("b1", "touch made"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
     await server.waitFor(() => server.commands.length > 0);
     await pairChat();
-    server.pushMessage(CHAT, CHAT, "list the files");
-    expect(await approve(CHAT, 1)).toContain("ls");
+    server.pushMessage(CHAT, CHAT, "make a file");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("can't be confined on this machine")));
+    expect(gw.model.requests).toHaveLength(0);
+    expect(keyboards(CHAT)).toHaveLength(0);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("without confinement, the owner's recorded consent runs the owner's chat unconfined at its level", async () => {
+    await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host", allowUnconfined: true } });
+    const gw = startGateway([bash("b1", "touch consented"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "make a file");
     await server.waitFor(() => server.textsTo(CHAT).includes("done"));
-    expect(gw.workspaces).toEqual([]);
+    expect(keyboards(CHAT)).toHaveLength(0); // autonomous applies
+    expect(await Bun.file(join(home, "workspace", "consented")).exists()).toBe(true); // on the host, in the project
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a guest's chat runs commands only in Docker: without it, the guest is told so and nothing runs", async () => {
+    await writeGatewayJson({ chat: { autonomy: "balanced", backend: "host", allowUnconfined: true } });
+    const gw = startGateway([say("owner here")], [], { seams: { sandboxCheck: async () => "Docker isn't running" } });
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT); // the owner
+    await pair(GUEST);
+    server.pushMessage(GUEST, GUEST, "hi");
+    await server.waitFor(() => server.textsTo(GUEST).some((t) => t.includes("commands from this chat need Docker on the owner's machine")));
+    expect(gw.model.requests).toHaveLength(0);
+    // The owner's chat is on the host and doesn't need Docker.
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.textsTo(CHAT).includes("owner here"));
     gw.stop();
     expect(await gw.done).toBe(0);
   });
@@ -667,33 +696,31 @@ describe("autonomy in chats and scheduled runs", () => {
     expect(await gw.done).toBe(0);
   });
 
-  test("a gateway.json broken after start keeps the last good settings on reload; open chats keep their level", async () => {
-    const gw = startGateway([bash("b1", "ls"), say("one"), bash("b2", "ls"), say("two")]);
+  test("a gateway.json broken mid-turn keeps the last good settings: the turn's next command is still judged at balanced", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gw = startGateway([async () => (await gate, reply([toolUseBlock("b1", "Bash", { command: "ls" })], "tool_use")), say("one")]);
     const info = await gw.running();
     await server.waitFor(() => server.commands.length > 0);
     await pairChat();
     server.pushMessage(CHAT, CHAT, "list the files");
-    await server.waitFor(() => server.textsTo(CHAT).includes("one"));
+    await server.waitFor(() => gw.model.requests.length === 1);
+    // The file breaks while the turn runs, and a reload reads it: the live settings stay the last good ones.
     await Bun.write(join(home, "gateway.json"), "{not json");
     await info.reload();
     expect(gw.err.join("")).toContain("keeping the last good settings");
-    // The session reload retired is rebuilt on the next message, after the file is fixed, still at balanced.
-    await Bun.write(join(home, "gateway.json"), JSON.stringify({ chat: { autonomy: "balanced", backend: "host" } }));
-    server.pushMessage(CHAT, CHAT, "again");
-    await server.waitFor(() => server.textsTo(CHAT).includes("two"));
-    expect(keyboards(CHAT)).toHaveLength(0);
+    release();
+    await server.waitFor(() => server.textsTo(CHAT).includes("one"));
+    expect(keyboards(CHAT)).toHaveLength(0); // ls was decided with the file broken, at balanced
+    expect(resultIn(gw.model, 1)).toContain("README.md");
     gw.stop();
     expect(await gw.done).toBe(0);
   });
 
-  test("a scheduled run uses the project's level: at balanced, a read-only command runs and an install is denied", async () => {
-    let deps: GatewayServiceDeps | undefined;
-    const service: GatewayService = { name: "probe", start: async (d) => void (deps = d), stop: async () => {} };
-    const gw = startGateway([bash("b1", "ls"), bash("b2", "npm install left-pad"), say("done")], [service]);
-    await gw.running();
-    const session = await deps!.openSession("default");
+  /** Opens a scheduled run's session as the job runner does: nobody is there, so whatever still asks is denied. */
+  async function scheduledRun(deps: GatewayServiceDeps) {
+    const session = await deps.openSession("default");
     const asked: string[] = [];
-    // As the job runner does: nobody is there, so whatever still asks is denied.
     session.attach({
       event: () => {},
       ask: (id, prompt) => {
@@ -703,10 +730,45 @@ describe("autonomy in chats and scheduled runs", () => {
       askClosed: () => {},
       state: () => {},
     });
+    return { session, asked };
+  }
+
+  function startWithProbe(steps: Step[]) {
+    let deps: GatewayServiceDeps | undefined;
+    const service: GatewayService = { name: "probe", start: async (d) => void (deps = d), stop: async () => {} };
+    const gw = startGateway(steps, [service]);
+    return { gw, deps: async () => (await gw.running(), deps!) };
+  }
+
+  test("a scheduled run uses the project's level: at balanced, a read-only command runs and an install is denied", async () => {
+    const { gw, deps } = startWithProbe([bash("b1", "ls"), bash("b2", "npm install left-pad"), say("done")]);
+    const { session, asked } = await scheduledRun(await deps());
     expect(await session.prompt("check the project")).toBe("end_turn");
     expect(asked).toEqual(["npm install left-pad"]);
     expect(resultIn(gw.model, 1)).toContain("README.md");
     expect(resultIn(gw.model, 2)).toContain("The user declined this action");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a scheduled run at ask: everything that would ask is denied, a read-only command too", async () => {
+    await writeGatewayJson({ chat: { autonomy: "ask", backend: "host" } });
+    const { gw, deps } = startWithProbe([bash("b1", "ls"), say("done")]);
+    const { session, asked } = await scheduledRun(await deps());
+    expect(await session.prompt("check the project")).toBe("end_turn");
+    expect(asked).toEqual(["ls"]);
+    expect(resultIn(gw.model, 1)).toContain("The user declined this action");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a scheduled run at autonomous: a command in the project runs unasked", async () => {
+    await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host" } });
+    const { gw, deps } = startWithProbe([bash("b1", "touch by-the-job"), say("done")]);
+    const { session, asked } = await scheduledRun(await deps());
+    expect(await session.prompt("make a file")).toBe("end_turn");
+    expect(asked).toEqual([]);
+    expect(await Bun.file(join(home, "workspace", "by-the-job")).exists()).toBe(true);
     gw.stop();
     expect(await gw.done).toBe(0);
   });

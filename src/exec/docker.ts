@@ -40,8 +40,9 @@ const OWNER_LABEL = "tropos.pid";
  * runs what is in them. A path that doesn't exist yet can't be protected by a mount, so the ones git itself
  * would create are created empty first (an empty hooks dir and config change nothing for git).
  *
- * Covered: `.git/hooks`, `.git/config`, the same under `.git/modules/**` (submodules), `.husky`, and a `.git`
- * gitfile (worktrees, submodule checkouts), whose target lives outside the mount anyway. Not covered: a workspace
+ * Covered: `.git/hooks`, `.git/config`, the same under `.git/modules/**` (submodules), `.husky`, `.tropos` (the repo's
+ * settings and deny rules), and a `.git` gitfile (worktrees, submodule checkouts), whose target lives outside the
+ * mount anyway. Not covered: a workspace
  * with no `.git` at all, where a command could `git init` one; the daemon warns about that.
  */
 export function protectedPaths(workspace: string): string[] {
@@ -96,6 +97,14 @@ export function protectedPaths(workspace: string): string[] {
   }
   const husky = join(workspace, ".husky");
   if (existsSync(husky) || isLink(husky)) out.push(resolve(husky));
+  // The repo's settings hold its deny rules, which a command must not strip: `.tropos` read-only, as under bwrap,
+  // and an empty one when missing so a command can't create settings there either.
+  const tropos = join(workspace, ".tropos");
+  if (existsSync(tropos) || isLink(tropos)) out.push(resolve(tropos));
+  else {
+    mkdirSync(tropos);
+    out.push(tropos);
+  }
   return out;
 }
 

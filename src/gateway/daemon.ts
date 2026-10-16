@@ -227,7 +227,12 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const check = run.seams?.sandboxCheck ?? dockerCheck();
   const confinement = run.seams?.confinement ?? confinementAvailable;
   const userHome = run.seams?.userHome ?? homedir();
-  if (run.seams?.sweep !== false && !run.seams?.backend && live.chat.backend === "docker") await sweepLeftoverContainers().catch(() => 0);
+  // Guests' sessions use Docker whatever chat.backend says, so leftovers are swept either way; only a Docker-backed
+  // gateway waits for it (it was always started this way).
+  if (run.seams?.sweep !== false && !run.seams?.backend) {
+    const sweeping = sweepLeftoverContainers().catch(() => 0);
+    if (live.chat.backend === "docker") await sweeping;
+  }
 
   // The role each open session was created with, so the reaper can close an owner session when ownership moves.
   const roles = new Map<string, SessionRole>();
@@ -252,9 +257,11 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const { pc, release } = await contexts.acquire(project);
       let exec: { backend: ExecBackend; confined: boolean } | undefined;
       try {
-        // Fail closed: Docker chosen and not up, or a project that can't be confined, means no session.
+        const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
+        // Fail closed: no Docker for a session that needs it, or no confinement it may go without, means no session.
         exec = await chatBackend({
           config,
+          role,
           workspace: pc.ctx.cwd,
           home,
           userHome,
@@ -263,7 +270,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           dockerCheck: check,
           override: run.seams?.backend,
         });
-        const handle = await startSession(key, saved, pc, exec);
+        const handle = await startSession(key, saved, pc, role, exec);
         return {
           ...handle,
           close: async () => {
@@ -286,13 +293,18 @@ export async function runGateway(run: GatewayRun): Promise<number> {
    * A chat's session on its project's context: its backend, its role's tools, its autonomy, and its transcript
    * (resumed when saved).
    */
-  const startSession = async (key: string, saved: string | undefined, pc: ProjectContext, exec: { backend: ExecBackend; confined: boolean }): Promise<HostHandle> => {
+  const startSession = async (
+    key: string,
+    saved: string | undefined,
+    pc: ProjectContext,
+    role: SessionRole,
+    exec: { backend: ExecBackend; confined: boolean },
+  ): Promise<HostHandle> => {
     const cwd = pc.ctx.cwd;
     const { backend, confined } = exec;
     const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
     const { ctx: base, setSessionId } = await pc.newSessionContext();
-    const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
-    // Read on every permission decision, from the live config: guests and unconsented unconfined sessions stay at ask.
+    // Read on every permission decision, from the live config; guests stay at ask (sessionAutonomy).
     const sessionCtx = channelContext(base, backend, {
       role,
       autonomy: () => ({ level: sessionAutonomy({ config: live, projectId, role, confined }), testCommands: pinnedTestCommands(live, projectId) }),

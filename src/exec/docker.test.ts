@@ -1,7 +1,7 @@
 // src/exec/docker.test.ts — integration tests against a REAL container. Skipped when Docker (or the image) is unavailable.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -94,12 +94,29 @@ describe("protectedPaths", () => {
     const ws = await makeTmpDir("tropos-prot-");
     try {
       await mkdir(join(ws, ".git"));
-      expect(protectedPaths(ws)).toEqual([join(ws, ".git", "hooks"), join(ws, ".git", "config"), join(ws, ".git", "config.worktree")]);
+      expect(protectedPaths(ws)).toEqual([join(ws, ".git", "hooks"), join(ws, ".git", "config"), join(ws, ".git", "config.worktree"), join(ws, ".tropos")]);
       expect(existsSync(join(ws, ".git", "hooks"))).toBe(true);
       expect(readFileSync(join(ws, ".git", "config"), "utf8")).toBe("");
       expect(readFileSync(join(ws, ".git", "config.worktree"), "utf8")).toBe("");
     } finally {
       await removeDir(ws);
+    }
+  });
+  test("the repo's .tropos (its settings and deny rules) is read-only; an empty one is created when missing, as under bwrap", async () => {
+    const ws = await makeTmpDir("tropos-prot-");
+    const outside = await makeTmpDir("tropos-out-");
+    try {
+      expect(protectedPaths(ws)).toEqual([join(ws, ".tropos")]);
+      expect(readdirSync(join(ws, ".tropos"))).toEqual([]);
+      await writeFile(join(ws, ".tropos", "settings.json"), '{"permissions":{"deny":["Bash(rm:*)"]}}');
+      expect(protectedPaths(ws)).toEqual([join(ws, ".tropos")]);
+      expect(readFileSync(join(ws, ".tropos", "settings.json"), "utf8")).toContain("deny");
+      await removeDir(join(ws, ".tropos"));
+      await symlink(outside, join(ws, ".tropos"));
+      expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
+    } finally {
+      await removeDir(ws);
+      await removeDir(outside);
     }
   });
   test("an existing config is left as it is", async () => {
@@ -141,13 +158,13 @@ describe("protectedPaths", () => {
       await removeDir(ws);
     }
   });
-  test("a .git file (worktree, submodule checkout) is protected as a file; .husky only when present; no .git means nothing to mount", async () => {
+  test("a .git file (worktree, submodule checkout) is protected as a file; .husky only when present; no .git means no git mounts", async () => {
     const ws = await makeTmpDir("tropos-prot-");
     try {
-      expect(protectedPaths(ws)).toEqual([]);
+      expect(protectedPaths(ws)).toEqual([join(ws, ".tropos")]);
       await writeFile(join(ws, ".git"), "gitdir: ../elsewhere\n");
       await mkdir(join(ws, ".husky"));
-      expect(protectedPaths(ws)).toEqual([join(ws, ".git"), join(ws, ".husky")]);
+      expect(protectedPaths(ws)).toEqual([join(ws, ".git"), join(ws, ".husky"), join(ws, ".tropos")]);
     } finally {
       await removeDir(ws);
     }
