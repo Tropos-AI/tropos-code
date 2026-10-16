@@ -33,8 +33,12 @@ export class WebHost {
   private usage = { contextTokens: 0, totalCostUsd: 0 as number | undefined };
   private turns = 0;
   private turnStartedAt: number | undefined;
+  private idleWaiters: Array<() => void> = [];
+  private closed = false;
+  /** A runtime swap in progress: a prompt sent meanwhile waits for it instead of failing as busy. */
+  private swapping: Promise<void> | undefined;
 
-  constructor(private readonly runtime: Runtime) {
+  constructor(private runtime: Runtime) {
     this.agent = runtime.newAgent(this.ui);
   }
 
@@ -62,8 +66,39 @@ export class WebHost {
   }
 
   async shutdown(opts?: { finalReview?: boolean }): Promise<void> {
+    this.closed = true;
     this.controller?.abort();
     await this.runtime.shutdown(opts);
+  }
+
+  /** Resolves once no turn (or other busy operation) is running. */
+  whenIdle(): Promise<void> {
+    return this.busy ? new Promise((resolve) => this.idleWaiters.push(resolve)) : Promise.resolve();
+  }
+
+  /**
+   * Moves the conversation onto the runtime `build` makes from the old one (the gateway reloaded its settings). A
+   * running turn finishes on the old runtime first; prompts wait out the swap as busy. `build` returns undefined to
+   * keep the old one; after shutdown nothing is swapped in.
+   */
+  async replaceRuntime(build: (old: Runtime) => Promise<Runtime | undefined>): Promise<void> {
+    while (this.busy) await this.whenIdle();
+    if (this.closed) return;
+    const swap = this.exclusive(async () => {
+      const next = await build(this.runtime);
+      if (!next) return;
+      if (this.closed) return void (await next.shutdown({ finalReview: false }).catch(() => {}));
+      this.runtime = next;
+      await next.start((level, text) => this.onEvent({ type: "notice", level, text })).catch(() => {});
+      this.agent = next.newAgent(this.ui);
+      this.broadcast({ t: "hello", server: this.hello() });
+    });
+    this.swapping = swap.catch(() => {});
+    try {
+      await swap;
+    } finally {
+      this.swapping = undefined;
+    }
   }
 
   hello(): HelloInfo {
@@ -173,6 +208,7 @@ export class WebHost {
       this.controller = null;
       this.busy = false;
       this.broadcastState();
+      for (const resolve of this.idleWaiters.splice(0)) resolve();
     }
   }
 
@@ -185,6 +221,7 @@ export class WebHost {
         const p = params as RpcMap["prompt"]["params"];
         const command = p?.command && typeof p.command.name === "string" ? { name: p.command.name, args: typeof p.command.args === "string" ? p.command.args : "" } : null;
         if (!command && (typeof p?.text !== "string" || !p.text.trim())) throw new RpcError("Nothing to send.");
+        await this.swapping;
         this.needIdle();
         this.turnStartedAt = Date.now();
         try {

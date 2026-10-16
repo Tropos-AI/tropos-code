@@ -1,13 +1,13 @@
 // src/gateway/daemon.test.ts — the pieces of the daemon that the end-to-end tests don't reach.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { FakeModel, reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
+import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
 import { CronStore } from "./cron/store";
 import { loadGatewayConfig } from "./config";
-import { dockerCheck, persistentToken, readGatewayState } from "./daemon";
+import { dockerCheck, persistentToken, readGatewayState, type GatewayRun } from "./daemon";
 
 let dir: string;
 beforeEach(async () => {
@@ -168,6 +168,92 @@ describe("tcode gateway", () => {
     const run = start(["--no-web", "--workspace", dir]);
     expect(await run.done).toBe(1);
     expect(run.err.join("")).toMatch(/pick a project directory/);
+  });
+});
+
+describe("the dashboard's chat across a reload", () => {
+  type UntilInfo = Parameters<NonNullable<GatewayRun["until"]>>[0];
+  const text = (t: string): Step => () => reply([textBlock(t)]);
+  const memoryAdd: Step = () => reply([toolUseBlock("m1", "Memory", { target: "user", action: "add", content: "prefers bun" })], "tool_use");
+  const saveSettings = async (settings: unknown) => {
+    await mkdir(join(dir, "home"), { recursive: true });
+    await writeFile(join(dir, "home", "settings.json"), JSON.stringify(settings));
+  };
+
+  /** The gateway with its web UI, and one dashboard tab that answers every permission question with allow. */
+  async function dashboard(steps: Step[]) {
+    await mkdir(join(dir, "project"), { recursive: true });
+    const model = new FakeModel(steps);
+    let info: UntilInfo | undefined;
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    const done = main(["gateway"], {
+      model,
+      out: () => {},
+      err: () => {},
+      env: { TROPOS_HOME: join(dir, "home"), SHELL: "/bin/bash" },
+      cwd: join(dir, "project"),
+      gatewayUntil: async (i) => {
+        info = i;
+        await stopped;
+      },
+      gatewaySeams: { sweep: false, assets: new Map() },
+    });
+    while (!info) await Bun.sleep(20);
+    const url = new URL(info.webUrl!);
+    const base = `http://127.0.0.1:${url.port}`;
+    const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${url.searchParams.get("token")}`, Origin: base } } as unknown as string[]);
+    const asked: string[] = [];
+    const pending = new Map<number, () => void>();
+    ws.onmessage = (e) => {
+      const m = JSON.parse(String(e.data)) as { t: string; id?: number; prompt?: { toolName: string } };
+      if (m.t === "ask") {
+        asked.push(m.prompt!.toolName);
+        ws.send(JSON.stringify({ t: "permission", id: m.id, answer: { kind: "allow" } }));
+      }
+      if (m.t === "rpc_result") pending.get(m.id!)?.();
+    };
+    await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
+    let next = 1;
+    const prompt = (t: string) =>
+      new Promise<void>((resolve) => {
+        const id = next++;
+        pending.set(id, resolve);
+        ws.send(JSON.stringify({ t: "rpc", id, method: "prompt", params: { text: t } }));
+      });
+    const finish = async () => {
+      ws.close();
+      stop();
+      expect(await done).toBe(0);
+    };
+    return { model, info, prompt, asked, finish };
+  }
+
+  test("a deny rule saved while it is idle holds from its next turn, which goes on with the same conversation", async () => {
+    const gw = await dashboard([text("hi there"), memoryAdd, text("ok")]);
+    await gw.prompt("hello");
+    await saveSettings({ permissions: { deny: ["Memory"] } });
+    await gw.info.reload();
+    await gw.prompt("remember that I prefer bun");
+    expect(JSON.stringify(gw.model.requests[2]!.messages.at(-1))).toContain("Blocked by the deny rule");
+    expect(JSON.stringify(gw.model.requests[1]!.messages)).toContain("hi there");
+    await gw.finish();
+  });
+
+  test("askBeforeSaving saved during a turn doesn't hold up the save; the next turn asks before saving", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gw = await dashboard([async () => (await gate, reply([textBlock("first answer")])), memoryAdd, text("ok")]);
+    const turn = gw.prompt("hello");
+    while (gw.model.requests.length < 1) await Bun.sleep(10);
+    await saveSettings({ learning: { askBeforeSaving: true } });
+    await gw.info.reload();
+    release();
+    await turn;
+    await gw.prompt("remember that I prefer bun");
+    expect(gw.asked).toEqual(["Memory"]);
+    expect(JSON.stringify(gw.model.requests[1]!.messages)).toContain("first answer");
+    await gw.finish();
   });
 });
 
