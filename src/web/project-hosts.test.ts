@@ -214,3 +214,107 @@ describe("ProjectHosts", () => {
     expect(a.result(3)).toMatchObject({ ok: false });
   });
 });
+
+describe("ProjectHosts when projects change", () => {
+  /** Projects that tests edit, as the registry would after a remove, an add or a new default. */
+  async function world() {
+    const projects = new Map(Object.values(PROJECTS).map((p) => [p.id, { ...p }]));
+    let defaultId = "default";
+    const opened: Array<{ id: string; path: string; fake: ReturnType<typeof fakeHost> }> = [];
+    const router = await ProjectHosts.create({
+      get: async (id) => projects.get(id),
+      defaultId: async () => defaultId,
+      open: async (id) => {
+        const fake = fakeHost(id);
+        opened.push({ id, path: projects.get(id)!.path, fake });
+        return fake.host;
+      },
+    });
+    const setDefault = (id: string) => void (defaultId = id);
+    return { router, projects, opened, setDefault };
+  }
+
+  test("a removed project's tabs move to the default project at the next refresh, and its host is shut down", async () => {
+    const { router, projects, opened } = await world();
+    const a = tab();
+    router.attach(a.send);
+    await a.rpc(router, 1, "project.select", "app");
+    projects.delete("app");
+    await router.refresh();
+    expect(hellos(a.seen).at(-1)).toMatchObject({ sessionId: "s-default", project: { id: "default" } });
+    const app = opened.find((o) => o.id === "app")!.fake;
+    expect(app.shutdowns()).toBe(1);
+    expect(app.detached).toHaveLength(1);
+    await a.rpc(router, 2, "prompt", { text: "hi" });
+    expect(opened[0]!.fake.handled.map((h) => h.message.t)).toEqual(["rpc"]);
+  });
+
+  test("a project removed and re-added at a new path under the same id opens the new path, with or without a refresh", async () => {
+    const { router, projects, opened } = await world();
+    const a = tab();
+    router.attach(a.send);
+    await a.rpc(router, 1, "project.select", "app");
+    await a.rpc(router, 2, "project.select", "default");
+    projects.set("app", { id: "app", name: "App", path: "/elsewhere/app" });
+    // No refresh (`tcode projects add` doesn't reload the gateway): selecting it notices the new path.
+    await a.rpc(router, 3, "project.select", "app");
+    expect(opened.filter((o) => o.id === "app").map((o) => o.path)).toEqual(["/w/app", "/elsewhere/app"]);
+    expect(opened[1]!.fake.shutdowns()).toBe(1);
+    expect(hellos(a.seen).at(-1)).toMatchObject({ project: { id: "app" } });
+    // And a refresh after another move closes the old host and leaves the tab in the default.
+    projects.set("app", { id: "app", name: "App", path: "/third/app" });
+    await router.refresh();
+    expect(opened[2]!.fake.shutdowns()).toBe(1);
+    expect(hellos(a.seen).at(-1)).toMatchObject({ project: { id: "default" } });
+  });
+
+  test("when the default project is removed, its tabs and new tabs land on the new default", async () => {
+    const { router, projects, setDefault, opened } = await world();
+    const a = tab();
+    router.attach(a.send);
+    projects.delete("default");
+    setDefault("site");
+    await router.refresh();
+    expect(hellos(a.seen).at(-1)).toMatchObject({ sessionId: "s-site", project: { id: "site", name: "Site" } });
+    expect(opened[0]!.fake.shutdowns()).toBe(1);
+    const b = tab();
+    router.attach(b.send);
+    expect(hellos(b.seen)).toEqual([expect.objectContaining({ project: { id: "site", name: "Site" } })]);
+  });
+
+  test("a new default (the old one still there) applies to new tabs; open tabs stay", async () => {
+    const { router, setDefault } = await world();
+    const a = tab();
+    router.attach(a.send);
+    setDefault("app");
+    await router.refresh();
+    expect(hellos(a.seen)).toHaveLength(1);
+    const b = tab();
+    router.attach(b.send);
+    expect(hellos(b.seen)[0]).toMatchObject({ project: { id: "app" } });
+  });
+
+  test("interrupt and permission answers aren't held up by a move that hangs", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const hosts = new Map<string, ReturnType<typeof fakeHost>>();
+    const router = await ProjectHosts.create({
+      get: async (id) => PROJECTS[id],
+      defaultId: async () => "default",
+      open: async (id) => {
+        if (id === "app") await gate;
+        const h = fakeHost(id);
+        hosts.set(id, h);
+        return h.host;
+      },
+    });
+    const a = tab();
+    router.attach(a.send);
+    const moving = a.rpc(router, 1, "project.select", "app");
+    await a.rpc(router, 2, "interrupt");
+    await router.handle({ t: "permission", id: 5, answer: { kind: "deny" } }, a.send);
+    expect(hosts.get("default")!.handled.map((h) => h.message.t)).toEqual(["rpc", "permission"]);
+    release();
+    await moving;
+  });
+});

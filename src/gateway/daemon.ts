@@ -385,8 +385,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let state: GatewayState | undefined;
   let stopping = false;
   // The dashboard's chat: one host per project a tab opened. A reload moves each onto its project's fresh context.
-  const dashboardHosts = new Map<string, { host: WebHost; cwd: string; swaps: Promise<void>; rebuild(): Promise<void> }>();
-  // Counts reloads, so a host that was opening during one is rebuilt once it is open.
+  // `builtAt` is the reload count its context comes from, so a host that was opening during a reload is rebuilt too.
+  const dashboardHosts = new Map<WebHost, { cwd: string; builtAt: number; swaps: Promise<void>; rebuild(): Promise<void> }>();
   let reloads = 0;
   let reloading: Promise<void> = Promise.resolve();
   const reloadOnce = async (): Promise<void> => {
@@ -406,10 +406,17 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     contexts.invalidate();
     reloads++;
     await pool.retire();
+    // A project removed (or moved under the same id) loses its dashboard chat, whose tabs go to the default project;
+    // the default is read again for new tabs.
+    await chatHosts?.refresh().catch((e: unknown) => run.err(`gateway: the dashboard's chat keeps its old projects: ${e instanceof Error ? e.message : String(e)}\n`));
     // An idle dashboard chat is rebuilt before the reload returns; a busy one after its turn, without holding the save.
     await Promise.all(
-      [...dashboardHosts.values()].map((d) => {
-        const idle = !d.host.state().busy;
+      [...dashboardHosts].map(([host, d]) => {
+        if (host.isShutDown()) return void dashboardHosts.delete(host);
+        // Opened during this reload, on the fresh context already.
+        if (d.builtAt === reloads) return undefined;
+        d.builtAt = reloads;
+        const idle = !host.state().busy;
         const rebuilt = d.rebuild();
         return idle ? rebuilt : undefined;
       }),
@@ -476,8 +483,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         // A reload moves this chat onto the project's fresh context (settings, rules, MCP servers), resuming its
         // session; a running turn finishes first.
         const entry = {
-          host,
           cwd: runtime.cwd,
+          builtAt: generation,
           swaps: Promise.resolve(),
           rebuild: (): Promise<void> =>
             (entry.swaps = entry.swaps
@@ -492,15 +499,18 @@ export async function runGateway(run: GatewayRun): Promise<number> {
               )
               .catch((e: unknown) => run.err(`gateway: the dashboard's chat in ${project.id} keeps its old settings: ${e instanceof Error ? e.message : String(e)}\n`))),
         };
-        dashboardHosts.set(project.id, entry);
+        dashboardHosts.set(host, entry);
         // A reload that ran while this opened may have left it on the old context.
-        if (reloads !== generation) void entry.rebuild();
+        if (entry.builtAt !== reloads) {
+          entry.builtAt = reloads;
+          void entry.rebuild();
+        }
         return host;
       };
-      // New tabs start in the default project; a tab moves with project.select.
-      const defaultId = await source.defaultId();
-      chatHosts = await ProjectHosts.create({ get: (id) => source.get(id), defaultId: async () => defaultId, open: openDashboard });
-      const cwd = dashboardHosts.get(defaultId)!.cwd;
+      // New tabs start in the default project (read again at each reload); a tab moves with project.select.
+      chatHosts = await ProjectHosts.create({ get: (id) => source.get(id), defaultId: () => source.defaultId(), open: openDashboard });
+      // The one host create opened: the default project's.
+      const cwd = [...dashboardHosts.values()][0]!.cwd;
       const assets = run.seams?.assets ?? (await loadAssets());
       const admin = createAdmin({
         home,

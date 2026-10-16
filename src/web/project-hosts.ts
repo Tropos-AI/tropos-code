@@ -12,13 +12,21 @@ export interface ChatHost {
 }
 
 export interface ProjectHostsOptions {
-  get(id: string): Promise<{ id: string; name: string } | undefined>;
+  /** `path`, when given, tells a project that was removed and re-added under the same id from the one a host is on. */
+  get(id: string): Promise<{ id: string; name: string; path?: string } | undefined>;
   defaultId(): Promise<string>;
   /** The project's host, started; its `shutdown` releases what it holds. Called once per project. */
   open(projectId: string): Promise<WebHost>;
 }
 
 type ProjectRef = NonNullable<HelloInfo["project"]>;
+type Found = { id: string; name: string; path?: string };
+
+interface Opened {
+  opening: Promise<WebHost>;
+  /** The project's path when it was opened. */
+  path?: string;
+}
 
 interface Tab {
   project: ProjectRef;
@@ -26,32 +34,51 @@ interface Tab {
   /** What the host knows this tab by: the tab's sender, naming the project in every hello. */
   send: Send;
   detach(): void;
-  /** A project.select in progress; the tab's requests wait for it, so a prompt sent right after goes to the new one. */
+  /**
+   * A project.select in progress; the tab's requests wait for it, so a prompt sent right after goes to the new one.
+   * Permission answers and interrupt don't: they act on the host the tab is still on, and must not hang on an open.
+   */
   moving?: Promise<void>;
 }
 
-const ref = (p: { id: string; name: string }): ProjectRef => ({ id: p.id, name: p.name });
+const ref = (p: Found): ProjectRef => ({ id: p.id, name: p.name });
 
 export class ProjectHosts implements ChatHost {
   /** Opened (or opening) hosts by project id; a failed open is dropped so a later select tries again. */
-  private readonly hosts = new Map<string, Promise<WebHost>>();
+  private readonly hosts = new Map<string, Opened>();
   /** Open tabs by the sender the server knows them by. */
   private readonly tabs = new Map<Send, Tab>();
   private closed = false;
 
-  private constructor(
-    private readonly opts: ProjectHostsOptions,
-    private readonly start: { project: ProjectRef; host: WebHost },
-  ) {
-    this.hosts.set(start.project.id, Promise.resolve(start.host));
-  }
+  /** Where new tabs start: the default project as last read (create, refresh). */
+  private start!: { project: ProjectRef; host: WebHost };
+
+  private constructor(private readonly opts: ProjectHostsOptions) {}
 
   /** Opens the default project's host up front: a broken default project fails here, as the single host did. */
   static async create(opts: ProjectHostsOptions): Promise<ProjectHosts> {
-    const id = await opts.defaultId();
-    const project = await opts.get(id);
-    if (!project) throw new Error(`There is no project "${id}".`);
-    return new ProjectHosts(opts, { project: ref(project), host: await opts.open(id) });
+    const hosts = new ProjectHosts(opts);
+    await hosts.readDefault();
+    return hosts;
+  }
+
+  /**
+   * After the projects changed (a reload): a host whose project was removed, or now has another path under the same
+   * id, is closed and its tabs move to the default project, which is read again for them and for new tabs.
+   */
+  async refresh(): Promise<void> {
+    if (this.closed) return;
+    const stale: string[] = [];
+    for (const [id, opened] of [...this.hosts]) {
+      const now = await this.opts.get(id);
+      if (!now || now.path !== opened.path) stale.push(id);
+    }
+    await this.evict(stale);
+  }
+
+  /** Closes the project's host; its tabs move to the (re-read) default project. */
+  close(projectId: string): Promise<void> {
+    return this.evict([projectId]);
   }
 
   attach(send: Send): () => void {
@@ -74,7 +101,7 @@ export class ProjectHosts implements ChatHost {
     if (!tab) return this.start.host.handle(message, reply);
     if (message.t === "rpc" && message.method === "project.select") return this.select(tab, message.id, message.params, reply);
     // A permission answer goes at once: the prompt it answers is on the host the tab is still attached to.
-    if (tab.moving && message.t !== "permission") await tab.moving;
+    if (tab.moving && message.t !== "permission" && !(message.t === "rpc" && message.method === "interrupt")) await tab.moving;
     // The tab's own sender, so the host can leave this tab out of what it echoes back.
     return tab.host.handle(message, tab.send);
   }
@@ -82,7 +109,7 @@ export class ProjectHosts implements ChatHost {
   /** Shuts down every host opened so far, including one still opening. */
   async shutdown(opts?: { finalReview?: boolean }): Promise<void> {
     this.closed = true;
-    const opened = await Promise.allSettled([...this.hosts.values()]);
+    const opened = await Promise.allSettled([...this.hosts.values()].map((o) => o.opening));
     await Promise.all(opened.map((r) => (r.status === "fulfilled" ? r.value.shutdown(opts).catch(() => {}) : undefined)));
   }
 
@@ -92,15 +119,12 @@ export class ProjectHosts implements ChatHost {
       if (typeof params !== "string") throw new RpcError("Which project?");
       const found = await this.opts.get(params);
       if (!found) throw new RpcError(`There is no project "${params}".`);
-      const host = await this.hostFor(found.id);
+      // Removed and re-added elsewhere under the same id since its host opened (without a reload): not that host.
+      const cached = this.hosts.get(found.id);
+      if (cached && cached.path !== found.path) await this.close(found.id);
+      const host = await this.hostFor(found);
       // A tab closed meanwhile stays closed.
-      if (this.tabs.get(reply) === tab) {
-        tab.detach();
-        tab.project = ref(found);
-        tab.host = host;
-        // The new host sends the tab its hello, state and any prompt still waiting for an answer.
-        tab.detach = host.attach(tab.send);
-      }
+      if (this.tabs.get(reply) === tab) this.move(tab, ref(found), host);
       return { ...host.hello(), project: ref(found) };
     };
     const done = (tab.moving ?? Promise.resolve()).then(move).then(
@@ -114,20 +138,67 @@ export class ProjectHosts implements ChatHost {
     return done;
   }
 
-  private async hostFor(projectId: string): Promise<WebHost> {
-    if (this.closed) throw new RpcError("The dashboard is stopping.");
-    let opening = this.hosts.get(projectId);
-    if (!opening) {
-      const fresh = this.opts.open(projectId);
-      fresh.catch(() => {
-        if (this.hosts.get(projectId) === fresh) this.hosts.delete(projectId);
-      });
-      this.hosts.set(projectId, fresh);
-      opening = fresh;
+  /** The new host sends the tab its hello, state and any prompt still waiting for an answer. */
+  private move(tab: Tab, project: ProjectRef, host: WebHost): void {
+    tab.detach();
+    tab.project = project;
+    tab.host = host;
+    tab.detach = host.attach(tab.send);
+  }
+
+  private async readDefault(): Promise<void> {
+    const id = await this.opts.defaultId();
+    const project = await this.opts.get(id);
+    if (!project) throw new Error(`There is no project "${id}".`);
+    this.start = { project: ref(project), host: await this.hostFor(project) };
+  }
+
+  /**
+   * Drops the hosts first, so the default read next opens afresh when it was one of them; then moves their tabs there
+   * and shuts them down. When the default can't be opened, nothing is closed: the tabs would have nowhere to go.
+   */
+  private async evict(ids: string[]): Promise<void> {
+    const gone = ids.flatMap((id) => {
+      const opened = this.hosts.get(id);
+      if (!opened) return [];
+      this.hosts.delete(id);
+      return [[id, opened] as const];
+    });
+    try {
+      await this.readDefault();
+    } catch (e) {
+      for (const [id, opened] of gone) if (!this.hosts.has(id)) this.hosts.set(id, opened);
+      throw e;
     }
-    const host = await opening;
+    for (const [, opened] of gone) {
+      const host = await opened.opening.catch(() => undefined);
+      if (!host) continue;
+      for (const tab of this.tabs.values()) if (tab.host === host) this.move(tab, this.start.project, this.start.host);
+      // Its project is gone: the conversation ends here, without holding up the reload for a final review.
+      await host.shutdown({ finalReview: false }).catch(() => {});
+    }
+  }
+
+  private async hostFor(project: Found): Promise<WebHost> {
+    if (this.closed) throw new RpcError("The dashboard is stopping.");
+    let opened = this.hosts.get(project.id);
+    if (!opened) {
+      const fresh: Opened = { opening: this.opts.open(project.id), path: project.path };
+      fresh.opening.catch(() => {
+        if (this.hosts.get(project.id) === fresh) this.hosts.delete(project.id);
+      });
+      this.hosts.set(project.id, fresh);
+      opened = fresh;
+    }
+    const host = await opened.opening;
     // shutdown() stopped it while it opened.
     if (this.closed) throw new RpcError("The dashboard is stopping.");
+    // Evicted while it opened (its project changed): open the project as it is now.
+    if (this.hosts.get(project.id) !== opened) {
+      const now = await this.opts.get(project.id);
+      if (!now) throw new RpcError(`There is no project "${project.id}".`);
+      return this.hostFor(now);
+    }
     return host;
   }
 }

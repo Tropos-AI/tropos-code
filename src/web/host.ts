@@ -76,6 +76,11 @@ export class WebHost {
     await this.runtime.shutdown(opts);
   }
 
+  /** True once shut down: nothing runs here any more. */
+  isShutDown(): boolean {
+    return this.closed;
+  }
+
   /** Resolves once no turn (or other busy operation) is running. */
   whenIdle(): Promise<void> {
     return this.busy ? new Promise((resolve) => this.idleWaiters.push(resolve)) : Promise.resolve();
