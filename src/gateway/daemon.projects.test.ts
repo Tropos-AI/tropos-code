@@ -619,16 +619,33 @@ describe("autonomy in chats and scheduled runs", () => {
     expect(await gw.done).toBe(0);
   });
 
-  test("without confinement or consent, the owner's chat is told so and nothing runs, whatever the level", async () => {
+  test("without confinement or consent, the owner's chat opens on the host but stays at ask, whatever the level", async () => {
     await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host" } });
-    // No backend seam: the gateway picks the real one, and with no confinement there is none it may use.
-    const gw = startGateway([bash("b1", "touch made"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
+    // No backend seam: the gateway picks the real one, and with no confinement the owner's chat gets the bare host.
+    const gw = startGateway([bash("b1", "ls"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
     await server.waitFor(() => server.commands.length > 0);
     await pairChat();
-    server.pushMessage(CHAT, CHAT, "make a file");
-    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("can't be confined on this machine")));
+    server.pushMessage(CHAT, CHAT, "list the files");
+    expect(await approve(CHAT, 1)).toContain("ls");
+    await server.waitFor(() => server.textsTo(CHAT).includes("done"));
+    expect(resultIn(gw.model, 1)).toContain("README.md"); // approved, it ran on the host in the project
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("without confinement, a scheduled run (nobody to approve) gets no session, even with the owner's consent", async () => {
+    await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host", allowUnconfined: true } });
+    let deps: GatewayServiceDeps | undefined;
+    const service: GatewayService = { name: "probe", start: async (d) => void (deps = d), stop: async () => {} };
+    const gw = startGateway([], [service], { seams: { backend: undefined, confinement: async () => null } });
+    await gw.running();
+    const run = async () => {
+      const session = await deps!.openSession("default");
+      session.attach({ event: () => {}, ask: (id) => session.answer(id, { kind: "deny" }), askClosed: () => {}, state: () => {} });
+      return session.prompt("run the job");
+    };
+    await expect(run()).rejects.toThrow("can't be confined on this machine");
     expect(gw.model.requests).toHaveLength(0);
-    expect(keyboards(CHAT)).toHaveLength(0);
     gw.stop();
     expect(await gw.done).toBe(0);
   });

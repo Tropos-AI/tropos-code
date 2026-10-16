@@ -172,11 +172,11 @@ Docker the guest is told "commands from this chat need Docker on the owner's mac
 If a project can't be confined (a linked sandbox cache, a `bwrap` a chat could replace), the chat is told so and
 nothing runs. With Docker chosen and Docker not running, the same: there is no fallback to your shell.
 
-**Without confinement** (no `sandbox-exec`, `bwrap` not installed), your chats get no session until you either
-install `bwrap`, switch chats to Docker, or confirm that their commands may run unconfined, as you (with the same
-allowlisted environment): `tcode config set --file gateway chat.allowUnconfined true` (the setup wizard and the
-dashboard will offer this too). That consent covers your own chats only: scheduled runs then need Docker
-(`chat.backend`), and guests always do.
+**Without confinement** (no `sandbox-exec`, `bwrap` not installed), your own chats run commands unconfined, as you
+(with the same allowlisted environment), and stay at `ask` whatever the level: you approve every command. A higher
+level needs you to confirm that it may run unconfined: `tcode config set --file gateway chat.allowUnconfined true`
+(the setup wizard and the dashboard will offer this too). Scheduled runs have nobody to approve anything, so without
+confinement they need Docker (`chat.backend`), even with that consent; guests always do.
 
 ### How freely a chat acts
 

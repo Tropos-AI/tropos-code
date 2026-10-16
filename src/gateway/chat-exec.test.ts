@@ -92,8 +92,8 @@ test.skipIf(!canConfine)("host: a project that can't be confined fails closed wi
   await expect(promise).rejects.toThrow("sandbox cache");
 });
 
-test("host without confinement, the owner having consented: the host with the allowlisted env, not confined", async () => {
-  const got = await chatBackend(input({ config: config({ backend: "host", allowUnconfined: true }), role: "owner", confinement: async () => null }));
+test("host without confinement, the owner's chat: the host with the allowlisted env, not confined", async () => {
+  const got = await chatBackend(input({ config: config({ backend: "host" }), role: "owner", confinement: async () => null }));
   expect(got.backend.kind).toBe("local");
   expect(got.confined).toBe(false);
   const r = await collect(got.backend.spawn({ shell: "/bin/sh", script: 'echo "${SECRET-unset}|$PWD"', cwd: workspace, env: { SECRET: "passed" } }));
@@ -102,7 +102,8 @@ test("host without confinement, the owner having consented: the host with the al
 
 /**
  * Every role × confinement × Docker, without test backends. Guests (their chats and the jobs made there) approve their
- * own requests, so they get Docker or nothing; nobody but the consenting owner ever gets the bare host.
+ * own requests, so they get Docker or nothing; nobody but the owner's own chat ever gets the bare host, and a scheduled
+ * run (nobody to approve) never does.
  */
 describe("which backend each role gets", () => {
   type Want = "confined" | "docker" | "local" | "no-docker" | "no-confinement" | "docker-down";
@@ -110,15 +111,15 @@ describe("which backend each role gets", () => {
     // role, chat.backend, confinement available, Docker up, consented to unconfined, outcome
     ["owner", "host", true, true, false, "confined"],
     ["owner", "host", true, false, false, "confined"],
-    ["owner", "host", false, true, false, "no-confinement"],
-    ["owner", "host", false, false, false, "no-confinement"],
+    ["owner", "host", false, true, false, "local"],
+    ["owner", "host", false, false, false, "local"],
     ["owner", "host", false, false, true, "local"],
     ["owner", "docker", true, true, false, "docker"],
     ["owner", "docker", false, false, true, "docker-down"],
     ["scheduled", "host", true, true, false, "confined"],
     ["scheduled", "host", true, false, false, "confined"],
     ["scheduled", "host", false, true, true, "no-confinement"],
-    ["scheduled", "host", false, false, true, "no-confinement"],
+    ["scheduled", "host", false, false, false, "no-confinement"],
     ["scheduled", "docker", true, true, false, "docker"],
     ["scheduled", "docker", true, false, false, "docker-down"],
     ["guest", "host", true, true, true, "docker"],

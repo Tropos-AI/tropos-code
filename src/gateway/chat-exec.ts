@@ -11,8 +11,7 @@ import type { SessionRole } from "./types";
 /** Why a guest's session has no backend: their commands run in a container or not at all. */
 export const GUEST_NEEDS_DOCKER = "commands from this chat need Docker on the owner's machine";
 
-const NO_CONFINEMENT =
-  'commands can\'t be confined on this machine (no sandbox-exec or bwrap). Install bwrap, switch chats to Docker, or confirm "run unconfined" on the computer';
+const NO_CONFINEMENT = "commands can't be confined on this machine (no sandbox-exec or bwrap). Install bwrap, or switch chats to Docker";
 
 export interface ChatBackendInput {
   config: GatewayConfig;
@@ -38,7 +37,7 @@ export interface ChatBackendInput {
  * - A guest (their chat, or a job made there) approves its own requests, and the host confinement still lets a command
  *   read the owner's other files: guests get Docker or nothing.
  * - Otherwise `chat.backend` decides: Docker, or the host confined by sandbox-exec/bwrap.
- * - The bare host (no confinement) only for the owner's own chats, and only once they consented to it.
+ * - The bare host (no confinement) only for the owner's own chats; it runs above `ask` only once they consented.
  */
 export async function chatBackend(input: ChatBackendInput): Promise<{ backend: ExecBackend; confined: boolean }> {
   const { config, role, workspace } = input;
@@ -51,7 +50,9 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
   }
   if (input.override) return { backend: input.override(workspace), confined: true };
   if ((await input.confinement()) === null) {
-    if (role === "owner" && config.chat.allowUnconfined) return { backend: unconfinedBackend({ project: workspace, env: input.env }), confined: false };
+    // The owner's own chat approves every command there (sessionAutonomy keeps it at ask until they consented to more);
+    // a scheduled run has nobody to approve anything.
+    if (role === "owner") return { backend: unconfinedBackend({ project: workspace, env: input.env }), confined: false };
     throw new SandboxUnavailableError(NO_CONFINEMENT);
   }
   try {
