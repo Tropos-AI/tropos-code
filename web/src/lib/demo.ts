@@ -232,7 +232,7 @@ class DemoServer {
 
   private hello(): HelloInfo {
     return {
-      version: "0.3.0-demo",
+      version: "0.4.0-demo",
       cwd: CWD,
       sessionId: this.sessionId,
       modes: ["default", "acceptEdits", "plan"],

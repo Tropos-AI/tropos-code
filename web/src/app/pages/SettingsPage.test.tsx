@@ -216,7 +216,7 @@ describe("Settings › Model and About", () => {
     await mountSettings();
     fireEvent.click(await screen.findByRole("tab", { name: "About" }));
     const panel = await screen.findByRole("tabpanel");
-    expect(panel.textContent).toContain("0.3.0");
+    expect(panel.textContent).toContain("0.4.0");
     expect(panel.textContent).toContain("/repo");
     expect(panel.textContent).toContain("6f1c2d9a-4b7e-4e21-9c3a-1d2e3f4a5b6c");
     for (const label of ["Copy the version", "Copy the working directory", "Copy the session id"]) {

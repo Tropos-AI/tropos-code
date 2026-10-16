@@ -59,7 +59,7 @@ export class FakeSocket implements SocketLike {
 }
 
 export const HELLO: HelloInfo = {
-  version: "0.3.0",
+  version: "0.4.0",
   cwd: "/repo",
   sessionId: "s1",
   modes: ["default", "acceptEdits", "plan"],
