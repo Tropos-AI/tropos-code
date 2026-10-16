@@ -103,6 +103,8 @@ export interface Runtime {
   start(notice: (level: "info" | "warn", text: string) => void): Promise<void>;
   /** True when shutdown will wait for the learning review: a final one is due, or one is running. */
   finalReviewDue(): boolean;
+  /** Ctrl+c during shutdown: aborts the final review; SessionEnd and closing the servers still run. */
+  skipFinalReview(): void;
   /**
    * The final learning review (unless `finalReview` is false; it waits at most 30 s), SessionEnd, then closes
    * MCP servers and language servers.

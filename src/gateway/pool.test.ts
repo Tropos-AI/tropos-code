@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
 import { fakeRuntime } from "../../test/helpers/fake-runtime";
+import { settle } from "../../test/helpers/wait";
 import { WebHost } from "../web/host";
 import { SessionPool, type HostHandle } from "./pool";
 import type { ChatSink } from "./types";
@@ -127,6 +128,57 @@ describe("idle sessions", () => {
     await pool.closeAll();
     expect(closed.sort()).toEqual(["telegram:1", "telegram:2"]);
     expect(pool.keys()).toEqual([]);
+  });
+
+  test("a sweep runs alone and never closes a session that was reopened while it ran", async () => {
+    const now = { t: 1_000 };
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const closed: string[] = [];
+    let n = 0;
+    const pool = new SessionPool({
+      statePath: join(dir, "sessions.json"),
+      idleMs: 60_000,
+      now: () => now.t,
+      sweepEveryMs: 0,
+      create: async (key): Promise<HostHandle> => {
+        const id = `session-${++n}`;
+        return {
+          host: new WebHost(fakeRuntime([])),
+          sessionId: () => id,
+          // The first close (a final review, say) takes a while.
+          close: async () => {
+            if (id === "session-1") await gate;
+            closed.push(id);
+          },
+        };
+      },
+    });
+    await pool.open("telegram:1");
+    await pool.open("telegram:2");
+    now.t += 70_000;
+    const first = pool.sweep();
+    await settle();
+    // A second sweep while the first is still closing telegram:1 doesn't start on telegram:2.
+    const second = pool.sweep();
+    await settle();
+    expect(closed).toEqual([]);
+    // Meanwhile telegram:2 is closed by someone else (the reaper) and its chat opens a fresh session.
+    await pool.close("telegram:2");
+    await pool.open("telegram:2");
+    release();
+    expect(await first).toEqual(["telegram:1"]);
+    await second;
+    // session-3, the reopened chat, is still open.
+    expect(closed).toEqual(["session-2", "session-1"]);
+    expect(pool.keys()).toEqual(["telegram:2"]);
+  });
+
+  test("close(key, { finalReview: false }) passes the option on", async () => {
+    const { pool, runtimes } = setup();
+    await pool.open("telegram:1");
+    await pool.close("telegram:1", { finalReview: false });
+    expect(runtimes.get("telegram:1")!.shutdowns).toEqual([{ finalReview: false }]);
   });
 
   test("closeAll shuts hosts down without a final review; close(key) keeps it", async () => {

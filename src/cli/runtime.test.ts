@@ -744,6 +744,24 @@ describe("learning and identity", () => {
     expect(await readCounters()).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
   });
 
+  test("skipFinalReview during shutdown aborts the final review at once; the rest of shutdown still runs", async () => {
+    const final = hanging();
+    await setup([text("a"), text("b"), final.step], LONG);
+    let closed = 0;
+    ctx.ext.searchIndex = { close: () => void closed++ } as unknown as SearchIndex;
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    const closing = rt.shutdown();
+    await final.started;
+    rt.skipFinalReview();
+    await closing;
+    expect(final.signal()!.aborted).toBe(true);
+    expect(closed).toBe(1);
+    expect(await readCounters()).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
+  });
+
   test("shutdown closes the search index", async () => {
     await setup();
     let closed = 0;

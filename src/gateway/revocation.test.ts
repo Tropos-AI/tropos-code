@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
+import { fakeRuntime } from "../../test/helpers/fake-runtime";
+import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { WebHost } from "../web/host";
+import { SessionPool } from "./pool";
 import { reapRevoked } from "./revocation";
 
 const job = (id: string, deliver: string, enabled = true) => ({ id, deliver, enabled });
@@ -34,4 +39,36 @@ test("a session opened as owner is closed once its sender is no longer the owner
     cron: { list: () => [] as never, setEnabled: () => undefined as never },
   });
   expect(closed).toEqual(["telegram:1@a"]);
+});
+
+test("a demoted owner's session closes without a final review: it would still run with owner powers", async () => {
+  const dir = await makeTmpDir("reaper");
+  try {
+    const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
+    const pool = new SessionPool({
+      statePath: join(dir, "sessions.json"),
+      idleMs: 60_000,
+      sweepEveryMs: 0,
+      create: async (key) => {
+        const runtime = fakeRuntime([]);
+        runtimes.set(key, runtime);
+        return { host: new WebHost(runtime), sessionId: () => key, close: async () => {} };
+      },
+    });
+    await pool.open("telegram:1@a");
+    const asked: Array<{ key: string; opts: unknown }> = [];
+    await reapRevoked({
+      sessionKeys: () => pool.keys(),
+      closeSession: (k, opts) => (asked.push({ key: k, opts }), pool.close(k, opts)),
+      isApproved: async () => true,
+      isOwner: async () => false,
+      roleOf: () => "owner",
+      cron: { list: () => [] as never, setEnabled: () => undefined as never },
+    });
+    expect(asked).toEqual([{ key: "telegram:1@a", opts: { finalReview: false } }]);
+    expect(runtimes.get("telegram:1@a")!.shutdowns).toEqual([{ finalReview: false }]);
+    expect(pool.keys()).toEqual([]);
+  } finally {
+    await removeDir(dir);
+  }
 });

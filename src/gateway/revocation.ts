@@ -10,7 +10,8 @@ export const privateTelegramSender = (chatKey: string): string | undefined => /^
 
 export interface ReapOptions {
   sessionKeys: () => string[];
-  closeSession: (key: string) => Promise<void>;
+  /** Called with `{ finalReview: false }`: the review would still run with the role the sender just lost. */
+  closeSession: (key: string, opts: { finalReview: false }) => Promise<void>;
   isApproved: (channel: string, senderId: string) => Promise<boolean>;
   /** Whether the sender is the gateway's owner. */
   isOwner: (channel: string, senderId: string) => Promise<boolean>;
@@ -30,7 +31,7 @@ export async function reapRevoked(o: ReapOptions): Promise<{ sessions: string[];
     // An owner session carries the owner's privileges; once the owner is changed it must not outlive the change.
     const demoted = !revoked && o.roleOf(key) === "owner" && !(await o.isOwner("telegram", sender));
     if (!revoked && !demoted) continue;
-    await o.closeSession(key);
+    await o.closeSession(key, { finalReview: false });
     sessions.push(key);
   }
   for (const job of o.cron.list()) {

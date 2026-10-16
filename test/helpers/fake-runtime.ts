@@ -87,6 +87,7 @@ export function fakeRuntime(
       shutdowns.push(opts);
     },
     finalReviewDue: () => false,
+    skipFinalReview: () => {},
     state: () => state,
     setMode: (mode) => (state = { ...state, mode }),
     setModel: (m) => (state = { ...state, model: m }),

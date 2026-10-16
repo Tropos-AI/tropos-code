@@ -101,6 +101,8 @@ export class LearningLoop {
   private lastHistory: MessageParam[] = [];
   private finishing: Promise<void> | undefined;
   private finishCancelled = false;
+  /** Resolves a running finish() early: the session's end no longer waits for the review. */
+  private skipFinish: (() => void) | undefined;
 
   constructor(private readonly deps: LearningLoopDeps) {
     this.turnsSinceMemory = deps.initial?.turnsSinceMemory ?? 0;
@@ -171,10 +173,14 @@ export class LearningLoop {
 
   /**
    * Aborts the running review; called when a new user turn starts so the review never competes with it, and
-   * at a shutdown that skips the final review (then a pending final review never starts).
+   * at a shutdown that skips the final review (ctrl+c): a pending final review never starts, and finish()
+   * resolves at once, even when the review is slow to notice the abort.
    */
   cancel(): void {
-    if (this.finishing) this.finishCancelled = true;
+    if (this.finishing) {
+      this.finishCancelled = true;
+      this.skipFinish?.();
+    }
     this.controller?.abort();
   }
 
@@ -203,6 +209,7 @@ export class LearningLoop {
         resolve();
       }, timeoutMs);
     });
+    const skipped = new Promise<void>((resolve) => (this.skipFinish = resolve));
     const work = async () => {
       // Only awaits when a review runs, so an idle loop starts the final review in this same tick.
       if (this.current) await this.whenIdle();
@@ -212,7 +219,7 @@ export class LearningLoop {
     };
     try {
       // A review that ignores the abort must not hold the session's end: the deadline resolves regardless.
-      await Promise.race([work(), deadline]);
+      await Promise.race([work(), deadline, skipped]);
     } catch {
       // Never rejects: the session ends either way.
     } finally {

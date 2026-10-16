@@ -684,6 +684,28 @@ describe("LearningLoop.finish", () => {
     expect(h.notices).toEqual(["💡 Learned: DailyNote half"]);
   });
 
+  test("cancel during finish resolves it at once, even when the review ignores the abort, and no final review starts after", async () => {
+    const h = harness({ interval: 2 });
+    turns(h.loop, 2);
+    turns(h.loop, 2);
+    // A regular review is running; finish waits for it.
+    const done = h.loop.finish(60_000);
+    h.loop.cancel();
+    await done;
+    expect(h.calls[0]!.signal.aborted).toBe(true);
+    h.calls[0]!.resolve({ changes: [], reply: "" });
+    await h.loop.whenIdle();
+    await settle();
+    expect(h.calls.map((c) => c.kind)).toEqual(["memory"]);
+
+    const idle = harness();
+    turns(idle.loop, 2);
+    const final = idle.loop.finish(60_000);
+    idle.loop.cancel();
+    await final;
+    expect(idle.calls[0]!.signal.aborted).toBe(true);
+  });
+
   test("finish never rejects, even when the final review throws", async () => {
     const h = harness();
     turns(h.loop, 2);

@@ -32,6 +32,7 @@ import {
   sessionStart,
   type AppContext,
 } from "./runtime";
+import { closeRuntime } from "./shutdown";
 import { USAGE } from "./usage";
 import { runWeb, type RunWebOptions } from "../web/serve";
 import { runGatewayCommand } from "../gateway/commands";
@@ -395,9 +396,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     try {
       await app.waitUntilExit();
     } finally {
-      // The final review can take up to 30 s; say why the terminal hasn't returned yet.
-      if (runtime.finalReviewDue()) err("Saving what I learned before closing… (ctrl+c to skip)\n");
-      await runtime.shutdown();
+      await closeRuntime(runtime, err);
     }
     return 0;
   }

@@ -735,6 +735,9 @@ export async function createRuntime(
       }
     },
     finalReviewDue: () => loops().some((l) => l.running || l.finalDue),
+    skipFinalReview: () => {
+      for (const l of loops()) l.cancel();
+    },
     shutdown: async (opts) => {
       if (opts?.finalReview ?? true) {
         await Promise.all(loops().map((l) => l.finish(FINAL_REVIEW_TIMEOUT_MS)));

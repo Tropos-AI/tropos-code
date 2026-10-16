@@ -37,6 +37,7 @@ export class SessionPool implements SessionProvider {
   private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private saving: Promise<void> = Promise.resolve();
+  private sweeping: Promise<string[]> | undefined;
 
   constructor(private readonly opts: PoolOptions) {
     this.now = opts.now ?? Date.now;
@@ -71,9 +72,9 @@ export class SessionPool implements SessionProvider {
     return entry.chat;
   }
 
-  /** Ends a chat's session; its final learning review runs first. */
-  close(key: string): Promise<void> {
-    return this.closeEntry(key);
+  /** Ends a chat's session; its final learning review runs first unless `finalReview` is false. */
+  close(key: string, opts?: { finalReview?: boolean }): Promise<void> {
+    return this.closeEntry(key, opts);
   }
 
   /** The gateway is stopping: no final reviews, so a stop never waits on them. */
@@ -91,10 +92,22 @@ export class SessionPool implements SessionProvider {
     await entry.handle.close().catch(() => {});
   }
 
-  /** Closes sessions that have been quiet for the idle time and are not working. */
-  async sweep(): Promise<string[]> {
+  /**
+   * Closes sessions that have been quiet for the idle time and are not working. One sweep at a time: closing
+   * runs final reviews, so a sweep can take a while.
+   */
+  sweep(): Promise<string[]> {
+    this.sweeping ??= this.runSweep().finally(() => {
+      this.sweeping = undefined;
+    });
+    return this.sweeping;
+  }
+
+  private async runSweep(): Promise<string[]> {
     const closed: string[] = [];
     for (const [key, entry] of [...this.entries]) {
+      // Closed and reopened while this sweep closed others: the fresh session is not the idle one seen here.
+      if (this.entries.get(key) !== entry) continue;
       if (entry.handle.host.state().busy || this.now() - entry.lastActive < this.opts.idleMs) continue;
       await this.close(key);
       closed.push(key);
