@@ -293,26 +293,31 @@ export async function runGateway(run: GatewayRun): Promise<number> {
 
   const sessions = new RoutedSessions(router, pool);
   const chatProjects: ChatProjects = { current: (k) => router.current(k), list: () => source.list(), select: (k, id) => router.select(k, id) };
-  const buildAdapters = (from: GatewayConfig): ChannelAdapter[] => {
-    const token = telegramToken(from, run.env);
+  const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
     return [new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
-  let adapters = buildAdapters(config);
+  let adapterToken = telegramToken(config, run.env);
+  let adapters = buildAdapters(adapterToken);
 
-  // What the dashboard calls after it saved a change: the channels, the project contexts and the sessions on them are
-  // rebuilt from what is on disk now. One reload at a time, and none once the gateway is stopping.
+  // What the dashboard calls after it saved a change: the project contexts and the sessions on them are rebuilt from
+  // what is on disk now, and the channels when their token changed. One reload at a time, none once stopping.
   let state: GatewayState | undefined;
   let stopping = false;
   let reloading: Promise<void> = Promise.resolve();
   const reloadOnce = async (): Promise<void> => {
     if (stopping) return;
     config = await loadGatewayConfig(home);
-    await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
-    adapters = buildAdapters(config);
-    for (const adapter of adapters) {
-      await adapter.start().catch((e: unknown) => run.err(`gateway: ${adapter.name} failed to start: ${e instanceof Error ? e.message : String(e)}\n`));
+    // Only a new token restarts the channels: a restart cuts off running turns (their answers, approvals and queues).
+    const token = telegramToken(config, run.env);
+    if (token !== adapterToken) {
+      await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
+      adapterToken = token;
+      adapters = buildAdapters(token);
+      for (const adapter of adapters) {
+        await adapter.start().catch((e: unknown) => run.err(`gateway: ${adapter.name} failed to start: ${e instanceof Error ? e.message : String(e)}\n`));
+      }
     }
     // A running turn keeps its context (and its MCP servers) until its session closes after the turn.
     contexts.invalidate();

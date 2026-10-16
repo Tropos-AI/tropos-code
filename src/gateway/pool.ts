@@ -27,19 +27,32 @@ export interface PoolOptions {
 
 interface Entry {
   handle: HostHandle;
-  chat: ChatSession;
   lastActive: number;
-  /** Retired while a turn ran (the gateway reloaded): closed as soon as it is no longer busy. */
+  /** Retired by a reload: closed (and replaced on the chat's next message) as soon as it is not busy. */
   retired?: boolean;
+  /** The chat's sinks attached to this session's host, with their detach functions. */
+  attached: Map<ChatSink, () => void>;
+}
+
+/** The one ChatSession a key ever hands out: it outlives the sessions behind it. */
+interface Chat {
+  chat: ChatSession;
+  sinks: Set<ChatSink>;
+  /** The session behind the chat now, or the one it had last. */
+  last: Entry;
 }
 
 export class SessionPool implements SessionProvider {
   private readonly entries = new Map<string, Entry>();
-  private readonly opening = new Map<string, Promise<ChatSession>>();
+  private readonly opening = new Map<string, Promise<Entry>>();
+  private readonly chats = new Map<string, Chat>();
   private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private saving: Promise<void> = Promise.resolve();
   private sweeping: Promise<string[]> | undefined;
+  /** Counts retire() calls, so a session still being built during one is retired too. */
+  private retirements = 0;
+  private stopped = false;
 
   constructor(private readonly opts: PoolOptions) {
     this.now = opts.now ?? Date.now;
@@ -50,15 +63,33 @@ export class SessionPool implements SessionProvider {
     }
   }
 
-  open(key: string): Promise<ChatSession> {
+  /**
+   * The chat's session. The same ChatSession comes back for a key every time: when the session behind it is closed
+   * (idle, revoked sender, reload), its next prompt opens a fresh one that resumes the transcript, and the attached
+   * sinks move over to it.
+   */
+  async open(key: string): Promise<ChatSession> {
+    const entry = await this.live(key);
+    let chat = this.chats.get(key);
+    if (!chat) {
+      chat = { chat: undefined as unknown as ChatSession, sinks: new Set(), last: entry };
+      chat.chat = this.wrap(key, chat);
+      this.chats.set(key, chat);
+    }
+    return chat.chat;
+  }
+
+  /** The key's open session; built when there is none, replaced when it was retired and its turn has ended. */
+  private live(key: string): Promise<Entry> {
+    if (this.stopped) return Promise.reject(new Error("The gateway is stopping."));
     const existing = this.entries.get(key);
     if (existing && !this.closable(existing)) {
       existing.lastActive = this.now();
-      return Promise.resolve(existing.chat);
+      return Promise.resolve(existing);
     }
     let pending = this.opening.get(key);
     if (!pending) {
-      // A retired session whose turn has ended: the chat's next message gets a fresh one, on the same transcript.
+      // The retired session is closed first, so the fresh one never shares the transcript with it.
       const retired = existing ? this.closeEntry(key, { finalReview: false }) : Promise.resolve();
       pending = retired.then(() => this.build(key)).finally(() => this.opening.delete(key));
       this.opening.set(key, pending);
@@ -70,14 +101,27 @@ export class SessionPool implements SessionProvider {
     return entry.retired === true && !entry.handle.host.state().busy;
   }
 
-  private async build(key: string): Promise<ChatSession> {
+  private async build(key: string): Promise<Entry> {
+    const retirements = this.retirements;
     const saved = (await this.readState())[key];
     const handle = await this.opts.create(key, saved);
-    const entry: Entry = { handle, chat: undefined as unknown as ChatSession, lastActive: this.now() };
-    entry.chat = this.wrap(key, entry);
+    // A reload while this was being built: it may stand on what the reload replaced, so it is retired too.
+    const entry: Entry = { handle, lastActive: this.now(), retired: retirements !== this.retirements, attached: new Map() };
     this.entries.set(key, entry);
+    const chat = this.chats.get(key);
+    if (chat) {
+      chat.last = entry;
+      for (const sink of chat.sinks) this.attachSink(entry, sink);
+    }
     await this.remember(key, handle.sessionId());
-    return entry.chat;
+    return entry;
+  }
+
+  private attachSink(entry: Entry, sink: ChatSink): void {
+    entry.attached.set(
+      sink,
+      entry.handle.host.attach((message) => deliver(sink, message)),
+    );
   }
 
   /** Ends a chat's session; its final learning review runs first unless `finalReview` is false. */
@@ -91,6 +135,7 @@ export class SessionPool implements SessionProvider {
    * goes on in the resumed session.
    */
   async retire(): Promise<string[]> {
+    this.retirements++;
     const closed: string[] = [];
     await Promise.all(
       [...this.entries].map(async ([key, entry]) => {
@@ -103,10 +148,12 @@ export class SessionPool implements SessionProvider {
     return closed;
   }
 
-  /** The gateway is stopping: no final reviews, so a stop never waits on them. */
+  /** The gateway is stopping: no final reviews, so a stop never waits on them; sessions still being built close too. */
   async closeAll(): Promise<void> {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    await Promise.allSettled([...this.opening.values()]);
     await Promise.all([...this.entries.keys()].map((key) => this.closeEntry(key, { finalReview: false })));
   }
 
@@ -115,6 +162,9 @@ export class SessionPool implements SessionProvider {
     if (!entry) return;
     this.entries.delete(key);
     await entry.handle.host.shutdown(opts).catch(() => {});
+    // After the shutdown, so what the final review reports still reaches the chat.
+    for (const detach of entry.attached.values()) detach();
+    entry.attached.clear();
     await entry.handle.close().catch(() => {});
   }
 
@@ -150,38 +200,55 @@ export class SessionPool implements SessionProvider {
     return [...this.entries.keys()];
   }
 
-  private wrap(key: string, entry: Entry): ChatSession {
-    const touch = () => {
+  private wrap(key: string, chat: Chat): ChatSession {
+    /** The open session, or the closed one it had last (its state, its asks); never reopens. */
+    const current = () => this.entries.get(key) ?? chat.last;
+    const touch = (entry: Entry) => {
       entry.lastActive = this.now();
     };
-    const { host } = entry.handle;
     return {
       key,
       prompt: async (text) => {
-        touch();
+        const entry = await this.live(key);
+        touch(entry);
         try {
-          return await host.call("prompt", { text });
+          return await entry.handle.host.call("prompt", { text });
         } finally {
-          touch();
+          touch(entry);
         }
       },
       interrupt: () => {
-        touch();
-        void host.call("interrupt", undefined);
+        const entry = this.entries.get(key);
+        if (!entry) return;
+        touch(entry);
+        void entry.handle.host.call("interrupt", undefined);
       },
       clear: async () => {
-        touch();
-        await host.call("clear", undefined);
+        const entry = await this.live(key);
+        touch(entry);
+        await entry.handle.host.call("clear", undefined);
         await this.remember(key, entry.handle.sessionId());
       },
-      state: () => host.state(),
+      state: () => current().handle.host.state(),
       answer: (id, answer: PermissionAnswer) => {
-        touch();
+        const entry = current();
+        touch(entry);
         // A chat can only approve or deny: a saved "always allow" rule would outlive the chat.
         const safe: PermissionAnswer = answer.kind === "allow" ? { kind: "allow" } : { kind: "deny" };
-        void host.handle({ t: "permission", id, answer: safe }, () => {});
+        void entry.handle.host.handle({ t: "permission", id, answer: safe }, () => {});
       },
-      attach: (sink) => host.attach((message) => deliver(sink, message)),
+      attach: (sink) => {
+        chat.sinks.add(sink);
+        const entry = this.entries.get(key);
+        if (entry) this.attachSink(entry, sink);
+        return () => {
+          chat.sinks.delete(sink);
+          for (const e of new Set([this.entries.get(key), chat.last])) {
+            e?.attached.get(sink)?.();
+            e?.attached.delete(sink);
+          }
+        };
+      },
     };
   }
 

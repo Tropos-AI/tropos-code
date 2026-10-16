@@ -209,7 +209,7 @@ describe("idle sessions", () => {
     ]);
   });
 
-  test("a retired session whose turn has ended is not handed out again: the next open starts afresh", async () => {
+  test("a retired session whose turn has ended is not used again: the next open starts afresh on the same transcript", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const { pool, closed, created } = setup([async () => (await gate, reply([textBlock("done")]))]);
@@ -218,14 +218,68 @@ describe("idle sessions", () => {
     await Bun.sleep(5);
     expect(await pool.retire()).toEqual([]);
     // Still running: whoever asks gets the running session.
-    expect(await pool.open("telegram:1")).toBe(first);
+    await pool.open("telegram:1");
+    expect(created).toHaveLength(1);
     release();
     await turn;
     // No sweep yet: the next message still gets a fresh session, resuming the same transcript.
-    const next = await pool.open("telegram:1");
-    expect(next).not.toBe(first);
+    await pool.open("telegram:1");
     expect(closed).toEqual(["telegram:1"]);
+    expect(created).toEqual([
+      { key: "telegram:1", saved: undefined },
+      { key: "telegram:1", saved: "session-1" },
+    ]);
+  });
+
+  test("a chat's session handle outlives its session: after a close, the next prompt opens a fresh one and the sink follows", async () => {
+    const now = { t: 1_000 };
+    const { pool, closed, created } = setup([() => reply([textBlock("one")]), () => reply([textBlock("two")]), () => reply([textBlock("three")])], now);
+    const chat = await pool.open("telegram:1");
+    const { s, events } = sink();
+    chat.attach(s);
+    await chat.prompt("first");
+    // Idle close.
+    now.t += 70_000;
+    expect(await pool.sweep()).toEqual(["telegram:1"]);
+    // The same handle, held by the channel all along, works and resumes the saved session.
+    expect(await chat.prompt("second")).toBe("end_turn");
     expect(created.at(-1)).toEqual({ key: "telegram:1", saved: "session-1" });
+    expect(await pool.open("telegram:1")).toBe(chat);
+    // Closed by someone else (the reaper): the same again.
+    await pool.close("telegram:1");
+    expect(await chat.prompt("third")).toBe("end_turn");
+    expect(closed).toEqual(["telegram:1", "telegram:1"]);
+    expect(created).toHaveLength(3);
+    // The sink attached before the closes saw every answer, once each.
+    const texts = events.filter((e) => e.type === "assistant").map((e) => JSON.stringify(e));
+    expect(texts).toHaveLength(3);
+    expect(texts.join()).toContain("three");
+  });
+
+  test("a session still being built when retire runs is retired too", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const closed: string[] = [];
+    let n = 0;
+    const pool = new SessionPool({
+      statePath: join(dir, "sessions.json"),
+      idleMs: 60_000,
+      sweepEveryMs: 0,
+      create: async (key): Promise<HostHandle> => {
+        const id = `session-${++n}`;
+        if (n === 1) await gate;
+        return { host: new WebHost(fakeRuntime([() => reply([textBlock("hi")])])), sessionId: () => id, close: async () => void closed.push(id) };
+      },
+    });
+    const opening = pool.open("telegram:1");
+    await settle();
+    expect(await pool.retire()).toEqual([]);
+    release();
+    const chat = await opening;
+    // Built on what the reload replaced: its first prompt runs on a fresh session instead.
+    await chat.prompt("hello");
+    expect(closed).toEqual(["session-1"]);
+    expect(n).toBe(2);
   });
 
   test("closeAll shuts hosts down without a final review; close(key) keeps it", async () => {

@@ -284,16 +284,66 @@ describe("reload", () => {
     expect(toolResult).not.toContain('"is_error":true');
     expect(toolNames(1, gw.model)).not.toContain("mcp__u__echo");
 
-    // The next message: the old session is closed, and a fresh one on a fresh context resumes the same transcript.
-    const next = await deps!.openSession(chatKey);
-    expect(next).not.toBe(chat);
+    // The next message, on the same handle: the old session is closed, and a fresh one on a fresh context resumes the
+    // same transcript.
+    expect(await chat.prompt("second question")).toBe("end_turn");
     expect(gw.backendsClosed).toEqual([join(home, "workspace")]);
-    expect(await next.prompt("second question")).toBe("end_turn");
     const resumed = JSON.stringify(gw.model.requests[2]!.messages);
     expect(resumed).toContain("first question");
     expect(resumed).toContain("first answer");
     expect(toolNames(2, gw.model)).toContain("mcp__u__echo");
     expect((await sessionsFile())[`${chatKey}@default`]).toBe(sessionId!);
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+  test("through Telegram: a turn running during a dashboard save is answered, and later messages run on fresh sessions", async () => {
+    await mkdir(home, { recursive: true });
+    await Bun.write(join(home, "settings.json"), JSON.stringify({ mcpServers: { t: mcpServer() } }));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const withU = (req: { tools: { name: string }[] }) => (req.tools.some((t) => t.name === "mcp__u__echo") ? "with u" : "without u");
+    const gw = startGateway([
+      async () => (await gate, reply([toolUseBlock("t1", "mcp__t__echo", { text: "still here" })], "tool_use")),
+      () => reply([textBlock("first answer")]),
+      (req) => reply([textBlock(`second answer, ${withU(req)}`)]),
+      () => reply([textBlock("third answer")]),
+    ]);
+    const info = await gw.running();
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat(); // update 100
+
+    server.pushMessage(CHAT, CHAT, "first question"); // update 101
+    await server.waitFor(() => gw.model.requests.length === 1);
+    // The dashboard saves a second MCP server while the turn runs.
+    await Bun.write(join(home, "settings.json"), JSON.stringify({ mcpServers: { t: mcpServer(), u: mcpServer() } }));
+    await info.reload();
+    // A message sent mid-turn waits its turn in the chat (update 102 handled once the adapter polls past it).
+    server.pushMessage(CHAT, CHAT, "second question");
+    await server.waitFor(() => Math.max(...server.getUpdatesOffsets) >= 103);
+    expect(gw.backendsClosed).toEqual([]);
+
+    release();
+    // The turn goes on in the same chat: its approval prompt arrives and is answered, and so is the question.
+    const ask = await server.waitFor(() => server.sent.find((m) => m.replyMarkup));
+    server.pushCallback(CHAT, CHAT, ask.messageId, ask.replyMarkup!.inline_keyboard[0]![0]!.callback_data);
+    await server.waitFor(() => server.textsTo(CHAT).includes("first answer"));
+    expect(JSON.stringify(gw.model.requests[1]!.messages.at(-1))).toContain("still here");
+
+    // The waiting message runs after the turn, on a fresh session and context that resume the transcript.
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("second answer")));
+    expect(server.textsTo(CHAT)).toContain("second answer, with u");
+    expect(JSON.stringify(gw.model.requests[2]!.messages)).toContain("first answer");
+    expect(gw.backendsClosed).toHaveLength(1);
+
+    // Another save with nothing running closes the session at once; the chat's next message still gets an answer.
+    await info.reload();
+    expect(gw.backendsClosed).toHaveLength(2);
+    server.pushMessage(CHAT, CHAT, "third question");
+    await server.waitFor(() => server.textsTo(CHAT).includes("third answer"));
+    expect(JSON.stringify(gw.model.requests[3]!.messages)).toContain("second answer, with u");
+    expect(gw.workspaces).toHaveLength(3);
+    expect(server.textsTo(CHAT).join("\n")).not.toContain("gateway stopped");
 
     gw.stop();
     expect(await gw.done).toBe(0);
