@@ -3,7 +3,9 @@
 // one of the commands the owner pinned. A chat at `balanced` may run pinned commands unasked,
 // so the match is strict: anything the shell parser cannot model is not a match.
 import { readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
+import { isInside } from "../paths";
 import { hasLeadingPrefix, splitBashCommand, squashShellSpace } from "../permissions/rules";
 
 const NPM_PLACEHOLDER = /^echo\s+["']?Error: no test specified["']?\s*&&\s*exit\s+1$/;
@@ -68,7 +70,7 @@ export async function detectTestCommands(projectDir: string): Promise<string[]> 
   const make = await readFirst(projectDir, ["Makefile", "makefile", "GNUmakefile"]);
   add(make !== null && /^test:/m.test(make) && "make test");
   const just = await readFirst(projectDir, ["justfile", "Justfile", ".justfile"]);
-  add(just !== null && /^test(\s[^:]*)?:/m.test(just) && "just test");
+  add(just !== null && /^test(\s[^:]*)?:(?!=)/m.test(just) && "just test");
   add(((await exists(projectDir, "deno.json")) || (await exists(projectDir, "deno.jsonc"))) && "deno test");
   return found;
 }
@@ -77,9 +79,13 @@ const MANIFEST_NAMES: ReadonlySet<string> = new Set([
   "package.json", "Makefile", "makefile", "GNUmakefile", "justfile", "Justfile", ".justfile", "pyproject.toml",
   "setup.cfg", "setup.py", "tox.ini", "noxfile.py", "pytest.ini", "conftest.py", "Cargo.toml", "build.rs",
   "bunfig.toml", "deno.json", "deno.jsonc",
+  // They change what a pinned runner executes: package manager config and hooks, Go and Rust toolchain files.
+  ".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", "pnpm-workspace.yaml", "go.mod", "go.work",
+  "rust-toolchain", "rust-toolchain.toml", "jest.config.json",
 ]);
 const MANIFEST_LOWER: ReadonlySet<string> = new Set([...MANIFEST_NAMES].map((n) => n.toLowerCase()));
 const TOOL_CONFIG = /^(vitest|vite|jest|playwright|karma|babel)\.config\.[cm]?[jt]s$/;
+const MORE_CONFIG = /^(babel\.config\.[^.]+|\.babelrc(\..+)?|vitest\.workspace\.[cm]?[jt]s|vitest\.workspace\.json)$/;
 const MOCHARC = /^\.mocharc(\..+)?$/;
 
 /**
@@ -92,32 +98,60 @@ export function isTestManifest(path: string, platform: NodeJS.Platform = process
   const raw = basename(norm);
   const name = insensitive ? raw.toLowerCase() : raw;
   if (insensitive ? MANIFEST_LOWER.has(name) : MANIFEST_NAMES.has(name)) return true;
-  if (TOOL_CONFIG.test(name) || MOCHARC.test(name)) return true;
+  if (TOOL_CONFIG.test(name) || MORE_CONFIG.test(name) || MOCHARC.test(name)) return true;
   if (name === "config" || name === "config.toml") {
-    return basename(norm.slice(0, norm.length - raw.length - 1)) === ".cargo";
+    const parent = basename(norm.slice(0, norm.length - raw.length - 1));
+    return (insensitive ? parent.toLowerCase() : parent) === ".cargo";
   }
   return false;
 }
 
-/** Extra words after a pinned command: plain paths and names only, never options or shell syntax. */
-const PLAIN_ARG = /^[A-Za-z0-9_@%+=:,./][A-Za-z0-9_@%+=:,./-]*$/;
+/** A plain word: no option, `=` (variable override), `@` (args file), glob, quote, `~` or `$`. `:` is checked apart. */
+const PLAIN_ARG = /^[A-Za-z0-9_%+,./:][A-Za-z0-9_%+,./:-]*$/;
+
+/** An existing path inside the project (symlinks resolved), so a word can name a test file but not run remote or outside code. */
+function projectPath(word: string, projectDir: string): boolean {
+  try {
+    const root = realpathSync(projectDir);
+    const real = realpathSync(resolve(projectDir, word));
+    return existsSync(real) && isInside(real, root);
+  } catch {
+    return false;
+  }
+}
+
+function plainTarget(word: string, pin: string, projectDir: string): boolean {
+  if (!PLAIN_ARG.test(word) || word.includes("://")) return false;
+  // `path::name` is a pytest node id; a `:` anywhere else is a URL or a make/just-style target.
+  if (word.includes(":")) {
+    const at = word.indexOf("::");
+    if (pin !== "pytest" || at < 1 || word.slice(0, at).includes(":")) return false;
+    return projectPath(word.slice(0, at), projectDir);
+  }
+  return projectPath(word, projectDir);
+}
 
 /**
- * Whether one simple command is a pinned test command, optionally followed by plain arguments
- * (test file paths). Options are refused (`--preload` runs arbitrary code), as is any prefix,
- * expansion, redirect, quoting or chaining the shell parser cannot model.
+ * Whether one simple command is a pinned test command, optionally followed by test paths that
+ * exist inside `projectDir` (pytest also takes `path::node` ids). `make` and `just` pins take
+ * no extra words: they would name other targets or override variables. Options are refused
+ * (`--preload` runs arbitrary code), as is any prefix, expansion, redirect, quoting or chaining
+ * the shell parser cannot model. Without `projectDir`, no extra words are accepted.
+ *
+ * Pinned tests run project code by design; only the manifests that define them are guarded
+ * (see isTestManifest).
  */
-export function matchesTestCommand(part: string, pinned: readonly string[]): boolean {
+export function matchesTestCommand(part: string, pinned: readonly string[], projectDir?: string): boolean {
   if (pinned.length === 0 || /[$`<>]/.test(part)) return false;
   const split = splitBashCommand(part);
   if (split.unsafe || split.parts.length !== 1 || hasLeadingPrefix(part)) return false;
   const squashed = squashShellSpace(part);
   return pinned.some((cmd) => {
     if (squashed === cmd) return true;
-    if (!squashed.startsWith(`${cmd} `)) return false;
+    if (!squashed.startsWith(`${cmd} `) || projectDir === undefined || /^(make|just)\b/.test(cmd)) return false;
     return squashed
       .slice(cmd.length + 1)
       .split(" ")
-      .every((arg) => PLAIN_ARG.test(arg));
+      .every((arg) => plainTarget(arg, cmd, projectDir));
   });
 }

