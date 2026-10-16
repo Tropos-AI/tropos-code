@@ -25,7 +25,7 @@ export interface CwdMarker {
 }
 
 export interface ExecBackend {
-  readonly kind: "local" | "docker";
+  readonly kind: "local" | "docker" | "confined";
   /**
    * Starts the script. The child is detached, with stdin ignored and stdout/stderr piped, and it can be
    * handed to the job table: the same contract as `child_process.spawn` has had in bash.ts.

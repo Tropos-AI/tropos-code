@@ -91,7 +91,7 @@ function protect(path: string, kind: Kind): string[] {
 }
 
 /** Git dirs under `.git/modules/**` and `.git/worktrees/*` (each has its own hooks and config). */
-function nestedGitDirs(git: string, depth: number): string[] {
+export function nestedGitDirs(git: string, depth: number): string[] {
   if (depth > 4) return [];
   const found: string[] = [];
   for (const parent of [join(git, "modules"), join(git, "worktrees")]) {
