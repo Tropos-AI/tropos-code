@@ -53,8 +53,9 @@ export function channelContext(base: AppContext, exec: ExecBackend, opts: { role
     exec,
     tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name) && (role === "owner" || !OWNER_ONLY_TOOLS.has(t.name))),
     // Formatters and language servers run on the host and load config from the project, which a sandboxed command can
-    // write without the write guard noticing.
-    ext: { ...base.ext, formatters: null, lsp: null },
+    // write without the write guard noticing. The owner's notes and journal are private: a guest's chat or a scheduled
+    // run never sees them in its context.
+    ext: { ...base.ext, formatters: null, lsp: null, ...(role === "owner" ? {} : { notes: null, daily: null }) },
     rules: {
       // The owner's allow rules are for the person at the keyboard: `Bash(npm:*)` or `Edit` must not make a chat's
       // commands and writes run unasked. Reads inside the workspace need no rule.
