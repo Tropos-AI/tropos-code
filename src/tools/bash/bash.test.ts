@@ -201,8 +201,8 @@ describe("Bash", () => {
     expect(out.content).toContain("characters truncated");
   });
 
-  test("subject is the command", () => {
-    expect(bashTool.subject({ command: "ls" }, dir)).toEqual({ command: "ls", paths: [] });
+  test("subject is the command and the working directory it runs in", () => {
+    expect(bashTool.subject({ command: "ls" }, dir)).toEqual({ command: "ls", paths: [], cwd: dir });
   });
 });
 

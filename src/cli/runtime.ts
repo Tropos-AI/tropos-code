@@ -341,7 +341,7 @@ export function commandIO(
         hookPermission = out.updatedInput !== undefined && out.permission === "allow" ? undefined : out.permission;
         if (signal.aborted) return { ok: false, reason: "interrupted" };
       }
-      let decision = decide({ toolName: "Bash", kind: "exec", command, paths: [] }, permissions());
+      let decision = decide({ toolName: "Bash", kind: "exec", command, paths: [], cwd: toolContext.cwd() }, permissions());
       if (decision.behavior === "deny") return { ok: false, reason: decision.reason };
       if (hookPermission === "allow" && decision.behavior === "ask") decision = { behavior: "allow" };
       if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };

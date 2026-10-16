@@ -72,6 +72,8 @@ export interface PermissionSubject {
   target?: string;
   /** The action can't be fully undone (deleting a skill folder): it is never one of the owner's unasked store saves. */
   destructive?: boolean;
+  /** Where a command runs, so relative paths in it are judged from there (autonomy, src/permissions/engine.ts). */
+  cwd?: string;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

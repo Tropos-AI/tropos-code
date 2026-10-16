@@ -6,7 +6,7 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import type { Autonomy } from "../gateway/config";
 import { troposStorePaths } from "../learning/stores";
 import { createSkillManageTool } from "../memory/skill-manage";
-import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, isStoreSave, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
+import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, isProjectSettingsFile, isStoreSave, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
 
 const cwd = "/work/app";
 function ctx(over: Partial<PermissionContext> & { allow?: string[]; ask?: string[]; deny?: string[] } = {}): PermissionContext {
@@ -572,6 +572,37 @@ describe("decide — autonomy", () => {
   });
   test("confinement still denies paths outside the workspace", () => {
     expect(decide(edit("/home/u/.bashrc"), auto("autonomous", [], { confine: true })).behavior).toBe("deny");
+  });
+  test("balanced: relative paths resolve from the shell's working directory, inside the project", () => {
+    const inSrc = (command: string): PermissionRequest => ({ ...bash(command), cwd: "/work/app/src" });
+    expect(decide(inSrc("cat ../package.json"), auto("balanced"))).toEqual({ behavior: "allow" });
+    expect(decide(inSrc("cat ../../outside"), auto("balanced")).behavior).toBe("ask");
+    // From the project root the same word climbs out.
+    expect(decide(bash("cat ../package.json"), auto("balanced")).behavior).toBe("ask");
+    // A shell somewhere outside the project never counts as inside.
+    expect(decide({ ...bash("cat a.ts"), cwd: "/elsewhere" }, auto("balanced")).behavior).toBe("ask");
+  });
+  test("balanced: a search that names a folder beside the project asks", () => {
+    expect(decide(bash("rg x ../other"), auto("balanced")).behavior).toBe("ask");
+  });
+  test("the project's own Tropos settings (hooks run from them) ask at every level", () => {
+    for (const path of ["/work/app/.tropos/settings.json", "/work/app/.tropos/settings.local.json", "/work/app/pkg/.tropos/settings.json"]) {
+      expect(decide(edit(path), auto("autonomous")).behavior).toBe("ask");
+      expect(decide(write(path), auto("balanced")).behavior).toBe("ask");
+    }
+    expect(decide(edit("/work/app/.tropos/TROPOS.md"), auto("balanced"))).toEqual({ behavior: "allow" });
+  });
+  test("isProjectSettingsFile folds names the way the filesystem compares them", () => {
+    expect(isProjectSettingsFile("/w/.TROPOS/Settings.Json", "darwin")).toBe(true);
+    expect(isProjectSettingsFile("/w/.TROPOS/Settings.Json", "linux")).toBe(false);
+    expect(isProjectSettingsFile("C:\\w\\.tropos\\settings.local.json. ", "win32")).toBe(true);
+    expect(isProjectSettingsFile("/w/settings.json", "linux")).toBe(false);
+    expect(isProjectSettingsFile("/w/.tropos/settings.json.bak", "linux")).toBe(false);
+  });
+  test("saves to Tropos's stores keep their own rule: an owner who asked to be asked is asked", () => {
+    const memory: PermissionRequest = { toolName: "Memory", kind: "edit", paths: ["/work/app/notes/MEMORY.md"] };
+    const stores = { paths: ["/work/app/notes"], askBeforeSaving: true };
+    expect(decide(memory, auto("autonomous", [], { role: "owner", stores })).behavior).toBe("ask");
   });
   test("saves to Tropos's stores keep their own rule: a guest's save inside the project still asks", () => {
     const memory: PermissionRequest = { toolName: "Memory", kind: "edit", paths: ["/work/app/notes/MEMORY.md"] };

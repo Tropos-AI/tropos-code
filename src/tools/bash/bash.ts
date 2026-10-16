@@ -71,7 +71,7 @@ export const bashTool = defineTool({
     "and stop them with KillShell. A background job starts in the current working directory and never changes it.",
   schema,
   summarize: (input) => input.command,
-  subject: (input) => ({ command: input.command, paths: [] }),
+  subject: (input, cwd) => ({ command: input.command, paths: [], cwd }),
   async run(input, ctx) {
     const startDir = ctx.cwd();
     const exec = ctx.exec ?? localBackend;

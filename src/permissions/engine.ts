@@ -32,6 +32,8 @@ export interface PermissionRequest {
   target?: string;
   /** Can't be fully undone, so never a store save (src/tools/types.ts PermissionSubject). */
   destructive?: boolean;
+  /** Where a command runs (the shell's working directory); the project when unset. */
+  cwd?: string;
 }
 
 export interface PermissionRules {
@@ -195,8 +197,10 @@ function autonomyAllows(req: PermissionRequest, ctx: PermissionContext): boolean
     return req.paths.every(
       (p) =>
         ctx.allowedDirs.some((dir) => isInside(p, dir)) &&
-        // Hooks and config under .git/.husky run code on a later git command: they ask at every level.
+        // Hooks and config under .git/.husky run code on a later git command, hooks in Tropos's settings on the
+        // next session: they ask at every level.
         !inGitControlDir(p) &&
+        !isProjectSettingsFile(p) &&
         // A test manifest decides what a pinned test command runs.
         (policy.level === "autonomous" || !isTestManifest(p)),
     );
@@ -208,7 +212,8 @@ function autonomyAllows(req: PermissionRequest, ctx: PermissionContext): boolean
   if (unsafe || parts.length === 0) return false;
   // Pinned tests are matched against the project, so a test path must exist inside it.
   const known = parts.every((part) => isReadOnlyCommand(part) || matchesTestCommand(part, policy.testCommands, ctx.cwd));
-  return known && pathsStayInside(req.command, ctx.cwd, ctx.home, ctx.allowedDirs);
+  // Relative words resolve from where the shell is; pathsStayInside refuses a base outside the project.
+  return known && pathsStayInside(req.command, req.cwd ?? ctx.cwd, ctx.home, ctx.allowedDirs);
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
@@ -266,6 +271,18 @@ export function inGitControlDir(path: string, platform: NodeJS.Platform = proces
     }
     return GIT_CONTROL_NAMES.has(name);
   });
+}
+
+const SETTINGS_FILES = new Set(["settings.json", "settings.local.json"]);
+
+/** `.tropos/settings.json` or `.tropos/settings.local.json` at any depth (src/config/settings.ts), folded like inGitControlDir. */
+export function isProjectSettingsFile(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  const insensitive = platform === "darwin" || platform === "win32";
+  const segments = (platform === "win32" ? path.split(/[\\/]/) : path.split("/")).map((segment) => {
+    const name = foldName(segment, insensitive);
+    return platform === "win32" ? name.replace(/:.*$/s, "").replace(/[. ]+$/, "") : name;
+  });
+  return segments.length >= 2 && SETTINGS_FILES.has(segments.at(-1)!) && segments.at(-2) === ".tropos";
 }
 
 const SHELL_SPACE = /[ \t\n]+/;
