@@ -12,6 +12,62 @@ Needs `curl` or `wget`, `sha256sum` or `shasum`, and `ssh-keygen` from OpenSSH 8
 (Debian/Ubuntu: `openssh-client`; Alpine: `apk add openssh-keygen`; Fedora: `openssh-clients`).
 `zstd` is optional and makes the download about three times smaller.
 
+### Flags and environment variables
+
+Flags go anywhere on the command line (`curl … | sh -s -- --dry-run stable`); a bare `--` is ignored and
+an unknown flag exits 64 with the usage text.
+
+| Flag | Environment | Effect |
+|---|---|---|
+| `--dry-run` | `TROPOS_DRY_RUN` | Resolves the version (it fetches and verifies the channel pointer and the signed manifest) and prints an install plan: version, channel, platform, binary URL, install directory, symlinks, the shell files that would be edited, upgrade or fresh, and whether onboarding would run. Downloads no binary, writes nothing, exits 0 |
+| `--no-modify-path` | `TROPOS_NO_MODIFY_PATH` | Leaves shell startup files alone and prints the line to add yourself |
+| `--no-onboard` | `TROPOS_NO_ONBOARD` | Does not start `tcode onboard` after a fresh install; prints `Run: tcode onboard` |
+| `--onboard` | | Starts onboarding even when `CI` or `TROPOS_NO_ONBOARD` would skip it (a terminal is still required, and only a fresh install is ever onboarded) |
+| `--non-interactive`, `--no-prompt` | `TROPOS_NO_PROMPT` | Never prompts and never onboards |
+| `--verbose` | `TROPOS_VERBOSE` | Shows the full output of every step |
+| `--help` | | Prints the usage |
+| | `CI` | Implies `--non-interactive`, `--verbose` and `--no-onboard` |
+| | `NO_COLOR` | No colour (colour is also off whenever stdout is not a terminal) |
+| | `TROPOS_INSTALL_ALLOW_SUDO` | Allows running under `sudo` (installs for root); otherwise the installer refuses |
+| | `TROPOS_INSTALL_FROM` | Installs an explicit version from a local folder of release files (manifest, signature, binary), still fully verified |
+
+A variable counts as set when it is non-empty and not `0`, `false`, `no` or `off`. Flags win over variables.
+
+### What the installer does
+
+1. Resolves the version, downloads the signed manifest and verifies the signature, then the binary's size and SHA-256 (see below).
+2. Runs the binary's `install --self`, which puts the version under `~/.local/share/tropos/versions` and links `~/.local/bin/tcode`.
+3. **Upgrade detection.** If `tcode` is on `PATH`, `~/.local/bin/tcode` exists, or the versions directory has entries, this is an upgrade (or a re-run): it runs `tcode doctor --fix --yes` (a failure only warns), restarts the gateway with `tcode gateway restart` when a gateway service is installed (a launchd or systemd unit with `tropos` in its name; a failure only warns), and prints `Upgraded X -> Y`. Re-running the same version repairs but does not restart the gateway. Upgrades and re-runs never start onboarding.
+4. **PATH.** Unless `--no-modify-path`, or `~/.local/bin` is already on `PATH` and a block already exists, it appends the block below to the startup files of the shell named by `$SHELL`. It never adds the block twice, never writes to a file that is not writable (it warns instead), and prints which files changed and a `source …` line.
+5. **Onboarding.** On a fresh install (no `~/.tropos/settings.json`, `credentials.json` or `gateway.json`, and no earlier install) with a terminal, it connects `/dev/tty` and runs `tcode onboard`. Without a terminal, or with `--no-onboard`, `CI` or `--non-interactive`, it prints `Run: tcode onboard`.
+6. Prints a summary: version, location, next steps and a link to this page.
+
+It cleans up its temporary directory on exit, Ctrl-C, `HUP` and `TERM`. It never uses `sudo`.
+
+### The PATH block
+
+```sh
+# >>> tropos installer >>>
+export PATH="$HOME/.local/bin:$PATH"
+# <<< tropos installer <<<
+```
+
+fish gets `fish_add_path "$HOME/.local/bin"` between the same two marker lines. When the file is not empty and does not already end with a blank line, one blank line is written first. Uninstall removes exactly this block (`tcode uninstall`).
+
+| `$SHELL` | Files |
+|---|---|
+| zsh | `~/.zshrc` (created if missing), `~/.zprofile` (if it exists); `$ZDOTDIR` is used instead of `~` when it is set to an absolute path |
+| bash | `~/.bashrc` (created if missing), `~/.profile` if it exists, and `~/.bash_profile` or else `~/.bash_login` if it exists |
+| fish | `~/.config/fish/config.fish` (created if missing) |
+| anything else | `~/.profile` (created if missing) |
+
+### The install log
+
+Everything the installer does, and the full output of each step, is appended to
+`$XDG_STATE_HOME/tropos/install.log` (default `~/.local/state/tropos/install.log`; directory mode 0700, file mode 0600),
+each run under a timestamped header. On a terminal you see short step lines (`==> Downloading…`); `--verbose` or `CI`
+shows everything. When a step fails, the installer prints the last 20 lines of the log and its path. A dry run writes no log.
+
 ### What you are trusting
 
 The one-line install trusts GitHub's HTTPS to deliver `install.sh` itself. From then on, every
@@ -57,10 +113,10 @@ in the background; the next session prints "Updated to <version>". Set `"autoUpd
 ## Files
 
 `~/.local/share/tropos/versions/<version>` (binaries), `~/.local/share/tropos/manifests/` (signed
-manifests), `~/.local/state/tropos/` (state, locks, `update.log`), `~/.local/bin/tcode` (symlink) and `~/.local/bin/tropos` (the command's name before 0.3.0, a symlink to `tcode`; an install from before 0.3.0 gains `tcode` the first time the new version runs).
+manifests), `~/.local/state/tropos/` (state, locks, `update.log`, `install.log`), `~/.local/bin/tcode` (symlink) and `~/.local/bin/tropos` (the command's name before 0.3.0, a symlink to `tcode`; an install from before 0.3.0 gains `tcode` the first time the new version runs).
 `XDG_DATA_HOME` and `XDG_STATE_HOME` are honoured when absolute.
 
-Uninstall: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tcode ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set). `~/.tropos` holds your settings, saved provider keys, memory and sessions; remove it too only if you want those gone.
+Uninstall: `tcode uninstall` (see `tcode uninstall --help` for scopes, `--dry-run` and `--yes`). It removes the PATH block the installer added. `~/.tropos` holds your settings, saved provider keys, memory and sessions; it is kept unless you choose to remove it. Without a working `tcode`, by hand: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tcode ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set) and delete the block between the `# >>> tropos installer >>>` markers from your shell startup files.
 
 ## Exit codes
 

@@ -93,9 +93,9 @@ describe("install.sh targets and sources", () => {
     expect((await sb.run(["2.0.0"], { env: { TROPOS_INSTALL_FROM: folder } })).code).toBe(65);
   });
 
-  test("prints the PATH line when ~/.local/bin is not on PATH, and never edits startup files", async () => {
+  test("prints the PATH line when ~/.local/bin is not on PATH and --no-modify-path keeps startup files untouched", async () => {
     const sb = await sandbox();
-    const r = await sb.run(["1.0.0"]);
+    const r = await sb.run(["1.0.0", "--no-modify-path"]);
     expect(r.stdout).toContain(`Add ${sb.home}/.local/bin to your PATH`);
     expect(r.stdout).toContain(`export PATH="${sb.home}/.local/bin:$PATH"`);
     expect(await Bun.file(join(sb.home, ".zshrc")).exists()).toBe(false);

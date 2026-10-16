@@ -7,7 +7,7 @@ import { makeTmpDir } from "../../helpers/tmp";
 
 export const INSTALL_SH = join(import.meta.dir, "../../../install.sh");
 
-const TOOLS = ["sh", "awk", "curl", "wget", "cp", "chmod", "rm", "mktemp", "uname", "od", "tail", "wc", "tr", "cat", "grep", "sleep", "id", "basename", "sha256sum", "shasum", "ssh-keygen", "zstd", "ldd", "sysctl", "stty", "env", "printf", "ls", "perl"];
+const TOOLS = ["sh", "awk", "curl", "wget", "cp", "chmod", "rm", "mktemp", "uname", "od", "tail", "wc", "tr", "cat", "grep", "sleep", "id", "basename", "sha256sum", "shasum", "ssh-keygen", "zstd", "ldd", "sysctl", "stty", "env", "printf", "ls", "perl", "mkdir", "date"];
 
 export const SHELLS: string[][] = [["sh"], ["dash"], ["bash", "--posix"], ["busybox", "ash"]].filter((s) => {
   if (!Bun.which(s[0]!)) return false;
@@ -50,7 +50,7 @@ export interface Sandbox {
   run(args?: string[], opts?: { env?: Record<string, string>; shell?: string[] }): Promise<ShResult>;
 }
 
-export async function makeSandbox(opts: { signers: string; base: string; shell?: string[]; hide?: string[]; shims?: Record<string, string>; home?: string }): Promise<Sandbox> {
+export async function makeSandbox(opts: { signers: string; base: string; shell?: string[]; hide?: string[]; shims?: Record<string, string>; home?: string; tty?: string }): Promise<Sandbox> {
   const dir = await makeTmpDir("tropos-sh-");
   const bin = join(dir, "bin");
   const home = opts.home ? join(dir, opts.home) : join(dir, "home");
@@ -73,6 +73,8 @@ export async function makeSandbox(opts: { signers: string; base: string; shell?:
     "release-urls",
     `  TROPOS_RELEASES='${opts.base}/t/r/releases'\n  TROPOS_CHANNELS='${opts.base}/t/r/releases/download/channels'\n  TROPOS_PROTO='=http,https'`,
   );
+  // The terminal onboarding reads from: tests point it at a readable file (a real tty cannot be faked), default is a path that cannot be opened.
+  text = replaceBlock(text, "tty-device", `  TROPOS_TTY='${opts.tty ?? join(dir, "no-tty")}'`);
   const script = join(dir, "install.sh");
   await writeFile(script, text);
   return {
