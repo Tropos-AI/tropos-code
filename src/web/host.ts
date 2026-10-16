@@ -23,10 +23,15 @@ interface OpenAsk {
 /** A failed RPC: the message is shown to the user as is. */
 export class RpcError extends Error {}
 
+/**
+ * Permission prompts are numbered across every host in the process: a dashboard tab that moved to another project's
+ * host must not answer that host's prompt with an answer it meant for the old one.
+ */
+let nextAsk = 1;
+
 export class WebHost {
   private readonly clients = new Set<Send>();
   private readonly asks = new Map<number, OpenAsk>();
-  private nextAsk = 1;
   private agent: Agent;
   private controller: AbortController | null = null;
   private busy = false;
@@ -48,7 +53,7 @@ export class WebHost {
     askPermission: (prompt, signal) =>
       new Promise<PermissionAnswer>((resolve) => {
         if (signal.aborted) return resolve({ kind: "deny" });
-        const id = this.nextAsk++;
+        const id = nextAsk++;
         const close = (answer: PermissionAnswer) => {
           if (!this.asks.delete(id)) return;
           this.broadcast({ t: "ask_closed", id });
@@ -355,6 +360,9 @@ export class WebHost {
         if (typeof token !== "string" || !token.startsWith("@")) return [] as RpcMap[M]["result"];
         return (await completeFile(token, r.cwd)) as RpcMap[M]["result"];
       }
+      case "project.select":
+        // One session serves `tcode web`; the gateway's ProjectHosts answers this before it reaches a host.
+        throw new RpcError("Switching projects needs the background service's dashboard (tcode dashboard).");
     }
     throw new RpcError("Unknown request.");
   }

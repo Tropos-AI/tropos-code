@@ -1,7 +1,7 @@
 // src/web/server.ts — the local HTTP + WebSocket server behind `tcode web`.
 import { timingSafeEqual } from "node:crypto";
 import { contentType, type AssetMap } from "./assets";
-import type { WebHost } from "./host";
+import type { ChatHost } from "./project-hosts";
 import { SESSION_COOKIE, WS_PATH, type ClientMessage, type ServerMessage } from "./protocol";
 
 /** Answers host-level admin calls (src/web/admin). Throws an Error whose message is shown to the user. */
@@ -10,7 +10,8 @@ export interface AdminDispatcher {
 }
 
 export interface WebServerOptions {
-  host: WebHost;
+  /** One session (`tcode web`) or one per project (the gateway's dashboard). */
+  host: ChatHost;
   /** Admin API; without it every admin call is answered "not available". */
   admin?: AdminDispatcher;
   assets: AssetMap;

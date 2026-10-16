@@ -17,6 +17,8 @@ export interface HelloInfo {
   history: MessageParam[];
   /** The agent's own name and emoji (~/.tropos/IDENTITY.md); empty until it has one. */
   identity?: { name?: string; emoji?: string };
+  /** The project this tab's chat works in; only the background service's dashboard serves more than one. */
+  project?: { id: string; name: string };
 }
 
 export interface SessionState {
@@ -90,6 +92,8 @@ export interface RpcMap {
   "modelPrefs.recordUse": { params: string; result: null };
   "modelPrefs.toggleFavorite": { params: string; result: boolean };
   completeFile: { params: { token: string }; result: string[] };
+  /** Moves this tab's chat to another project (its own session there); the result is that session's hello. */
+  "project.select": { params: string; result: HelloInfo };
 }
 
 export type RpcMethod = keyof RpcMap;
@@ -115,6 +119,7 @@ export const RPC_METHODS: RpcMethod[] = [
   "modelPrefs.recordUse",
   "modelPrefs.toggleFavorite",
   "completeFile",
+  "project.select",
 ];
 
 export type ClientMessage =

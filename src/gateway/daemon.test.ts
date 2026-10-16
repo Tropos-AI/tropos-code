@@ -1,13 +1,15 @@
 // src/gateway/daemon.test.ts — the pieces of the daemon that the end-to-end tests don't reach.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
 import { CronStore } from "./cron/store";
 import { loadGatewayConfig } from "./config";
+import type { HelloInfo } from "../web/protocol";
 import { dockerCheck, persistentToken, readGatewayState, type GatewayRun } from "./daemon";
+import { addProject } from "./projects";
 
 let dir: string;
 beforeEach(async () => {
@@ -172,6 +174,7 @@ describe("tcode gateway", () => {
 });
 
 describe("the dashboard's chat across a reload", () => {
+  type RpcResult = { t: "rpc_result"; id: number; ok: boolean; result?: unknown; error?: string };
   type UntilInfo = Parameters<NonNullable<GatewayRun["until"]>>[0];
   const text = (t: string): Step => () => reply([textBlock(t)]);
   const memoryAdd: Step = () => reply([toolUseBlock("m1", "Memory", { target: "user", action: "add", content: "prefers bun" })], "tool_use");
@@ -204,29 +207,32 @@ describe("the dashboard's chat across a reload", () => {
     const base = `http://127.0.0.1:${url.port}`;
     const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${url.searchParams.get("token")}`, Origin: base } } as unknown as string[]);
     const asked: string[] = [];
-    const pending = new Map<number, () => void>();
+    const hellos: HelloInfo[] = [];
+    const pending = new Map<number, (m: RpcResult) => void>();
     ws.onmessage = (e) => {
-      const m = JSON.parse(String(e.data)) as { t: string; id?: number; prompt?: { toolName: string } };
+      const m = JSON.parse(String(e.data)) as { t: string; id?: number; prompt?: { toolName: string }; server?: HelloInfo };
+      if (m.t === "hello") hellos.push(m.server!);
       if (m.t === "ask") {
         asked.push(m.prompt!.toolName);
         ws.send(JSON.stringify({ t: "permission", id: m.id, answer: { kind: "allow" } }));
       }
-      if (m.t === "rpc_result") pending.get(m.id!)?.();
+      if (m.t === "rpc_result") pending.get(m.id!)?.(m as RpcResult);
     };
     await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
     let next = 1;
-    const prompt = (t: string) =>
-      new Promise<void>((resolve) => {
+    const rpc = (method: string, params?: unknown) =>
+      new Promise<RpcResult>((resolve) => {
         const id = next++;
         pending.set(id, resolve);
-        ws.send(JSON.stringify({ t: "rpc", id, method: "prompt", params: { text: t } }));
+        ws.send(JSON.stringify({ t: "rpc", id, method, params }));
       });
+    const prompt = async (t: string) => void (await rpc("prompt", { text: t }));
     const finish = async () => {
       ws.close();
       stop();
       expect(await done).toBe(0);
     };
-    return { model, info, prompt, asked, finish };
+    return { model, info, prompt, rpc, hellos, asked, finish };
   }
 
   test("a deny rule saved while it is idle holds from its next turn, which goes on with the same conversation", async () => {
@@ -237,6 +243,28 @@ describe("the dashboard's chat across a reload", () => {
     await gw.prompt("remember that I prefer bun");
     expect(JSON.stringify(gw.model.requests[2]!.messages.at(-1))).toContain("Blocked by the deny rule");
     expect(JSON.stringify(gw.model.requests[1]!.messages)).toContain("hi there");
+    await gw.finish();
+  });
+
+  test("a tab moves to another project, its chat works there, and a deny rule saved in that project holds after a reload", async () => {
+    await mkdir(join(dir, "app", ".git"), { recursive: true });
+    await addProject(join(dir, "home"), { path: join(dir, "app"), name: "App" }, { userHome: join(dir, "nobody") });
+    const gw = await dashboard([text("hi from app"), memoryAdd, text("ok")]);
+    expect(gw.hellos[0]?.project).toEqual({ id: "default", name: "Default workspace" });
+    const moved = await gw.rpc("project.select", "app");
+    const app = await realpath(join(dir, "app"));
+    expect(moved).toMatchObject({ ok: true, result: { cwd: app, project: { id: "app", name: "App" } } });
+    expect(gw.hellos.at(-1)).toMatchObject({ cwd: app, project: { id: "app", name: "App" } });
+    expect(await gw.rpc("project.select", "nope")).toEqual({ t: "rpc_result", id: 2, ok: false, error: 'There is no project "nope".' });
+    await gw.prompt("hello");
+    await mkdir(join(dir, "app", ".tropos"), { recursive: true });
+    await writeFile(join(dir, "app", ".tropos", "settings.json"), JSON.stringify({ permissions: { deny: ["Memory"] } }));
+    await gw.info.reload();
+    // The rebuilt host still names its project, and goes on with the same conversation.
+    expect(gw.hellos.at(-1)).toMatchObject({ cwd: app, project: { id: "app" } });
+    await gw.prompt("remember that I prefer bun");
+    expect(JSON.stringify(gw.model.requests[2]!.messages.at(-1))).toContain("Blocked by the deny rule");
+    expect(JSON.stringify(gw.model.requests[1]!.messages)).toContain("hi from app");
     await gw.finish();
   });
 

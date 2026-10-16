@@ -243,3 +243,35 @@ describe("replaceRuntime", () => {
     expect(host.hello().history).toEqual(next.history());
   });
 });
+
+describe("projects", () => {
+  test("a plain WebHost refuses project.select", async () => {
+    const { host } = setup();
+    await expect(host.call("project.select", "app")).rejects.toThrow("Switching projects needs the background service's dashboard (tcode dashboard).");
+    const replies: ServerMessage[] = [];
+    await host.handle({ t: "rpc", id: 3, method: "project.select", params: "app" }, (m) => replies.push(m));
+    expect(replies).toEqual([{ t: "rpc_result", id: 3, ok: false, error: "Switching projects needs the background service's dashboard (tcode dashboard)." }]);
+  });
+
+  test("permission prompts are numbered across hosts, so an answer meant for one project's prompt can't answer another's", async () => {
+    const asking: Parameters<typeof fakeRuntime>[1] = {
+      expand: async (_name, _args, ui, signal) => {
+        const answer = await ui.askPermission({ toolName: "Bash", summary: "ls" } as never, signal);
+        return { ok: true, prompt: answer.kind };
+      },
+    };
+    const a = setup(asking);
+    const b = setup(asking);
+    const first = a.host.call("expand", { name: "x", args: "" });
+    const second = b.host.call("expand", { name: "x", args: "" });
+    const idOf = (seen: ServerMessage[]) => seen.flatMap((m) => (m.t === "ask" ? [m.id] : []))[0]!;
+    while (idOf(a.seen) === undefined || idOf(b.seen) === undefined) await Bun.sleep(5);
+    expect(idOf(a.seen)).not.toBe(idOf(b.seen));
+    // An answer to a's prompt sent to b does nothing there.
+    await b.host.handle({ t: "permission", id: idOf(a.seen), answer: { kind: "allow" } }, () => {});
+    await a.host.handle({ t: "permission", id: idOf(a.seen), answer: { kind: "allow" } }, () => {});
+    expect(await first).toEqual({ ok: true, prompt: "allow" });
+    await b.host.call("interrupt", undefined);
+    expect(await second).toEqual({ ok: true, prompt: "deny" });
+  });
+});
