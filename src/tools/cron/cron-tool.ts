@@ -72,9 +72,20 @@ export function createCronTool(opts: CronToolOptions) {
     return j.deliver === opts.defaultDeliver() ? j : undefined;
   }
 
+  // Resolves an id or prefix among the visible jobs only, so an ambiguous-prefix error cannot name other chats' ids.
+  function findVisible(idOrPrefix: string): CronJob | undefined {
+    if (!opts.defaultDeliver) return store.find(idOrPrefix);
+    const mine = store.list().filter((j) => visible(j));
+    const exact = mine.find((j) => j.id === idOrPrefix);
+    if (exact || !idOrPrefix) return exact;
+    const hits = mine.filter((j) => j.id.startsWith(idOrPrefix));
+    if (hits.length > 1) throw new Error(`"${idOrPrefix}" matches ${hits.length} jobs: ${hits.map((j) => j.id).join(", ")}`);
+    return hits[0];
+  }
+
   function lookup(input: Input): CronJob {
     if (!input.id) throw new Error("id is required");
-    const job = visible(store.find(input.id));
+    const job = findVisible(input.id);
     if (!job) throw new Error(`no job "${input.id}"`);
     return job;
   }
@@ -103,7 +114,7 @@ export function createCronTool(opts: CronToolOptions) {
           };
         }
         if (input.action === "list") return undefined;
-        const job = input.id ? visible(store.find(input.id)) : undefined;
+        const job = input.id ? findVisible(input.id) : undefined;
         return { header: `Cron: ${input.action} job`, text: job ? jobText(job) : `no job "${input.id ?? ""}"` };
       } catch (e) {
         return { header: `Cron: ${input.action}`, text: errorText(e) };

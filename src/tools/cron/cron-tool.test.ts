@@ -121,3 +121,14 @@ test("from a chat, other chats' jobs cannot be listed, previewed, changed or run
   expect((await mine.preview?.({ action: "remove", id: theirs.id }))?.text ?? "").not.toContain("private");
   expect(store.list()).toHaveLength(1);
 });
+
+test("from a chat, an ambiguous prefix never names jobs of other chats", async () => {
+  const mine = createCronTool({ store, defaultDeliver: () => "telegram:1" });
+  const a = store.add({ name: "a", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:2", createdBy: "agent" });
+  const b = store.add({ name: "b", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:3", createdBy: "agent" });
+  const common = [...a.id].findIndex((c, i) => c !== b.id[i]);
+  const out = await mine.run({ action: "remove", id: a.id.slice(0, Math.max(common, 0)) }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(text(out)).not.toContain(a.id);
+  expect(text(out)).not.toContain(b.id);
+});
