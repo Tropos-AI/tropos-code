@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { CwdMarker, ExecBackend, ExecSpawn } from "./backend";
-import { COMMONDIR_MARKER, type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
+import { type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
 
 export interface DockerBackendOptions {
   workspace: string;
@@ -133,6 +133,12 @@ const TREE_KILL = [
   'kill "-$sig" $pids 2>/dev/null',
 ].join("\n");
 
+/** A command's `commondir` snapshot, and what close() found if it ran the check first. */
+interface PendingCheck {
+  snap: CommondirSnapshot;
+  closeMessage: string | null;
+}
+
 interface Run {
   /** Pid file the in-container wrapper writes, on the host side. */
   pidFile: string;
@@ -156,7 +162,7 @@ export class DockerBackend implements ExecBackend {
   private closing: Promise<void> | undefined;
   private readonly runs = new WeakMap<ChildProcess, Run>();
   /** Commands whose `commondir` check hasn't run yet (see spawn). */
-  private readonly pendingChecks = new Set<CommondirSnapshot>();
+  private readonly pendingChecks = new Set<PendingCheck>();
 
   constructor(opts: DockerBackendOptions) {
     this.workspace = opts.workspace;
@@ -205,18 +211,17 @@ export class DockerBackend implements ExecBackend {
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
     // Host-side fallback for when the wrapper never gets to its check (its process group was SIGKILLed): checked on
-    // any exit, and again in close() for a command still running then. Registered before bash.ts's listeners, so the
-    // message lands in the command's stderr before its result is read, unless the wrapper already reported it.
+    // any exit, and in close() for a command still running then (that result is kept on the entry, so it is still
+    // reported here). Registered before bash.ts's listeners, so the message lands in the command's stderr before its
+    // result is read. Always reported when the host acts: the command's own output can't be trusted to say whether the
+    // wrapper did (it can print the same line), so a duplicate of the wrapper's line is accepted.
     if (snap) {
-      this.pendingChecks.add(snap);
-      let reported = false;
-      child.stderr?.on("data", (d: Buffer | string) => {
-        if (String(d).includes(COMMONDIR_MARKER)) reported = true;
-      });
+      const pending: PendingCheck = { snap, closeMessage: null };
+      this.pendingChecks.add(pending);
       child.once("close", () => {
-        this.pendingChecks.delete(snap);
-        const message = this.enforce(snap);
-        if (message && !reported) child.stderr?.emit("data", `\n${message}\n`);
+        this.pendingChecks.delete(pending);
+        const message = this.enforce(snap) ?? pending.closeMessage;
+        if (message) child.stderr?.emit("data", `\n${message}\n`);
       });
     }
     return child;
@@ -292,7 +297,7 @@ export class DockerBackend implements ExecBackend {
     this.closing ??= (async () => {
       await this.starting?.catch(() => {});
       await run(this.bin, ["rm", "-f", this.name], 60_000);
-      for (const check of this.pendingChecks) this.enforce(check);
+      for (const pending of this.pendingChecks) pending.closeMessage = this.enforce(pending.snap) ?? pending.closeMessage;
       this.pendingChecks.clear();
       if (this.ownsRunDir) rmSync(this.runDir, { recursive: true, force: true });
       this.started = false;

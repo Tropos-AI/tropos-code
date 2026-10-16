@@ -218,8 +218,21 @@ describe("DockerBackend commondir check (fake docker client)", () => {
       expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
     } finally {
       if (child.pid) process.kill(-child.pid, "SIGKILL");
-      await result;
     }
+    // close() acted first, so the child's own check finds nothing; the message close() found is still reported.
+    const r = await result;
+    expect(r.err).toContain(COMMONDIR_TAMPERED);
+  });
+
+  test("a command that prints the message itself can't suppress the host's report", async () => {
+    const script = `echo ${JSON.stringify(COMMONDIR_TAMPERED)} >&2; echo x > .git/commondir; sleep 30`;
+    const child = backend.spawn({ shell: "/bin/sh", script, cwd: ws, env: {} });
+    const result = collect(child);
+    await until(() => existsSync(join(ws, ".git", "commondir")));
+    backend.signal(child, "SIGKILL"); // the wrapper dies before its own check, so only the host can report
+    const r = await result;
+    expect(r.err.split(COMMONDIR_TAMPERED).length - 1).toBe(2); // the command's fake line, then the host's real one
+    expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
   });
 
   test("a commondir planted as a directory fails the command and is left in place, not deleted recursively", async () => {

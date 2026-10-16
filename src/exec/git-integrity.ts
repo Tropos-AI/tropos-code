@@ -12,7 +12,6 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isInside } from "../paths";
 
 export const COMMONDIR_TAMPERED = "tropos sandbox: a command tried to redirect git's hooks (.git/commondir); it was undone";
-export const COMMONDIR_MARKER = "tropos sandbox: a command tried to redirect git's hooks";
 export const commondirUnsafe = (path: string): string =>
   `tropos sandbox: a command tried to redirect git's hooks (.git/commondir); it could not be undone safely; check ${path}`;
 
