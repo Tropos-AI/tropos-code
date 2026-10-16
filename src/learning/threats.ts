@@ -76,6 +76,8 @@ function logicalLines(text: string): string[] {
   const lines: string[] = [];
   let carried = "";
   for (const line of text.split(/\r?\n/)) {
+    // The shell carries a trailing pipe over blank lines as well.
+    if (carried !== "" && line.trim() === "") continue;
     if (line.endsWith("\\")) {
       carried += `${line.slice(0, -1)} `;
     } else if (/(?:\||&&)\s*$/.test(line) && !/^\s*\|/.test(line)) {
@@ -130,6 +132,32 @@ function exfiltration(text: string): boolean {
   const joined = logicalLines(text);
   if (ENV_PIPE.test(text) || ENV_PIPE.test(joined.join("\n"))) return true;
   return joined.some(leaksOnLine) || networkCalls(text).some(leaksOnLine);
+}
+
+/**
+ * Code fetched or decoded and handed straight to a shell: `curl … | sh`, `base64 -d | bash`, `bash <(curl …)`,
+ * `sh -c "$(curl …)"`. The one place a skill's text decides what runs unseen, so it is refused outright.
+ */
+const SHELL_START = /^\s*(?:sudo\s+(?:-\S+\s+)*)?(?:\S*\/)?(?:ba|z|da|k|a)?sh(?![\w.-])/i;
+const DOWNLOADER = /\b(?:curl|wget)\b/i;
+const DECODER = /\bbase64\b[^|]*(?:\s-[a-zA-Z]*[dD]\b|--decode)/i;
+/** Fetched text handed to a shell without a pipe in between: bash <(curl …), sh -c "$(curl …)", eval "$(curl …)". */
+const SUBSTITUTED_EXEC = [/\b(?:ba|z|da|k|a)?sh\s+(?:-c\s+)?["']?(?:<\(|\$\()\s*(?:curl|wget)\b/i, /\beval\s+["']?\$\(\s*(?:curl|wget)\b/i];
+
+/** One pass over the pipe-separated segments (never a scan per "curl", so a line of thousands of them stays linear). */
+function pipesToShell(line: string, isSource: (segment: string) => boolean): boolean {
+  const segments = line.split("|");
+  let source = -1;
+  for (let i = 0; i < segments.length; i++) {
+    if (source < 0) {
+      if (isSource(segments[i]!)) source = i;
+    } else if (SHELL_START.test(segments[i]!)) return true;
+  }
+  return false;
+}
+
+function pipedExecution(text: string): boolean {
+  return logicalLines(text).some((line) => pipesToShell(line, (s) => DOWNLOADER.test(s)) || pipesToShell(line, (s) => DECODER.test(s)) || SUBSTITUTED_EXEC.some((re) => re.test(line)));
 }
 
 /** Writing to authorized_keys grants whoever holds the key a shell; mentioning the file is fine. */
@@ -248,13 +276,24 @@ const RULES: Rule[] = [
   { check: secretMaterial },
 ];
 
+/**
+ * Rules only applied to content that arrives from outside (`tcode migrate`): an install snippet in the user's own
+ * skill is documentation, but the same line in a file imported from somebody else's tool is a thing to look at first.
+ */
+const STRICT_RULES: Rule[] = [{ check: when(pipedExecution, "downloads or decodes code and runs it straight from a pipe") }];
+
+export interface ScanOptions {
+  /** Also refuse code that is fetched or decoded and piped straight into a shell. */
+  strict?: boolean;
+}
+
 /** Checks text the agent wrote, or is about to load, for injection, exfiltration, secrets and hidden characters. */
-export function scanText(text: string): ScanResult {
+export function scanText(text: string, options: ScanOptions = {}): ScanResult {
   const hidden = invisibleChar(text);
   if (hidden) return { ok: false, reason: `invisible or bidi Unicode character ${hidden}` };
   // Normalise compatibility forms (full-width letters) so they can't dodge the word patterns.
   const normal = text.normalize("NFKC");
-  for (const rule of RULES) {
+  for (const rule of options.strict ? [...RULES, ...STRICT_RULES] : RULES) {
     const reason = rule.check(normal);
     if (reason) return { ok: false, reason };
   }

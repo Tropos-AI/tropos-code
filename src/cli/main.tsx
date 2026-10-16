@@ -35,6 +35,9 @@ import {
 import { USAGE } from "./usage";
 import { runWeb, type RunWebOptions } from "../web/serve";
 import { runGatewayCommand } from "../gateway/commands";
+import { createLifecycleContext } from "./lifecycle/context";
+import { loadLifecycle } from "./lifecycle";
+import type { LifecycleContext } from "./lifecycle/types";
 import { GatewayConfigError, configPermissionWarning, gatewayDir, loadGatewayConfig } from "../gateway/config";
 import { runGateway, type GatewayRun } from "../gateway/daemon";
 import { FilePairing } from "../gateway/pairing";
@@ -58,25 +61,17 @@ export interface MainDeps {
   openBrowser?: (url: string) => void;
   /** Tests override terminal detection for the native-session announcement. */
   tty?: { stdin: boolean; stdout: boolean };
+  /** Tests replace parts of the lifecycle commands' context (prompts, terminal detection, clock). */
+  lifecycle?: Partial<LifecycleContext>;
   /** Tests stop `tcode gateway` themselves and fake what it talks to. */
   gatewayUntil?: GatewayRun["until"];
   gatewaySeams?: GatewayRun["seams"];
+  /** Background services for `tcode gateway` (the scheduler is one); tests pass fakes. */
+  gatewayServices?: GatewayRun["services"];
 }
 
-const POSIX_SHELLS = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
-
-/**
- * The shell that runs Bash-tool commands. The wrapper script is POSIX, so $SHELL is used only
- * when it is bash, zsh, sh, dash or ksh; anything else (fish, tcsh, nu ...) falls back to bash.
- * `rejected` names the unsupported shell, when there was one.
- */
-export function pickShell(envShell: string | undefined, which: (name: string) => string | null): { shell: string; rejected?: string } {
-  const fallback = which("bash") ?? "/bin/bash";
-  if (!envShell) return { shell: fallback };
-  const name = envShell.slice(envShell.lastIndexOf("/") + 1);
-  if (POSIX_SHELLS.has(name)) return { shell: envShell };
-  return { shell: fallback, rejected: name };
-}
+export { pickShell } from "./context";
+import { pickShell } from "./context";
 
 async function readPipedStdin(): Promise<string | null> {
   if (process.stdin.isTTY) return null;
@@ -131,6 +126,11 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         engine: deps.engine,
       });
     }
+    if (invocation.kind === "lifecycle") {
+      const run = await loadLifecycle(invocation.name);
+      const lifecycleDeps = { out, err, env: deps.env ?? process.env, cwd: deps.cwd ?? process.cwd(), execPath: deps.execPath ?? process.execPath, scriptPath: process.argv[1] };
+      return await run(invocation.argv, createLifecycleContext(lifecycleDeps, deps.lifecycle));
+    }
     if (invocation.kind === "gateway-command") {
       return await runGatewayCommand(invocation.command, {
         out,
@@ -159,7 +159,67 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
 
   const env = deps.env ?? process.env;
-  const cwd = resolveToolPath(opts.gateway?.workspace ?? ".", deps.cwd ?? process.cwd());
+  /** Native-install bookkeeping shared by sessions and the gateway: the in-use lock, re-exec and the update notice. */
+  async function enterNativeSession(autoUpdates: boolean, print: boolean): Promise<number | undefined> {
+    const native = await startNativeSession({
+      env,
+      execPath: deps.execPath ?? process.execPath,
+      print,
+      stdinTTY: deps.tty?.stdin ?? (Boolean(process.stdin.isTTY) && !deps.readStdin),
+      stdoutTTY: deps.tty?.stdout ?? Boolean(process.stdout.isTTY),
+      autoUpdates,
+      version: VERSION,
+    });
+    if (native.kind === "reexec") {
+      // Starting must never fail loudly because of re-exec: if the target cannot run, carry on in this process.
+      try {
+        const proc = Bun.spawn([native.via, ...argv], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, TROPOS_REEXEC: "1" } });
+        return await proc.exited;
+      } catch {
+        // fall through to a native session without the in-use lock
+      }
+    }
+    if (native.kind === "native" && native.announcement) err(`${native.announcement}\n`);
+    return undefined;
+  }
+
+  /** `tcode gateway`: no workspace to name; the projects come from ~/.tropos/gateway.json (and `--workspace` for one run). */
+  async function runGatewayMode(gateway: NonNullable<CliOptions["gateway"]>): Promise<number> {
+    const entered = await enterNativeSession(true, false);
+    if (entered !== undefined) return entered;
+    const home = troposHome(env);
+    let config;
+    try {
+      config = await loadGatewayConfig(home);
+    } catch (e) {
+      if (e instanceof GatewayConfigError) {
+        err(`tcode: ${e.message}\n`);
+        return 1;
+      }
+      throw e;
+    }
+    const warning = await configPermissionWarning(home);
+    if (warning) err(`tcode: ${warning}\n`);
+    return await runGateway({
+      home,
+      env,
+      version: VERSION,
+      model: deps.model,
+      config,
+      pairing: new FilePairing({ path: join(gatewayDir(home), "pairing.json") }),
+      out,
+      err,
+      web: gateway.web,
+      workspace: gateway.workspace ? resolveToolPath(gateway.workspace, deps.cwd ?? process.cwd()) : undefined,
+      services: deps.gatewayServices,
+      until: deps.gatewayUntil,
+      seams: deps.gatewaySeams,
+    });
+  }
+
+  // The gateway has no working directory of its own: each project brings its settings (see runGatewayMode).
+  if (opts.gateway) return await runGatewayMode(opts.gateway);
+  const cwd = resolveToolPath(".", deps.cwd ?? process.cwd());
   const home = troposHome(env);
   const paths = settingsPaths(cwd, home);
 
@@ -176,25 +236,8 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     throw e;
   }
   Object.assign(env, settings.env);
-  const native = await startNativeSession({
-    env,
-    execPath: deps.execPath ?? process.execPath,
-    print: opts.print,
-    stdinTTY: deps.tty?.stdin ?? (Boolean(process.stdin.isTTY) && !deps.readStdin),
-    stdoutTTY: deps.tty?.stdout ?? Boolean(process.stdout.isTTY),
-    autoUpdates: settings.autoUpdates,
-    version: VERSION,
-  });
-  if (native.kind === "reexec") {
-    // Starting must never fail loudly because of re-exec: if the target cannot run, carry on in this process.
-    try {
-      const proc = Bun.spawn([native.via, ...argv], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, TROPOS_REEXEC: "1" } });
-      return await proc.exited;
-    } catch {
-      // fall through to a native session without the in-use lock
-    }
-  }
-  if (native.kind === "native" && native.announcement) err(`${native.announcement}\n`);
+  const entered = await enterNativeSession(settings.autoUpdates, opts.print);
+  if (entered !== undefined) return entered;
   const { rules, invalid } = compileRules(settings.permissions);
   for (const rule of invalid) err(`tcode: ignoring invalid permission rule "${rule}"\n`);
 
@@ -246,48 +289,9 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     modelPrefs: new ModelPrefs(home),
   };
   try {
-    return opts.gateway ? await runGatewayMode(opts.gateway.web) : await runSession();
+    return await runSession();
   } finally {
     await Promise.all([ext.mcp?.close(), ext.lsp?.close()]);
-  }
-
-  async function runGatewayMode(web: boolean): Promise<number> {
-    let config;
-    try {
-      config = await loadGatewayConfig(home);
-    } catch (e) {
-      if (e instanceof GatewayConfigError) {
-        err(`tcode: ${e.message}\n`);
-        return 1;
-      }
-      throw e;
-    }
-    const warning = await configPermissionWarning(home);
-    if (warning) err(`tcode: ${warning}\n`);
-    const rgPath = Bun.which("rg");
-    // Each chat gets its own subagent holder and tools over the shared extensions (MCP, skills, memory).
-    const newSessionContext = () => {
-      const holder: SubagentHolder = {};
-      let current = "";
-      return {
-        ctx: { ...ctx, subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
-        setSessionId: (id: string) => {
-          current = id;
-        },
-      };
-    };
-    return await runGateway({
-      ctx,
-      newSessionContext,
-      config,
-      pairing: new FilePairing({ path: join(gatewayDir(home), "pairing.json") }),
-      env,
-      out,
-      err,
-      web,
-      until: deps.gatewayUntil,
-      seams: deps.gatewaySeams,
-    });
   }
 
   async function runSession(): Promise<number> {

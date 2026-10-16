@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { EFFORTS, MODES, OUTPUT_FORMATS, type Effort, type Mode, type OutputFormat } from "../config/constants";
 import { isVersion } from "../install/version";
+import { isLifecycleName, type LifecycleName } from "./lifecycle/names";
 
 export interface CliOptions {
   prompt?: string;
@@ -54,19 +55,46 @@ export function parseGateway(argv: string[]): CliOptions {
 export type GatewayCommand =
   | { kind: "gateway-install"; workspace?: string }
   | { kind: "gateway-uninstall" }
+  | { kind: "gateway-start" }
+  | { kind: "gateway-stop" }
+  | { kind: "gateway-restart" }
   | { kind: "gateway-status" }
+  | { kind: "gateway-logs"; lines?: number }
+  | { kind: "projects-list" }
+  | { kind: "projects-add"; path: string; name?: string }
+  | { kind: "projects-remove"; id: string }
+  | { kind: "projects-default"; id: string }
   | { kind: "pairing-approve"; channel: string; code: string }
   | { kind: "pairing-list" }
   | { kind: "pairing-revoke"; channel: string; senderId: string }
-  | { kind: "help"; command: "gateway" | "pairing" };
+  | { kind: "help"; command: "gateway" | "pairing" | "projects" };
 
-/** `tcode gateway install|uninstall|status` and `tcode pairing approve|list|revoke`; null for anything else. */
+const GATEWAY_USAGE = "usage: tcode gateway [install [--workspace <dir>] | uninstall | start | stop | restart | status | logs [-n <lines>]]";
+const PROJECTS_USAGE = "usage: tcode projects [list | add <path> [--name <name>] | remove <id> | default <id>]";
+
+/** `tcode gateway install|uninstall|start|stop|restart|status|logs`, `tcode projects …` and `tcode pairing …`; null for anything else. */
 export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
   const [word, sub, ...rest] = argv;
   if (word === "gateway") {
     if (sub === "-h" || sub === "--help") return { kind: "help", command: "gateway" };
-    if (sub === "uninstall" && rest.length === 0) return { kind: "gateway-uninstall" };
-    if (sub === "status" && rest.length === 0) return { kind: "gateway-status" };
+    const bare: Record<string, GatewayCommand> = {
+      uninstall: { kind: "gateway-uninstall" },
+      start: { kind: "gateway-start" },
+      stop: { kind: "gateway-stop" },
+      restart: { kind: "gateway-restart" },
+      status: { kind: "gateway-status" },
+    };
+    if (sub !== undefined && Object.hasOwn(bare, sub)) {
+      if (rest.length === 0) return bare[sub]!;
+      throw new CliError(GATEWAY_USAGE);
+    }
+    if (sub === "logs") {
+      if (rest.length === 0) return { kind: "gateway-logs" };
+      const raw = rest.length === 2 && (rest[0] === "-n" || rest[0] === "--lines") ? rest[1] : rest.length === 1 && rest[0]!.startsWith("--lines=") ? rest[0]!.slice("--lines=".length) : undefined;
+      const lines = Number(raw);
+      if (raw === undefined || !Number.isInteger(lines) || lines < 1) throw new CliError("usage: tcode gateway logs [-n <lines>]");
+      return { kind: "gateway-logs", lines };
+    }
     if (sub === "install") {
       if (rest.length === 0) return { kind: "gateway-install" };
       if (rest[0] === "--workspace" && rest[1] && rest.length === 2) return { kind: "gateway-install", workspace: rest[1] };
@@ -76,6 +104,28 @@ export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
       throw new CliError("usage: tcode gateway install [--workspace <dir>]");
     }
     return null;
+  }
+  if (word === "projects") {
+    if (sub === "-h" || sub === "--help") return { kind: "help", command: "projects" };
+    if (sub === undefined || (sub === "list" && rest.length === 0)) return { kind: "projects-list" };
+    if (sub === "remove" && rest.length === 1) return { kind: "projects-remove", id: rest[0]! };
+    if (sub === "default" && rest.length === 1) return { kind: "projects-default", id: rest[0]! };
+    if (sub === "add") {
+      let path: string | undefined;
+      let name: string | undefined;
+      for (let i = 0; i < rest.length; i++) {
+        const arg = rest[i]!;
+        if (arg === "--name" || arg.startsWith("--name=")) {
+          const value = arg === "--name" ? rest[++i] : arg.slice("--name=".length);
+          if (!value || name !== undefined) throw new CliError(PROJECTS_USAGE);
+          name = value;
+        } else if (path === undefined && !arg.startsWith("-")) path = arg;
+        else throw new CliError(PROJECTS_USAGE);
+      }
+      if (path === undefined) throw new CliError(PROJECTS_USAGE);
+      return { kind: "projects-add", path, ...(name !== undefined ? { name } : {}) };
+    }
+    throw new CliError(PROJECTS_USAGE);
   }
   if (word === "pairing") {
     if (sub === undefined || sub === "-h" || sub === "--help") return { kind: "help", command: "pairing" };
@@ -229,6 +279,7 @@ export type InstallCommand =
 export type Invocation =
   | { kind: "subcommand"; command: InstallCommand }
   | { kind: "gateway-command"; command: GatewayCommand }
+  | { kind: "lifecycle"; name: LifecycleName; argv: string[] }
   | { kind: "session"; options: CliOptions };
 
 const SUBCOMMAND_WORDS = new Set(["install", "update", "upgrade", "rollback"]);
@@ -264,6 +315,7 @@ export function parseInvocation(argv: string[]): Invocation {
     const command = matchSubcommand(argv);
     if (command) return { kind: "subcommand", command };
     if (argv[0] === "web") return { kind: "session", options: parseWeb(argv.slice(1)) };
+    if (isLifecycleName(argv[0])) return { kind: "lifecycle", name: argv[0], argv: argv.slice(1) };
     const gatewayCommand = matchGatewayCommand(argv);
     if (gatewayCommand) return { kind: "gateway-command", command: gatewayCommand };
     if (argv[0] === "gateway") return { kind: "session", options: parseGateway(argv.slice(1)) };

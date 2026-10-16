@@ -49,7 +49,7 @@ describe("evaluate", () => {
   });
 
   test("the built-in exemptions are explicit and explained", () => {
-    expect(Object.keys(EXEMPT).sort()).toEqual(["src/agent/events.ts", "src/exec/backend.ts", "src/gateway/types.ts", "src/index.ts", "src/install/build-flags.ts", "src/ui/runtime.ts"]);
+    expect(Object.keys(EXEMPT).sort()).toEqual(["src/agent/events.ts", "src/cli/lifecycle/types.ts", "src/doctor/types.ts", "src/exec/backend.ts", "src/gateway/types.ts", "src/index.ts", "src/install/build-flags.ts", "src/service/types.ts", "src/ui/runtime.ts"]);
     for (const reason of Object.values(EXEMPT)) expect(reason.length).toBeGreaterThan(5);
   });
 });

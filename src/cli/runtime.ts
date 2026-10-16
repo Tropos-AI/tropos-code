@@ -217,6 +217,12 @@ export function makeAgent(
       contextText,
       nonce,
       persist: (message) => opts.session().appendMessage(message),
+      // Usage lives in its own event lines: extra fields on a stored message would be sent back to the API.
+      recordUsage: ({ model, usage, costUsd }) =>
+        void opts
+          .session()
+          .appendEvent("usage", { model, usage: { ...usage, ...(costUsd === undefined ? {} : { cost_usd: costUsd }) } })
+          .catch(() => {}),
       toolContext: opts.toolContext,
       maxTurns: opts.maxTurns,
       emit: (event) => {

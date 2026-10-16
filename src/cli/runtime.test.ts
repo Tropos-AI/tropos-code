@@ -62,6 +62,21 @@ test("mode, model and effort changes are recorded as session events", async () =
   expect(rt.state()).toMatchObject({ mode: "plan", effort: "max" });
 });
 
+test("each model reply's usage and cost is recorded as a session event, for the usage report", async () => {
+  ctx = { ...ctx, model: new FakeModel([() => reply([textBlock("hello")]), () => reply([textBlock("again")])]) };
+  const { session, runtime: rt } = await runtime();
+  const agent = rt.newAgent({ emit: () => {}, askPermission: async () => ({ kind: "deny" }) });
+  await agent.run("hi", new AbortController().signal);
+  await agent.run("and again", new AbortController().signal);
+  await Bun.sleep(20);
+  const lines = (await readFile(session.path, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
+  const usage = lines.filter((l) => l.type === "event" && l.name === "usage");
+  expect(usage).toHaveLength(2);
+  expect(usage[0].value).toMatchObject({ model: "claude-opus-5-5", usage: { input_tokens: 100, output_tokens: 20 } });
+  // The stored messages themselves carry no usage: extra fields there would be sent back to the API.
+  expect(lines.filter((l) => l.type === "message").every((l) => l.message.usage === undefined)).toBe(true);
+});
+
 test("clear starts a new session", async () => {
   const { runtime: rt } = await runtime();
   await rt.clear();

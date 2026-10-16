@@ -15,6 +15,9 @@ export const EXEMPT: Record<string, string> = {
   "src/ui/runtime.ts": "type-only module",
   "src/exec/backend.ts": "type-only module",
   "src/gateway/types.ts": "type-only module",
+  "src/cli/lifecycle/types.ts": "type-only module",
+  "src/doctor/types.ts": "type-only module",
+  "src/service/types.ts": "type-only module",
   "src/install/build-flags.ts": "test-build branches run only in compiled e2e binaries (amendment A3)",
 };
 

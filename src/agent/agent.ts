@@ -68,6 +68,8 @@ export interface AgentOptions {
   onAllowAlways?(rule: string): Promise<void> | void;
   contextText(): Promise<string>;
   persist(message: MessageParam): Promise<void>;
+  /** Records what one model reply cost, for usage reports. Called after every reply; failures are the caller's to swallow. */
+  recordUsage?(entry: { model: string; usage: Message["usage"]; costUsd: number | undefined }): void;
   toolContext: Omit<ToolContext, "signal">;
   maxTurns?: number;
   emit(event: AgentEvent): void;
@@ -539,6 +541,7 @@ export class Agent {
     // Sums compaction/fallback iterations and prices fallbacks at the model that served them.
     const cost = messageCostUsd(message, requestedModel);
     this.totalCostUsd = cost === undefined || this.totalCostUsd === undefined ? undefined : this.totalCostUsd + cost;
+    this.opts.recordUsage?.({ model: message.model || requestedModel, usage: message.usage, costUsd: cost });
     this.emit({
       type: "usage",
       inputTokens: message.usage.input_tokens,

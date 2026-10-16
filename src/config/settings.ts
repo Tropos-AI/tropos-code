@@ -383,3 +383,6 @@ export async function addLocalAllowRule(localPath: string, rule: string): Promis
   await mkdir(dirname(localPath), { recursive: true });
   await writeFile(localPath, `${JSON.stringify(next, null, 2)}\n`);
 }
+
+/** The schema of one settings file (user, project or local): the config store validates writes with it. */
+export { layerSchema as settingsLayerSchema };
