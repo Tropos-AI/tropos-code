@@ -190,6 +190,12 @@ The level is `chat.autonomy` in `~/.tropos/gateway.json` (`tcode config set --fi
 project entry's `autonomy` overrides it. Open chats follow a change as soon as the gateway reads the file again: on a
 dashboard save, or when any chat starts a session. A guest's chat and a job made in one always ask.
 
+**In Telegram**, `/autonomy` shows the level of the chat's current project and `/autonomy ask` or `/autonomy balanced`
+lowers it (the project's own level, or the global `chat.autonomy` when the project has none), and open chats follow at
+their next decision. Only the owner can use it, and only
+in their private chat with the bot (a group is refused). A chat can never raise the level: `/autonomy autonomous` is
+refused. Raising it is done on the computer, with `tcode config` or the dashboard.
+
 `balanced` lets the agent run code it wrote: it may edit a test file and then run the project's tests, inside the
 confinement. What it still asks for is installs, pushes, deletions, network tools and everything else, and edits to
 the files that define the tests (`package.json`, `Makefile`, `pyproject.toml`, …); at `autonomous` those edits run

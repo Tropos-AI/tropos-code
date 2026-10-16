@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { SandboxUnavailableError, UnknownCommandError, SenderNotApprovedError, UserFacingError } from "../errors";
-import type { ChatProjects } from "../types";
+import type { Autonomy } from "../config";
+import { AutonomyError, RAISE_REFUSED } from "../autonomy";
+import type { ChatAutonomy, ChatProjects } from "../types";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
 import { TelegramAdapter } from "./adapter";
@@ -14,6 +16,25 @@ afterEach(async () => {
   for (const c of cleanup.reverse()) await c();
   cleanup = [];
 });
+
+const RANKS: Autonomy[] = ["ask", "balanced", "autonomous"];
+/** A ChatAutonomy at `level` in project "App" that records its lower() calls and refuses raises like the real one. */
+function fakeAutonomy(level: Autonomy = "balanced") {
+  const calls: Autonomy[] = [];
+  const project = { id: "app", name: "App" };
+  const autonomy: ChatAutonomy = {
+    current: async () => ({ level, project }),
+    lower: async (_key, to) => {
+      calls.push(to);
+      if (RANKS.indexOf(to) > RANKS.indexOf(level)) throw new AutonomyError(RAISE_REFUSED);
+      const changed = to !== level;
+      level = to;
+      return { changed, level, project };
+    },
+  };
+  return { autonomy, calls };
+}
+const NOT_OWNER = "Only the owner can see or change the autonomy level.";
 
 /** Two projects, each chat in `default` until it picks. */
 function fakeProjects() {
@@ -35,7 +56,7 @@ function fakeProjects() {
   return { projects, chosen };
 }
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects } = {}) {
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -48,6 +69,7 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
     pairing,
     allowGroups: opts.allowGroups,
     projects: opts.projects,
+    autonomy: opts.autonomy,
     askTimeoutMs: opts.askTimeoutMs,
     minIntervalMs: 0,
     backoffBaseMs: 5,
@@ -619,6 +641,77 @@ describe("TelegramAdapter", () => {
     await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned, in their private chat with me.").length === 2);
     // Refused before any session was opened.
     expect(sessions.opens).toBe(0);
+  });
+
+  test("/autonomy shows the level to the owner without opening a session", async () => {
+    const { autonomy } = fakeAutonomy("balanced");
+    const { server, sessions, pairing } = await setup({ autonomy });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "/autonomy");
+    await server.waitFor(() => server.textsTo(CHAT).length > 0);
+    expect(server.textsTo(CHAT).at(-1)).toBe(
+      "Autonomy in App: balanced.\nask: every edit and command asks · balanced: edits, read-only commands and tests run, the rest asks · autonomous: everything in the project runs, MCP tools ask.\nLower it with /autonomy ask or /autonomy balanced. Raising it is done on the computer: tcode config or the dashboard.",
+    );
+    expect(sessions.opens).toBe(0);
+  });
+
+  test("/autonomy ask lowers; /autonomy autonomous is refused; an unknown argument gets the usage line", async () => {
+    const { autonomy, calls } = fakeAutonomy("balanced");
+    const { server, pairing } = await setup({ autonomy });
+    pairing.owners.add(`telegram:${CHAT}`);
+    const say = async (text: string, reply: string) => {
+      const before = server.textsTo(CHAT).length;
+      server.pushMessage(CHAT, CHAT, text);
+      await server.waitFor(() => server.textsTo(CHAT).length > before);
+      expect(server.textsTo(CHAT).at(-1)).toBe(reply);
+    };
+    await say("/autonomy ask", "Autonomy in App is now ask.");
+    await say("/autonomy ask", "Autonomy in App is already ask.");
+    await say("/autonomy Autonomous", RAISE_REFUSED);
+    await say("/autonomy balanced", RAISE_REFUSED);
+    await say("/autonomy wild", "Use /autonomy, /autonomy ask or /autonomy balanced.");
+    await say("/autonomy ask now", "Use /autonomy, /autonomy ask or /autonomy balanced.");
+    expect(calls).toEqual(["ask", "ask", "autonomous", "balanced"]);
+  });
+
+  test("an approved sender who isn't the owner can't use /autonomy", async () => {
+    const { autonomy, calls } = fakeAutonomy("balanced");
+    const { server, sessions, pairing } = await setup({ autonomy });
+    pairing.owners.add("telegram:1");
+    server.pushMessage(CHAT, CHAT, "/autonomy");
+    server.pushMessage(CHAT, CHAT, "/autonomy ask");
+    await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === NOT_OWNER).length === 2);
+    expect(calls).toEqual([]);
+    expect(sessions.opens).toBe(0);
+  });
+
+  test("the owner's /autonomy in a group is refused there", async () => {
+    const { autonomy, calls } = fakeAutonomy("balanced");
+    const { server, sessions, pairing } = await setup({ autonomy, allowGroups: true });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(-100, CHAT, "/autonomy", { chatType: "supergroup" });
+    server.pushMessage(-100, CHAT, "/autonomy ask", { chatType: "supergroup" });
+    await server.waitFor(() => server.textsTo(-100).filter((t) => t === NOT_OWNER).length === 2);
+    expect(calls).toEqual([]);
+    expect(sessions.opens).toBe(0);
+  });
+
+  test("/autonomy without the option says it isn't available; a failing lookup says so too", async () => {
+    const { server, pairing } = await setup();
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "/autonomy");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Autonomy isn't available here."));
+    const broken: ChatAutonomy = { current: async () => { throw new Error("disk"); }, lower: async () => { throw new Error("disk"); } };
+    const b = await setup({ autonomy: broken });
+    b.pairing.owners.add(`telegram:${CHAT}`);
+    b.server.pushMessage(CHAT, CHAT, "/autonomy");
+    await b.server.waitFor(() => b.server.textsTo(CHAT).includes("Could not do that right now."));
+  });
+
+  test("help and the bot's command menu mention /autonomy", async () => {
+    const { server } = await setup();
+    expect(HELP_TEXT).toContain("/autonomy  show the autonomy level, or lower it");
+    expect(server.commands).toContainEqual({ command: "autonomy", description: "Show or lower the autonomy level" });
   });
 
   test("a learned notice during a turn is sent after the answer; one between turns at once; other info notices stay silent", async () => {

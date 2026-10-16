@@ -85,5 +85,7 @@ describe("help", () => {
     expect(HELP_TEXT).toContain("/learned  what I saved; /learned undo takes back the newest");
     expect(HELP_TEXT).toContain("/<name>  run one of your skills or commands");
     expect(BOT_COMMANDS).toContainEqual({ command: "learned", description: "What I learned, with undo" });
+    expect(HELP_TEXT).toContain("/autonomy  show the autonomy level, or lower it");
+    expect(BOT_COMMANDS).toContainEqual({ command: "autonomy", description: "Show or lower the autonomy level" });
   });
 });

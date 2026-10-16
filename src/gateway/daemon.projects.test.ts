@@ -603,6 +603,28 @@ describe("autonomy in chats and scheduled runs", () => {
     expect(await gw.done).toBe(0);
   });
 
+  test("/autonomy ask from the owner applies to the open session at once", async () => {
+    await writeGatewayJson({ chat: { autonomy: "balanced", backend: "host" } });
+    const gw = startGateway([bash("b1", "ls"), say("listed"), bash("b2", "ls"), say("again")]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "list the files");
+    await server.waitFor(() => server.textsTo(CHAT).includes("listed"));
+    expect(keyboards(CHAT)).toHaveLength(0); // balanced: a read-only command runs unasked
+    server.pushMessage(CHAT, CHAT, "/autonomy ask");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Autonomy in Default workspace is now ask."));
+    expect(await chatSettings()).toEqual({ autonomy: "ask", backend: "host" });
+    server.pushMessage(CHAT, CHAT, "list them again");
+    expect(await approve(CHAT, 1)).toContain("ls"); // same open session, now asking
+    await server.waitFor(() => server.textsTo(CHAT).includes("again"));
+    // Raising is refused and leaves the file alone.
+    server.pushMessage(CHAT, CHAT, "/autonomy autonomous");
+    await server.waitFor(() => server.textsTo(CHAT).includes("A chat can only lower the autonomy level. Raise it on the computer: tcode config or the dashboard."));
+    expect(await chatSettings()).toEqual({ autonomy: "ask", backend: "host" });
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("an existing install (gateway.json without chat, an approved sender in pairing.json) keeps asking for everything", async () => {
     await writeGatewayJson({ projects: [] });
     const pairing = new FilePairing({ path: join(home, "gateway", "pairing.json") });

@@ -1,8 +1,9 @@
 // src/gateway/telegram/adapter.ts — routes Telegram private chats to agent sessions.
 import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/events";
+import { AUTONOMY_LEVELS, type Autonomy } from "../config";
 import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
-import type { ChannelAdapter, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
+import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
   assistantText,
@@ -29,6 +30,8 @@ const MAX_UNPAIRED_MEMORY = 1000;
 /** How long start() waits for the bot's command list to be registered. */
 const COMMANDS_WAIT_MS = 10_000;
 const LEARNED_REFUSAL = "Only the owner can see what I've learned, in their private chat with me.";
+const AUTONOMY_REFUSAL = "Only the owner can see or change the autonomy level.";
+const AUTONOMY_USAGE = "Use /autonomy, /autonomy ask or /autonomy balanced.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
 export interface TelegramAdapterOptions {
@@ -37,6 +40,8 @@ export interface TelegramAdapterOptions {
   pairing: Pairing;
   /** Lets chats see and switch their project (/project). Without it the command says it isn't available. */
   projects?: ChatProjects;
+  /** Lets the owner see and lower the autonomy level (/autonomy). Without it the command says it isn't available. */
+  autonomy?: ChatAutonomy;
   allowGroups?: boolean;
   /** Unanswered permission requests are denied after this long. Default 5 minutes. */
   askTimeoutMs?: number;
@@ -125,6 +130,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly sessions: SessionProvider;
   private readonly pairing: Pairing;
   private readonly projects: ChatProjects | undefined;
+  private readonly autonomy: ChatAutonomy | undefined;
   private readonly allowGroups: boolean;
   private readonly askTimeoutMs: number;
   private readonly minIntervalMs: number;
@@ -149,6 +155,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.sessions = opts.sessions;
     this.pairing = opts.pairing;
     this.projects = opts.projects;
+    this.autonomy = opts.autonomy;
     this.allowGroups = opts.allowGroups ?? false;
     this.askTimeoutMs = opts.askTimeoutMs ?? 300_000;
     this.minIntervalMs = opts.minIntervalMs ?? 1000;
@@ -272,6 +279,11 @@ export class TelegramAdapter implements ChannelAdapter {
     // Before the session is opened: switching away from a project whose session can't start must still work.
     if (text.startsWith("/") && /^project(s)?$/.test(commandWord(text))) {
       await this.handleProjectCommand(msg.chat.id, text);
+      return;
+    }
+    // Before the session is opened, and only for the owner in their private chat (a group would show it to everyone).
+    if (text.startsWith("/") && commandWord(text) === "autonomy") {
+      await this.handleAutonomyCommand(msg.chat.id, msg.chat.type, senderId, text);
       return;
     }
     // Before the session is opened: a guest's /learned, or the owner's in a group, is refused without starting one.
@@ -578,6 +590,41 @@ export class TelegramAdapter implements ChannelAdapter {
       await this.reply(chatId, await this.switchProject(chatId, wanted.toLowerCase()));
     } catch (e) {
       this.log("project command failed", e);
+      await this.reply(chatId, e instanceof UserFacingError ? e.message : "Could not do that right now.");
+    }
+  }
+
+  /** `/autonomy`, `/autonomy ask`, `/autonomy balanced`: owner only, private chat only, and only downwards. */
+  private async handleAutonomyCommand(chatId: number, chatType: string, senderId: string, text: string): Promise<void> {
+    if (chatType !== "private" || !(await this.pairing.isOwner(CHANNEL, senderId))) {
+      await this.reply(chatId, AUTONOMY_REFUSAL);
+      return;
+    }
+    if (!this.autonomy) {
+      await this.reply(chatId, "Autonomy isn't available here.");
+      return;
+    }
+    const args = text.split(/\s+/).slice(1);
+    const wanted = args[0]?.toLowerCase();
+    // "autonomous" is a valid level: it reaches lower(), which refuses the raise in one place.
+    if (args.length > 1 || (wanted !== undefined && !AUTONOMY_LEVELS.includes(wanted as Autonomy))) {
+      await this.reply(chatId, AUTONOMY_USAGE);
+      return;
+    }
+    const key = `${CHANNEL}:${chatId}`;
+    try {
+      if (wanted === undefined) {
+        const { level, project } = await this.autonomy.current(key);
+        await this.reply(
+          chatId,
+          `Autonomy in ${oneLine(project.name, 60)}: ${level}.\nask: every edit and command asks · balanced: edits, read-only commands and tests run, the rest asks · autonomous: everything in the project runs, MCP tools ask.\nLower it with /autonomy ask or /autonomy balanced. Raising it is done on the computer: tcode config or the dashboard.`,
+        );
+        return;
+      }
+      const out = await this.autonomy.lower(key, wanted as Autonomy);
+      await this.reply(chatId, `Autonomy in ${oneLine(out.project.name, 60)} ${out.changed ? "is now" : "is already"} ${out.level}.`);
+    } catch (e) {
+      this.log("autonomy command failed", e);
       await this.reply(chatId, e instanceof UserFacingError ? e.message : "Could not do that right now.");
     }
   }

@@ -2,7 +2,7 @@
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import type { PanelData } from "../ui/runtime";
 import type { SessionState } from "../web/protocol";
-import type { GatewayConfig } from "./config";
+import type { Autonomy, GatewayConfig } from "./config";
 import type { Project, ProjectSource } from "./projects";
 
 /** Who a session answers to: the owner at their own chat, a paired guest, or a scheduled run. */
@@ -88,6 +88,13 @@ export interface ChatProjects {
   list(): Promise<Project[]>;
   /** Rejects with a user-facing error when the project doesn't exist. */
   select(chatKey: string, projectId: string): Promise<Project>;
+}
+
+/** What a channel needs to show and lower the autonomy level of the project a chat is in. */
+export interface ChatAutonomy {
+  current(chatKey: string): Promise<{ level: Autonomy; project: { id: string; name: string } }>;
+  /** Rejects with `AutonomyError` on a raise: a chat can only lower the level. */
+  lower(chatKey: string, to: Autonomy): Promise<{ changed: boolean; level: Autonomy; project: { id: string; name: string } }>;
 }
 
 /** What a background service (the scheduler, say) gets from the gateway when it starts. */

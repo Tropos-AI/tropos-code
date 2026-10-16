@@ -21,7 +21,7 @@ import { DEFAULT_PORT } from "../web/protocol";
 import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
-import { ensureChatSettings, pinnedTestCommands, sessionAutonomy } from "./autonomy";
+import { effectiveAutonomy, ensureChatSettings, lowerAutonomy, pinnedTestCommands, sessionAutonomy } from "./autonomy";
 import { chatBackend } from "./chat-exec";
 import { ProjectContexts } from "./contexts";
 import { SenderNotApprovedError, UserFacingError } from "./errors";
@@ -49,7 +49,7 @@ import { createCronGatewayService } from "./cron/service";
 import { createCuratorService } from "./curator-service";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
-import type { ChannelAdapter, ChatProjects, GatewayService, GatewayServiceDeps, Pairing, SessionRole } from "./types";
+import type { ChannelAdapter, ChatAutonomy, ChatProjects, GatewayService, GatewayServiceDeps, Pairing, SessionRole } from "./types";
 
 export type { SessionContext } from "../cli/context";
 
@@ -359,10 +359,23 @@ export async function runGateway(run: GatewayRun): Promise<number> {
 
   const sessions = new RoutedSessions(router, pool);
   const chatProjects: ChatProjects = { current: (k) => router.current(k), list: () => source.list(), select: (k, id) => router.select(k, id) };
+  const chatAutonomy: ChatAutonomy = {
+    current: async (k) => {
+      const project = await router.current(k);
+      return { level: effectiveAutonomy(await refreshConfig(), project.id), project: { id: project.id, name: project.name } };
+    },
+    lower: async (k, to) => {
+      const project = await router.current(k);
+      const out = await lowerAutonomy(home, project.id, to);
+      // Open sessions read the live config at each decision: re-read it now, not at the next reload.
+      await refreshConfig();
+      return { ...out, project: { id: project.id, name: project.name } };
+    },
+  };
   const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    return [new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
+    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
   let adapterToken = telegramToken(live, run.env);
   let adapters = buildAdapters(adapterToken);
