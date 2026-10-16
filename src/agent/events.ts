@@ -18,7 +18,8 @@ export type AgentEvent =
   | { type: "tool_end"; id: string; name: string; output: ToolOutput; status: ToolStatus }
   /** A running tool's latest progress line, e.g. what a subagent is doing. */
   | { type: "tool_progress"; id: string; text: string }
-  | { type: "notice"; level: "info" | "warn" | "error"; text: string }
+  /** learned: the line reports something saved to the agent's own stores (a save or a review), which Telegram holds back and forwards. */
+  | { type: "notice"; level: "info" | "warn" | "error"; text: string; learned?: boolean }
   | { type: "usage"; inputTokens: number; outputTokens: number; contextTokens: number; costUsd?: number; totalCostUsd?: number }
   | { type: "turn_end"; reason: TurnEndReason };
 

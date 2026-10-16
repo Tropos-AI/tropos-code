@@ -18,7 +18,8 @@ import { createSkillManageTool } from "../memory/skill-manage";
 import { LearningLoop, runReviewAgent } from "../learning/review";
 import { loadIdentity } from "../context/identity";
 import { runCurator } from "../learning/curator";
-import { canonicalStorePath, troposStorePaths } from "../learning/stores";
+import { savedNotice } from "../learning/saved-notice";
+import { canonicalStorePath, STORE_TOOLS, troposStorePaths } from "../learning/stores";
 import { dailyNotesDir } from "../memory/daily";
 import { commandMessage, expandCommand, MAX_EXTENSION_BYTES, type CommandIO } from "../extensions/commands";
 import { renderSkill, skillListing } from "../extensions/skills";
@@ -41,6 +42,8 @@ import type { ListTopic } from "../ui/commands";
 import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSection, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
+
+const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
 
 export interface AppContext {
   cwd: string;
@@ -158,6 +161,8 @@ export function makeAgent(
      * learning is on, the background review. Print mode gets neither.
      */
     interactive?: boolean;
+    /** Runs the background review. Defaults to `interactive`; the gateway sets it for the owner's chats only. */
+    learn?: boolean;
     /** Receives the session's learning loop, so the runtime can cancel it on /clear and at exit. */
     onLearning?(loop: LearningLoop): void;
     /** After the Identity tool saved something (headers show the new name). */
@@ -205,10 +210,10 @@ export function makeAgent(
   // The background review (Hermes' learning loop): interactive sessions only, never print mode.
   // The review writes skills to its own folder (~/.tropos/skills-learned), never over the user's.
   const learnedSkills = createSkillManageTool({ home: ctx.home, folder: LEARNED_SKILLS_DIR, ledger: ctx.ext.ledger, tracker: ctx.ext.reviewTracker });
-  const learning = opts.interactive
+  const learning = (opts.learn ?? opts.interactive)
     ? new LearningLoop({
         settings: () => ctx.settings.learning,
-        notice: (text) => opts.ui.emit({ type: "notice", level: "info", text }),
+        notice: (text) => opts.ui.emit({ type: "notice", level: "info", text, learned: true }),
         runReview: async (_kind, prompt, history, signal) => {
           const result = await runReviewAgent({
             model: ctx.model,
@@ -230,6 +235,7 @@ export function makeAgent(
       })
     : undefined;
   if (learning) opts.onLearning?.(learning);
+  const storeInputs = new Map<string, unknown>();
 
   agent = new Agent(
     {
@@ -252,6 +258,14 @@ export function makeAgent(
       toolContext: opts.toolContext,
       maxTurns: opts.maxTurns,
       emit: (event) => {
+        // A save the agent made itself: say so once it is done, whoever approved it.
+        if (event.type === "tool_start" && STORE_TOOL_NAMES.has(event.name)) storeInputs.set(event.id, event.input);
+        if (event.type === "tool_end" && STORE_TOOL_NAMES.has(event.name)) {
+          const input = storeInputs.get(event.id);
+          storeInputs.delete(event.id);
+          const text = event.status === "done" ? savedNotice(event.name, input) : undefined;
+          if (text) opts.ui.emit({ type: "notice", level: "info", text, learned: true });
+        }
         if (event.type === "tool_end" && event.name === "Identity" && event.status === "done") opts.onIdentityChange?.();
         if (learning) {
           if (event.type === "tool_end") learning.onToolEnd(event.name, event.status);
@@ -493,7 +507,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
     }
     case "learned": {
       const entries = await ext.ledger.list(LEARNED_PANEL_LIMIT);
-      const by = { agent: "you asked", review: "learned on its own", user: "you" } as const;
+      const by = { agent: "saved while we talked", review: "learned on its own", user: "you" } as const;
       return {
         title: "Learned",
         subtitle: "Notes, skills and identity changes, newest first · /learned undo reverts the latest",
@@ -555,6 +569,8 @@ export async function createRuntime(
     source?: "startup" | "resume";
     /** False for sessions from a messaging channel: no learning review, no first-run identity note. Default true. */
     interactive?: boolean;
+    /** Runs the background review; defaults to `interactive`. */
+    learn?: boolean;
     /**
      * False when other sessions share ctx.ext (the gateway's chats): shutting this one down must not close the
      * MCP servers, language servers and search index under the others. Default true.
@@ -631,6 +647,7 @@ export async function createRuntime(
         hooks,
         pending,
         interactive: init.interactive ?? true,
+        learn: init.learn,
         onLearning: (loop) => {
           learning = loop;
         },

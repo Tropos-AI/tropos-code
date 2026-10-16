@@ -19,6 +19,7 @@ import { ModelPrefs } from "../config/model-prefs";
 import { loadExtensions, sessionTools } from "./extensions";
 import { troposStorePaths } from "../learning/stores";
 import { dailyNotesDir } from "../memory/daily";
+import { channelContext } from "../gateway/policy";
 import { createRuntime, createToolContext, makeAgent, permissionContext, type AppContext } from "./runtime";
 
 let dir: string;
@@ -309,17 +310,19 @@ describe("learning and identity", () => {
     return model;
   }
 
-  async function agentFor(opts: { interactive?: boolean; onIdentityChange?(): void } = {}) {
+  async function agentFor(opts: { interactive?: boolean; learn?: boolean; ask?: (p: PermissionPrompt) => Promise<PermissionAnswer>; ctx?: AppContext; onIdentityChange?(): void } = {}) {
+    const appCtx = opts.ctx ?? ctx;
     const session = await SessionStore.create(ctx.home, { cwd: dir, model: "m", version: "v" });
     const events: AgentEvent[] = [];
     let loop: LearningLoop | undefined;
-    const agent = makeAgent(ctx, {
+    const agent = makeAgent(appCtx, {
       session: () => session,
       history: [],
       state: () => ({ model: "claude-opus-5-5", effort: ctx.settings.effort, mode: "default" }),
-      ui: { emit: (e) => events.push(e), askPermission: allow },
-      toolContext: createToolContext(ctx),
+      ui: { emit: (e) => events.push(e), askPermission: opts.ask ?? allow },
+      toolContext: createToolContext(appCtx),
       interactive: opts.interactive,
+      learn: opts.learn,
       onLearning: (l) => {
         loop = l;
       },
@@ -425,6 +428,64 @@ describe("learning and identity", () => {
     expect(await ctx.ext.ledger.list()).toEqual([]);
   });
 
+  const memoryAdd = (id: string): Step => () => reply([toolUseBlock(id, "Memory", { target: "user", action: "add", content: "prefers bun" })], "tool_use");
+  const learnedNotices = (events: AgentEvent[]) => events.flatMap((e) => (e.type === "notice" && e.learned ? [e.text] : []));
+
+  test("an owner's Memory save runs without a prompt and leaves one learned notice", async () => {
+    await setup([memoryAdd("m1"), text("ok")]);
+    const asked: PermissionPrompt[] = [];
+    const { agent, events } = await agentFor({ ask: async (p) => (asked.push(p), { kind: "allow" }) });
+    await agent.run("remember", signal());
+    expect(asked).toEqual([]);
+    expect(events).toContainEqual({ type: "notice", level: "info", text: "💡 Remembered: prefers bun", learned: true });
+    expect(learnedNotices(events)).toHaveLength(1);
+    const entries = await ctx.ext.ledger.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ actor: "agent", kind: "user" });
+  });
+
+  test("with learning.askBeforeSaving the same save asks first", async () => {
+    await setup([memoryAdd("m1"), text("ok")], { askBeforeSaving: true });
+    const asked: PermissionPrompt[] = [];
+    const { agent, events } = await agentFor({ ask: async (p) => (asked.push(p), { kind: "allow" }) });
+    await agent.run("remember", signal());
+    expect(asked.map((p) => p.toolName)).toEqual(["Memory"]);
+    expect(learnedNotices(events)).toEqual(["💡 Remembered: prefers bun"]);
+  });
+
+  test("a denied save leaves no notice", async () => {
+    await setup([memoryAdd("m1"), text("ok")], { askBeforeSaving: true });
+    const { agent, events } = await agentFor({ ask: async () => ({ kind: "deny" }) });
+    await agent.run("remember", signal());
+    expect(learnedNotices(events)).toEqual([]);
+  });
+
+  test("learn: true runs the review in a non-interactive session without the first-run note", async () => {
+    const model = await setup([text("a"), text("b"), text(NOTHING)]);
+    const { agent, loop } = await agentFor({ interactive: false, learn: true });
+    expect(loop()).toBeDefined();
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    await loop()!.whenIdle();
+    expect(model.requests).toHaveLength(3);
+    expect(JSON.stringify(model.requests[0]!.messages[0])).not.toContain("<bootstrap>");
+    // Without the option a non-interactive session never reviews.
+    expect((await agentFor({ interactive: false })).loop()).toBeUndefined();
+    expect((await agentFor({ interactive: true, learn: false })).loop()).toBeUndefined();
+  });
+
+  test("a guest session gets no store tools and no learned notices; an owner session in the same setup does", async () => {
+    await setup([memoryAdd("m1"), text("ok"), memoryAdd("m2"), text("ok")]);
+    const exec = {} as Parameters<typeof channelContext>[1];
+    const owner = await agentFor({ ctx: channelContext(ctx, exec, { role: "owner" }) });
+    await owner.agent.run("remember", signal());
+    expect(learnedNotices(owner.events)).toEqual(["💡 Remembered: prefers bun"]);
+    const guest = await agentFor({ ctx: channelContext(ctx, exec, { role: "guest" }) });
+    await guest.agent.run("remember", signal());
+    expect(learnedNotices(guest.events)).toEqual([]);
+    expect(await ctx.ext.ledger.list()).toHaveLength(1);
+  });
+
   test("print mode never reviews", async () => {
     const model = await setup([text("a"), text("b"), text("c")]);
     const { agent, loop } = await agentFor();
@@ -505,7 +566,7 @@ describe("learning and identity", () => {
     const panel = await rt.panel("learned");
     const [undo, original] = panel.sections[0]!.items;
     expect(undo).toMatchObject({ label: "memory: undo add: add: Uses bun", hint: "undo", status: "warn" });
-    expect(original).toMatchObject({ label: "memory: add: Uses bun", hint: "you asked", status: "off" });
+    expect(original).toMatchObject({ label: "memory: add: Uses bun", hint: "saved while we talked", status: "off" });
     expect(original!.detail![0]).toBe("add by agent (undone)");
     expect(original!.aside).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
     expect(await rt.undoLearned(original!.key)).toEqual({ ok: false, reason: `${original!.key} was already undone.` });

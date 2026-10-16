@@ -256,6 +256,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           theme: DARK,
           source: resumed ? "resume" : "startup",
           interactive: false,
+          // Only the owner's chats learn; a guest's chat is not material for the owner's memory.
+          learn: role === "owner",
           ownsExtensions: false,
         });
         const host = new WebHost(runtime);
