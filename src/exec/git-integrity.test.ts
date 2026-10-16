@@ -1,6 +1,6 @@
 // src/exec/git-integrity.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
   enforceCommondir,
   enforceNewGitDirs,
   findNestedGitDirs,
+  GIT_LINK_REMOVED,
   GIT_METADATA_TAMPERED,
   gitDirsSnapshot,
   gitMetadataUnsafe,
@@ -128,7 +129,8 @@ test("nested git dirs are found under modules (path segments included) and workt
   const found = findNestedGitDirs(git);
   expect(found.gitDirs.sort()).toEqual([join(git, "modules", "lib"), join(git, "modules", "lib", "modules", "inner"), join(git, "modules", "libs", "foo"), join(git, "worktrees", "wt")].sort());
   expect(found.links).toEqual([join(git, "modules", "linked")]);
-  expect(found.deep).toEqual([]);
+  expect(found.unreadable).toEqual([]);
+  expect(found.overflow).toBe(false);
 });
 
 test("a git dir created during the command loses its hooks and config, and the command is to be failed", () => {
@@ -172,16 +174,42 @@ test("a link planted under modules is removed, never followed; a directory insid
   expect(existsSync(join(fresh, "config"))).toBe(false);
 });
 
-test("git dirs nested beyond the search depth are reported, not silently skipped", () => {
+test("git dirs nested at any depth are found and swept (no depth limit)", () => {
   const snap = gitDirsSnapshot(git)!;
   let deep = join(git, "modules");
-  for (let i = 0; i < 12; i++) deep = join(deep, `d${i}`);
+  for (let i = 0; i < 40; i++) deep = join(deep, `d${i}`);
   plantGitDir(deep);
   const r = enforceNewGitDirs(snap);
+  expect(r.message).toBe(GIT_METADATA_TAMPERED);
+  expect(r.removed.sort()).toEqual([join(deep, "config"), join(deep, "hooks")]);
+});
+
+test("more directories than the search may visit fail closed, on this command and on the next", () => {
+  plantGitDir(join(git, "modules", "lib"));
+  const snap = gitDirsSnapshot(git, { maxVisits: 6 })!;
+  expect(snap.gitDirs).toEqual([join(git, "modules", "lib")]);
+  for (let i = 0; i < 8; i++) mkdirSync(join(git, "modules", `pad${i}`));
+  const r = enforceNewGitDirs(snap);
   expect(r.removed).toEqual([]);
-  expect(r.unsafe.length).toBe(1);
-  expect(r.message).toBe(gitMetadataUnsafe(r.unsafe[0]!));
-  expect(existsSync(join(deep, "config"))).toBe(true);
+  expect(r.unsafe).toEqual([git]);
+  expect(r.message).toBe(gitMetadataUnsafe(git));
+  const next = gitDirsSnapshot(git, { maxVisits: 6 })!; // the next command's snapshot can't make the overflow trusted
+  expect(enforceNewGitDirs(next).message).toBe(gitMetadataUnsafe(git));
+});
+
+const root = process.getuid?.() === 0;
+test.skipIf(root)("a directory the search can't read fails closed when it is new, and is known once it was there before", () => {
+  const snap = gitDirsSnapshot(git)!;
+  const locked = join(git, "modules", "locked");
+  plantGitDir(join(locked, "inner"));
+  chmodSync(locked, 0o000);
+  try {
+    const r = enforceNewGitDirs(snap);
+    expect(r).toEqual({ removed: [], unsafe: [locked], message: gitMetadataUnsafe(locked) });
+    expect(enforceNewGitDirs(gitDirsSnapshot(git)!).message).toBeNull();
+  } finally {
+    chmodSync(locked, 0o755);
+  }
 });
 
 test("a modules dir replaced by a link is caught: the link goes, the moved dir and the target stay", () => {
@@ -198,4 +226,32 @@ test("a modules dir replaced by a link is caught: the link goes, the moved dir a
   const withLink = gitDirsSnapshot(git)!;
   expect(enforceNewGitDirs(withLink)).toEqual({ removed: [], unsafe: [], message: null });
   expect(lstatSync(join(git, "worktrees")).isSymbolicLink()).toBe(true);
+});
+
+test("a link into a sandbox-writable dir is removed even when the snapshot already had it", () => {
+  const writable = join(fx, "writable");
+  plantGitDir(join(writable, "lib"));
+  symlinkSync(writable, join(git, "modules"));
+  symlinkSync(outside, join(git, "worktrees")); // into a dir the sandbox can't write: the owner's, left alone
+  mkdirSync(join(git, "hooks"));
+  writeFileSync(join(writable, "pre-commit"), "x");
+  symlinkSync("../../../writable/pre-commit", join(git, "hooks", "pre-commit")); // relative, into the writable dir
+  const snap = gitDirsSnapshot(git, { writable: [writable] })!;
+  expect(snap.known.has(join(git, "modules"))).toBe(true);
+  const r = enforceNewGitDirs(snap);
+  expect(r.removed.sort()).toEqual([join(git, "hooks", "pre-commit"), join(git, "modules")].sort());
+  expect(r.message).toBe(GIT_LINK_REMOVED);
+  expect(lstatSync(join(git, "worktrees")).isSymbolicLink()).toBe(true);
+  expect(existsSync(join(writable, "lib", "hooks", "post-checkout"))).toBe(true); // never followed
+  expect(readFileSync(join(writable, "pre-commit"), "utf8")).toBe("x");
+});
+
+test("a dangling link whose path would land in a writable dir is removed too", () => {
+  const writable = join(fx, "writable");
+  mkdirSync(writable);
+  mkdirSync(join(git, "modules", "lib"), { recursive: true });
+  writeFileSync(join(git, "modules", "lib", "HEAD"), "ref: x");
+  symlinkSync(join(writable, "not-yet"), join(git, "modules", "lib", "config"));
+  const snap = gitDirsSnapshot(git, { writable: [writable] })!;
+  expect(enforceNewGitDirs(snap)).toEqual({ removed: [join(git, "modules", "lib", "config")], unsafe: [], message: GIT_LINK_REMOVED });
 });

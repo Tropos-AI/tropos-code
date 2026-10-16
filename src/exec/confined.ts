@@ -4,9 +4,11 @@
 // Both run under a small host `sh` wrapper that leads the command's process group, so signals work as in
 // LocalBackend. Neither confinement can stop everything in `.git` in advance: bwrap can't mask a `commondir` or a
 // nested git dir that doesn't exist yet, and the macOS profile matches resolved paths, so a `.git/modules` link to a
-// writable dir slips past it. So the host checks after each command (git-integrity.ts), with the same code on both:
-// the wrapper reports the tool's status on fd 3 and exits with the host's verdict; when the wrapper is killed
-// first, the host checks on close. Residual: a nested repo or `gitdir:` file in the working tree (`lib/.git`).
+// writable dir slips past it. So the host checks (git-integrity.ts), with the same code on both: when the confined
+// shell returns (the wrapper reports its status on fd 3 and exits with the host's verdict), when the command's output
+// closes (also when the wrapper was killed), before every later spawn while a command (a background job) still runs,
+// and in close(). Residuals: a nested repo or `gitdir:` file in the working tree (`lib/.git`); and an owner's host
+// git run while a chat background job is alive can see what it planted after the last check.
 import { type ChildProcess, spawn } from "node:child_process";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import type { Socket } from "node:net";
@@ -64,6 +66,16 @@ export class ConfinedBackend implements ExecBackend {
   /** bwrap's real path, resolved once on TRUSTED_PATH (linux only). */
   private readonly bwrap: string = "";
   private readonly tempDir: string;
+  /** Real paths a confined command can write: a link in `.git` into one of them is never trusted. */
+  private readonly sandboxWritable: string[];
+  /**
+   * The `.git` state last verified while no confined command of this backend ran. Every check compares against it;
+   * it is only re-taken when nothing runs, so what a background job plants is never absorbed into it.
+   */
+  private baseline: PostRun = { commondir: null, gitDirs: null };
+  /** Started commands whose process group may still run something, with how each reports a finding. */
+  private readonly running = new Map<ChildProcess, (message: string | null) => void>();
+  private readonly closed = new WeakSet<ChildProcess>();
 
   constructor(opts: ConfinedBackendOptions) {
     const platform = opts.platform ?? process.platform;
@@ -78,9 +90,10 @@ export class ConfinedBackend implements ExecBackend {
     this.tempDir = this.paths.writable.includes(temp) ? temp : realOr(platform === "darwin" ? "/private/tmp" : "/tmp");
     // Computed (and so refused, on a ConfinementError) once, here. bwrap's arguments are rebuilt per command (see
     // spawn); building them now still refuses a project that can't be confined before any command runs.
+    this.sandboxWritable = [...new Set([this.paths.project, this.paths.cacheDir, this.tempDir, ...this.paths.writable])];
     if (platform === "darwin") this.profile = sandboxProfile(this.paths);
     else {
-      this.bwrap = trustedBinary(opts.bwrapBin ?? "bwrap", [this.paths.project, this.paths.cacheDir, this.tempDir, ...this.paths.writable]);
+      this.bwrap = trustedBinary(opts.bwrapBin ?? "bwrap", this.sandboxWritable);
       bwrapArgs(this.paths, this.paths.project);
     }
   }
@@ -108,41 +121,66 @@ export class ConfinedBackend implements ExecBackend {
         return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
       }
     }
-    // Taken before the command runs: the `commondir`s and nested git dirs that don't exist yet, and the links in .git.
-    const git = join(this.paths.project, ".git");
-    const gitDirs = gitDirsSnapshot(git);
-    const post: PostRun = { commondir: commondirSnapshot(git, [git, ...(gitDirs?.gitDirs ?? [])]), gitDirs };
+    // Before it runs: with nothing confined running, the current `.git` becomes the baseline (the owner's own changes
+    // since included). Otherwise something still running (a background job) may have planted since the last check,
+    // so this command first gets that check, and its result reports what it found.
+    const pre = this.anyRunning() ? this.verify() : ((this.baseline = this.snapshot()), null);
     const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", ...command], { ...options, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     // Each message is the host's own, so it is always reported when the host acted: the command's output can't be
     // trusted to say whether it already was. Both listeners come before bash.ts's, so the message lands in the
-    // command's stderr before its result is read.
-    let checked = false;
-    const check = (): string | null => {
-      checked = true;
-      return postRunMessage(post);
+    // command's stderr before its result is read. A repeat of the last message (a leftover reported as unsafe) is not.
+    let last: string | null = null;
+    let pending = pre; // the pre-spawn finding, until it is reported
+    const report = (found: string | null): string | null => {
+      const message = [pending, found].filter(Boolean).join("\n") || null;
+      pending = null;
+      if (message && message !== last) child.stderr?.emit("data", `\n${message}\n`);
+      if (message) last = message;
+      return message;
     };
+    this.running.set(child, (message) => void report(message));
+    let answered = false;
     const control = child.stdio[3] as Socket | null;
     if (control) {
       let line = "";
       control.on("error", () => {});
       control.on("data", (chunk: Buffer | string) => {
-        if (checked) return;
+        if (answered) return;
         line += String(chunk);
         if (!line.includes("\n")) return;
-        // The tool has returned, so nothing confined still runs: the check can't race the command.
-        const message = check();
-        if (message) child.stderr?.emit("data", `\n${message}\n`);
+        answered = true;
+        // The confined shell has returned. Anything it left running in the background (and any background job) may
+        // still plant: that is checked again on this command's close, before every later spawn and in close().
+        const message = report(this.verify());
         const status = Number.parseInt(line, 10);
         control.end(`${message ? 1 : Number.isInteger(status) ? status : 1}\n`);
       });
     }
-    // The wrapper was killed before it could report: check on the host anyway.
+    // Every holder of the command's output is gone, or the wrapper was killed before it could report: check again.
     child.once("close", () => {
-      if (checked) return;
-      const message = check();
-      if (message) child.stderr?.emit("data", `\n${message}\n`);
+      report(this.verify());
+      this.closed.add(child);
     });
     return child;
+  }
+
+  /** Whether a command this backend started may still run something; forgets the ones that are over. */
+  private anyRunning(): boolean {
+    for (const child of this.running.keys()) {
+      if (this.closed.has(child) && !this.host.alive(child)) this.running.delete(child);
+    }
+    return this.running.size > 0;
+  }
+
+  private snapshot(): PostRun {
+    const git = join(this.paths.project, ".git");
+    const gitDirs = gitDirsSnapshot(git, { writable: this.sandboxWritable });
+    return { commondir: commondirSnapshot(git, [git, ...(gitDirs?.gitDirs ?? [])]), gitDirs };
+  }
+
+  /** Undoes what was planted in `.git` since the baseline; the message to report, or null. */
+  private verify(): string | null {
+    return postRunMessage(this.baseline);
   }
 
   cwdMarker(id: string): CwdMarker {
@@ -158,7 +196,12 @@ export class ConfinedBackend implements ExecBackend {
     return this.host.alive(child);
   }
 
+  /** A command still running gets one more check here, and the commands still running get its finding. */
   close(): Promise<void> {
+    if (this.anyRunning()) {
+      const message = this.verify();
+      for (const report of this.running.values()) report(message);
+    }
     return this.host.close();
   }
 }

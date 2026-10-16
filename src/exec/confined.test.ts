@@ -1,12 +1,12 @@
 // src/exec/confined.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, TRUSTED_PATH, unconfinedBackend } from "./confined";
 import { ConfinementError } from "./confinement-paths";
-import { COMMONDIR_TAMPERED, GIT_METADATA_TAMPERED } from "./git-integrity";
+import { COMMONDIR_TAMPERED, GIT_LINK_REMOVED, GIT_METADATA_TAMPERED, gitMetadataUnsafe } from "./git-integrity";
 
 const until = async (check: () => boolean, ms = 5000) => {
   const end = Date.now() + ms;
@@ -190,6 +190,17 @@ describe.skipIf(available === null)("with real confinement", () => {
     rmSync(evil(), { recursive: true });
   });
 
+  test("a .git/worktrees link into the temp dir that was already there is still removed on the next command", async () => {
+    mkdirSync(evil(), { recursive: true });
+    symlinkSync(evil(), join(f.project, ".git", "worktrees"));
+    const r = await run("true");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(GIT_LINK_REMOVED);
+    expect(() => lstatSync(join(f.project, ".git", "worktrees"))).toThrow();
+    expect(existsSync(evil())).toBe(true);
+    rmSync(evil(), { recursive: true });
+  });
+
   test("a killed command's planted link is still removed on the host, with the message", async () => {
     const child = backend.spawn({ shell: "/bin/sh", script: `${plantLinkedWorktrees}; sleep 30`, cwd: f.project, env: {} });
     const result = collect(child);
@@ -307,6 +318,18 @@ describe("the bwrap backend (fake bwrap)", () => {
     rmSync(fresh, { recursive: true });
   });
 
+  test("a new directory in .git/modules the host can't read fails the command", async () => {
+    const locked = join(f.project, ".git", "modules", "locked");
+    try {
+      const r = await sh("mkdir .git/modules/locked && chmod 000 .git/modules/locked");
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(gitMetadataUnsafe(locked));
+    } finally {
+      chmodSync(locked, 0o755);
+      rmSync(locked, { recursive: true });
+    }
+  });
+
   test("a killed command that planted git metadata is still caught on the host, even if it printed the message itself", async () => {
     const script = `echo ${JSON.stringify(COMMONDIR_TAMPERED)} >&2; echo x > .git/commondir; mkdir -p .git/worktrees/w/hooks && echo r > .git/worktrees/w/HEAD && echo x > .git/worktrees/w/hooks/x; sleep 30`;
     const child = backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} });
@@ -320,6 +343,56 @@ describe("the bwrap backend (fake bwrap)", () => {
     expect(existsSync(commondir())).toBe(false);
     expect(existsSync(join(f.project, ".git", "worktrees", "w", "hooks"))).toBe(false);
     rmSync(join(f.project, ".git", "worktrees"), { recursive: true });
+  });
+
+  const plantModule = "mkdir -p .git/modules/late/hooks && echo r > .git/modules/late/HEAD && echo x > .git/modules/late/hooks/post-checkout";
+  const late = () => join(f.project, ".git", "modules", "late");
+  const backgroundPlanter = () => {
+    // Like a run_in_background job: it outlives the tool call that started it, and plants once that has returned.
+    const job = backend.spawn({ shell: "/bin/sh", script: `sleep 0.2; ${plantModule}; sleep 30`, cwd: f.project, env: {} });
+    return { job, done: collect(job) };
+  };
+
+  test("a background job that plants after its tool call returned is caught before the next command runs", async () => {
+    const { job, done } = backgroundPlanter();
+    try {
+      await until(() => existsSync(join(late(), "hooks", "post-checkout")));
+      const r = await sh("echo next");
+      expect(r.out).toBe("next\n");
+      expect(r.err).toContain(GIT_METADATA_TAMPERED);
+      expect(r.code).toBe(1);
+      expect(existsSync(join(late(), "hooks"))).toBe(false);
+    } finally {
+      backend.signal(job, "SIGKILL");
+      await done;
+      rmSync(late(), { recursive: true, force: true });
+    }
+  });
+
+  test("close() checks while a background job still runs, and reports to that job", async () => {
+    const { job, done } = backgroundPlanter();
+    try {
+      await until(() => existsSync(join(late(), "hooks", "post-checkout")));
+      await backend.close();
+      expect(existsSync(join(late(), "hooks"))).toBe(false);
+    } finally {
+      backend.signal(job, "SIGKILL");
+    }
+    expect((await done).err).toContain(GIT_METADATA_TAMPERED);
+    rmSync(late(), { recursive: true, force: true });
+  });
+
+  test("with nothing running, what the owner changed between commands is the new baseline", async () => {
+    const owner = join(f.project, ".git", "worktrees", "mine");
+    mkdirSync(owner, { recursive: true });
+    writeFileSync(join(owner, "HEAD"), "ref: x");
+    writeFileSync(join(owner, "commondir"), "../..");
+    try {
+      expect(await sh("true")).toEqual({ out: "", err: "", code: 0 });
+      expect(readFileSync(join(owner, "commondir"), "utf8")).toBe("../..");
+    } finally {
+      rmSync(join(f.project, ".git", "worktrees"), { recursive: true });
+    }
   });
 
   test("a commondir that existed before the command is left alone", async () => {
