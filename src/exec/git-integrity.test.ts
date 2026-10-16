@@ -168,11 +168,33 @@ test("a link planted under modules is removed, never followed; a directory insid
   mkdirSync(join(fresh, "hooks", "nested"));
   writeFileSync(join(fresh, "hooks", "nested", "f"), "x");
   r = enforceNewGitDirs(snap);
-  expect(r.unsafe).toEqual([join(fresh, "hooks", "nested")]);
-  expect(r.message).toBe(gitMetadataUnsafe(join(fresh, "hooks", "nested")));
-  expect(existsSync(join(fresh, "hooks", "nested", "f"))).toBe(true); // never deleted recursively
-  expect(existsSync(join(fresh, "hooks", "post-checkout"))).toBe(false);
+  // The hooks dir is moved aside into a quarantine in .git (out of git's reach) and emptied there; the directory
+  // inside it is left there and reported.
+  expect(r.unsafe).toHaveLength(1);
+  const leftover = r.unsafe[0]!;
+  expect(leftover).toMatch(new RegExp(`^${git}/\\.tropos-quarantine-[^/]+/\\d+/nested$`));
+  expect(r.message).toBe(gitMetadataUnsafe(leftover));
+  expect(readFileSync(join(leftover, "f"), "utf8")).toBe("x"); // never deleted recursively
+  expect(existsSync(join(fresh, "hooks"))).toBe(false);
   expect(existsSync(join(fresh, "config"))).toBe(false);
+});
+
+test("the quarantine sits in the main .git/hooks when that is a real dir, and is gone when everything was removed", () => {
+  mkdirSync(join(git, "hooks"));
+  writeFileSync(join(git, "hooks", "pre-commit"), "owner's hook");
+  const snap = gitDirsSnapshot(git)!;
+  const fresh = join(git, "modules", "lib");
+  plantGitDir(fresh);
+  mkdirSync(join(fresh, "hooks", "nested"));
+  let r = enforceNewGitDirs(snap);
+  expect(r.unsafe).toHaveLength(1);
+  expect(r.unsafe[0]).toMatch(new RegExp(`^${git}/hooks/\\.tropos-quarantine-[^/]+/\\d+/nested$`));
+  rmSync(join(git, "hooks", readdirSync(join(git, "hooks")).find((n) => n.startsWith(".tropos-quarantine-"))!), { recursive: true });
+  plantGitDir(join(git, "modules", "other"));
+  r = enforceNewGitDirs(snap);
+  expect(r).toMatchObject({ unsafe: [], message: GIT_METADATA_TAMPERED });
+  expect(readdirSync(join(git, "hooks"))).toEqual(["pre-commit"]);
+  expect(readdirSync(git).filter((n) => n.startsWith(".tropos-quarantine-"))).toEqual([]);
 });
 
 test("git dirs nested at any depth are found and swept (no depth limit)", () => {
@@ -268,4 +290,90 @@ test("writableLinks lists the links into writable dirs without touching them", (
   const snap = gitDirsSnapshot(git, { writable: [writable] })!;
   expect(writableLinks(snap)).toEqual([join(git, "hooks", "pre-commit")]);
   expect(lstatSync(join(git, "hooks", "pre-commit")).isSymbolicLink()).toBe(true);
+});
+
+/**
+ * A separate process that keeps flipping `path` between a real directory (built by `fill`, then renamed into place)
+ * and a link to `victim`, as a still-running confined job could while the host cleans up.
+ */
+const swapper = (path: string, victim: string, scratch: string, fill: string) => {
+  mkdirSync(scratch, { recursive: true });
+  const code = `
+    const fs = require("node:fs"); const p = require("node:path");
+    const { P, V, S } = process.env; let i = 0;
+    const fill = ${fill};
+    for (;;) {
+      const d = p.join(S, String(i++));
+      try { fs.mkdirSync(d); fill(d); } catch {}
+      try { fs.renameSync(d, P); } catch {}
+      try { fs.renameSync(P, d + "-gone"); } catch {}
+      try { fs.symlinkSync(V, P); } catch {}
+      try { fs.unlinkSync(P); } catch {}
+    }`;
+  return Bun.spawn([process.execPath, "-e", code], { env: { ...process.env, P: path, V: victim, S: scratch }, stdout: "ignore", stderr: "ignore" });
+};
+
+/** Every regular file under `dir` (links not followed), with its content. */
+const filesUnder = (dir: string): Map<string, string> => {
+  const out = new Map<string, string>();
+  for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    const path = join(entry.parentPath, entry.name);
+    if (entry.isFile()) out.set(path, readFileSync(path, "utf8"));
+  }
+  return out;
+};
+
+/** Runs `sweep` over and over for `ms` while `swap` races it; returns every path reported unsafe. */
+const raceFor = async (ms: number, swap: ReturnType<typeof swapper>, sweep: () => string[]) => {
+  const unsafe = new Set<string>();
+  await Bun.sleep(50); // let the swapper start flipping
+  const end = Date.now() + ms;
+  try {
+    while (Date.now() < end) {
+      for (let i = 0; i < 200; i++) for (const path of sweep()) unsafe.add(path);
+      await Bun.sleep(0);
+    }
+  } finally {
+    swap.kill("SIGKILL");
+    await swap.exited;
+  }
+  return unsafe;
+};
+
+test("a hooks dir flipped between a real dir and a link to a host dir while it is cleaned: the host dir's files survive", async () => {
+  mkdirSync(join(git, "hooks"));
+  const snap = gitDirsSnapshot(git)!;
+  const fresh = join(git, "modules", "x");
+  mkdirSync(fresh, { recursive: true });
+  writeFileSync(join(fresh, "HEAD"), "ref: x");
+  const victim = join(outside, "hooks");
+  mkdirSync(victim);
+  const names = ["post-checkout", "pre-commit", "pre-push", "commit-msg", "post-merge"];
+  for (const name of names) writeFileSync(join(victim, name), `victim ${name}`);
+  const fill = `(d) => { for (const n of ${JSON.stringify(names)}) fs.writeFileSync(p.join(d, n), "evil"); }`;
+  await raceFor(1500, swapper(join(fresh, "hooks"), victim, join(fx, "scratch"), fill), () => enforceNewGitDirs(snap).unsafe);
+  expect(readdirSync(victim).sort()).toEqual([...names].sort());
+  for (const name of names) expect(readFileSync(join(victim, name), "utf8")).toBe(`victim ${name}`);
+});
+
+test("a git dir flipped between a real dir and a link to another repo's .git while it is cleaned: nothing of that repo is deleted", async () => {
+  mkdirSync(join(git, "hooks"));
+  const snap = gitDirsSnapshot(git)!;
+  mkdirSync(join(git, "modules"));
+  const commondirs = snapshot([git, join(git, "modules", "x")]);
+  const victim = join(outside, "other", ".git");
+  mkdirSync(join(victim, "hooks"), { recursive: true });
+  const before = new Map<string, string>();
+  for (const [rel, body] of [["HEAD", "ref: refs/heads/main\n"], ["config", "victim config"], ["commondir", "victim commondir"], ["config.worktree", "victim wt"], ["hooks/pre-commit", "victim hook"]] as const) {
+    writeFileSync(join(victim, rel), body);
+    before.set(rel, body);
+  }
+  const fill = `(d) => { fs.mkdirSync(p.join(d, "hooks")); fs.writeFileSync(p.join(d, "HEAD"), "r"); for (const n of ["config", "commondir", "config.worktree", "hooks/post-checkout"]) fs.writeFileSync(p.join(d, n), "evil"); }`;
+  const unsafe = await raceFor(1500, swapper(join(git, "modules", "x"), victim, join(fx, "scratch"), fill), () => [
+    ...enforceNewGitDirs(snap).unsafe,
+    ...enforceCommondir(commondirs).unsafe,
+  ]);
+  // Every file of the other repo still exists: in place, or moved aside inside this .git and reported.
+  const contents = [...filesUnder(victim).values(), ...[...filesUnder(git)].filter(([path]) => [...unsafe].some((u) => path === u || path.startsWith(`${u}/`))).map(([, body]) => body)];
+  for (const body of before.values()) expect(contents).toContain(body);
 });

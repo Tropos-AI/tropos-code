@@ -256,6 +256,7 @@ describe("the bwrap backend (fake bwrap)", () => {
   const FAKE_BWRAP = [
     "#!/bin/sh",
     'env > "$(dirname "$0")/wrapper-env"',
+    'printf "%s\\n" "$@" > "$(dirname "$0")/bwrap-args"',
     'dir=""',
     'while [ "$#" -gt 0 ]; do case "$1" in --chdir) dir="$2"; shift 2;; --setenv) export "$2=$3"; shift 3;; --) shift; break;; *) shift;; esac; done',
     'cd "$dir" || exit 1',
@@ -381,6 +382,11 @@ describe("the bwrap backend (fake bwrap)", () => {
       expect(r.err).toContain(GIT_METADATA_TAMPERED);
       expect(r.code).toBe(1);
       expect(existsSync(join(late(), "hooks"))).toBe(false);
+      // bwrap's arguments are built after that check: the removed hooks get a placeholder, not a bind of a missing source.
+      const args = readFileSync(join(f.fx, "bwrap-args"), "utf8").split("\n");
+      const at = args.indexOf(join(late(), "hooks"));
+      expect(at).toBeGreaterThan(0);
+      expect(args[at - 1]).toBe("--tmpfs");
     } finally {
       backend.signal(job, "SIGKILL");
       await done;
@@ -444,11 +450,15 @@ describe("the bwrap backend (fake bwrap)", () => {
   });
 
   test("what was left in place as unsafe keeps failing later commands until the owner removes it", async () => {
-    const leftover = join(f.project, ".git", "modules", "odd", "hooks", "nested");
+    let leftover = "";
     try {
       const r = await sh("mkdir -p .git/modules/odd/hooks/nested && echo r > .git/modules/odd/HEAD && echo x > .git/modules/odd/hooks/nested/f");
       expect(r.code).toBe(1);
+      // The hooks dir was moved aside into the quarantine in .git/hooks; the directory inside it stays there.
+      leftover = /check (\S+\/\.git\/hooks\/\.tropos-quarantine-[^/]+\/\d+\/nested)$/m.exec(r.err)?.[1] ?? "";
+      expect(leftover).not.toBe("");
       expect(r.err).toContain(gitMetadataUnsafe(leftover));
+      expect(existsSync(join(f.project, ".git", "modules", "odd", "hooks"))).toBe(false);
       expect(existsSync(join(leftover, "f"))).toBe(true); // never deleted recursively
       // Nothing runs now, so the next command re-takes the baseline: the leftover must not be absorbed by it.
       const again = await sh("echo next");
@@ -459,6 +469,56 @@ describe("the bwrap backend (fake bwrap)", () => {
       expect(await sh("true")).toEqual({ out: "", err: "", code: 0 });
     } finally {
       rmSync(join(f.project, ".git", "modules", "odd"), { recursive: true, force: true });
+      if (leftover) rmSync(join(leftover, "..", ".."), { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.getuid?.() === 0)("a .git that can't be read before the command fails it closed; nothing runs", async () => {
+    const own = fixture();
+    try {
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const ran = join(own.fx, "tmp", "ran");
+      chmodSync(own.project, 0o000); // lstat of .git now fails with EACCES, not ENOENT
+      let r: Awaited<ReturnType<typeof collect>>;
+      try {
+        r = await collect(b.spawn({ shell: "/bin/sh", script: `echo ran > '${ran}'`, cwd: join(own.fx, "tmp"), env: {} }));
+      } finally {
+        chmodSync(own.project, 0o755);
+      }
+      expect(r.code).toBe(126);
+      expect(r.err).toContain("tropos sandbox: .git could not be checked");
+      expect(existsSync(ran)).toBe(false);
+      expect((await collect(b.spawn({ shell: "/bin/sh", script: "true", cwd: own.project, env: {} }))).code).toBe(0);
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
+  test("a .git that was absent at the baseline and appears while a job runs is checked as all new", async () => {
+    const own = fixture();
+    try {
+      rmSync(join(own.project, ".git"), { recursive: true });
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const run = (script: string) => collect(b.spawn({ shell: "/bin/sh", script, cwd: own.project, env: {} }));
+      const job = b.spawn({ shell: "/bin/sh", script: "sleep 0.2; mkdir .git; sleep 30", cwd: own.project, env: {} });
+      const jobDone = collect(job);
+      try {
+        await until(() => existsSync(join(own.project, ".git")));
+        // An empty .git (as bwrap's read-only placeholder leaves on the host) is nothing new to undo.
+        expect(await run("true")).toEqual({ out: "", err: "", code: 0 });
+        mkdirSync(join(own.project, ".git", "modules", "late", "hooks"), { recursive: true });
+        writeFileSync(join(own.project, ".git", "modules", "late", "HEAD"), "r");
+        writeFileSync(join(own.project, ".git", "modules", "late", "hooks", "post-checkout"), "x");
+        const r = await run("true");
+        expect(r.code).toBe(1);
+        expect(r.err).toContain(GIT_METADATA_TAMPERED);
+        expect(existsSync(join(own.project, ".git", "modules", "late", "hooks"))).toBe(false);
+      } finally {
+        b.signal(job, "SIGKILL");
+        await jobDone;
+      }
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
     }
   });
 

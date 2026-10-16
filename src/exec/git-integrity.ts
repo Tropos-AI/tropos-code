@@ -6,11 +6,17 @@
 //
 // Removal never follows a link: a command may have replaced a parent (`.git/modules/x`) with a link to a host
 // directory. Every component from the real `.git` down is lstat'ed, the parent must still resolve inside it, and only
-// the single entry is unlinked. A planted directory, or anything that fails the check, is left alone and reported.
+// the single entry is removed. A planted directory, or anything that fails the check, is left alone and reported.
+// A confined job may still run and swap a path between that check and the removal, so nothing is enumerated or
+// unlinked through the path itself: the entry is first renamed into a quarantine dir (rename acts on a link, not its
+// target) and only handled there, if it is still the entry that was checked (same device and inode). The quarantine
+// sits in the main `.git/hooks`, which no confined command can write (the profile's deny, bwrap's read-only bind).
+// Residual: under such a race a swapped-in host entry can end up moved aside into the quarantine; it is never
+// deleted there, and is reported.
 //
 // The same goes for whole git dirs a command creates under `.git/modules` or `.git/worktrees` (bwrap can only make
 // the ones that already exist read-only): after the command, each new one loses its hooks, config and commondir.
-import { lstatSync, readdirSync, readlinkSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, type Stats, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isInside } from "../paths";
 
@@ -81,25 +87,133 @@ function chain(gitRoot: string, dir: string): string[] | null {
   return out;
 }
 
-/** Whether `path`'s parent chain is links-free real directories that still resolve inside the real `.git`. */
-function parentsAreSafe(snap: Pick<CommondirSnapshot, "gitRoot" | "realGitRoot">, path: string): boolean {
-  const dirs = chain(snap.gitRoot, dirname(path));
+type GitRoot = Pick<CommondirSnapshot, "gitRoot" | "realGitRoot">;
+
+/** Whether `dir` and its chain from `.git` down are links-free real directories that still resolve inside the real `.git`. */
+function dirIsSafe(snap: GitRoot, dir: string): boolean {
+  const dirs = chain(snap.gitRoot, dir);
   if (!dirs) return false;
   try {
-    for (const dir of dirs) {
-      const info = lstatSync(dir);
+    for (const d of dirs) {
+      const info = lstatSync(d);
       if (info.isSymbolicLink() || !info.isDirectory()) return false;
     }
-    return isInside(realpathSync(dirname(path)), snap.realGitRoot);
+    return isInside(realpathSync(dir), snap.realGitRoot);
   } catch {
     return false;
+  }
+}
+
+/** Whether `path`'s parent chain is links-free real directories that still resolve inside the real `.git`. */
+function parentsAreSafe(snap: GitRoot, path: string): boolean {
+  return dirIsSafe(snap, dirname(path));
+}
+
+/**
+ * Removes entries from `.git` without following a link, also while a confined job races it (see the header): each
+ * entry is moved aside into a quarantine dir first and only handled there. Paths it could not remove safely collect
+ * in `unsafe`: the original path when nothing was moved, else where it lies in the quarantine. Call `done()` after.
+ */
+class Sweep {
+  readonly unsafe: string[] = [];
+  private quarantine: string | null = null;
+  private moved = 0;
+
+  constructor(private readonly snap: GitRoot) {}
+
+  /**
+   * Removes the file or link at `path`, or, with `dir`, a directory of files and links (a hooks dir; a directory
+   * inside it is left and reported, never recursed into). True when it is gone.
+   */
+  remove(path: string, dir = false): boolean {
+    let before: Stats;
+    try {
+      if (!parentsAreSafe(this.snap, path)) throw new Error("unsafe parents");
+      before = lstatSync(path);
+    } catch {
+      this.unsafe.push(path);
+      return false;
+    }
+    const quarantine = before.isDirectory() && !dir ? null : this.quarantineDir();
+    if (!quarantine) {
+      this.unsafe.push(path);
+      return false;
+    }
+    const aside = join(quarantine, String(this.moved++));
+    try {
+      renameSync(path, aside); // the entry itself, even if it is now a link
+    } catch {
+      this.unsafe.push(path);
+      return false;
+    }
+    // From here on only the quarantine path is used: no confined command can swap it.
+    try {
+      const after = lstatSync(aside);
+      // Not the entry that was checked: a parent was swapped meanwhile, so it may be the owner's. Never deleted.
+      if (after.dev !== before.dev || after.ino !== before.ino || !this.stillSafe()) {
+        this.unsafe.push(aside);
+        return false;
+      }
+      if (!after.isDirectory()) {
+        unlinkSync(aside);
+        return true;
+      }
+    } catch {
+      this.unsafe.push(aside);
+      return false;
+    }
+    let clean = true;
+    try {
+      for (const name of readdirSync(aside)) {
+        const entry = join(aside, name);
+        try {
+          if (lstatSync(entry).isDirectory()) throw new Error("a directory");
+          unlinkSync(entry); // never follows: a link is removed, not its target
+        } catch {
+          this.unsafe.push(entry);
+          clean = false;
+        }
+      }
+      if (clean) rmdirSync(aside);
+    } catch {
+      this.unsafe.push(aside);
+      return false;
+    }
+    return clean;
+  }
+
+  /** Removes the quarantine dir when nothing was left in it. */
+  done(): void {
+    if (this.quarantine === null) return;
+    try {
+      rmdirSync(this.quarantine);
+    } catch {
+      // something was left in it, and reported
+    }
+  }
+
+  /** A fresh quarantine dir in the main `.git/hooks` (or `.git` without a real one), re-verified on every use. */
+  private quarantineDir(): string | null {
+    if (this.quarantine === null) {
+      const hooks = join(this.snap.gitRoot, "hooks");
+      try {
+        this.quarantine = mkdtempSync(join(dirIsSafe(this.snap, hooks) ? hooks : this.snap.gitRoot, ".tropos-quarantine-"));
+      } catch {
+        return null;
+      }
+    }
+    return this.stillSafe() ? this.quarantine : null;
+  }
+
+  private stillSafe(): boolean {
+    return this.quarantine !== null && dirIsSafe(this.snap, this.quarantine);
   }
 }
 
 /** Removes each `commondir` that appeared since the snapshot, when that is safe; the caller fails the command on `message`. */
 export function enforceCommondir(snap: CommondirSnapshot): CommondirCheck {
   const removed: string[] = [];
-  const unsafe: string[] = [];
+  const sweep = new Sweep(snap);
   for (const path of absentCommondirs(snap)) {
     let appeared: boolean;
     try {
@@ -107,23 +221,11 @@ export function enforceCommondir(snap: CommondirSnapshot): CommondirCheck {
     } catch {
       appeared = true; // can't even look: report it rather than assume it's fine
     }
-    if (!appeared) continue;
-    if (!parentsAreSafe(snap, path)) {
-      unsafe.push(path);
-      continue;
-    }
-    try {
-      const info = lstatSync(path);
-      if (info.isDirectory()) {
-        unsafe.push(path); // never recurse: leave it and report
-        continue;
-      }
-      unlinkSync(path); // a file or a link; a link is removed, not followed
-      removed.push(path);
-    } catch {
-      unsafe.push(path);
-    }
+    // A file or a link is removed (a link, not its target); a directory is never recursed into: left and reported.
+    if (appeared && sweep.remove(path)) removed.push(path);
   }
+  sweep.done();
+  const { unsafe } = sweep;
   const message = unsafe.length > 0 ? unsafe.map(commondirUnsafe).join("\n") : removed.length > 0 ? COMMONDIR_TAMPERED : null;
   return { removed, unsafe, message };
 }
@@ -270,43 +372,24 @@ const GIT_DIR_CODE = ["hooks", "config", "config.worktree", "commondir"];
 export function enforceNewGitDirs(snap: GitDirsSnapshot): CommondirCheck {
   const removed: string[] = [];
   const removedLinks: string[] = [];
-  const unsafe: string[] = [];
-  const unlinkIfSafe = (path: string, into = removed) => {
-    if (!parentsAreSafe(snap, path)) return void unsafe.push(path);
-    try {
-      unlinkSync(path);
-      into.push(path);
-    } catch {
-      unsafe.push(path);
-    }
-  };
+  const sweep = new Sweep(snap);
+  const { unsafe } = sweep;
   const found = findNestedGitDirs(snap.gitRoot, snap.maxVisits);
   // Fail closed: a search that couldn't finish, or a dir it couldn't read, may hide a git dir.
   if (found.overflow) unsafe.push(snap.gitRoot);
   unsafe.push(...found.unreadable);
-  for (const link of found.links) if (!snap.known.has(link)) unlinkIfSafe(link);
+  for (const link of found.links) if (!snap.known.has(link) && sweep.remove(link)) removed.push(link);
   for (const dir of found.gitDirs) {
     if (snap.known.has(dir)) continue;
     for (const name of GIT_DIR_CODE) {
       const path = join(dir, name);
-      let info: ReturnType<typeof lstatSync>;
-      try {
-        info = lstatSync(path);
-      } catch {
-        continue; // not there
-      }
-      if (!info.isDirectory()) {
-        unlinkIfSafe(path);
-        continue;
-      }
-      if (name !== "hooks" || !parentsAreSafe(snap, path)) {
-        unsafe.push(path); // never recurse
-        continue;
-      }
-      removeHooksDir(path, removed, unsafe);
+      if (!presentOrUnknown(path)) continue;
+      // Only hooks may be a directory (of files and links); any other directory is left and reported.
+      if (sweep.remove(path, name === "hooks")) removed.push(path);
     }
   }
-  for (const path of linksIntoWritable(snap, found)) unlinkIfSafe(path, removedLinks);
+  for (const path of linksIntoWritable(snap, found)) if (sweep.remove(path)) removedLinks.push(path);
+  sweep.done();
   const lines = unsafe.length > 0 ? unsafe.map(gitMetadataUnsafe) : [...(removed.length > 0 ? [GIT_METADATA_TAMPERED] : []), ...(removedLinks.length > 0 ? [GIT_LINK_REMOVED] : [])];
   return { removed: [...removed, ...removedLinks], unsafe, message: lines.length > 0 ? lines.join("\n") : null };
 }
@@ -363,22 +446,11 @@ function realOr(path: string): string {
   }
 }
 
-/** Unlinks each file or link in a (parent-checked) hooks dir, then the dir; a directory inside is left and reported. */
-function removeHooksDir(hooks: string, removed: string[], unsafe: string[]): void {
+/** Whether something is at `path` (lstat); true when that can't be told, so it is checked rather than skipped. */
+function presentOrUnknown(path: string): boolean {
   try {
-    let clean = true;
-    for (const entry of readdirSync(hooks, { withFileTypes: true })) {
-      const path = join(hooks, entry.name);
-      if (entry.isDirectory()) {
-        unsafe.push(path);
-        clean = false;
-      } else unlinkSync(path);
-    }
-    if (clean) {
-      rmdirSync(hooks);
-      removed.push(hooks);
-    }
+    return present(path);
   } catch {
-    unsafe.push(hooks);
+    return true;
   }
 }

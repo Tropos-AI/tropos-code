@@ -125,6 +125,25 @@ export class ConfinedBackend implements ExecBackend {
    */
   spawn(opts: ExecSpawn): ChildProcess {
     const options = { cwd: opts.cwd, env: { PATH: TRUSTED_PATH }, detached: true };
+    // Before it runs: with nothing confined running, the current `.git` becomes the baseline (the owner's own changes
+    // since included); one that can't be read fails the command closed. Otherwise something still running (a
+    // background job) may have planted since the last check, so this command first gets that check, and its result
+    // reports what it found.
+    let pre: string | null = null;
+    if (this.anyRunning()) pre = this.verify();
+    else {
+      try {
+        this.baseline = this.snapshot();
+      } catch (err) {
+        return failed(gitUncheckable(reason(err)), options);
+      }
+      const links = this.baseline.gitDirs ? writableLinks(this.baseline.gitDirs) : [];
+      const owner: Set<string> = this.ownerLinks ?? new Set(links);
+      this.ownerLinks = new Set(links.filter((link) => owner.has(link)));
+      if (this.ownerLinks.size > 0) {
+        return failed(`tropos sandbox: ${OWNER_HOOK_LINKS}\nLinked: ${[...this.ownerLinks].join(", ")}`, options);
+      }
+    }
     const vars = Object.entries(this.env).filter((entry): entry is [string, string] => entry[1] !== undefined);
     let command: string[];
     if (this.profile) {
@@ -132,26 +151,12 @@ export class ConfinedBackend implements ExecBackend {
       command = [ENV, "-i", ...vars.map(([k, v]) => `${k}=${v}`), SANDBOX_EXEC, "-p", this.profile.profile, ...params, opts.shell, "-c", opts.script];
     } else {
       try {
-        // Rebuilt per command: they depend on the cwd (`--chdir`) and on the git dirs that exist now (a bind of
-        // one removed since would stop every later command).
+        // Rebuilt per command, after the check above: they depend on the cwd (`--chdir`) and on the git dirs that
+        // exist now (a bind of hooks that check just removed would stop the command).
         command = [this.bwrap, ...bwrapArgs(this.paths, opts.cwd), ...vars.flatMap(([k, v]) => ["--setenv", k, v]), "--", opts.shell, "-c", opts.script];
       } catch (err) {
         // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare.
         return failed(`tropos sandbox: ${(err as Error).message}`, options);
-      }
-    }
-    // Before it runs: with nothing confined running, the current `.git` becomes the baseline (the owner's own changes
-    // since included). Otherwise something still running (a background job) may have planted since the last check,
-    // so this command first gets that check, and its result reports what it found.
-    let pre: string | null = null;
-    if (this.anyRunning()) pre = this.verify();
-    else {
-      this.baseline = this.snapshot();
-      const links = this.baseline.gitDirs ? writableLinks(this.baseline.gitDirs) : [];
-      const owner: Set<string> = this.ownerLinks ?? new Set(links);
-      this.ownerLinks = new Set(links.filter((link) => owner.has(link)));
-      if (this.ownerLinks.size > 0) {
-        return failed(`tropos sandbox: ${OWNER_HOOK_LINKS}\nLinked: ${[...this.ownerLinks].join(", ")}`, options);
       }
     }
     const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", ...command], { ...options, stdio: ["ignore", "pipe", "pipe", "pipe"] });
@@ -206,15 +211,49 @@ export class ConfinedBackend implements ExecBackend {
     return this.running.size > 0;
   }
 
+  /**
+   * The `.git` state now; both parts null when there is no real `.git` (nothing to check). Throws when `.git` is
+   * there but can't be read: a check that silently saw nothing would let a command's changes through.
+   */
   private snapshot(): PostRun {
     const git = join(this.paths.project, ".git");
+    let info: ReturnType<typeof lstatSync>;
+    try {
+      info = lstatSync(git);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return { commondir: null, gitDirs: null };
+      throw err;
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) return { commondir: null, gitDirs: null };
     const gitDirs = gitDirsSnapshot(git, { writable: this.sandboxWritable });
-    return { commondir: commondirSnapshot(git, [git, ...(gitDirs?.gitDirs ?? [])]), gitDirs };
+    const commondir = gitDirs && commondirSnapshot(git, [git, ...gitDirs.gitDirs]);
+    if (!gitDirs || !commondir) throw new Error("it could not be read");
+    return { commondir, gitDirs };
+  }
+
+  /**
+   * What the checks compare against. A `.git` absent at the baseline that is there now (bwrap leaves its empty
+   * placeholder on the host) is checked as all new: nothing in it is known.
+   */
+  private checkAgainst(): PostRun {
+    if (this.baseline.gitDirs) return this.baseline;
+    const now = this.snapshot();
+    if (!now.gitDirs || !now.commondir) return now;
+    return {
+      commondir: { ...now.commondir, gitDirs: [now.commondir.gitRoot], present: new Set() },
+      gitDirs: { ...now.gitDirs, gitDirs: [], known: new Set() },
+    };
   }
 
   /** Undoes what was planted in `.git` since the baseline; the message to report, or null. */
   private verify(): string | null {
-    const result = postRun(this.baseline);
+    let result: { message: string | null; unsafe: string[] };
+    try {
+      result = postRun(this.checkAgainst());
+    } catch (err) {
+      result = { message: gitUncheckable(reason(err)), unsafe: [] };
+    }
     const git = join(this.paths.project, ".git");
     // The overflow marker (`.git` itself) is not tainted: every search recomputes it.
     for (const path of result.unsafe) if (path !== git) this.tainted.add(path);
@@ -239,7 +278,10 @@ export class ConfinedBackend implements ExecBackend {
     return this.host.alive(child);
   }
 
-  /** A command still running gets one more check here, and the commands still running get its finding. */
+  /**
+   * A command still running gets one more check here, and the commands still running get its finding. Their exit
+   * codes were already fixed when their confined shells returned, so a finding here can only be added to their stderr.
+   */
   close(): Promise<void> {
     if (this.anyRunning()) {
       const message = this.verify();
@@ -309,6 +351,13 @@ function failed(message: string, options: { cwd: string; env: NodeJS.ProcessEnv;
   return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
 }
 
+/** Why `.git` can't be checked; the command fails rather than let what it did there go unseen. */
+export const gitUncheckable = (why: string): string => `tropos sandbox: .git could not be checked (${why}), so the command failed; try again`;
+
+function reason(err: unknown): string {
+  return err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.message) : String(err);
+}
+
 /** Undoes what a command planted in `.git` (see git-integrity.ts): the message to fail it with, and what was left. */
 function postRun(post: PostRun): { message: string | null; unsafe: string[] } {
   const messages: string[] = [];
@@ -318,8 +367,8 @@ function postRun(post: PostRun): { message: string | null; unsafe: string[] } {
       const result = check();
       if (result?.message) messages.push(result.message);
       if (result) unsafe.push(...result.unsafe);
-    } catch {
-      // project gone; nothing to undo
+    } catch (err) {
+      messages.push(gitUncheckable(reason(err))); // fail closed: a check that didn't finish may have missed something
     }
   }
   return { message: messages.length > 0 ? messages.join("\n") : null, unsafe };
