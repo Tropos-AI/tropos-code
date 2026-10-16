@@ -29,6 +29,10 @@ test("the terminal's Cron tool delivers to the owner's chat by default, or nowhe
   await tool.run({ ...add, name: "second" }, makeToolContext());
   expect(new CronStore(home).list().find((j) => j.name === "second")!.deliver).toBe("telegram:42");
   // Sees jobs of every chat.
-  new CronStore(home).add({ name: "x", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:99", createdBy: "agent" });
-  expect(String((await tool.run({ action: "list" }, makeToolContext())).content)).toContain("telegram:99");
+  const theirs = new CronStore(home).add({ name: "x", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:99", createdBy: "agent" });
+  expect(String((await tool.run({ action: "list" }, makeToolContext())).content)).toContain(theirs.id);
+  expect((await tool.run({ action: "disable", id: theirs.id }, makeToolContext())).isError).toBeFalsy();
+  expect(new CronStore(home).get(theirs.id)!.enabled).toBe(false);
+  expect((await tool.run({ action: "remove", id: theirs.id }, makeToolContext())).isError).toBeFalsy();
+  expect(new CronStore(home).get(theirs.id)).toBeUndefined();
 });

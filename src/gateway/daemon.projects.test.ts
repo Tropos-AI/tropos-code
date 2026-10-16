@@ -8,6 +8,8 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
 import { localBackend } from "../exec/local";
 import type { ExecBackend } from "../exec/backend";
+import { CronStore } from "./cron/store";
+import { FilePairing } from "./pairing";
 import { gatewayConfigSchema, saveGatewayConfig } from "./config";
 import { readGatewayState, type GatewayRun } from "./daemon";
 import { addProject } from "./projects";
@@ -100,6 +102,38 @@ describe("learning in the owner's chat", () => {
     expect(server.sent.some((m) => m.replyMarkup)).toBe(false);
     expect(texts.indexOf("Noted.")).toBeGreaterThan(-1);
     expect(texts.indexOf("💡 Remembered: prefers bun")).toBeGreaterThan(texts.indexOf("Noted."));
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+});
+
+describe("scheduling from chats", () => {
+  test("an owner's Cron tool lists every chat's jobs; a guest's lists only their own", async () => {
+    const job = new CronStore(home).add({ name: "elsewhere", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:555", createdBy: "agent" });
+    const listCron = (id: string) => () => reply([toolUseBlock(id, "Cron", { action: "list" })], "tool_use");
+    let deps: GatewayServiceDeps | undefined;
+    const service: GatewayService = { name: "fake", start: async (d) => void (deps = d), stop: async () => {} };
+    const gw = startGateway([listCron("c1"), () => reply([textBlock("done")]), listCron("c2"), () => reply([textBlock("done")])], [service]);
+    await gw.running();
+    await pairChat(); // CHAT is the first approved sender: the owner
+    const pairing = new FilePairing({ path: join(home, "gateway", "pairing.json") });
+    const challenge = await pairing.challenge("telegram", "777");
+    if (challenge.kind !== "code") throw new Error("expected a code");
+    expect(await pairing.approve("telegram", challenge.code)).toMatchObject({ ok: true });
+    expect(await pairing.isOwner("telegram", "777")).toBe(false);
+
+    const open = async (key: string) => {
+      const chat = await deps!.openSession(key);
+      chat.attach({ event: () => {}, ask: (id) => chat.answer(id, { kind: "allow" }), askClosed: () => {}, state: () => {} });
+      return chat;
+    };
+    expect(await (await open(`telegram:${CHAT}`)).prompt("what is scheduled?")).toBe("end_turn");
+    expect(JSON.stringify(gw.model.requests[1]!.messages.at(-1))).toContain(job.id);
+    expect(await (await open("telegram:777")).prompt("what is scheduled?")).toBe("end_turn");
+    const guestResult = JSON.stringify(gw.model.requests[3]!.messages.at(-1));
+    expect(guestResult).toContain("No scheduled jobs.");
+    expect(guestResult).not.toContain(job.id);
 
     gw.stop();
     expect(await gw.done).toBe(0);

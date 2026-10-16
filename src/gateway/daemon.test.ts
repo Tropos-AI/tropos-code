@@ -2,9 +2,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { FakeModel } from "../../test/helpers/fake-model";
+import { FakeModel, reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
+import { CronStore } from "./cron/store";
 import { loadGatewayConfig } from "./config";
 import { dockerCheck, persistentToken, readGatewayState } from "./daemon";
 
@@ -89,6 +90,45 @@ describe("tcode gateway", () => {
     expect(new URL(second.url()!).searchParams.get("token")).toBe(new URL(url).searchParams.get("token"));
     second.stop();
     await second.done;
+  });
+
+  test("the dashboard's session has the owner's Cron tool: it sees every chat's jobs", async () => {
+    await mkdir(join(dir, "project"));
+    const job = new CronStore(join(dir, "home")).add({ name: "elsewhere", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:555", createdBy: "agent" });
+    const model = new FakeModel([() => reply([toolUseBlock("c1", "Cron", { action: "list" })], "tool_use"), () => reply([textBlock("done")])]);
+    let webUrl: string | undefined;
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    const done = main(["gateway"], {
+      model,
+      out: () => {},
+      err: () => {},
+      env: { TROPOS_HOME: join(dir, "home"), SHELL: "/bin/bash" },
+      cwd: join(dir, "project"),
+      gatewayUntil: async (info) => {
+        webUrl = info.webUrl;
+        await stopped;
+      },
+      gatewaySeams: { sweep: false, assets: new Map() },
+    });
+    while (!webUrl) await Bun.sleep(20);
+    const base = `http://127.0.0.1:${new URL(webUrl).port}`;
+    const token = new URL(webUrl).searchParams.get("token")!;
+    const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${token}`, Origin: base } } as unknown as string[]);
+    const finished = new Promise<void>((resolve) => {
+      ws.onmessage = (e) => {
+        const m = JSON.parse(String(e.data)) as { t: string; id?: number };
+        if (m.t === "ask") ws.send(JSON.stringify({ t: "permission", id: m.id, answer: { kind: "allow" } }));
+        if (m.t === "rpc_result") resolve();
+      };
+    });
+    await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
+    ws.send(JSON.stringify({ t: "rpc", id: 1, method: "prompt", params: { text: "what is scheduled?" } }));
+    await finished;
+    expect(JSON.stringify(model.requests[1]!.messages.at(-1))).toContain(job.id);
+    ws.close();
+    stop();
+    expect(await done).toBe(0);
   });
 
   test("needs no workspace: it creates ~/.tropos/workspace with a .git and a README, and doesn't warn about it", async () => {

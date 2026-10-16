@@ -9,6 +9,7 @@ import type { AnyTool } from "../types";
 import { createCronTool } from "./cron-tool";
 
 export async function ownerCronTool(home: string, opts: { runNow?: (id: string) => Promise<RunRecord> } = {}): Promise<AnyTool> {
+  // The owner is read when the tool is built: a change applies from the next session (or restart).
   const owner = await ownerChatKey(new FilePairing({ path: join(gatewayDir(home), "pairing.json") }));
   return createCronTool({ store: new CronStore(home), seeAll: true, defaultDeliver: () => owner, runNow: opts.runNow }) as AnyTool;
 }
