@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Check } from "../types";
+import { loadGatewayConfig } from "../../gateway/config";
 import { finding, isRecord } from "../util";
 
 export const DEFAULT_IMAGE = "alpine:3.22";
@@ -17,6 +18,21 @@ export async function sandboxImage(home: string): Promise<string> {
   }
 }
 
+/** Whether chats run on this machine; a config that won't load is the gateway check's to report, so Docker stays a warning then. */
+async function chatsOnHost(home: string): Promise<boolean> {
+  try {
+    return (await loadGatewayConfig(home)).chat.backend === "host";
+  } catch {
+    return false;
+  }
+}
+
+const OPTIONAL = {
+  level: "info",
+  suffix: " (optional — needed only for guests' commands)",
+  detail: "Optional: chats run on this machine. Docker is only needed if you switch chats to the Docker backend.",
+} as const;
+
 export const dockerCheck: Check = {
   id: "docker.daemon",
   area: "docker",
@@ -24,9 +40,11 @@ export const dockerCheck: Check = {
   async run(env) {
     const info = await env.runner.exec("docker", ["info", "--format", "{{.ServerVersion}}"], 8_000);
     if (info.error?.includes("not found")) {
+      if (await chatsOnHost(env.home)) return [finding("docker.daemon", OPTIONAL.level, `Docker is not installed${OPTIONAL.suffix}`, { detail: OPTIONAL.detail })];
       return [finding("docker.daemon", "warn", "Docker is not installed", { detail: "Only the gateway needs it: chat commands run in a Docker sandbox." })];
     }
     if (info.code !== 0) {
+      if (await chatsOnHost(env.home)) return [finding("docker.daemon", OPTIONAL.level, `Docker is installed but the daemon is not reachable${OPTIONAL.suffix}`, { detail: OPTIONAL.detail })];
       return [finding("docker.daemon", "warn", "Docker is installed but the daemon is not reachable", { detail: (info.error ?? info.stderr.trim().split("\n")[0]) || "start Docker Desktop or the docker service" })];
     }
     const out = [finding("docker.daemon", "ok", `Docker daemon reachable (server ${info.stdout.trim() || "unknown"})`)];

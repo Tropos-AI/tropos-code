@@ -1,5 +1,6 @@
 // src/doctor/checks/index.ts — every check, in the order the report lists them.
 import type { Check } from "../types";
+import { chatExecCheck } from "./chat-exec";
 import { containersCheck } from "./containers";
 import { dockerCheck } from "./docker";
 import { driftCheck } from "./drift";
@@ -24,6 +25,7 @@ export const ALL_CHECKS: Check[] = [
   providersCheck,
   permissionsCheck,
   dockerCheck,
+  chatExecCheck,
   containersCheck,
   gatewayCheck,
   gatewayStateCheck,

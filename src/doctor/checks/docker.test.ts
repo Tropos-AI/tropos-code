@@ -22,6 +22,7 @@ function docker(over: { image?: boolean; daemon?: boolean } = {}) {
 
 test("docker missing is a warning, not an error", async () => {
   fx = await makeFixture();
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "docker", autonomy: "ask" } }));
   const r = await runOne(fx, dockerCheck);
   expect(r.findings).toHaveLength(1);
   expect(r.findings[0]).toMatchObject({ level: "warn", message: "Docker is not installed" });
@@ -29,6 +30,7 @@ test("docker missing is a warning, not an error", async () => {
 
 test("a daemon that is down is reported with Docker's reason", async () => {
   fx = await makeFixture();
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "docker", autonomy: "ask" } }));
   const d = docker({ daemon: false });
   const r = await runOne(fx, dockerCheck, { runner: d.runner });
   expect(r.findings[0]!.detail).toContain("Cannot connect");
