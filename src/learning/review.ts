@@ -182,6 +182,8 @@ export class LearningLoop {
   }
 }
 
+const REMOVE_ONLY_REFUSAL = "The learning review can't only remove notes; replace or merge them instead.";
+
 /**
  * The review's tool list: the same names, descriptions and schemas in the same order as the main agent's
  * (so the prompt cache is shared), but tools outside `allowed` refuse to run. They become "meta" with no
@@ -198,12 +200,12 @@ export function reviewToolGate(
     const tool = swap ? wrap(original, { kind: original.kind, subject: swap.subject, run: swap.run }) : original;
     if (allowed.includes(tool.name)) {
       if (tool.name === "Memory") {
-        // Unattended, the review may only add: replacing or removing could drop what the user wrote there.
+        // Unattended, the review may add, replace and consolidate but never only remove; the ledger keeps undo for every change.
         return wrap(tool, {
           kind: tool.kind,
           subject: (input, cwd) => tool.subject(input, cwd),
           run: (input, ctx) =>
-            onlyAdds(input) ? tool.run(input, ctx) : Promise.resolve({ content: "The learning review can only add notes, not replace or remove them.", isError: true }),
+            consolidates(input) ? tool.run(input, ctx) : Promise.resolve({ content: REMOVE_ONLY_REFUSAL, isError: true }),
         });
       }
       if (tool.name !== "SkillManage") return tool;
@@ -238,12 +240,14 @@ function wrap(tool: AnyTool, over: Pick<AnyTool, "kind" | "subject" | "run">): A
   };
 }
 
-/** A Memory call that only adds: action "add", or operations that are all adds. */
-function onlyAdds(input: unknown): boolean {
+/** A Memory call that adds or replaces, or a batch of 1-50 operations with at least one add or replace (removes may ride along). */
+function consolidates(input: unknown): boolean {
   if (typeof input !== "object" || input === null) return false;
   const { action, operations } = input as { action?: unknown; operations?: unknown };
-  if (Array.isArray(operations)) return operations.length > 0 && operations.every((op) => (op as { action?: unknown } | null)?.action === "add");
-  return action === "add";
+  if (Array.isArray(operations)) {
+    return operations.length >= 1 && operations.length <= 50 && operations.some((op) => ["add", "replace"].includes((op as { action?: unknown } | null)?.action as string));
+  }
+  return action === "add" || action === "replace";
 }
 
 function isDelete(input: unknown): boolean {
@@ -254,7 +258,7 @@ function isDelete(input: unknown): boolean {
 export function reviewAskPermission(prompt: PermissionPrompt): PermissionAnswer {
   if (!REVIEW_WRITE_TOOLS.includes(prompt.toolName)) return { kind: "deny", message: `${prompt.toolName} needs approval, and the learning review can't ask for it.` };
   if (prompt.toolName === "SkillManage" && isDelete(prompt.input)) return { kind: "deny", message: "Skills can't be deleted during the learning review." };
-  if (prompt.toolName === "Memory" && !onlyAdds(prompt.input)) return { kind: "deny", message: "The learning review can only add notes, not replace or remove them." };
+  if (prompt.toolName === "Memory" && !consolidates(prompt.input)) return { kind: "deny", message: REMOVE_ONLY_REFUSAL };
   return { kind: "allow" };
 }
 

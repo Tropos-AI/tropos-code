@@ -28,7 +28,8 @@ const MEMORY_RULES =
   "Memory (the Memory tool) holds short declarative facts that stay true across sessions: user preferences " +
   '(target "user") and facts about the environment, project conventions and lessons (target "memory"). ' +
   'Write facts, not commands ("The user prefers small commits", not "Always make small commits"), and never task logs ' +
-  "or progress reports. Prefer replacing an outdated entry over adding a near-duplicate.";
+  "or progress reports. Prefer replacing an outdated entry (action replace) over adding a near-duplicate. " +
+  "When a store is full, consolidate in one Memory call with operations: remove or merge entries and add the merged one. Never only remove.";
 
 const SKILL_RULES =
   "Skills (the SkillManage tool) hold reusable procedures. In order of preference:\n" +

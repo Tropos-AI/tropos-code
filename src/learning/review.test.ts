@@ -292,19 +292,21 @@ describe("reviewToolGate", () => {
     expect(gated[2]).not.toBe(all[2]!);
   });
 
-  test("Memory only adds during the review; replace, remove and mixed batches are refused", async () => {
+  test("Memory may add, replace and consolidate during the review; a lone remove is refused", async () => {
     const ran: Ran[] = [];
     const memory = reviewToolGate(makeTools(ran)).find((t) => t.name === "Memory")!;
     expect(memory.kind).toBe("edit");
     expect(memory.subject({ action: "add" }, "/work")).toEqual({ paths: ["/h/.tropos/memories/MEMORY.md"] });
-    expect(await memory.run({ action: "add", text: "x" }, ctx)).toEqual({ content: "Memory ok" });
-    expect(await memory.run({ operations: [{ action: "add" }, { action: "add" }] }, ctx)).toEqual({ content: "Memory ok" });
-    for (const input of [{ action: "replace" }, { action: "remove" }, { operations: [{ action: "add" }, { action: "remove" }] }, { operations: [] }, null]) {
-      expect(await memory.run(input, ctx)).toMatchObject({ isError: true });
-    }
-    expect(ran).toHaveLength(2);
+    for (const ok of [{ action: "add" }, { action: "replace" }, { operations: [{ action: "remove" }, { action: "add" }] }]) expect(await memory.run(ok, ctx)).toEqual({ content: "Memory ok" });
+    for (const bad of [{ action: "remove" }, { operations: [{ action: "remove" }] }, { operations: [] }, null]) expect(await memory.run(bad, ctx)).toMatchObject({ isError: true });
+    expect(await memory.run({ action: "remove" }, ctx)).toEqual({ content: "The learning review can't only remove notes; replace or merge them instead.", isError: true });
+    expect(ran).toHaveLength(3);
+    expect(reviewAskPermission({ toolName: "Memory", kind: "edit", summary: "", input: { action: "replace" } })).toEqual({ kind: "allow" });
     expect(reviewAskPermission({ toolName: "Memory", kind: "edit", summary: "", input: { action: "remove" } })).toMatchObject({ kind: "deny" });
-    expect(reviewAskPermission({ toolName: "Memory", kind: "edit", summary: "", input: { action: "add" } })).toEqual({ kind: "allow" });
+  });
+
+  test("the memory rules tell the review to replace and consolidate, never only remove", () => {
+    expect(MEMORY_REVIEW_PROMPT).toContain("Never only remove");
   });
 
   test("an override runs under the same name, description and schema", async () => {
