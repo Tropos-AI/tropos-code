@@ -41,6 +41,7 @@ import { AdminError } from "../web/admin/context";
 import { createCronTool } from "../tools/cron/cron-tool";
 import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
+import { createCuratorService } from "./curator-service";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
 import type { ChannelAdapter, ChatProjects, GatewayService, GatewayServiceDeps, Pairing, SessionRole } from "./types";
@@ -425,7 +426,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let stopReaper = (): void => {};
   try {
     for (const adapter of adapters) await adapter.start();
-    for (const service of [cron, ...(run.services ?? [])]) {
+    for (const service of [cron, createCuratorService({ log: (m) => run.err(`gateway: curator: ${m}\n`) }), ...(run.services ?? [])]) {
       try {
         await service.start(serviceDeps);
         startedServices.push(service);
