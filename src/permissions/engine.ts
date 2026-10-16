@@ -1,10 +1,13 @@
 // src/permissions/engine.ts
 import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
+import type { Autonomy } from "../gateway/config";
+import { isTestManifest, matchesTestCommand } from "../gateway/tests-detect";
 import type { SessionRole } from "../gateway/types";
 import { STORE_TOOLS } from "../learning/stores";
 import { isInside } from "../paths";
 import { resolveToolPath } from "../tools/paths";
+import { isReadOnlyCommand, pathsStayInside } from "./readonly";
 import {
   bashPatternMatches,
   createRestrictBudget,
@@ -37,6 +40,12 @@ export interface PermissionRules {
   deny: Rule[];
 }
 
+/** How freely a chat's agent acts without asking (src/gateway/autonomy.ts), and the test commands it may run at `balanced`. */
+export interface AutonomyPolicy {
+  level: Autonomy;
+  testCommands: readonly string[];
+}
+
 export interface PermissionContext {
   mode: Mode;
   rules: PermissionRules;
@@ -49,6 +58,8 @@ export interface PermissionContext {
   role?: SessionRole;
   /** Tropos's own stores (canonical paths, src/learning/stores.ts) and whether saving there still asks. */
   stores?: { paths: string[]; askBeforeSaving: boolean };
+  /** Unset outside the gateway: everything asks as before. */
+  autonomy?: AutonomyPolicy;
 }
 
 export type Decision =
@@ -172,6 +183,34 @@ export function isStoreSave(req: PermissionRequest, ctx: PermissionContext): boo
   });
 }
 
+/**
+ * What the chat's autonomy level lets run unasked; checked only after deny, confinement, plan mode and ask rules.
+ * Store tools keep their own rule (only the owner's saves skip the prompt), MCP and other exec tools always ask.
+ */
+function autonomyAllows(req: PermissionRequest, ctx: PermissionContext): boolean {
+  const policy = ctx.autonomy;
+  if (!policy || policy.level === "ask" || STORE_TOOL_NAMES.has(req.toolName)) return false;
+  if (req.kind === "edit") {
+    if (req.paths.length === 0) return false;
+    return req.paths.every(
+      (p) =>
+        ctx.allowedDirs.some((dir) => isInside(p, dir)) &&
+        // Hooks and config under .git/.husky run code on a later git command: they ask at every level.
+        !inGitControlDir(p) &&
+        // A test manifest decides what a pinned test command runs.
+        (policy.level === "autonomous" || !isTestManifest(p)),
+    );
+  }
+  if (req.toolName !== "Bash" || req.command === undefined) return false;
+  // Writes Bash makes to .git/.husky or outside the project are stopped by the confinement profile instead.
+  if (policy.level === "autonomous") return true;
+  const { parts, unsafe } = splitBashCommand(req.command);
+  if (unsafe || parts.length === 0) return false;
+  // Pinned tests are matched against the project, so a test path must exist inside it.
+  const known = parts.every((part) => isReadOnlyCommand(part) || matchesTestCommand(part, policy.testCommands, ctx.cwd));
+  return known && pathsStayInside(req.command, ctx.cwd, ctx.home, ctx.allowedDirs);
+}
+
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
   // One work allowance covers every deny and ask rule, so many rules cannot multiply the cost.
   const budget = createRestrictBudget();
@@ -190,6 +229,7 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
   // Asking hooks still turn this allow into a prompt (src/agent/agent.ts).
   if (ownerStoreSave && !ctx.stores!.askBeforeSaving) return { behavior: "allow" };
+  if (autonomyAllows(req, ctx)) return { behavior: "allow" };
   if (isAllowed(req, ctx)) return { behavior: "allow" };
 
   const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));

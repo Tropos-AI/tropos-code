@@ -1,8 +1,9 @@
 // src/permissions/engine.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import type { Autonomy } from "../gateway/config";
 import { troposStorePaths } from "../learning/stores";
 import { createSkillManageTool } from "../memory/skill-manage";
 import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, isStoreSave, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
@@ -513,5 +514,68 @@ describe("decide — saving to Tropos's stores", () => {
     await mkdir(join(home, "agents"), { recursive: true });
     await symlink(join(outside, "x.md"), join(home, "agents", "evil.md"));
     expect(isStoreSave({ toolName: "AgentManage", kind: "edit", paths: [join(home, "agents", "evil.md")] }, owner())).toBe(false);
+  });
+});
+
+describe("decide — autonomy", () => {
+  const auto = (level: Autonomy, testCommands: string[] = [], over: Parameters<typeof ctx>[0] = {}): PermissionContext => ({
+    ...ctx(over),
+    autonomy: { level, testCommands },
+  });
+  // Pinned tests take only paths that exist inside the project, so this one is on disk.
+  let proj: string;
+  beforeAll(async () => {
+    proj = await makeTmpDir();
+    await mkdir(join(proj, "src"));
+    await writeFile(join(proj, "src", "a.test.ts"), "");
+  });
+  afterAll(() => removeDir(proj));
+
+  test("ask changes nothing", () => expect(decide(edit("/work/app/src/a.ts"), auto("ask")).behavior).toBe("ask"));
+  test("balanced: project edits run, test manifests and git control files ask", () => {
+    expect(decide(edit("/work/app/src/a.ts"), auto("balanced"))).toEqual({ behavior: "allow" });
+    expect(decide(edit("/work/app/packages/x/package.json"), auto("balanced")).behavior).toBe("ask");
+    expect(decide(edit("/work/app/.git/hooks/pre-commit"), auto("autonomous")).behavior).toBe("ask");
+    expect(decide(edit("/elsewhere/a.ts"), auto("autonomous")).behavior).toBe("ask");
+  });
+  test("autonomous: test manifests run too", () => expect(decide(edit("/work/app/package.json"), auto("autonomous"))).toEqual({ behavior: "allow" }));
+  test("balanced: read-only commands and pinned tests run; installs, deletions and unknown commands ask", () => {
+    expect(decide(bash("git status && rg foo src"), auto("balanced"))).toEqual({ behavior: "allow" });
+    const inProj = { cwd: proj, allowedDirs: [proj] };
+    expect(decide(bash("bun test src/a.test.ts"), auto("balanced", ["bun test"], inProj))).toEqual({ behavior: "allow" });
+    expect(decide(bash("bun test"), auto("balanced")).behavior).toBe("ask");
+    expect(decide(bash("npm install left-pad"), auto("balanced")).behavior).toBe("ask");
+    expect(decide(bash("rm -rf build"), auto("balanced")).behavior).toBe("ask");
+  });
+  test("balanced: a pinned test is matched against the project, so a path that isn't there asks", () => {
+    const inProj = { cwd: proj, allowedDirs: [proj] };
+    expect(decide(bash("bun test src/missing.test.ts"), auto("balanced", ["bun test"], inProj)).behavior).toBe("ask");
+    expect(decide(bash("bun test && git status"), auto("balanced", ["bun test"], inProj))).toEqual({ behavior: "allow" });
+  });
+  test("balanced: a read-only command that reaches outside the project asks", () => {
+    expect(decide(bash("cat ~/.ssh/id_rsa"), auto("balanced")).behavior).toBe("ask");
+    expect(decide(bash("ls /etc"), auto("balanced")).behavior).toBe("ask");
+  });
+  test("balanced: a command the parser can't model asks", () => {
+    expect(decide(bash("cat $(echo a.ts)"), auto("balanced")).behavior).toBe("ask");
+  });
+  test("autonomous: any Bash runs; MCP and other exec tools still ask", () => {
+    expect(decide(bash("npm install left-pad && rm -rf build"), auto("autonomous"))).toEqual({ behavior: "allow" });
+    expect(decide({ toolName: "mcp__gh__x", kind: "exec", paths: [] }, auto("autonomous", [], { ask: ["mcp__*"] })).behavior).toBe("ask");
+    expect(decide({ toolName: "mcp__gh__x", kind: "exec", paths: [] }, auto("autonomous")).behavior).toBe("ask");
+    expect(decide({ toolName: "Cron", kind: "exec", paths: [] }, auto("autonomous")).behavior).toBe("ask");
+  });
+  test("deny rules, the user's ask rules and plan mode still win", () => {
+    expect(decide(bash("rm x"), auto("autonomous", [], { deny: ["Bash(rm:*)"] })).behavior).toBe("deny");
+    expect(decide(bash("git status"), auto("balanced", [], { ask: ["Bash(git:*)"] })).behavior).toBe("ask");
+    expect(decide(edit("/work/app/a.ts"), auto("autonomous", [], { mode: "plan" })).behavior).toBe("deny");
+  });
+  test("confinement still denies paths outside the workspace", () => {
+    expect(decide(edit("/home/u/.bashrc"), auto("autonomous", [], { confine: true })).behavior).toBe("deny");
+  });
+  test("saves to Tropos's stores keep their own rule: a guest's save inside the project still asks", () => {
+    const memory: PermissionRequest = { toolName: "Memory", kind: "edit", paths: ["/work/app/notes/MEMORY.md"] };
+    const stores = { paths: ["/work/app/notes"], askBeforeSaving: true };
+    expect(decide(memory, auto("autonomous", [], { role: "guest", stores })).behavior).toBe("ask");
   });
 });

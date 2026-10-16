@@ -26,7 +26,7 @@ import type { HookRunner } from "../hooks/runner";
 import { MEMORY_LIMITS, notesLabel, notesSize, usageHeader } from "../memory/notes";
 import { harnessNonce, nonceBlock } from "../context/tags";
 import { isInside } from "../paths";
-import { decide, type PermissionContext, type PermissionRules } from "../permissions/engine";
+import { decide, type AutonomyPolicy, type PermissionContext, type PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { bashTool } from "../tools/bash/bash";
@@ -71,6 +71,8 @@ export interface AppContext {
   role: SessionRole;
   /** Where Bash runs; the host when unset. */
   exec?: ExecBackend;
+  /** A chat's autonomy level, read on every decision so a change applies to the open session; unset, everything asks as before. */
+  autonomy?: () => AutonomyPolicy;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -102,6 +104,7 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     allowedDirs: ctx.allowedDirs,
     confine: ctx.origin === "channel",
     role: ctx.role,
+    autonomy: ctx.autonomy?.(),
     stores: {
       // The journal is still per project, so it is a store of its own here, held to the same no-links check.
       paths: [...troposStorePaths(ctx.home), canonicalStorePath(ctx.home, dailyNotesDir(ctx.home, ctx.cwd))].filter((p) => p !== undefined),

@@ -107,6 +107,15 @@ test("permissionContext carries the role, the origin's confinement and the store
   expect(permissionContext(asking, "default")).toMatchObject({ mode: "default", confine: true, role: "guest", stores: { askBeforeSaving: true } });
 });
 
+test("permissionContext reads the chat's autonomy on every decision, so a change applies to the open session", () => {
+  expect(permissionContext(ctx, "default").autonomy).toBeUndefined();
+  let level: "ask" | "balanced" = "balanced";
+  const live = { ...ctx, autonomy: () => ({ level, testCommands: ["bun test"] }) };
+  expect(permissionContext(live, "default").autonomy).toEqual({ level: "balanced", testCommands: ["bun test"] });
+  level = "ask";
+  expect(permissionContext(live, "default").autonomy).toEqual({ level: "ask", testCommands: ["bun test"] });
+});
+
 test("permissionContext leaves out a journal reached through a link out of the home", async () => {
   const outside = join(dir, "outside");
   await mkdir(outside);
