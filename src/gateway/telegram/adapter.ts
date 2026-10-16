@@ -26,7 +26,7 @@ import {
 const CHANNEL = "telegram";
 const MAX_TOOL_LINES = 12;
 const MAX_UNPAIRED_MEMORY = 1000;
-const LEARNED_REFUSAL = "Only the owner can see what I've learned.";
+const LEARNED_REFUSAL = "Only the owner can see what I've learned, in their private chat with me.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
 export interface TelegramAdapterOptions {
@@ -267,8 +267,8 @@ export class TelegramAdapter implements ChannelAdapter {
       await this.handleProjectCommand(msg.chat.id, text);
       return;
     }
-    // Before the session is opened: a guest's /learned is refused without starting one.
-    if (text.startsWith("/") && commandWord(text) === "learned" && !(await this.pairing.isOwner(CHANNEL, senderId))) {
+    // Before the session is opened: a guest's /learned, or the owner's in a group, is refused without starting one.
+    if (text.startsWith("/") && commandWord(text) === "learned" && !(msg.chat.type === "private" && (await this.pairing.isOwner(CHANNEL, senderId)))) {
       await this.reply(msg.chat.id, LEARNED_REFUSAL);
       return;
     }
@@ -650,8 +650,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** `/learned` and `/learned undo`: what the agent saved on its own. Only the owner's chat may see or change it. */
   private async handleLearned(chat: Chat, senderId: string, arg: string | undefined): Promise<void> {
-    // The owner check is in handleMessage; this re-check covers an owner change since.
-    if (!(await this.pairing.isOwner(CHANNEL, senderId))) {
+    // The owner check is in handleMessage; this re-check covers an owner change since. A private chat's id is its
+    // sender's: anywhere else (a group) the owner's memory would be shown to everyone in it.
+    if (String(chat.chatId) !== senderId || !(await this.pairing.isOwner(CHANNEL, senderId))) {
       this.sendAll(chat, LEARNED_REFUSAL);
       return;
     }

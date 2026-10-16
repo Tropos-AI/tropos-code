@@ -588,12 +588,21 @@ describe("TelegramAdapter", () => {
     expect(session().commands).toEqual([]);
   });
 
+  test("/learned from the owner in an allowed group is refused there: their memory stays out of the group", async () => {
+    const { server, sessions, pairing } = await setup({ allowGroups: true });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(-100, CHAT, "/learned", { chatType: "supergroup" });
+    server.pushMessage(-100, CHAT, "/learned undo", { chatType: "supergroup" });
+    await server.waitFor(() => server.textsTo(-100).filter((t) => t === "Only the owner can see what I've learned, in their private chat with me.").length === 2);
+    expect(sessions.opens).toBe(0);
+  });
+
   test("/learned from an approved guest is refused", async () => {
     const { server, sessions, pairing } = await setup();
     pairing.owners.add("telegram:1");
     server.pushMessage(CHAT, CHAT, "/learned");
     server.pushMessage(CHAT, CHAT, "/learned undo");
-    await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned.").length === 2);
+    await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned, in their private chat with me.").length === 2);
     // Refused before any session was opened.
     expect(sessions.opens).toBe(0);
   });
