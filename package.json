@@ -1,6 +1,6 @@
 {
   "name": "tropos-code",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Tropos Code \u2014 an agentic coding CLI by Tropos Labs",
   "license": "MIT",
   "private": true,
