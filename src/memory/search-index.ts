@@ -192,6 +192,22 @@ CREATE VIRTUAL TABLE chunks USING fts5(body, role UNINDEXED, tokenize = 'unicode
 PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
+/** A project's session transcripts, subagent ones (subagents/<parent>/<id>.jsonl) included. */
+export async function sessionPaths(dir: string): Promise<Array<{ path: string; id: string }>> {
+  const out: Array<{ path: string; id: string }> = [];
+  const idOf = (name: string) => name.slice(0, -".jsonl".length);
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (SESSION_FILE.test(name)) out.push({ path: join(dir, name), id: idOf(name) });
+  }
+  const subagents = join(dir, "subagents");
+  for (const parent of await readdir(subagents).catch(() => [] as string[])) {
+    for (const name of await readdir(join(subagents, parent)).catch(() => [] as string[])) {
+      if (SESSION_FILE.test(name)) out.push({ path: join(subagents, parent, name), id: idOf(name) });
+    }
+  }
+  return out;
+}
+
 async function diskFiles(dir: string): Promise<DiskFile[]> {
   const out: DiskFile[] = [];
   const add = async (path: string, kind: DiskFile["kind"], docId: string, maxBytes: number) => {
@@ -202,9 +218,7 @@ async function diskFiles(dir: string): Promise<DiskFile[]> {
       // vanished between readdir and stat
     }
   };
-  for (const name of await readdir(dir).catch(() => [] as string[])) {
-    if (SESSION_FILE.test(name)) await add(join(dir, name), "session", name.slice(0, -".jsonl".length), MAX_SESSION_BYTES);
-  }
+  for (const s of await sessionPaths(dir)) await add(s.path, "session", s.id, MAX_SESSION_BYTES);
   const notes = join(dir, "notes");
   for (const name of await readdir(notes).catch(() => [] as string[])) {
     const date = DAY_FILE.exec(name)?.[1];

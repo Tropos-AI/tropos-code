@@ -11,7 +11,7 @@ import {
   MAX_SESSION_BYTES,
   MESSAGE_LINE_PREFIX,
   SCAFFOLD,
-  SESSION_FILE,
+  sessionPaths,
   SearchIndex,
   messageTexts,
   noteEntries,
@@ -81,9 +81,7 @@ async function candidateFiles(dirs: string[], source: SearchSource): Promise<Can
   };
   for (const dir of dirs) {
     if (source !== "notes") {
-      for (const name of await readdir(dir).catch(() => [] as string[])) {
-        if (SESSION_FILE.test(name)) await add({ kind: "session", id: name.slice(0, -".jsonl".length), path: join(dir, name), project: dir });
-      }
+      for (const s of await sessionPaths(dir)) await add({ kind: "session", id: s.id, path: s.path, project: dir });
     }
     if (source !== "sessions") {
       const notes = join(dir, "notes");
@@ -210,9 +208,9 @@ function clip(text: string, max: number): string {
 async function readSession(dirs: string[], id: string, around: number | undefined, input: Input): Promise<ToolOutput> {
   let path: string | undefined;
   for (const dir of dirs) {
-    const candidate = join(dir, `${id}.jsonl`);
-    const info = await stat(candidate).catch(() => null);
-    if (info?.isFile()) {
+    const candidate = (await sessionPaths(dir)).find((s) => s.id.toLowerCase() === id.toLowerCase())?.path;
+    const info = candidate ? await stat(candidate).catch(() => null) : null;
+    if (candidate && info?.isFile()) {
       if (info.size > MAX_SESSION_BYTES) return { content: `Session ${id} is too large to read.`, isError: true };
       path = candidate;
       break;

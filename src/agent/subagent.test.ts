@@ -85,6 +85,35 @@ describe("runSubagent", () => {
     expect(JSON.stringify(req.messages[0])).toContain("<context>ctx</context>");
   });
 
+  test("writes the child's messages through openTranscript; a failing transcript doesn't stop it", async () => {
+    const saved: unknown[] = [];
+    const opened: string[] = [];
+    const d = deps([() => reply([textBlock("done")])], {
+      openTranscript: async (agent) => {
+        opened.push(agent);
+        return { appendMessage: async (m) => void saved.push(m) };
+      },
+    });
+    const out = await runSubagent(def, "find a", d, ctx());
+    expect(out.isError).toBeUndefined();
+    expect(opened).toEqual(["explore"]);
+    expect(saved.map((m) => (m as { role: string }).role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(saved[0])).toContain("find a");
+
+    const broken = await runSubagent(def, "find b", deps([() => reply([textBlock("still ran")])], { openTranscript: async () => { throw new Error("disk full"); } }), ctx());
+    expect(broken.isError).toBeUndefined();
+    expect(String(broken.content)).toContain("still ran");
+
+    const failing = await runSubagent(
+      def,
+      "find c",
+      deps([() => reply([textBlock("ok anyway")])], { openTranscript: async () => ({ appendMessage: async () => { throw new Error("write failed"); } }) }),
+      ctx(),
+    );
+    expect(failing.isError).toBeUndefined();
+    expect(String(failing.content)).toContain("ok anyway");
+  });
+
   test("the child's cd doesn't move the parent", async () => {
     const d = deps([() => reply([toolUseBlock("t1", "Cd", {})], "tool_use"), () => reply([textBlock("ok")])]);
     const c = ctx();

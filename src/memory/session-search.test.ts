@@ -248,6 +248,20 @@ describe("index", () => {
   });
 });
 
+describe.each(["fts", "scan"] as const)("subagent transcripts (%s)", (mode) => {
+  test("SessionSearch finds text only a subagent wrote, and can open that transcript by id", async () => {
+    const dir = join(projectDir(home, CWD), "subagents", ID(1));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${ID(7)}.jsonl`), `${meta({ title: "Child" })}\n${msg("user", "audit the kumquat cache")}\n${msg("assistant", "kumquat finding")}\n`);
+    const tool = makeTool(mode);
+    const found = await run(tool, { query: "kumquat" });
+    expect(found.text).toContain(ID(7));
+    const read = await run(tool, { session_id: ID(7) });
+    expect(read.isError).toBeUndefined();
+    expect(read.text).toContain("kumquat finding");
+  });
+});
+
 describe("read mode", () => {
   const long = (i: number) => msg(i % 2 === 0 ? "user" : "assistant", `message ${i} ${"z".repeat(10)}`);
 

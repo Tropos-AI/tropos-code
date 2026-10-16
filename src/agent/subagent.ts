@@ -1,5 +1,6 @@
 // src/agent/subagent.ts
 import type { Model } from "../api/model";
+import type { MessageParam } from "../session/store";
 import { subagentIdentityLine } from "../context/identity";
 import type { Effort } from "../config/constants";
 import { errorText } from "../error-text";
@@ -37,6 +38,8 @@ export interface SubagentDeps {
   onAllowAlways?(rule: string): Promise<void> | void;
   /** Adds the subagent's spend to the session's cost (undefined = a model without a known price). */
   recordCost?(costUsd: number | undefined): void;
+  /** Opens a transcript for one subagent run; a failure here is ignored and the run goes on unsaved. */
+  openTranscript?(agent: string): Promise<{ appendMessage(m: MessageParam): Promise<void> }>;
   hooks?: AgentHooks;
   beforeChange?(): Promise<void>;
   postWrite?(paths: string[], signal: AbortSignal): Promise<string | null>;
@@ -111,6 +114,8 @@ export async function runSubagent(def: SubagentDefinition, prompt: string, deps:
     // A sandboxed session's subagents must not get the host shell back.
     exec: ctx.exec,
   };
+  // A transcript that can't be opened or written must never stop the work.
+  const transcript = await deps.openTranscript?.(def.name).catch(() => null);
   let toolUses = 0;
   let turns = 0;
   let lastError: string | undefined;
@@ -127,7 +132,9 @@ export async function runSubagent(def: SubagentDefinition, prompt: string, deps:
     onAllowAlways: deps.onAllowAlways,
     contextText: deps.contextText,
     nonce: deps.nonce,
-    persist: async () => {},
+    persist: async (message) => {
+      await transcript?.appendMessage(message).catch(() => {});
+    },
     toolContext,
     maxTurns: Math.min(def.maxTurns ?? DEFAULT_SUBAGENT_TURNS, MAX_SUBAGENT_TURNS),
     // The task prompt comes from the parent agent, not the user: UserPromptSubmit doesn't fire for it.

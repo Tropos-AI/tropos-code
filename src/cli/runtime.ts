@@ -204,6 +204,8 @@ export function makeAgent(
     nonce,
     onAllowAlways,
     recordCost: (cost) => agent?.addCost(cost),
+    openTranscript: (name) =>
+      SessionStore.createSubagent(ctx.home, { cwd: ctx.cwd, parentId: opts.session().id, agent: name, model: config().model, version: ctx.version }),
     hooks: opts.hooks,
     beforeChange,
     postWrite: afterWrite,

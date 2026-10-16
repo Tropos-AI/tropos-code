@@ -196,6 +196,18 @@ describe("search", () => {
   });
 });
 
+describe("subagent transcripts", () => {
+  test("the index picks up subagent transcripts", async () => {
+    const dir = join(projectDir(home, CWD), "subagents", ID(1));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${ID(9)}.jsonl`), `${meta({ title: "Child" })}\n${msg("assistant", "the zucchini root cause")}\n`);
+    await index.refresh({ home, cwd: CWD });
+    const hits = index.search("zucchini", { source: "all", projectDirs: here(), limit: 5 });
+    expect(hits.map((h) => h.id)).toEqual([ID(9)]);
+    expect(hits[0]!.kind).toBe("session");
+  });
+});
+
 describe("refresh", () => {
   test("re-indexes a file only when its mtime or size changed", async () => {
     const when = new Date(Date.UTC(2026, 9, 1));

@@ -15,6 +15,9 @@ export interface SessionMeta {
   version: string;
   createdAt: string;
   title?: string;
+  /** Subagent transcripts only: the session that started it, and the agent that ran. */
+  parentId?: string;
+  agent?: string;
 }
 
 type SessionLine =
@@ -110,6 +113,23 @@ export class SessionStore {
   static async create(home: string, meta: { cwd: string; model: string; version: string }): Promise<SessionStore> {
     const id = randomUUID();
     const dir = projectDir(home, meta.cwd);
+    await mkdir(dir, { recursive: true, mode: DIR_MODE });
+    const store = new SessionStore(id, join(dir, `${id}.jsonl`), false);
+    await store.write({ type: "meta", sessionId: id, createdAt: new Date().toISOString(), ...meta });
+    return store;
+  }
+
+  /**
+   * A subagent's transcript, kept beside its parent session so search can find it. It lives in a
+   * subfolder, so listSessions and resume never see it.
+   */
+  static async createSubagent(
+    home: string,
+    meta: { cwd: string; parentId: string; agent: string; model: string; version: string },
+  ): Promise<SessionStore> {
+    if (!SESSION_ID.test(meta.parentId)) throw new Error("Invalid session id");
+    const id = randomUUID();
+    const dir = join(projectDir(home, meta.cwd), "subagents", meta.parentId);
     await mkdir(dir, { recursive: true, mode: DIR_MODE });
     const store = new SessionStore(id, join(dir, `${id}.jsonl`), false);
     await store.write({ type: "meta", sessionId: id, createdAt: new Date().toISOString(), ...meta });

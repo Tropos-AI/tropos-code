@@ -53,6 +53,18 @@ describe("SessionStore", () => {
     expect(store.path).toBe(join(projectDir(home, cwd), `${store.id}.jsonl`));
   });
 
+  test("a subagent transcript is saved under its parent session and isn't listed as a session", async () => {
+    const parent = await SessionStore.create(home, { cwd, model: "claude-opus-5-5", version: "0.1.0" });
+    await parent.appendMessage(user("main"));
+    const child = await SessionStore.createSubagent(home, { cwd, parentId: parent.id, agent: "explore", model: "claude-haiku-5-5", version: "0.1.0" });
+    await child.appendMessage(user("child task"));
+    expect(child.path).toBe(join(projectDir(home, cwd), "subagents", parent.id, `${child.id}.jsonl`));
+    const saved = await readSessionFile(child.path);
+    expect(saved.meta).toMatchObject({ parentId: parent.id, agent: "explore", sessionId: child.id });
+    expect(saved.messages).toEqual([user("child task")]);
+    expect((await listSessions(home, cwd)).map((s) => s.id)).toEqual([parent.id]);
+  });
+
   test("title skips the context and mode blocks and is truncated", async () => {
     const store = await SessionStore.create(home, { cwd, model: "m", version: "v" });
     await store.appendMessage({
