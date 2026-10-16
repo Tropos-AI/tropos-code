@@ -63,6 +63,7 @@ describe("SessionStore", () => {
     expect(saved.meta).toMatchObject({ parentId: parent.id, agent: "explore", sessionId: child.id });
     expect(saved.messages).toEqual([user("child task")]);
     expect((await listSessions(home, cwd)).map((s) => s.id)).toEqual([parent.id]);
+    await expect(SessionStore.open(home, cwd, child.id)).rejects.toThrow(`No session ${child.id}`);
   });
 
   test("title skips the context and mode blocks and is truncated", async () => {

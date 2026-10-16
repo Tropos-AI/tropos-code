@@ -136,6 +136,19 @@ describe.each(["fts", "scan"] as const)("search (%s)", (mode) => {
     expect(out.summary).toBe("1 result");
   });
 
+  test("leaves out the current session's own subagent transcripts, but not another session's", async () => {
+    const sub = async (parent: number, n: number) => {
+      const dir = join(projectDir(home, CWD), "subagents", ID(parent));
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${ID(n)}.jsonl`), `${meta({ title: `Child${n}` })}\n${msg("assistant", "mango finding")}\n`);
+    };
+    await sub(2, 20);
+    await sub(3, 30);
+    const out = await run(makeTool(mode, { currentSessionId: () => ID(2) }), { query: "mango" });
+    expect(out.text).not.toContain(ID(20));
+    expect(out.text).toContain(ID(30));
+  });
+
   test("all_projects searches every project and shows its folder", async () => {
     await session(CWD, 1, [meta({ cwd: CWD, title: "Here" }), msg("user", "rotate keys")], 5);
     await session(OTHER, 2, [meta({ cwd: OTHER, title: "There" }), msg("user", "rotate keys")], 1);

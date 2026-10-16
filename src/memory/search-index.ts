@@ -2,7 +2,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { projectDir, type MessageParam } from "../session/store";
 import { DAY_FILE } from "./daily";
 
@@ -277,8 +277,9 @@ export class SearchIndex {
     const params: Array<string | number> = [match, ...opts.projectDirs, ...kinds];
     let exclude = "";
     if (opts.excludeSessionId) {
-      exclude = "AND NOT (docs.kind = 'session' AND docs.doc_id = ?)";
-      params.push(opts.excludeSessionId);
+      // The current session's own subagent transcripts (subagents/<id>/) are excluded with it.
+      exclude = "AND NOT (docs.kind = 'session' AND (docs.doc_id = ? OR instr(docs.path, ?) > 0))";
+      params.push(opts.excludeSessionId, `${sep}subagents${sep}${opts.excludeSessionId}${sep}`);
     }
     params.push(Math.max(200, opts.limit * 40));
     const rows = this.db
@@ -359,7 +360,7 @@ export class SearchIndex {
     for (const file of files) {
       const row = known.get(file.path);
       if (row && row.mtime === file.mtime && row.size === file.size) continue;
-      if (file.kind === "session" && file.docId === excludeSessionId) continue;
+      if (file.kind === "session" && excludeSessionId && (file.docId === excludeSessionId || file.path.includes(`${sep}subagents${sep}${excludeSessionId}${sep}`))) continue;
       let text: string;
       try {
         text = await readFile(file.path, "utf8");

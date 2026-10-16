@@ -1,6 +1,6 @@
 // src/memory/session-search.ts
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { z } from "zod";
 import { neutraliseHarnessTags } from "../context/tags";
 import { errorText } from "../error-text";
@@ -162,7 +162,7 @@ function scanNotes(text: string, words: string[]): SearchResult["snippets"] {
 
 /** The fallback: plain substring matching over the files, newest first. */
 async function scanSearch(dirs: string[], words: string[], source: SearchSource, limit: number, current: string | undefined, signal: AbortSignal): Promise<SearchResult[]> {
-  const candidates = (await candidateFiles(dirs, source)).filter((c) => !(c.kind === "session" && c.id === current));
+  const candidates = (await candidateFiles(dirs, source)).filter((c) => !(c.kind === "session" && (c.id === current || (current && c.path.includes(`${sep}subagents${sep}${current}${sep}`)))));
   const out: SearchResult[] = [];
   for (const c of candidates) {
     if (signal.aborted || out.length >= limit) break;
