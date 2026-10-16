@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, TRUSTED_PATH, unconfinedBackend } from "./confined";
 import { ConfinementError } from "./confinement-paths";
-import { COMMONDIR_TAMPERED, GIT_LINK_REMOVED, GIT_METADATA_TAMPERED, gitMetadataUnsafe, OWNER_HOOK_LINKS } from "./git-integrity";
+import { COMMONDIR_TAMPERED, GIT_LINK_REMOVED, GIT_METADATA_TAMPERED, gitMetadataUnsafe, hooksDirRequired, OWNER_HOOK_LINKS } from "./git-integrity";
 
 const until = async (check: () => boolean, ms = 5000) => {
   const end = Date.now() + ms;
@@ -513,6 +513,59 @@ describe("the bwrap backend (fake bwrap)", () => {
         expect(r.code).toBe(1);
         expect(r.err).toContain(GIT_METADATA_TAMPERED);
         expect(existsSync(join(own.project, ".git", "modules", "late", "hooks"))).toBe(false);
+      } finally {
+        b.signal(job, "SIGKILL");
+        await jobDone;
+      }
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing .git/hooks is created by the host before the command, and the clean-up's quarantine lives there", async () => {
+    const own = fixture();
+    try {
+      rmSync(join(own.project, ".git", "hooks"), { recursive: true });
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const r = await collect(b.spawn({ shell: "/bin/sh", script: "test -d .git/hooks && mkdir -p .git/modules/odd/hooks/nested && echo r > .git/modules/odd/HEAD", cwd: own.project, env: {} }));
+      expect(r.code).toBe(1); // the command saw .git/hooks already there; what it planted was moved aside
+      expect(lstatSync(join(own.project, ".git", "hooks")).isDirectory()).toBe(true);
+      expect(r.err).toMatch(new RegExp(`check ${join(own.project, ".git", "hooks")}/\\.tropos-quarantine-[^/]+/\\d+/nested$`, "m"));
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
+  test("a .git/hooks that is a link refuses the command; nothing runs and the link stays", async () => {
+    const own = fixture();
+    try {
+      rmSync(join(own.project, ".git", "hooks"), { recursive: true });
+      symlinkSync(own.outside, join(own.project, ".git", "hooks")); // not writable by a chat, so not an owner-link refusal
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const r = await collect(b.spawn({ shell: "/bin/sh", script: "echo ran > ran.txt", cwd: own.project, env: {} }));
+      expect(r.code).toBe(126);
+      expect(r.err).toContain(hooksDirRequired(join(own.project, ".git", "hooks")));
+      expect(existsSync(join(own.project, "ran.txt"))).toBe(false);
+      expect(lstatSync(join(own.project, ".git", "hooks")).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
+  test("a command refused because the repo can't be confined still reports what the check before it undid", async () => {
+    const own = fixture();
+    try {
+      const b = new ConfinedBackend({ project: own.project, home: own.home, userHome: own.userHome, env: own.env, platform: "linux", bwrapBin: bin });
+      const plant = `sleep 0.2; ${plantModule}; rm -rf .husky && ln -s '${own.outside}' .husky; sleep 30`;
+      const job = b.spawn({ shell: "/bin/sh", script: plant, cwd: own.project, env: {} });
+      const jobDone = collect(job);
+      try {
+        await until(() => existsSync(join(own.project, ".husky")) && lstatSync(join(own.project, ".husky")).isSymbolicLink());
+        const r = await collect(b.spawn({ shell: "/bin/sh", script: "echo ran > ran.txt", cwd: own.project, env: {} }));
+        expect(r.code).toBe(126);
+        expect(r.err).toContain(GIT_METADATA_TAMPERED);
+        expect(r.err).toContain("can't be confined");
+        expect(existsSync(join(own.project, "ran.txt"))).toBe(false);
       } finally {
         b.signal(job, "SIGKILL");
         await jobDone;

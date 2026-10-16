@@ -11,6 +11,7 @@ import {
   commondirUnsafe,
   enforceCommondir,
   enforceNewGitDirs,
+  ensureHooksDir,
   findNestedGitDirs,
   GIT_LINK_REMOVED,
   GIT_METADATA_TAMPERED,
@@ -27,6 +28,7 @@ beforeEach(() => {
   git = join(fx, "ws", ".git");
   outside = join(fx, "outside");
   mkdirSync(git, { recursive: true });
+  mkdirSync(join(git, "hooks")); // as the backend makes sure of before any command (ensureHooksDir)
   mkdirSync(outside);
 });
 afterEach(() => rmSync(fx, { recursive: true, force: true }));
@@ -172,15 +174,14 @@ test("a link planted under modules is removed, never followed; a directory insid
   // inside it is left there and reported.
   expect(r.unsafe).toHaveLength(1);
   const leftover = r.unsafe[0]!;
-  expect(leftover).toMatch(new RegExp(`^${git}/\\.tropos-quarantine-[^/]+/\\d+/nested$`));
+  expect(leftover).toMatch(new RegExp(`^${git}/hooks/\\.tropos-quarantine-[^/]+/\\d+/nested$`));
   expect(r.message).toBe(gitMetadataUnsafe(leftover));
   expect(readFileSync(join(leftover, "f"), "utf8")).toBe("x"); // never deleted recursively
   expect(existsSync(join(fresh, "hooks"))).toBe(false);
   expect(existsSync(join(fresh, "config"))).toBe(false);
 });
 
-test("the quarantine sits in the main .git/hooks when that is a real dir, and is gone when everything was removed", () => {
-  mkdirSync(join(git, "hooks"));
+test("the quarantine sits in the main .git/hooks, and is gone when everything was removed", () => {
   writeFileSync(join(git, "hooks", "pre-commit"), "owner's hook");
   const snap = gitDirsSnapshot(git)!;
   const fresh = join(git, "modules", "lib");
@@ -258,7 +259,6 @@ test("a link into a sandbox-writable dir is removed even when the snapshot alrea
   plantGitDir(join(writable, "lib"));
   symlinkSync(writable, join(git, "modules"));
   symlinkSync(outside, join(git, "worktrees")); // into a dir the sandbox can't write: the owner's, left alone
-  mkdirSync(join(git, "hooks"));
   writeFileSync(join(writable, "pre-commit"), "x");
   symlinkSync("../../../writable/pre-commit", join(git, "hooks", "pre-commit")); // relative, into the writable dir
   const snap = gitDirsSnapshot(git, { writable: [writable] })!;
@@ -284,7 +284,6 @@ test("a dangling link whose path would land in a writable dir is removed too", (
 test("writableLinks lists the links into writable dirs without touching them", () => {
   const writable = join(fx, "writable");
   mkdirSync(writable);
-  mkdirSync(join(git, "hooks"));
   symlinkSync(join(writable, "pre-commit"), join(git, "hooks", "pre-commit"));
   symlinkSync(outside, join(git, "worktrees"));
   const snap = gitDirsSnapshot(git, { writable: [writable] })!;
@@ -341,7 +340,6 @@ const raceFor = async (ms: number, swap: ReturnType<typeof swapper>, sweep: () =
 };
 
 test("a hooks dir flipped between a real dir and a link to a host dir while it is cleaned: the host dir's files survive", async () => {
-  mkdirSync(join(git, "hooks"));
   const snap = gitDirsSnapshot(git)!;
   const fresh = join(git, "modules", "x");
   mkdirSync(fresh, { recursive: true });
@@ -357,7 +355,6 @@ test("a hooks dir flipped between a real dir and a link to a host dir while it i
 });
 
 test("a git dir flipped between a real dir and a link to another repo's .git while it is cleaned: nothing of that repo is deleted", async () => {
-  mkdirSync(join(git, "hooks"));
   const snap = gitDirsSnapshot(git)!;
   mkdirSync(join(git, "modules"));
   const commondirs = snapshot([git, join(git, "modules", "x")]);
@@ -376,4 +373,34 @@ test("a git dir flipped between a real dir and a link to another repo's .git whi
   // Every file of the other repo still exists: in place, or moved aside inside this .git and reported.
   const contents = [...filesUnder(victim).values(), ...[...filesUnder(git)].filter(([path]) => [...unsafe].some((u) => path === u || path.startsWith(`${u}/`))).map(([, body]) => body)];
   for (const body of before.values()) expect(contents).toContain(body);
+});
+
+test("without a real .git/hooks there is no quarantine: nothing is moved, the entry is reported where it is", () => {
+  const snap = snapshot();
+  rmSync(join(git, "hooks"), { recursive: true });
+  writeFileSync(join(git, "commondir"), "x");
+  expect(enforceCommondir(snap)).toEqual({ removed: [], unsafe: [join(git, "commondir")], message: commondirUnsafe(join(git, "commondir")) });
+  symlinkSync(outside, join(git, "hooks")); // a link: never a quarantine either
+  expect(enforceCommondir(snap).unsafe).toEqual([join(git, "commondir")]);
+  expect(readFileSync(join(git, "commondir"), "utf8")).toBe("x");
+  expect(readdirSync(outside)).toEqual([]);
+  expect(readdirSync(git).filter((n) => n.startsWith(".tropos-quarantine-"))).toEqual([]);
+});
+
+test("ensureHooksDir creates a missing .git/hooks and refuses a link or a file there, never following it", () => {
+  rmSync(join(git, "hooks"), { recursive: true });
+  expect(ensureHooksDir(git)).toBe(true);
+  expect(lstatSync(join(git, "hooks")).isDirectory()).toBe(true);
+  expect(ensureHooksDir(git)).toBe(true); // already there
+  rmSync(join(git, "hooks"), { recursive: true });
+  symlinkSync(outside, join(git, "hooks"));
+  expect(ensureHooksDir(git)).toBe(false);
+  rmSync(join(git, "hooks"));
+  symlinkSync(join(outside, "missing"), join(git, "hooks")); // dangling: mkdir must not create its target
+  expect(ensureHooksDir(git)).toBe(false);
+  expect(existsSync(join(outside, "missing"))).toBe(false);
+  rmSync(join(git, "hooks"));
+  writeFileSync(join(git, "hooks"), "");
+  expect(ensureHooksDir(git)).toBe(false);
+  expect(ensureHooksDir(join(fx, "no-such", ".git"))).toBe(false);
 });

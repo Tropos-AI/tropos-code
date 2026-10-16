@@ -10,13 +10,15 @@
 // A confined job may still run and swap a path between that check and the removal, so nothing is enumerated or
 // unlinked through the path itself: the entry is first renamed into a quarantine dir (rename acts on a link, not its
 // target) and only handled there, if it is still the entry that was checked (same device and inode). The quarantine
-// sits in the main `.git/hooks`, which no confined command can write (the profile's deny, bwrap's read-only bind).
+// sits only in the main `.git/hooks`, which no confined command can write (the profile's deny, bwrap's read-only
+// bind) and which the backend makes sure is a real directory before any command runs (ensureHooksDir). Without it
+// nothing is moved: the entry is left and reported.
 // Residual: under such a race a swapped-in host entry can end up moved aside into the quarantine; it is never
 // deleted there, and is reported.
 //
 // The same goes for whole git dirs a command creates under `.git/modules` or `.git/worktrees` (bwrap can only make
 // the ones that already exist read-only): after the command, each new one loses its hooks, config and commondir.
-import { lstatSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, type Stats, unlinkSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, type Stats, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isInside } from "../paths";
 
@@ -192,12 +194,16 @@ class Sweep {
     }
   }
 
-  /** A fresh quarantine dir in the main `.git/hooks` (or `.git` without a real one), re-verified on every use. */
+  /**
+   * A fresh quarantine dir in the main `.git/hooks`, re-verified on every use; null when that is not a real directory
+   * inside the real `.git`. Never anywhere else: the rest of `.git` is writable by a confined command.
+   */
   private quarantineDir(): string | null {
     if (this.quarantine === null) {
       const hooks = join(this.snap.gitRoot, "hooks");
+      if (!dirIsSafe(this.snap, hooks)) return null;
       try {
-        this.quarantine = mkdtempSync(join(dirIsSafe(this.snap, hooks) ? hooks : this.snap.gitRoot, ".tropos-quarantine-"));
+        this.quarantine = mkdtempSync(join(hooks, ".tropos-quarantine-"));
       } catch {
         return null;
       }
@@ -207,6 +213,28 @@ class Sweep {
 
   private stillSafe(): boolean {
     return this.quarantine !== null && dirIsSafe(this.snap, this.quarantine);
+  }
+}
+
+export const hooksDirRequired = (path: string): string =>
+  `tropos sandbox: ${path} must be a real directory inside .git: the sandbox undoes a command's changes to .git there. For shared hooks use \`git config core.hooksPath <dir>\` instead, then try again.`;
+
+/**
+ * Makes sure the main `.git/hooks` is a real directory inside the real `.git`, creating it when missing (mkdir never
+ * follows a link at that name). The clean-up's quarantine lives there; false when it can't be (a link, a file, an
+ * error), and the caller refuses the command.
+ */
+export function ensureHooksDir(gitRoot: string): boolean {
+  const hooks = join(gitRoot, "hooks");
+  try {
+    mkdirSync(hooks, { mode: 0o755 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+  }
+  try {
+    return dirIsSafe({ gitRoot, realGitRoot: realpathSync(gitRoot) }, hooks);
+  } catch {
+    return false;
   }
 }
 
@@ -454,3 +482,4 @@ function presentOrUnknown(path: string): boolean {
     return true;
   }
 }
+

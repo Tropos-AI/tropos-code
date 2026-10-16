@@ -26,7 +26,9 @@ import {
   enforceNewGitDirs,
   type GitDirsSnapshot,
   gitDirsSnapshot,
+  ensureHooksDir,
   gitMetadataUnsafe,
+  hooksDirRequired,
   OWNER_HOOK_LINKS,
   writableLinks,
 } from "./git-integrity";
@@ -143,6 +145,9 @@ export class ConfinedBackend implements ExecBackend {
       if (this.ownerLinks.size > 0) {
         return failed(`tropos sandbox: ${OWNER_HOOK_LINKS}\nLinked: ${[...this.ownerLinks].join(", ")}`, options);
       }
+      // The clean-up's quarantine needs a `.git/hooks` no confined command can write; never anywhere else.
+      const git = this.baseline.gitDirs?.gitRoot;
+      if (git && !ensureHooksDir(git)) return failed(hooksDirRequired(join(git, "hooks")), options);
     }
     const vars = Object.entries(this.env).filter((entry): entry is [string, string] => entry[1] !== undefined);
     let command: string[];
@@ -155,8 +160,9 @@ export class ConfinedBackend implements ExecBackend {
         // exist now (a bind of hooks that check just removed would stop the command).
         command = [this.bwrap, ...bwrapArgs(this.paths, opts.cwd), ...vars.flatMap(([k, v]) => ["--setenv", k, v]), "--", opts.shell, "-c", opts.script];
       } catch (err) {
-        // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare.
-        return failed(`tropos sandbox: ${(err as Error).message}`, options);
+        // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare,
+        // and still report what the check before it found.
+        return failed([pre, `tropos sandbox: ${(err as Error).message}`].filter(Boolean).join("\n"), options);
       }
     }
     const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", ...command], { ...options, stdio: ["ignore", "pipe", "pipe", "pipe"] });
@@ -234,12 +240,14 @@ export class ConfinedBackend implements ExecBackend {
 
   /**
    * What the checks compare against. A `.git` absent at the baseline that is there now (bwrap leaves its empty
-   * placeholder on the host) is checked as all new: nothing in it is known.
+   * placeholder on the host) is checked as all new: nothing in it is known. Its hooks dir is made sure of first, for
+   * the quarantine (no running command can see into it: bwrap covered it with the placeholder, the profile denies it).
    */
   private checkAgainst(): PostRun {
     if (this.baseline.gitDirs) return this.baseline;
     const now = this.snapshot();
     if (!now.gitDirs || !now.commondir) return now;
+    if (!ensureHooksDir(now.gitDirs.gitRoot)) throw new Error(`${join(now.gitDirs.gitRoot, "hooks")} is not a real directory`);
     return {
       commondir: { ...now.commondir, gitDirs: [now.commondir.gitRoot], present: new Set() },
       gitDirs: { ...now.gitDirs, gitDirs: [], known: new Set() },
