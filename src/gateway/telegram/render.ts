@@ -30,6 +30,22 @@ export function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+const SUMMARY_FILES = 10;
+const SUMMARY_COMMANDS = 8;
+
+function capped(items: string[], max: number, sep: string): string {
+  return items.length > max ? `${items.slice(0, max).join(sep)} and ${items.length - max} more` : items.join(sep);
+}
+
+/** What a turn changed and ran, for a chat where it happened without asking. Nothing when it did neither. */
+export function taskSummaryText(done: { files: string[]; commands: string[] }): string | undefined {
+  const files = [...new Set(done.files)];
+  const lines: string[] = [];
+  if (files.length > 0) lines.push(`Changed: ${capped(files, SUMMARY_FILES, ", ")}`);
+  if (done.commands.length > 0) lines.push(`Ran: ${capped(done.commands.map((c) => oneLine(c, 80)), SUMMARY_COMMANDS, " · ")}`);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 export interface ToolLine {
   id: string;
   name: string;

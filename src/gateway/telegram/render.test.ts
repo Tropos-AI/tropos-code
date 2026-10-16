@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, splitMessage, statusText } from "./render";
+import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, splitMessage, statusText, taskSummaryText } from "./render";
 
 describe("splitMessage", () => {
   test("short text is one part", () => {
@@ -87,5 +87,15 @@ describe("help", () => {
     expect(BOT_COMMANDS).toContainEqual({ command: "learned", description: "What I learned, with undo" });
     expect(HELP_TEXT).toContain("/autonomy  show the autonomy level, or lower it");
     expect(BOT_COMMANDS).toContainEqual({ command: "autonomy", description: "Show or lower the autonomy level" });
+  });
+});
+
+describe("taskSummaryText", () => {
+  test("lists changed files and commands, capped", () => {
+    expect(taskSummaryText({ files: [], commands: [] })).toBeUndefined();
+    expect(taskSummaryText({ files: ["src/a.ts"], commands: ["bun test", "git status"] })).toBe("Changed: src/a.ts\nRan: bun test · git status");
+    expect(taskSummaryText({ files: Array.from({ length: 12 }, (_, i) => `f${i}`), commands: [] })).toEndWith(" and 2 more");
+    expect(taskSummaryText({ files: [], commands: Array.from({ length: 10 }, (_, i) => `c${i}`) })).toEndWith(" and 2 more");
+    expect(taskSummaryText({ files: ["a.ts"], commands: ["x\n".repeat(60)] })!.split("\n")[1]!.length).toBeLessThanOrEqual(5 + 80);
   });
 });

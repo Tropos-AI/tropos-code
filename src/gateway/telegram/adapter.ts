@@ -1,4 +1,5 @@
 // src/gateway/telegram/adapter.ts — routes Telegram private chats to agent sessions.
+import { isAbsolute, relative } from "node:path";
 import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/events";
 import { AUTONOMY_LEVELS, type Autonomy } from "../config";
 import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "../errors";
@@ -21,6 +22,7 @@ import {
   splitMessage,
   statusText,
   turnEndNote,
+  taskSummaryText,
   type ToolLine,
 } from "./render";
 
@@ -104,6 +106,10 @@ interface Chat {
   errorSent: boolean;
   /** Learned notices that arrived during a turn: sent after its answer. */
   heldNotices: string[];
+  /** This turn's finished edits and commands, for the summary after the answer. */
+  done: { files: Set<string>; commands: string[]; pending: Map<string, { name: string; input: unknown }> };
+  /** The chat's project folder, to show changed files relative to it. */
+  root: string | undefined;
 }
 
 /** `/Project@MyBot arg` -> `project`. */
@@ -349,6 +355,8 @@ export class TelegramAdapter implements ChannelAdapter {
       asks: new Map(),
       errorSent: false,
       heldNotices: [],
+      done: { files: new Set(), commands: [], pending: new Map() },
+      root: undefined,
     };
     chat.detach = session.attach({
       event: (event) => this.onEvent(chat, event),
@@ -394,11 +402,13 @@ export class TelegramAdapter implements ChannelAdapter {
     switch (event.type) {
       case "tool_start":
         chat.tools.push({ id: event.id, name: event.name, summary: event.summary });
+        if (event.name === "Bash" || event.name === "Edit" || event.name === "Write") chat.done.pending.set(event.id, { name: event.name, input: event.input });
         if (chat.tools.length >= MAX_TOOL_LINES) this.flushTools(chat);
         break;
       case "tool_end": {
         const line = chat.tools.find((l) => l.id === event.id);
         if (line) line.status = event.status;
+        this.recordDone(chat, event.id, event.status);
         break;
       }
       case "assistant": {
@@ -422,6 +432,7 @@ export class TelegramAdapter implements ChannelAdapter {
         break;
       case "turn_end":
         this.flushTools(chat);
+        this.flushSummary(chat);
         this.flushNotices(chat);
         chat.blocked = false;
         this.drain(chat);
@@ -429,6 +440,28 @@ export class TelegramAdapter implements ChannelAdapter {
       default:
         break;
     }
+  }
+
+  /** Only calls that finished count: a denied or failed one changed nothing. */
+  private recordDone(chat: Chat, id: string, status: "done" | "error" | "denied"): void {
+    const call = chat.done.pending.get(id);
+    chat.done.pending.delete(id);
+    if (!call || status !== "done" || typeof call.input !== "object" || call.input === null) return;
+    const input = call.input as { command?: unknown; file_path?: unknown };
+    if (call.name === "Bash" && typeof input.command === "string") chat.done.commands.push(input.command);
+    else if (typeof input.file_path === "string") {
+      const rel = chat.root && isAbsolute(input.file_path) ? relative(chat.root, input.file_path) : input.file_path;
+      chat.done.files.add(rel.startsWith("..") ? input.file_path : rel);
+    }
+  }
+
+  /** Sent once per turn, after the answer and before any learned notices. */
+  private flushSummary(chat: Chat): void {
+    const text = taskSummaryText({ files: [...chat.done.files], commands: chat.done.commands });
+    chat.done.files.clear();
+    chat.done.commands.length = 0;
+    chat.done.pending.clear();
+    if (text) this.sendAll(chat, text);
   }
 
   private flushNotices(chat: Chat): void {
@@ -515,6 +548,13 @@ export class TelegramAdapter implements ChannelAdapter {
 
   private async runTurn(chat: Chat, item: QueueItem): Promise<void> {
     chat.errorSent = false;
+    // Another client's turn may be in flight (busy): keep what it has recorded so far.
+    if (!chat.session.state().busy) {
+      chat.done.files.clear();
+      chat.done.commands.length = 0;
+      chat.done.pending.clear();
+    }
+    chat.root = (await this.projects?.current(`${CHANNEL}:${chat.chatId}`).catch(() => undefined))?.path;
     let reason: TurnEndReason | undefined;
     let busy = false;
     try {
@@ -543,6 +583,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     this.flushTools(chat);
     // A turn that ended without a turn_end event (an error) still releases what it held.
+    this.flushSummary(chat);
     this.flushNotices(chat);
     if (reason) {
       const note = turnEndNote(reason);

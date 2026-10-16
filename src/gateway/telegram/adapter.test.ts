@@ -748,4 +748,68 @@ describe("TelegramAdapter", () => {
     server.pushMessage(CHAT, CHAT, "go");
     await server.waitFor(() => server.textsTo(CHAT).includes("💡 Remembered: x"));
   });
+
+  test("after a turn that edited and ran things, the chat gets one summary between the answer and the learned notices; denied or failed calls aren't in it", async () => {
+    const { projects } = fakeProjects();
+    const { server, session } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    const call = (s: FakeSession, id: string, name: string, input: unknown, status: "done" | "error" | "denied") => {
+      s.emit({ type: "tool_start", id, name, summary: name, input });
+      s.emit({ type: "tool_end", id, name, output: { content: "" } as never, status });
+    };
+    session().onPrompt = async (_t, s) => {
+      call(s, "1", "Edit", { file_path: "/h/workspace/src/a.ts" }, "done");
+      call(s, "2", "Write", { file_path: "/h/workspace/src/a.ts" }, "done");
+      call(s, "3", "Write", { file_path: "/h/workspace/denied.ts" }, "denied");
+      call(s, "4", "Bash", { command: "bun test" }, "done");
+      call(s, "5", "Bash", { command: "rm -rf nope" }, "error");
+      call(s, "6", "Read", { file_path: "/h/workspace/r.ts" }, "done");
+      s.emit({ type: "notice", level: "info", text: "💡 Remembered: x", learned: true });
+      s.emit(assistantEvent("all done"));
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "do it");
+    await server.waitFor(() => server.textsTo(CHAT).includes("💡 Remembered: x"));
+    expect(server.textsTo(CHAT).slice(-3)).toEqual(["all done", "Changed: src/a.ts\nRan: bun test", "💡 Remembered: x"]);
+    expect(server.textsTo(CHAT).filter((t) => t.startsWith("Changed:"))).toHaveLength(1);
+  });
+
+  test("a turn that only answered sends no summary, and the next turn starts clean", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    session().onPrompt = async (_t, s) => {
+      s.emit({ type: "tool_start", id: "1", name: "Bash", summary: "ls", input: { command: "ls" } });
+      s.emit({ type: "tool_end", id: "1", name: "Bash", output: { content: "" } as never, status: "done" });
+      s.emit(assistantEvent("one"));
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "a");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Ran: ls"));
+    session().onPrompt = async (_t, s) => {
+      s.emit(assistantEvent("two"));
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "b");
+    await server.waitFor(() => server.textsTo(CHAT).includes("two"));
+    await Bun.sleep(30);
+    expect(server.textsTo(CHAT).filter((t) => t.startsWith("Ran:"))).toHaveLength(1);
+  });
+
+  test("a summary is still sent when the turn ends without a turn_end event", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    session().onPrompt = async (_t, s) => {
+      s.emit({ type: "tool_start", id: "1", name: "Bash", summary: "ls", input: { command: "make" } });
+      s.emit({ type: "tool_end", id: "1", name: "Bash", output: { content: "" } as never, status: "done" });
+      return "error";
+    };
+    server.pushMessage(CHAT, CHAT, "a");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Ran: make"));
+  });
 });
