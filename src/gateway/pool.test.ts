@@ -8,6 +8,7 @@ import { fakeRuntime } from "../../test/helpers/fake-runtime";
 import { settle } from "../../test/helpers/wait";
 import { WebHost } from "../web/host";
 import { SessionPool, type HostHandle } from "./pool";
+import { UserFacingError } from "./errors";
 import type { ChatSink } from "./types";
 import type { AgentEvent, PermissionPrompt } from "../agent/events";
 
@@ -19,7 +20,7 @@ afterEach(async () => {
   await removeDir(dir);
 });
 
-function setup(steps: Parameters<typeof fakeRuntime>[0] = [], now = { t: 1_000 }) {
+function setup(steps: Parameters<typeof fakeRuntime>[0] = [], now = { t: 1_000 }, over: Parameters<typeof fakeRuntime>[1] = {}) {
   const closed: string[] = [];
   const created: Array<{ key: string; saved: string | undefined }> = [];
   const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
@@ -32,7 +33,7 @@ function setup(steps: Parameters<typeof fakeRuntime>[0] = [], now = { t: 1_000 }
     create: async (key, saved): Promise<HostHandle> => {
       created.push({ key, saved });
       const id = `session-${++n}`;
-      const runtime = fakeRuntime(steps);
+      const runtime = fakeRuntime(steps, over);
       runtimes.set(key, runtime);
       return { host: new WebHost(runtime), sessionId: () => id, close: async () => void closed.push(key) };
     },
@@ -89,6 +90,38 @@ describe("a chat's session", () => {
     await expect(chat.prompt("second")).rejects.toThrow("busy");
     release();
     await running;
+  });
+
+  test("command, learned and undoLearned reach the host; an unknown command rejects with a user-facing error", async () => {
+    const undone: Array<string | undefined> = [];
+    const { pool, runtimes } = setup([() => reply([textBlock("deployed")])], { t: 1_000 }, {
+      expand: async (name, args) => (name === "deploy" ? { ok: true, prompt: `deploy to ${args}` } : { ok: false, reason: `Unknown command /${name}.` }),
+      undoLearned: async (id) => (undone.push(id), { ok: true, summary: "removed note: x" }),
+    });
+    const chat = await pool.open("telegram:1");
+    expect(await chat.command("deploy", "prod")).toBe("end_turn");
+    expect(runtimes.get("telegram:1")!.inputs).toEqual(["/deploy prod"]);
+    const error = await chat.command("nope", "").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect((error as Error).message).toContain("Unknown command /nope.");
+    expect((await chat.learned()).title).toBeDefined();
+    expect(runtimes.get("telegram:1")!.described).toEqual(["learned"]);
+    expect(await chat.undoLearned()).toEqual({ ok: true, summary: "removed note: x" });
+    expect(undone).toEqual([undefined]);
+  });
+
+  test("command is refused with busy during a turn, and undoLearned reports why it couldn't", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { pool } = setup([async () => (await gate, reply([textBlock("late")]))], { t: 1_000 }, { expand: async () => ({ ok: true, prompt: "x" }) });
+    const chat = await pool.open("telegram:1");
+    const running = chat.prompt("first");
+    await Bun.sleep(5);
+    await expect(chat.command("deploy", "")).rejects.toThrow("busy");
+    expect(await chat.undoLearned()).toEqual({ ok: false, reason: "busy" });
+    release();
+    await running;
+    expect(await chat.undoLearned()).toEqual({ ok: false, reason: "Nothing learned to undo." });
   });
 
   test("a permission ask reaches the sink and only allow or deny can answer it", async () => {

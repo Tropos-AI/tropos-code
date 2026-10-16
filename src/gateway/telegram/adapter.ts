@@ -8,6 +8,7 @@ import {
   assistantText,
   BOT_COMMANDS,
   HELP_TEXT,
+  learnedText,
   oneLine,
   parseCallbackData,
   parseProjectCallback,
@@ -76,19 +77,24 @@ class Outbox {
   }
 }
 
+/** One thing waiting to run: a message, or a `/name args` skill or command. */
+type QueueItem = { text: string } | { command: string; args: string };
+
 interface Chat {
   chatId: number;
   senderId: string;
   session: ChatSession;
   detach: () => void;
   outbox: Outbox;
-  queue: string[];
+  queue: QueueItem[];
   running: boolean;
   /** Another client's turn is running on the session: hold the queue until it ends. */
   blocked: boolean;
   tools: ToolLine[];
   asks: Map<number, AskEntry>;
   errorSent: boolean;
+  /** Learned notices that arrived during a turn: sent after its answer. */
+  heldNotices: string[];
 }
 
 /** `/Project@MyBot arg` -> `project`. */
@@ -234,10 +240,15 @@ export class TelegramAdapter implements ChannelAdapter {
 
   private async handleMessage(msg: TgMessage): Promise<void> {
     if (msg.chat.type !== "private" && !this.allowGroups) return;
-    if (!msg.from || msg.from.is_bot || msg.text === undefined) return;
+    if (!msg.from || msg.from.is_bot) return;
     const senderId = String(msg.from.id);
     if (!(await this.pairing.isApproved(CHANNEL, senderId))) {
-      await this.handleStranger(msg.chat.id, senderId);
+      // A stranger's photo or file is not worth a pairing code.
+      if (msg.text !== undefined) await this.handleStranger(msg.chat.id, senderId);
+      return;
+    }
+    if (msg.text === undefined) {
+      await this.reply(msg.chat.id, "I can only read text for now.");
       return;
     }
     const text = msg.text.trim();
@@ -250,10 +261,10 @@ export class TelegramAdapter implements ChannelAdapter {
     const chat = await this.chatFor(msg.chat.id, senderId);
     if (!chat) return;
     if (text.startsWith("/")) {
-      await this.handleCommand(chat, text);
+      await this.handleCommand(chat, senderId, text);
       return;
     }
-    this.enqueue(chat, text);
+    this.enqueue(chat, { text });
   }
 
   private async handleStranger(chatId: number, senderId: string): Promise<void> {
@@ -304,6 +315,7 @@ export class TelegramAdapter implements ChannelAdapter {
       tools: [],
       asks: new Map(),
       errorSent: false,
+      heldNotices: [],
     };
     chat.detach = session.attach({
       event: (event) => this.onEvent(chat, event),
@@ -365,7 +377,11 @@ export class TelegramAdapter implements ChannelAdapter {
         break;
       }
       case "notice":
-        if (event.level === "error") {
+        if (event.learned) {
+          // During a turn it follows the answer; between turns (a review, a save elsewhere) it goes at once.
+          if (chat.running || chat.session.state().busy) chat.heldNotices.push(event.text);
+          else this.sendAll(chat, event.text);
+        } else if (event.level === "error") {
           chat.errorSent = true;
           this.flushTools(chat);
           this.sendAll(chat, `Error: ${oneLine(event.text, 300)}`);
@@ -373,12 +389,18 @@ export class TelegramAdapter implements ChannelAdapter {
         break;
       case "turn_end":
         this.flushTools(chat);
+        this.flushNotices(chat);
         chat.blocked = false;
         this.drain(chat);
         break;
       default:
         break;
     }
+  }
+
+  private flushNotices(chat: Chat): void {
+    const held = chat.heldNotices.splice(0);
+    for (const text of held) this.sendAll(chat, text);
   }
 
   // ---- permission asks ----
@@ -445,8 +467,8 @@ export class TelegramAdapter implements ChannelAdapter {
 
   // ---- prompts and commands ----
 
-  private enqueue(chat: Chat, text: string): void {
-    chat.queue.push(text);
+  private enqueue(chat: Chat, item: QueueItem): void {
+    chat.queue.push(item);
     this.drain(chat);
   }
 
@@ -458,17 +480,17 @@ export class TelegramAdapter implements ChannelAdapter {
     void this.runTurn(chat, next);
   }
 
-  private async runTurn(chat: Chat, text: string): Promise<void> {
+  private async runTurn(chat: Chat, item: QueueItem): Promise<void> {
     chat.errorSent = false;
     let reason: TurnEndReason | undefined;
     let busy = false;
     try {
-      reason = await chat.session.prompt(text);
+      reason = "text" in item ? await chat.session.prompt(item.text) : await chat.session.command(item.command, item.args);
     } catch (e) {
       if (e instanceof Error && e.message === "busy") {
         // Another client's turn is running on this session: keep the text first in line until it ends.
         busy = true;
-        chat.queue.unshift(text);
+        chat.queue.unshift(item);
         chat.blocked = chat.session.state().busy;
       } else if (e instanceof SenderNotApprovedError) {
         // Revoked while this waited in the queue: nothing more of theirs runs, and nothing is said.
@@ -477,7 +499,8 @@ export class TelegramAdapter implements ChannelAdapter {
         return;
       } else {
         this.log("prompt failed", e);
-        this.sendAll(chat, e instanceof UserFacingError ? e.message : "Something went wrong running that. Try again, or send /new.");
+        const unknown = "command" in item && e instanceof UserFacingError && /Unknown command/.test(e.message);
+        this.sendAll(chat, unknown ? `Unknown command.\n${HELP_TEXT}` : e instanceof UserFacingError ? e.message : "Something went wrong running that. Try again, or send /new.");
       }
     }
     chat.running = false;
@@ -486,6 +509,8 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
     this.flushTools(chat);
+    // A turn that ended without a turn_end event (an error) still releases what it held.
+    this.flushNotices(chat);
     if (reason) {
       const note = turnEndNote(reason);
       if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
@@ -574,7 +599,7 @@ export class TelegramAdapter implements ChannelAdapter {
     return `Switched to ${next.name} (${next.id}). Your next message continues there.`;
   }
 
-  private async handleCommand(chat: Chat, text: string): Promise<void> {
+  private async handleCommand(chat: Chat, senderId: string, text: string): Promise<void> {
     const command = (text.split(/\s+/)[0] ?? "").slice(1).split("@")[0]?.toLowerCase();
     switch (command) {
       case "stop":
@@ -598,8 +623,33 @@ export class TelegramAdapter implements ChannelAdapter {
       case "start":
         this.sendAll(chat, HELP_TEXT);
         break;
-      default:
-        this.sendAll(chat, `Unknown command.\n${HELP_TEXT}`);
+      case "learned":
+        await this.handleLearned(chat, senderId, text.split(/\s+/)[1]?.toLowerCase());
+        break;
+      default: {
+        // Anything else may be one of the user's skills or commands; the session knows.
+        const args = text.replace(/^\S+\s*/, "").trim();
+        this.enqueue(chat, { command, args });
+      }
+    }
+  }
+
+  /** `/learned` and `/learned undo`: what the agent saved on its own. Only the owner's chat may see or change it. */
+  private async handleLearned(chat: Chat, senderId: string, arg: string | undefined): Promise<void> {
+    if (!(await this.pairing.isOwner(CHANNEL, senderId))) {
+      this.sendAll(chat, "Only the owner can see what I've learned.");
+      return;
+    }
+    try {
+      if (arg === "undo") {
+        const out = await chat.session.undoLearned();
+        this.sendAll(chat, out.ok ? `Took back: ${out.summary}` : out.reason);
+      } else {
+        this.sendAll(chat, learnedText(await chat.session.learned()));
+      }
+    } catch (e) {
+      this.log("learned failed", e);
+      this.sendAll(chat, "Could not read that right now.");
     }
   }
 }

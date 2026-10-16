@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { callbackData, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, splitMessage, statusText } from "./render";
+import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, splitMessage, statusText } from "./render";
 
 describe("splitMessage", () => {
   test("short text is one part", () => {
@@ -62,5 +62,28 @@ describe("permissionView", () => {
   });
   test("a body that fits is complete", () => {
     expect(permissionView(bash("Write", { preview: { header: "a.ts", text: "const a = 1;" } })).complete).toBe(true);
+  });
+});
+
+describe("learnedText", () => {
+  const item = (n: number) => ({ key: `k${n}`, label: `note: fact ${n}`, hint: "saved while we talked", aside: "2026-10-16 09:00" });
+
+  test("shows up to 10 items and the undo hint, or the panel's empty text", () => {
+    const panel = { title: "Learned", sections: [{ items: Array.from({ length: 12 }, (_, i) => item(i)) }], empty: "Nothing learned yet." };
+    const lines = learnedText(panel).split("\n");
+    expect(lines).toHaveLength(11);
+    expect(lines[0]).toBe("• note: fact 0 (saved while we talked, 2026-10-16 09:00)");
+    expect(lines[9]).toBe("• note: fact 9 (saved while we talked, 2026-10-16 09:00)");
+    expect(lines[10]).toBe("Send /learned undo to take back the newest.");
+    expect(learnedText(panel, 2).split("\n")).toHaveLength(3);
+    expect(learnedText({ title: "Learned", sections: [], empty: "Nothing learned yet." })).toBe("Nothing learned yet.");
+  });
+});
+
+describe("help", () => {
+  test("lists /learned and the skill and command shortcut, and the menu has /learned", () => {
+    expect(HELP_TEXT).toContain("/learned  what I saved; /learned undo takes back the newest");
+    expect(HELP_TEXT).toContain("/<name>  run one of your skills or commands");
+    expect(BOT_COMMANDS).toContainEqual({ command: "learned", description: "What I learned, with undo" });
   });
 });

@@ -1,9 +1,10 @@
 // src/gateway/pool.ts — chat key → session. A session is a WebHost (src/web/host.ts) seen through ChatSession.
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { PermissionAnswer } from "../agent/events";
-import type { ServerMessage } from "../web/protocol";
-import type { WebHost } from "../web/host";
+import type { PermissionAnswer, TurnEndReason } from "../agent/events";
+import { BUSY_ERROR, type ServerMessage } from "../web/protocol";
+import { RpcError, type WebHost } from "../web/host";
+import { UserFacingError } from "./errors";
 import type { ChatSession, ChatSink, SessionProvider } from "./types";
 
 /** What the pool needs from whoever builds a session (the daemon builds the real one). */
@@ -226,29 +227,54 @@ export class SessionPool implements SessionProvider {
     const touch = (entry: Entry) => {
       entry.lastActive = this.now();
     };
+    const turn = async (params: { text: string; command?: { name: string; args: string } }): Promise<TurnEndReason> => {
+      chat.waiting++;
+      let entry: Entry;
+      try {
+        entry = await this.live(key);
+      } catch (e) {
+        if (chat.waiting === 1) chat.stopRequested = false;
+        throw e;
+      } finally {
+        chat.waiting--;
+      }
+      // /stop arrived while the session was being built: the turn it would have stopped never starts.
+      if (chat.stopRequested) {
+        chat.stopRequested = false;
+        return "aborted";
+      }
+      touch(entry);
+      try {
+        return await entry.handle.host.call("prompt", params);
+      } finally {
+        touch(entry);
+      }
+    };
     return {
       key,
-      prompt: async (text) => {
-        chat.waiting++;
-        let entry: Entry;
+      prompt: (text) => turn({ text }),
+      command: async (name, args) => {
         try {
-          entry = await this.live(key);
+          return await turn({ text: "", command: { name, args } });
         } catch (e) {
-          if (chat.waiting === 1) chat.stopRequested = false;
+          // The host's reason (unknown name, a hook that refused) is for the person at the chat; "busy" stays as is.
+          if (e instanceof RpcError && e.message !== BUSY_ERROR) throw new UserFacingError(e.message);
           throw e;
-        } finally {
-          chat.waiting--;
         }
-        // /stop arrived while the session was being built: the turn it would have stopped never starts.
-        if (chat.stopRequested) {
-          chat.stopRequested = false;
-          return "aborted";
-        }
+      },
+      learned: async () => {
+        const entry = await this.live(key);
+        touch(entry);
+        return entry.handle.host.call("panel", "learned");
+      },
+      undoLearned: async () => {
+        const entry = await this.live(key);
         touch(entry);
         try {
-          return await entry.handle.host.call("prompt", { text });
-        } finally {
-          touch(entry);
+          return { ok: true, ...(await entry.handle.host.call("learned.undo", undefined)) };
+        } catch (e) {
+          if (e instanceof RpcError) return { ok: false, reason: e.message };
+          throw e;
         }
       },
       interrupt: () => {

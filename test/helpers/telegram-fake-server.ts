@@ -49,6 +49,12 @@ export class FakeTelegramServer {
     this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: opts.chatType ?? "private" }, from: { id: fromId, first_name: "T" }, text, date: 1 } });
   }
 
+  /** A message without text (a photo, a voice note or a file), as Telegram sends it. */
+  pushNonText(chatId: number, fromId: number, field: "photo" | "voice" | "document"): void {
+    const media = field === "photo" ? [{ file_id: "p", width: 1, height: 1 }] : { file_id: "f" };
+    this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: "private" }, from: { id: fromId, first_name: "T" }, [field]: media, date: 1 } });
+  }
+
   pushCallback(fromId: number, chatId: number, messageId: number, data: string): void {
     this.push({ callback_query: { id: `cb${this.nextUpdateId}`, from: { id: fromId, first_name: "T" }, message: { message_id: messageId, chat: { id: chatId, type: "private" } }, data } });
   }

@@ -1,6 +1,7 @@
 // test/helpers/telegram-fakes.ts — in-memory fakes of the gateway contracts, for adapter tests.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../../src/agent/events";
 import type { SessionState } from "../../src/web/protocol";
+import type { PanelData } from "../../src/ui/runtime";
 import type { ChatSession, ChatSink, Pairing, PairedSender, PairingChallenge, SessionProvider } from "../../src/gateway/types";
 
 export function assistantEvent(text: string): AgentEvent {
@@ -9,6 +10,7 @@ export function assistantEvent(text: string): AgentEvent {
 
 export class FakeSession implements ChatSession {
   readonly prompts: string[] = [];
+  readonly commands: { name: string; args: string }[] = [];
   readonly answers: { id: number; answer: PermissionAnswer }[] = [];
   interrupted = 0;
   cleared = 0;
@@ -20,6 +22,16 @@ export class FakeSession implements ChatSession {
     s.emit({ type: "turn_end", reason: "end_turn" });
     return "end_turn";
   };
+  /** What a command does; the default echoes. Throw a UserFacingError to simulate an unknown command. */
+  onCommand: (name: string, args: string, session: FakeSession) => Promise<TurnEndReason> = async (name, args, s) => {
+    s.emit(assistantEvent(`ran /${name} ${args}`.trim()));
+    s.emit({ type: "turn_end", reason: "end_turn" });
+    return "end_turn";
+  };
+  /** What /learned shows, and what /learned undo answers. */
+  learnedPanel: PanelData = { title: "Learned", sections: [], empty: "Nothing learned yet." };
+  undoResult: { ok: true; summary: string } | { ok: false; reason: string } = { ok: false, reason: "Nothing to undo." };
+  undos = 0;
   stateValue: SessionState = { model: "test-model", effort: "medium", mode: "default", busy: false, contextTokens: 0, totalCostUsd: 0.0123, turns: 2 } as SessionState;
 
   constructor(readonly key: string) {}
@@ -27,6 +39,17 @@ export class FakeSession implements ChatSession {
   async prompt(text: string): Promise<TurnEndReason> {
     this.prompts.push(text);
     return this.onPrompt(text, this);
+  }
+  async command(name: string, args: string): Promise<TurnEndReason> {
+    this.commands.push({ name, args });
+    return this.onCommand(name, args, this);
+  }
+  async learned(): Promise<PanelData> {
+    return this.learnedPanel;
+  }
+  async undoLearned(): Promise<{ ok: true; summary: string } | { ok: false; reason: string }> {
+    this.undos++;
+    return this.undoResult;
   }
   interrupt(): void {
     this.interrupted++;

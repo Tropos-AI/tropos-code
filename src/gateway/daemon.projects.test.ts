@@ -83,6 +83,29 @@ async function pairChat() {
 const lastText = () => server.textsTo(CHAT).at(-1) ?? "";
 const sessionsFile = async () => JSON.parse(await readFile(join(home, "gateway", "sessions.json"), "utf8")) as Record<string, string>;
 
+describe("learning in the owner's chat", () => {
+  test("the owner's chat saves a memory without asking and gets '💡 Remembered: …' after the answer", async () => {
+    const gw = startGateway([
+      () => reply([toolUseBlock("m1", "Memory", { target: "user", action: "add", content: "prefers bun" })], "tool_use"),
+      () => reply([textBlock("Noted.")]),
+    ]);
+    await server.waitFor(() => server.commands.length > 0);
+    expect(server.commands.map((c) => c.command)).toContain("learned");
+    await pairChat();
+
+    server.pushMessage(CHAT, CHAT, "remember that I prefer bun");
+    await server.waitFor(() => server.textsTo(CHAT).includes("💡 Remembered: prefers bun"));
+    const texts = server.textsTo(CHAT);
+    // No permission question, and the notice follows the answer.
+    expect(server.sent.some((m) => m.replyMarkup)).toBe(false);
+    expect(texts.indexOf("Noted.")).toBeGreaterThan(-1);
+    expect(texts.indexOf("💡 Remembered: prefers bun")).toBeGreaterThan(texts.indexOf("Noted."));
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+});
+
 describe("projects in chats", () => {
   test("a chat starts in the default project, /project lists, /project <id> switches, and each project keeps its session", async () => {
     await mkdir(home, { recursive: true });

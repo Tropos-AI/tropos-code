@@ -5,6 +5,7 @@ import type { Project } from "../projects";
 import { TelegramApi } from "./api";
 import { TelegramAdapter } from "./adapter";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
+import { HELP_TEXT } from "./render";
 import { assistantEvent, FakePairing, FakeSession, FakeSessions } from "../../../test/helpers/telegram-fakes";
 
 const CHAT = 42;
@@ -488,5 +489,132 @@ describe("TelegramAdapter", () => {
     expect(cmds.map((c) => c.command)).toContain("project");
     server.pushMessage(CHAT, CHAT, "/start");
     await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("/project")));
+  });
+
+  test("a photo from an approved sender gets one plain reply; a stranger's photo gets nothing", async () => {
+    const { server, sessions, pairing } = await setup();
+    server.pushNonText(CHAT, CHAT, "photo");
+    await server.waitFor(() => server.textsTo(CHAT).includes("I can only read text for now."));
+    server.pushNonText(CHAT, CHAT, "voice");
+    await server.waitFor(() => server.textsTo(CHAT).length >= 2);
+    expect(server.textsTo(CHAT)).toEqual(["I can only read text for now.", "I can only read text for now."]);
+    expect(sessions.opens).toBe(0);
+
+    const stranger = await setup({ approved: false });
+    stranger.server.pushNonText(CHAT, CHAT, "document");
+    stranger.server.pushMessage(CHAT, CHAT, "hi");
+    await stranger.server.waitFor(() => stranger.server.sent.length >= 1);
+    // Only the text message got the pairing reply; the file got none.
+    expect(stranger.pairing.challenges).toHaveLength(1);
+    expect(stranger.server.sent).toHaveLength(1);
+    expect(pairing.challenges).toHaveLength(0);
+  });
+
+  test("an unknown /name goes to the session as a command with its args", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "/deploy prod");
+    await server.waitFor(() => session()?.commands.length === 1);
+    expect(session().commands[0]).toEqual({ name: "deploy", args: "prod" });
+    expect(session().prompts).toEqual([]);
+    await server.waitFor(() => server.textsTo(CHAT).includes("ran /deploy prod"));
+    server.pushMessage(CHAT, CHAT, "/Deploy@MyBot");
+    await server.waitFor(() => session().commands.length === 2);
+    expect(session().commands[1]).toEqual({ name: "deploy", args: "" });
+  });
+
+  test("a command the session doesn't know shows the help", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => session());
+    session().onCommand = async (name) => {
+      throw new UserFacingError(`/${name}: Unknown command /${name}.`);
+    };
+    server.pushMessage(CHAT, CHAT, "/nope");
+    await server.waitFor(() => server.textsTo(CHAT).includes(`Unknown command.\n${HELP_TEXT}`));
+  });
+
+  test("a command that fails for another reason says why, and a busy session keeps it queued", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => session());
+    session().onCommand = async () => {
+      throw new UserFacingError("/deploy: a PreToolUse hook refused it");
+    };
+    server.pushMessage(CHAT, CHAT, "/deploy");
+    await server.waitFor(() => server.textsTo(CHAT).includes("/deploy: a PreToolUse hook refused it"));
+
+    let calls = 0;
+    session().busy = true;
+    session().onCommand = async (name, args, s) => {
+      if (++calls === 1) throw new Error("busy");
+      s.emit(assistantEvent(`ran /${name} ${args}`));
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "/deploy later");
+    await server.waitFor(() => calls === 1);
+    session().busy = false;
+    session().pushState();
+    await server.waitFor(() => server.textsTo(CHAT).includes("ran /deploy later"));
+  });
+
+  test("/learned lists the latest saves and /learned undo takes back the newest, for the owner", async () => {
+    const { server, session, pairing } = await setup();
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => session());
+    session().learnedPanel = {
+      title: "Learned",
+      sections: [{ items: [{ key: "1", label: "note: you deploy on Fridays", hint: "saved while we talked", aside: "2026-10-16 09:00" }] }],
+    };
+    server.pushMessage(CHAT, CHAT, "/learned");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("• note: you deploy on Fridays")));
+    expect(server.textsTo(CHAT).at(-1)).toBe("• note: you deploy on Fridays (saved while we talked, 2026-10-16 09:00)\nSend /learned undo to take back the newest.");
+
+    session().undoResult = { ok: true, summary: "removed note: you deploy on Fridays" };
+    server.pushMessage(CHAT, CHAT, "/learned undo");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("removed note: you deploy on Fridays") && !t.startsWith("•")));
+    expect(session().undos).toBe(1);
+
+    session().undoResult = { ok: false, reason: "Nothing learned to undo." };
+    server.pushMessage(CHAT, CHAT, "/learned undo");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Nothing learned to undo."));
+    // Neither reached the model.
+    expect(session().prompts).toEqual(["hello"]);
+    expect(session().commands).toEqual([]);
+  });
+
+  test("/learned from an approved guest is refused", async () => {
+    const { server, session, pairing } = await setup();
+    pairing.owners.add("telegram:1");
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => session());
+    server.pushMessage(CHAT, CHAT, "/learned");
+    server.pushMessage(CHAT, CHAT, "/learned undo");
+    await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned.").length === 2);
+    expect(session().undos).toBe(0);
+    expect(session().commands).toEqual([]);
+  });
+
+  test("a learned notice during a turn is sent after the answer; one between turns at once; other info notices stay silent", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    session().onPrompt = async (_t, s) => {
+      s.emit({ type: "notice", level: "info", text: "💡 Remembered: you deploy on Fridays", learned: true });
+      s.emit({ type: "notice", level: "info", text: "resumed session" });
+      s.emit(assistantEvent("noted"));
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "remember this");
+    await server.waitFor(() => server.textsTo(CHAT).includes("💡 Remembered: you deploy on Fridays"));
+    expect(server.textsTo(CHAT).slice(-2)).toEqual(["noted", "💡 Remembered: you deploy on Fridays"]);
+
+    session().emit({ type: "notice", level: "info", text: "💡 Learned: a skill", learned: true });
+    await server.waitFor(() => server.textsTo(CHAT).includes("💡 Learned: a skill"));
+    await Bun.sleep(30);
+    expect(server.textsTo(CHAT).some((t) => t.includes("resumed session"))).toBe(false);
+    // Each was sent once.
+    expect(server.textsTo(CHAT).filter((t) => t.startsWith("💡"))).toHaveLength(2);
   });
 });

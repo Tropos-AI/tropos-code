@@ -56,6 +56,16 @@ class FakeSession implements ChatSession {
       this.active--;
     }
   }
+  // Scheduled runs never use a chat's commands or /learned.
+  command(): Promise<TurnEndReason> {
+    throw new Error("not used");
+  }
+  learned(): Promise<never> {
+    throw new Error("not used");
+  }
+  undoLearned(): Promise<never> {
+    throw new Error("not used");
+  }
   interrupt() {
     this.interrupted++;
   }

@@ -1,6 +1,7 @@
 // src/gateway/telegram/render.ts — pure functions turning agent events into Telegram text (plain text, no parse_mode).
 import type { PermissionPrompt } from "../../agent/events";
 import type { Message } from "../../api/model";
+import type { PanelData } from "../../ui/runtime";
 import type { SessionState } from "../../web/protocol";
 import type { TurnEndReason } from "../../agent/events";
 import type { InlineKeyboard } from "./api";
@@ -158,12 +159,26 @@ export const HELP_TEXT = [
   "/new  start a fresh session",
   "/status  project, model, mode and cost",
   "/project  show the project, or /project <id> to switch",
+  "/learned  what I saved; /learned undo takes back the newest",
+  "/<name>  run one of your skills or commands",
 ].join("\n");
+
+/** `/learned`: the newest saves, one line each, with how to take the latest back. */
+export function learnedText(panel: PanelData, limit = 10): string {
+  const items = panel.sections.flatMap((section) => section.items).slice(0, limit);
+  if (items.length === 0) return panel.empty ?? "Nothing learned yet.";
+  const lines = items.map((item) => {
+    const detail = [item.hint, item.aside].filter(Boolean).join(", ");
+    return `• ${oneLine(item.label, 200)}${detail ? ` (${detail})` : ""}`;
+  });
+  return [...lines, "Send /learned undo to take back the newest."].join("\n");
+}
 
 export const BOT_COMMANDS = [
   { command: "stop", description: "Stop the running turn" },
   { command: "new", description: "Start a fresh session" },
   { command: "status", description: "Project, model, mode and cost" },
   { command: "project", description: "Show or switch the project" },
+  { command: "learned", description: "What I learned, with undo" },
   { command: "start", description: "Show help" },
 ];

@@ -1,5 +1,6 @@
 // src/gateway/types.ts — the contracts between the gateway's parts. Type-only: no runtime imports.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
+import type { PanelData } from "../ui/runtime";
 import type { SessionState } from "../web/protocol";
 import type { GatewayConfig } from "./config";
 import type { Project, ProjectSource } from "./projects";
@@ -22,6 +23,15 @@ export interface ChatSession {
   readonly key: string;
   /** Runs one turn. Rejects with an Error whose message is "busy" while another turn runs. */
   prompt(text: string): Promise<TurnEndReason>;
+  /**
+   * Runs `/name args` (a custom command or user-invocable skill) as one turn. Rejects with "busy" like `prompt`, and
+   * with a UserFacingError carrying the reason when the command can't run (an unknown name, say).
+   */
+  command(name: string, args: string): Promise<TurnEndReason>;
+  /** What the agent has learned, for `/learned`. */
+  learned(): Promise<PanelData>;
+  /** Takes back the newest learned change. */
+  undoLearned(): Promise<{ ok: true; summary: string } | { ok: false; reason: string }>;
   /** Stops the running turn, if any. */
   interrupt(): void;
   /** Starts a fresh session for this chat. */
