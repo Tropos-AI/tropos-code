@@ -131,6 +131,8 @@ describe("chatRole", () => {
   test("project keys are scheduled; the owner's private chat is owner; others and groups are guests", async () => {
     const pairing = { isOwner: async (c: string, s: string) => c === "telegram" && s === "7" };
     expect(await chatRole("project:app", pairing)).toBe("scheduled");
+    // A scheduled run of a job made in a guest's chat runs as a guest.
+    expect(await chatRole("project:app:guest", pairing)).toBe("guest");
     expect(await chatRole("telegram:7", pairing)).toBe("owner");
     expect(await chatRole("telegram:8", pairing)).toBe("guest");
     expect(await chatRole("telegram:-1007", pairing)).toBe("guest");

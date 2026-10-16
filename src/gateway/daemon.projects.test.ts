@@ -345,6 +345,27 @@ describe("gateway services", () => {
     expect(fake.log).toEqual(["start", "stop"]);
   });
 
+  test("an untrusted scheduled session is separate and recorded as a guest's; a plain one as scheduled", async () => {
+    const fake = fakeService();
+    const gw = startGateway([() => reply([textBlock("guest job output")]), () => reply([textBlock("owner job output")])], [fake.service]);
+    await server.waitFor(() => fake.log.includes("start"));
+    const untrusted = await fake.deps().openSession("default", { untrusted: true });
+    expect(await untrusted.prompt("run the guest's job")).toBe("end_turn");
+    const plain = await fake.deps().openSession("default");
+    expect(await plain.prompt("run the owner's job")).toBe("end_turn");
+    const ids = await sessionsFile();
+    expect(Object.keys(ids).sort()).toEqual(["project:default:guest@default", "project:default@default"]);
+    const dir = join(home, "projects", (await readdir(join(home, "projects")))[0]!);
+    const roleOf = async (key: string) => JSON.parse((await readFile(join(dir, `${ids[key]}.jsonl`), "utf8")).split("\n")[0]!).role;
+    expect(await roleOf("project:default:guest@default")).toBe("guest");
+    expect(await roleOf("project:default@default")).toBe("scheduled");
+    expect(await fake.deps().ownerChat!()).toBeUndefined();
+    await pairChat();
+    expect(await fake.deps().ownerChat!()).toBe(`telegram:${CHAT}`);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("delivery splits at Telegram's 4096 characters", async () => {
     const fake = fakeService();
     const gw = startGateway([], [fake.service]);

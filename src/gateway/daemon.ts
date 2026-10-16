@@ -35,6 +35,7 @@ import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./route
 import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { ownerCronTool } from "../tools/cron/owner-cron";
+import { ownerChatKey } from "./pairing";
 import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
@@ -261,7 +262,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     const chatKey = parseSessionKey(key)?.chatKey;
     if (chatKey && !chatKey.startsWith("project:")) {
       // The owner's chats see every job; a guest's chat only its own.
-      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, seeAll: role === "owner", defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
+      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, seeAll: role === "owner", defaultDeliver: () => chatKey, origin: chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
     }
     let session: SessionStore;
     let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
@@ -453,11 +454,13 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     config,
     projects: source,
     deliver,
-    openSession: async (target) => {
+    openSession: async (target, opts) => {
       if (target.includes(":")) return sessions.open(target);
       if (!(await source.get(target))) throw new UserFacingError(`There is no project "${target}".`);
-      return pool.open(sessionKey(`project:${target}`, target));
+      // A guest's job gets a session of its own that runs (and is recorded) as a guest's.
+      return pool.open(sessionKey(`project:${target}${opts?.untrusted ? ":guest" : ""}`, target));
     },
+    ownerChat: () => ownerChatKey(run.pairing),
   };
 
   state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };

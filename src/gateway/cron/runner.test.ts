@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { PermissionAnswer, PermissionPrompt, TurnEndReason } from "../../agent/events";
 import { assistantEvent } from "../../../test/helpers/telegram-fakes";
 import type { ChatSession, ChatSink } from "../types";
-import { allowedByJob, createJobRunner } from "./runner";
+import { allowedByJob, createJobRunner, untrustedJob } from "./runner";
 import type { CronJob } from "./types";
 
 const job = (over: Partial<CronJob> = {}): CronJob => ({
@@ -144,5 +144,33 @@ describe("createJobRunner", () => {
     const run = runnerFor(session);
     await Promise.all([run(job({ id: "a" }), new AbortController().signal), run(job({ id: "b" }), new AbortController().signal)]);
     expect(session.maxActive).toBe(1);
+  });
+});
+
+describe("untrusted jobs", () => {
+  test("a job from a chat other than the owner's (or from no known owner) is untrusted; the owner's and local ones are not", () => {
+    const owner = "telegram:1";
+    expect(untrustedJob(job({ origin: "telegram:2" }), owner)).toBe(true);
+    expect(untrustedJob(job({ origin: "telegram:2", deliver: "telegram:1" }), owner)).toBe(true);
+    expect(untrustedJob(job({ origin: "telegram:1" }), owner)).toBe(false);
+    expect(untrustedJob(job({ origin: "telegram:1" }), undefined)).toBe(true);
+    // Older jobs carry no origin: a chat they deliver to stands in for it.
+    expect(untrustedJob(job({ deliver: "telegram:2" }), owner)).toBe(true);
+    expect(untrustedJob(job({ deliver: "telegram:1" }), owner)).toBe(false);
+    expect(untrustedJob(job(), owner)).toBe(false);
+  });
+
+  test("the runner opens an untrusted job's session as untrusted", async () => {
+    const opened: Array<{ untrusted?: boolean }> = [];
+    const session = new FakeSession();
+    const run = createJobRunner({
+      home: "/h",
+      openSession: async (_p, opts) => (opened.push(opts ?? {}), session),
+      projectPath: async () => "/w",
+      ownerChat: async () => "telegram:1",
+    });
+    await run(job({ origin: "telegram:2" }), new AbortController().signal);
+    await run(job({ origin: "telegram:1" }), new AbortController().signal);
+    expect(opened).toEqual([{ untrusted: true }, { untrusted: false }]);
   });
 });

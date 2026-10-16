@@ -149,3 +149,12 @@ test("without a default target a new job delivers nowhere", async () => {
   await tool.run({ action: "add", name: "n", schedule: "every 5m", prompt: "p" }, makeToolContext());
   expect(store.list()[0]!.deliver).toBe("none");
 });
+
+test("a job made in a chat records that chat as its origin, even when it delivers nowhere", async () => {
+  const tool = createCronTool({ store, defaultDeliver: () => "telegram:9", origin: "telegram:9" });
+  await tool.run({ action: "add", name: "quiet", schedule: "every 5m", prompt: "p", deliverTo: "none" }, makeToolContext());
+  expect(store.list()[0]).toMatchObject({ deliver: "none", origin: "telegram:9" });
+  // The owner's terminal and dashboard have no chat: no origin.
+  await createCronTool({ store }).run({ action: "add", name: "local", schedule: "every 5m", prompt: "p" }, makeToolContext());
+  expect(store.list().find((j) => j.name === "local")!.origin).toBeUndefined();
+});

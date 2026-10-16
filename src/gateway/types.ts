@@ -97,9 +97,12 @@ export interface GatewayServiceDeps {
   projects: ProjectSource;
   /**
    * A session to run something in. A chat key (`telegram:123`) is that chat's session in its current project; a
-   * project id (`my-app`) is a session of its own in that project, which the caller may `clear()` for a fresh start.
+   * project id (`my-app`) is a session of its own in that project, which the caller may `clear()` for a fresh start;
+   * `untrusted` gives it a separate session that runs (and is recorded) as a guest's.
    */
-  openSession(target: string): Promise<ChatSession>;
+  openSession(target: string, opts?: { untrusted?: boolean }): Promise<ChatSession>;
+  /** The owner's chat key, when there is an owner. */
+  ownerChat?(): Promise<string | undefined>;
   /** Sends text to a chat key through the channel that owns it; rejects when no channel can. */
   deliver(target: string, text: string): Promise<void>;
 }

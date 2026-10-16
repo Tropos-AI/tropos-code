@@ -37,6 +37,8 @@ export interface CronToolOptions {
   defaultDeliver?: () => string | undefined;
   /** The owner's sessions: every job is visible and changeable, and `defaultDeliver` only supplies the default target. */
   seeAll?: boolean;
+  /** The chat the tool is used in, recorded on new jobs: a job made in a guest's chat runs as untrusted. */
+  origin?: string;
   /** Starts a job now without waiting for it (the daemon's scheduler); `run` is refused when absent. */
   runNow?: (id: string) => Promise<RunRecord>;
 }
@@ -146,6 +148,7 @@ export function createCronTool(opts: CronToolOptions) {
               project: input.project ?? "default",
               deliver: target(input),
               createdBy: "agent",
+              ...(opts.origin ? { origin: opts.origin } : {}),
               ...(input.allowCommands?.length ? { allowCommands: input.allowCommands } : {}),
             });
             const next = job.nextRunAt ? ` First run ${new Date(job.nextRunAt).toISOString()}.` : "";

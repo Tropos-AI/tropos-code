@@ -6,8 +6,13 @@ import { assistantText } from "../telegram/render";
 import type { CronDeps, CronJob } from "./types";
 
 export interface JobRunnerDeps {
-  /** A session in a project (a project id) that the runner may `clear()` for a fresh start. */
-  openSession(projectId: string): Promise<ChatSession>;
+  /**
+   * A session in a project (a project id) that the runner may `clear()` for a fresh start; an untrusted one (a job
+   * from a guest's chat) is recorded as a guest's, so its output never reaches the owner's sessions through search.
+   */
+  openSession(projectId: string, opts?: { untrusted?: boolean }): Promise<ChatSession>;
+  /** The owner's chat key, when there is an owner. Without it, every job made in a chat is untrusted. */
+  ownerChat?(): Promise<string | undefined>;
   /** The project's directory, for the permission context; undefined when the project is gone. */
   projectPath(projectId: string): Promise<string | undefined>;
   home: string;
@@ -25,6 +30,12 @@ export function allowedByJob(prompt: PermissionPrompt, job: CronJob, cwd: string
   return decide({ toolName: "Bash", kind: "exec", command, paths: [] }, { mode: "default", rules, cwd, home, allowedDirs: [cwd], confine: true }).behavior === "allow";
 }
 
+/** A job made in (or, for older jobs without an origin, delivering to) a chat that isn't the owner's. */
+export function untrustedJob(job: CronJob, ownerChat: string | undefined): boolean {
+  const from = job.origin ?? (job.deliver !== "none" ? job.deliver : undefined);
+  return from !== undefined && from !== ownerChat;
+}
+
 export function createJobRunner(deps: JobRunnerDeps): CronDeps["runJob"] {
   // Two jobs of one project share its session, so they take turns.
   const tails = new Map<string, Promise<unknown>>();
@@ -32,7 +43,7 @@ export function createJobRunner(deps: JobRunnerDeps): CronDeps["runJob"] {
   const runOnce = async (job: CronJob, signal: AbortSignal): Promise<{ text: string }> => {
     const cwd = await deps.projectPath(job.project);
     if (!cwd) throw new Error(`The project "${job.project}" doesn't exist any more.`);
-    const session = await deps.openSession(job.project);
+    const session = await deps.openSession(job.project, { untrusted: untrustedJob(job, await deps.ownerChat?.()) });
     await session.clear();
     let last = "";
     const detach = session.attach({

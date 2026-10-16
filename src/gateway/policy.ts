@@ -26,9 +26,10 @@ const WITHHELD_TOOLS = new Set(["WebFetch"]);
  */
 const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["SessionSearch", ...STORE_TOOLS]);
 
-/** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups included). */
+/** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups and guests' jobs included). */
 export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner">): Promise<SessionRole> {
-  if (chatKey.startsWith("project:")) return "scheduled";
+  // project:<id>:guest runs a job made in a guest's chat: its text is a guest's (src/gateway/cron/runner.ts).
+  if (chatKey.startsWith("project:")) return chatKey.endsWith(":guest") ? "guest" : "scheduled";
   const sender = privateTelegramSender(chatKey);
   return sender !== undefined && (await pairing.isOwner("telegram", sender)) ? "owner" : "guest";
 }

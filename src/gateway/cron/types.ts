@@ -16,6 +16,8 @@ export const jobSchema = z.object({
   enabled: z.boolean().default(true),
   createdAt: z.number(),
   createdBy: z.enum(["user", "agent"]).default("user"),
+  /** The chat a job was made in (a chat key); absent for the owner's terminal and dashboard, and older jobs. */
+  origin: z.string().optional(),
   lastRunAt: z.number().optional(),
   lastStatus: z.enum(["ok", "error", "timeout", "skipped", "missed"]).optional(),
   nextRunAt: z.number().optional(),

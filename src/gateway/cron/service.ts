@@ -18,7 +18,8 @@ export function createCronGatewayService(opts: CronServiceOptions & { log?: (mes
         home: deps.home,
         runJob: createJobRunner({
           home: deps.home,
-          openSession: (projectId) => deps.openSession(projectId),
+          openSession: (projectId, opts) => deps.openSession(projectId, opts),
+          ownerChat: deps.ownerChat,
           projectPath: async (projectId) => (await deps.projects.get(projectId))?.path,
         }),
         deliver: (target, text) => deps.deliver(target, text),
