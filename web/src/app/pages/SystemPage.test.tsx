@@ -10,7 +10,7 @@ withDom();
 const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
 const { SystemPage } = await import("@/app/pages/SystemPage");
 
-const UPDATE: UpdateStatus = { current: "0.4.0", channel: "latest", latest: "0.5.0", available: true, checkedAt: "2026-10-14T10:00:00Z", autoUpdates: false };
+const UPDATE: UpdateStatus = { current: "0.4.1", channel: "latest", latest: "0.5.0", available: true, checkedAt: "2026-10-14T10:00:00Z", autoUpdates: false };
 const BACKUP: BackupInfo = { name: "tropos-2026-10-14.tar.gz", path: "/b/x", size: 2_500_000, createdAt: "2026-10-14T10:00:00Z", secrets: false, sessions: true };
 
 function handlers(over: AdminHandlers = {}): AdminHandlers {
@@ -68,7 +68,7 @@ describe("SystemPage service", () => {
     await mountAdmin(SystemPage, handlers({ "service.status": () => { throw new Error("Not available in the demo."); } }));
     await screen.findByText("Couldn't load the service status");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(await screen.findByText("v0.4.0")).toBeTruthy();
+    expect(await screen.findByText("v0.4.1")).toBeTruthy();
   });
 });
 
@@ -87,7 +87,7 @@ describe("SystemPage sandbox", () => {
 describe("SystemPage updates", () => {
   test("shows current vs latest; Update now confirms, runs and explains the restart", async () => {
     stubMatchMedia();
-    const { socket } = await mountAdmin(SystemPage, handlers({ "update.run": () => ({ ok: true, from: "0.4.0", to: "0.5.0", message: "Updated 0.4.0 to 0.5.0." }) }));
+    const { socket } = await mountAdmin(SystemPage, handlers({ "update.run": () => ({ ok: true, from: "0.4.1", to: "0.5.0", message: "Updated 0.4.1 to 0.5.0." }) }));
     await screen.findByText("Update available");
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
     expect(socket.callsOf("update.run").length).toBe(0);
@@ -104,7 +104,7 @@ describe("SystemPage updates", () => {
       handlers({
         "update.setChannel": (p) => ({ ...UPDATE, channel: (p as { channel: "latest" | "stable" }).channel }),
         "update.setAuto": (p) => ({ ...UPDATE, autoUpdates: (p as { enabled: boolean }).enabled }),
-        "update.check": () => ({ ...UPDATE, available: false, latest: "0.4.0" }),
+        "update.check": () => ({ ...UPDATE, available: false, latest: "0.4.1" }),
       }),
     );
     const select = (await screen.findByLabelText("Release channel")) as HTMLSelectElement;

@@ -69,7 +69,7 @@ export function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => voi
 }
 
 export const TEST_HELLO: HelloInfo = {
-  version: "0.4.0",
+  version: "0.4.1",
   cwd: "/repo",
   sessionId: "6f1c2d9a-4b7e-4e21-9c3a-1d2e3f4a5b6c",
   modes: ["default", "acceptEdits", "plan"],
