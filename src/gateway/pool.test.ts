@@ -21,6 +21,7 @@ afterEach(async () => {
 function setup(steps: Parameters<typeof fakeRuntime>[0] = [], now = { t: 1_000 }) {
   const closed: string[] = [];
   const created: Array<{ key: string; saved: string | undefined }> = [];
+  const runtimes = new Map<string, ReturnType<typeof fakeRuntime>>();
   let n = 0;
   const pool = new SessionPool({
     statePath: join(dir, "sessions.json"),
@@ -31,10 +32,11 @@ function setup(steps: Parameters<typeof fakeRuntime>[0] = [], now = { t: 1_000 }
       created.push({ key, saved });
       const id = `session-${++n}`;
       const runtime = fakeRuntime(steps);
+      runtimes.set(key, runtime);
       return { host: new WebHost(runtime), sessionId: () => id, close: async () => void closed.push(key) };
     },
   });
-  return { pool, closed, created, now };
+  return { pool, closed, created, now, runtimes };
 }
 
 const sink = () => {
@@ -125,5 +127,16 @@ describe("idle sessions", () => {
     await pool.closeAll();
     expect(closed.sort()).toEqual(["telegram:1", "telegram:2"]);
     expect(pool.keys()).toEqual([]);
+  });
+
+  test("closeAll shuts hosts down without a final review; close(key) keeps it", async () => {
+    const { pool, runtimes } = setup();
+    await pool.open("telegram:1");
+    await pool.open("telegram:2");
+    await pool.close("telegram:1");
+    expect(runtimes.get("telegram:1")!.shutdowns).toEqual([undefined]);
+    // The gateway is stopping: nobody waits 30 s per chat for a review.
+    await pool.closeAll();
+    expect(runtimes.get("telegram:2")!.shutdowns).toEqual([{ finalReview: false }]);
   });
 });

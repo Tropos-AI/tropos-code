@@ -71,18 +71,24 @@ export class SessionPool implements SessionProvider {
     return entry.chat;
   }
 
-  async close(key: string): Promise<void> {
-    const entry = this.entries.get(key);
-    if (!entry) return;
-    this.entries.delete(key);
-    await entry.handle.host.shutdown().catch(() => {});
-    await entry.handle.close().catch(() => {});
+  /** Ends a chat's session; its final learning review runs first. */
+  close(key: string): Promise<void> {
+    return this.closeEntry(key);
   }
 
+  /** The gateway is stopping: no final reviews, so a stop never waits on them. */
   async closeAll(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    await Promise.all([...this.entries.keys()].map((key) => this.close(key)));
+    await Promise.all([...this.entries.keys()].map((key) => this.closeEntry(key, { finalReview: false })));
+  }
+
+  private async closeEntry(key: string, opts?: { finalReview?: boolean }): Promise<void> {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    await entry.handle.host.shutdown(opts).catch(() => {});
+    await entry.handle.close().catch(() => {});
   }
 
   /** Closes sessions that have been quiet for the idle time and are not working. */

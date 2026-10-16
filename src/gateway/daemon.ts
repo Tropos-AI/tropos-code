@@ -402,7 +402,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
     await pool.closeAll();
     await webStop?.().catch(() => {});
-    await webHost?.shutdown().catch(() => {});
+    // Like the chats: the gateway is stopping, so the dashboard's session skips its final review.
+    await webHost?.shutdown({ finalReview: false }).catch(() => {});
     // Sessions are closed first; then what the projects' extensions hold open (MCP servers, language servers).
     await Promise.all([...contexts.values()].map((p) => p.then((pc) => pc.close()).catch(() => {})));
     await rm(stateFile(home), { force: true });

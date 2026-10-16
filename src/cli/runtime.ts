@@ -10,12 +10,11 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
-import { contextWindow } from "../api/pricing";
-import { COMPACTION_TRIGGER_TOKENS } from "../api/model";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
-import { LearningLoop, runReviewAgent } from "../learning/review";
+import { loadCounters, saveCounters, type LearningCounters } from "../learning/counters";
+import { FINAL_REVIEW_TIMEOUT_MS, flushWindow, LearningLoop, runReviewAgent } from "../learning/review";
 import { loadIdentity } from "../context/identity";
 import { runCurator } from "../learning/curator";
 import { savedNotice } from "../learning/saved-notice";
@@ -163,8 +162,10 @@ export function makeAgent(
     interactive?: boolean;
     /** Runs the background review. Defaults to `interactive`; the gateway sets it for the owner's chats only. */
     learn?: boolean;
-    /** Receives the session's learning loop, so the runtime can cancel it on /clear and at exit. */
+    /** Receives the session's learning loop, so the runtime can finish it on /clear and at exit. */
     onLearning?(loop: LearningLoop): void;
+    /** The learning loop's starting counters and where every change to them goes. */
+    counters?: { initial: LearningCounters; save(c: LearningCounters): void };
     /** After the Identity tool saved something (headers show the new name). */
     onIdentityChange?(): void;
   },
@@ -213,6 +214,8 @@ export function makeAgent(
   const learning = (opts.learn ?? opts.interactive)
     ? new LearningLoop({
         settings: () => ctx.settings.learning,
+        initial: opts.counters?.initial,
+        saveCounters: opts.counters?.save,
         notice: (text) => opts.ui.emit({ type: "notice", level: "info", text, learned: true }),
         runReview: async (_kind, prompt, history, signal) => {
           const result = await runReviewAgent({
@@ -269,9 +272,8 @@ export function makeAgent(
         if (event.type === "tool_end" && event.name === "Identity" && event.status === "done") opts.onIdentityChange?.();
         if (learning) {
           if (event.type === "tool_end") learning.onToolEnd(event.name, event.status);
-          // The flush is timed against compaction, which comes long before a 1M window fills; models
-          // without a known window (other providers) get no compaction and no flush.
-          else if (event.type === "usage") learning.onUsage(event.contextTokens, Math.min(contextWindow(config().model) ?? 0, COMPACTION_TRIGGER_TOKENS));
+          // Timed against compaction; models without a known window (other providers) assume 128k.
+          else if (event.type === "usage") learning.onUsage(event.contextTokens, flushWindow(config().model));
         }
         opts.ui.emit(event);
       },
@@ -605,9 +607,26 @@ export async function createRuntime(
       if (read === identityReads) identity = id;
     });
   };
-  const stopLearning = async () => {
-    learning?.cancel();
-    await learning?.whenIdle();
+  // Counters carry across sessions in this project: loaded here and again after /clear and resume.
+  let counters = await loadCounters(ctx.home, ctx.cwd);
+  // Saves go out in order, so an older value never lands last.
+  let savingCounters: Promise<void> = Promise.resolve();
+  // Only the live loop writes the file; a detached loop's final review must not overwrite the next session's counts.
+  let generation = 0;
+  // Loops of earlier sessions (/clear, resume) still running their final review.
+  const detached = new Set<LearningLoop>();
+  const loops = () => [...detached, ...(learning ? [learning] : [])];
+  const detachLearning = async () => {
+    const old = learning;
+    learning = undefined;
+    generation++;
+    if (old) {
+      detached.add(old);
+      // Not awaited: /clear and resume return at once while the old session's last review runs.
+      void old.finish(FINAL_REVIEW_TIMEOUT_MS).finally(() => detached.delete(old));
+    }
+    await savingCounters;
+    counters = await loadCounters(ctx.home, ctx.cwd);
   };
 
   return {
@@ -636,8 +655,9 @@ export async function createRuntime(
       turnModel = model;
     },
     newAgent: (ui) => {
-      // A new agent (start, /clear, resume) ends the previous one's review.
+      // A new agent over the same session (/clear and resume detach the old loop first) ends its review.
       learning?.cancel();
+      const mine = ++generation;
       return makeAgent(ctx, {
         session: () => session,
         history,
@@ -651,13 +671,20 @@ export async function createRuntime(
         onLearning: (loop) => {
           learning = loop;
         },
+        counters: {
+          initial: learning?.counters ?? counters,
+          save: (c) => {
+            if (mine !== generation) return;
+            savingCounters = savingCounters.then(() => saveCounters(ctx.home, ctx.cwd, c)).catch(() => {});
+          },
+        },
         onIdentityChange: refreshIdentity,
       });
     },
     history: () => history,
     sessionId: () => session.id,
     clear: async () => {
-      await stopLearning();
+      await detachLearning();
       ctx.ext.tracker.reset();
       await sessionEnd(hooks, "clear");
       session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version });
@@ -666,7 +693,7 @@ export async function createRuntime(
     },
     sessions: () => listSessions(ctx.home, ctx.cwd),
     resume: async (id) => {
-      await stopLearning();
+      await detachLearning();
       ctx.ext.tracker.reset();
       const opened = await SessionStore.open(ctx.home, ctx.cwd, id);
       session = opened.store;
@@ -689,7 +716,7 @@ export async function createRuntime(
     redo: () => ctx.ext.undo.redo(),
     undoLearned: async (id) => {
       // An undo racing the review's own write could be overwritten by it.
-      if (learning?.running) return { ok: false, reason: "The background review is saving; try again in a moment." };
+      if (loops().some((l) => l.running)) return { ok: false, reason: "The background review is saving; try again in a moment." };
       const out = await ctx.ext.ledger.undo(id);
       return out.ok ? { ok: true, summary: `${out.entry.kind}: ${out.entry.summary}` } : out;
     },
@@ -707,8 +734,16 @@ export async function createRuntime(
           .catch(() => {});
       }
     },
-    shutdown: async () => {
-      await stopLearning();
+    finalReviewDue: () => loops().some((l) => l.running || l.finalDue),
+    shutdown: async (opts) => {
+      if (opts?.finalReview ?? true) {
+        await Promise.all(loops().map((l) => l.finish(FINAL_REVIEW_TIMEOUT_MS)));
+      } else {
+        const all = loops();
+        for (const l of all) l.cancel();
+        await Promise.all(all.map((l) => l.whenIdle()));
+      }
+      await savingCounters;
       await sessionEnd(hooks, "exit");
       if (init.ownsExtensions === false) return;
       ctx.ext.searchIndex?.close();

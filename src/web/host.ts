@@ -61,9 +61,9 @@ export class WebHost {
     await this.runtime.start((level, text) => this.onEvent({ type: "notice", level, text })).catch(() => {});
   }
 
-  async shutdown(): Promise<void> {
+  async shutdown(opts?: { finalReview?: boolean }): Promise<void> {
     this.controller?.abort();
-    await this.runtime.shutdown();
+    await this.runtime.shutdown(opts);
   }
 
   hello(): HelloInfo {

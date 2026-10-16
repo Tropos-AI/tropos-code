@@ -395,6 +395,8 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     try {
       await app.waitUntilExit();
     } finally {
+      // The final review can take up to 30 s; say why the terminal hasn't returned yet.
+      if (runtime.finalReviewDue()) err("Saving what I learned before closing… (ctrl+c to skip)\n");
       await runtime.shutdown();
     }
     return 0;

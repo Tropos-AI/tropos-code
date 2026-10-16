@@ -1,16 +1,20 @@
 // src/learning/review.ts
 // The learning loop (Hermes): after enough user turns or tool calls, a background agent re-reads a copy of
 // the conversation and saves what is worth keeping to memory and skills; near the context limit, a flush
-// review writes the session's durable state to the daily note before compaction loses it.
+// review writes the session's durable state to the daily note before compaction loses it; and when the session
+// ends with unreviewed work, a final review does both.
 import { Agent, type AgentHooks } from "../agent/agent";
 import type { PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
-import type { Model } from "../api/model";
+import { COMPACTION_TRIGGER_TOKENS, type Model } from "../api/model";
+import { contextWindow } from "../api/pricing";
 import type { Effort } from "../config/constants";
 import type { PermissionContext } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
 import type { AnyTool, ToolContext } from "../tools/types";
+import type { LearningCounters } from "./counters";
 import {
   COMBINED_REVIEW_PROMPT,
+  FINAL_PROMPT,
   FLUSH_PROMPT,
   MEMORY_REVIEW_PROMPT,
   REVIEW_ALLOWED_TOOLS,
@@ -18,14 +22,29 @@ import {
   SKILL_REVIEW_PROMPT,
 } from "./review-prompts";
 
-export type ReviewKind = "memory" | "skill" | "combined" | "flush";
+export type ReviewKind = "memory" | "skill" | "combined" | "flush" | "final";
 
 export const REVIEW_PROMPTS: Record<ReviewKind, string> = {
   memory: MEMORY_REVIEW_PROMPT,
   skill: SKILL_REVIEW_PROMPT,
   combined: COMBINED_REVIEW_PROMPT,
   flush: FLUSH_PROMPT,
+  final: FINAL_PROMPT,
 };
+
+/** How long the end of a session waits for the final review before aborting it. */
+export const FINAL_REVIEW_TIMEOUT_MS = 30_000;
+/** The final review runs for at least this many user turns, or tool calls, the reviews haven't seen. */
+const FINAL_MIN_TURNS = 2;
+const FINAL_MIN_TOOLS = 5;
+
+/** Context window assumed for models without a known one (other providers), so they get a flush too. */
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+/** The window the flush is timed against: compaction comes long before a 1M window fills. */
+export function flushWindow(model: string): number {
+  return Math.min(contextWindow(model) ?? DEFAULT_CONTEXT_WINDOW, COMPACTION_TRIGGER_TOKENS);
+}
 
 export interface ReviewResult {
   /** Successful writes, e.g. { tool: "Memory", summary: "Memory add user: prefers bun" }. */
@@ -42,6 +61,10 @@ export interface LearningLoopDeps {
   runReview(kind: ReviewKind, prompt: string, history: MessageParam[], signal: AbortSignal): Promise<ReviewResult>;
   notice(text: string): void;
   now?: () => number;
+  /** Counters carried over from earlier sessions in this project. */
+  initial?: LearningCounters;
+  /** Called with a copy of the counters after every change, so they outlive the session. */
+  saveCounters?(c: LearningCounters): void;
 }
 
 export interface LastReview {
@@ -74,11 +97,28 @@ export class LearningLoop {
   private controller: AbortController | undefined;
   private current: Promise<void> | undefined;
   private lastReview: LastReview | undefined;
+  /** The history the last ended turn left, for the final review. */
+  private lastHistory: MessageParam[] = [];
+  private finishing: Promise<void> | undefined;
+  private finishCancelled = false;
 
-  constructor(private readonly deps: LearningLoopDeps) {}
+  constructor(private readonly deps: LearningLoopDeps) {
+    this.turnsSinceMemory = deps.initial?.turnsSinceMemory ?? 0;
+    this.toolsSinceSkill = deps.initial?.toolsSinceSkill ?? 0;
+  }
 
   get running(): boolean {
     return this.current !== undefined;
+  }
+
+  get counters(): LearningCounters {
+    return { turnsSinceMemory: this.turnsSinceMemory, toolsSinceSkill: this.toolsSinceSkill };
+  }
+
+  /** A turn ended in this loop and enough of the session is unreviewed to be worth a last review. */
+  get finalDue(): boolean {
+    if (this.lastHistory.length === 0 || !this.deps.settings().review) return false;
+    return this.turnsSinceMemory >= FINAL_MIN_TURNS || this.toolsSinceSkill >= FINAL_MIN_TOOLS;
   }
 
   /** What the most recent review was, for status displays. */
@@ -89,9 +129,11 @@ export class LearningLoop {
   /** The main agent's tool calls. Its own successful saves postpone the matching review. */
   onToolEnd(toolName: string, status: "done" | "error" | "denied"): void {
     this.toolsSinceSkill++;
-    if (status !== "done") return;
-    if (toolName === "Memory") this.turnsSinceMemory = 0;
-    if (toolName === "SkillManage") this.toolsSinceSkill = 0;
+    if (status === "done") {
+      if (toolName === "Memory") this.turnsSinceMemory = 0;
+      if (toolName === "SkillManage") this.toolsSinceSkill = 0;
+    }
+    this.saveCounters();
   }
 
   /** The main agent's latest context size. */
@@ -104,6 +146,15 @@ export class LearningLoop {
   /** Fire-and-forget: call after every main-agent turn. */
   afterTurn(reason: TurnEndReason, history: MessageParam[]): void {
     this.turnsSinceMemory++;
+    if (history.length > 0) this.lastHistory = history;
+    try {
+      this.maybeStart(reason, history);
+    } finally {
+      this.saveCounters();
+    }
+  }
+
+  private maybeStart(reason: TurnEndReason, history: MessageParam[]): void {
     const settings = this.deps.settings();
     if (reason !== "end_turn" || !settings.review || this.running || history.length === 0) return;
     const pre = { turnsSinceMemory: this.turnsSinceMemory, toolsSinceSkill: this.toolsSinceSkill, flushArmed: this.flushArmed };
@@ -118,14 +169,63 @@ export class LearningLoop {
     this.start(kind, [...history], consumed);
   }
 
-  /** Aborts the running review; called when a new user turn starts so the review never competes with it. */
+  /**
+   * Aborts the running review; called when a new user turn starts so the review never competes with it, and
+   * at a shutdown that skips the final review (then a pending final review never starts).
+   */
   cancel(): void {
+    if (this.finishing) this.finishCancelled = true;
     this.controller?.abort();
   }
 
   /** Resolves once no review is running (tests, shutdown). */
   async whenIdle(): Promise<void> {
     while (this.current) await this.current;
+  }
+
+  /**
+   * The end of the session: waits for a running review, then runs one final review on the last history when
+   * `finalDue`. After `timeoutMs` it aborts what is running (saves made so far are kept and announced) and
+   * resolves. Never rejects; a second call gets the same promise.
+   */
+  finish(timeoutMs: number): Promise<void> {
+    this.finishing ??= this.runFinish(timeoutMs);
+    return this.finishing;
+  }
+
+  private async runFinish(timeoutMs: number): Promise<void> {
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        this.controller?.abort();
+        resolve();
+      }, timeoutMs);
+    });
+    const work = async () => {
+      // Only awaits when a review runs, so an idle loop starts the final review in this same tick.
+      if (this.current) await this.whenIdle();
+      if (timedOut || this.finishCancelled || !this.finalDue) return;
+      this.start("final", [...this.lastHistory], { turnsSinceMemory: 0, toolsSinceSkill: 0, flushArmed: false });
+      await this.whenIdle();
+    };
+    try {
+      // A review that ignores the abort must not hold the session's end: the deadline resolves regardless.
+      await Promise.race([work(), deadline]);
+    } catch {
+      // Never rejects: the session ends either way.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private saveCounters(): void {
+    try {
+      this.deps.saveCounters?.(this.counters);
+    } catch {
+      // Losing a counter only delays a review.
+    }
   }
 
   private pickKind(settings: { interval: number; flushAt: number }): ReviewKind | undefined {
@@ -151,6 +251,7 @@ export class LearningLoop {
     this.turnsSinceMemory += before.turnsSinceMemory;
     this.toolsSinceSkill += before.toolsSinceSkill;
     this.flushArmed ||= before.flushArmed;
+    this.saveCounters();
   }
 
   private start(kind: ReviewKind, history: MessageParam[], before: { turnsSinceMemory: number; toolsSinceSkill: number; flushArmed: boolean }): void {
@@ -164,6 +265,13 @@ export class LearningLoop {
         const result = await this.deps.runReview(kind, REVIEW_PROMPTS[kind], history, controller.signal);
         if (controller.signal.aborted) record.aborted = true;
         record.changes = result.changes.length;
+        // The final review consumes the counters only once it has really finished: until then, an exit
+        // (ctrl+c, the timeout) leaves the work counted for the next session.
+        if (kind === "final" && !record.aborted) {
+          this.turnsSinceMemory = 0;
+          this.toolsSinceSkill = 0;
+          this.saveCounters();
+        }
         // Saves made before a cancel are real: they are announced like any other.
         if (result.changes.length > 0) this.deps.notice(learnedNotice(result.changes));
         else if (record.aborted) this.restore(before);

@@ -101,6 +101,11 @@ export interface Runtime {
   redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
   /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */
   start(notice: (level: "info" | "warn", text: string) => void): Promise<void>;
-  /** SessionEnd, then closes MCP servers and language servers. */
-  shutdown(): Promise<void>;
+  /** True when shutdown will wait for the learning review: a final one is due, or one is running. */
+  finalReviewDue(): boolean;
+  /**
+   * The final learning review (unless `finalReview` is false; it waits at most 30 s), SessionEnd, then closes
+   * MCP servers and language servers.
+   */
+  shutdown(opts?: { finalReview?: boolean }): Promise<void>;
 }

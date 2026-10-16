@@ -39,7 +39,14 @@ export function fakeRuntime(
     start?: Runtime["start"];
     modelPrefs?: Runtime["modelPrefs"];
   } = {},
-): Runtime & { model: FakeModel; inputs: string[]; turnModels: Array<string | undefined>; described: ListTopic[] } {
+): Runtime & {
+  model: FakeModel;
+  inputs: string[];
+  turnModels: Array<string | undefined>;
+  described: ListTopic[];
+  /** The options of every shutdown call, in order. */
+  shutdowns: Array<Parameters<Runtime["shutdown"]>[0]>;
+} {
   const model = new FakeModel(steps);
   let state = { model: "claude-opus-5-5", effort: "high" as Effort, mode: over.mode ?? ("default" as Mode) };
   let history: MessageParam[] = [];
@@ -47,6 +54,7 @@ export function fakeRuntime(
   const toolContext = makeToolContext({ root: "/w" });
   const turnModels: Array<string | undefined> = [];
   const described: ListTopic[] = [];
+  const shutdowns: Array<Parameters<Runtime["shutdown"]>[0]> = [];
   return {
     version: "0.1.0-test",
     cwd: "/w",
@@ -74,7 +82,11 @@ export function fakeRuntime(
     undoLearned: over.undoLearned ?? (async () => ({ ok: false, reason: "Nothing learned to undo." })),
     identity: over.identity ?? (() => ({})),
     start: over.start ?? (async () => {}),
-    shutdown: async () => {},
+    shutdowns,
+    shutdown: async (opts) => {
+      shutdowns.push(opts);
+    },
+    finalReviewDue: () => false,
     state: () => state,
     setMode: (mode) => (state = { ...state, mode }),
     setModel: (m) => (state = { ...state, model: m }),

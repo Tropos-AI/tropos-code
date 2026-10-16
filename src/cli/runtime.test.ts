@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstat, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProviderRouter } from "../providers/router";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
@@ -12,7 +12,7 @@ import type { SearchIndex } from "../memory/search-index";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { DEFAULT_SETTINGS, type Settings } from "../config/settings";
 import { compileRules } from "../permissions/engine";
-import { SessionStore } from "../session/store";
+import { projectDir, SessionStore } from "../session/store";
 import { createTools } from "../tools/registry";
 import { DARK } from "../ui/theme";
 import { ModelPrefs } from "../config/model-prefs";
@@ -46,7 +46,11 @@ beforeEach(async () => {
     role: "owner",
   };
 });
-afterEach(() => removeDir(dir));
+afterEach(async () => {
+  // A test that fails while it fakes the clock must not leave later files on fake timers.
+  jest.useRealTimers();
+  await removeDir(dir);
+});
 
 async function runtime() {
   const session = await SessionStore.create(ctx.home, { cwd: dir, model: "m", version: "v" });
@@ -397,7 +401,8 @@ describe("learning and identity", () => {
     await agent.run("two", signal());
     await waitFor(() => expect(model.requests).toHaveLength(3));
     expect(await rt.undoLearned()).toEqual({ ok: false, reason: "The background review is saving; try again in a moment." });
-    await rt.shutdown();
+    // The review hangs until aborted: shut down without the final review, which would wait for it.
+    await rt.shutdown({ finalReview: false });
     expect(await rt.undoLearned()).toMatchObject({ ok: false, reason: expect.not.stringContaining("background review") });
   });
 
@@ -613,6 +618,130 @@ describe("learning and identity", () => {
     await settle();
     expect(seen).toEqual([]);
     expect(await lstat(path).catch(() => null)).not.toBeNull();
+  });
+
+  /** A model step that hangs until aborted; `started` resolves when the request arrives. */
+  function hanging() {
+    let signal: AbortSignal | undefined;
+    let release: (() => void) | undefined;
+    let markStarted: () => void = () => {};
+    const started = new Promise<void>((r) => (markStarted = r));
+    const step: Step = (_req, _handlers, abort) =>
+      new Promise((resolve, reject) => {
+        signal = abort;
+        release = () => resolve(reply([textBlock(NOTHING)]));
+        abort.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+        markStarted();
+      });
+    return { step, started, signal: () => signal, release: () => release!() };
+  }
+  const countersFile = () => join(projectDir(ctx.home, dir), "learning.json");
+  const readCounters = async () => JSON.parse(await readFile(countersFile(), "utf8"));
+  const LONG = { interval: 10 };
+
+  test("shutdown runs the final review and the journal gets an entry", async () => {
+    const model = await setup(
+      [text("a"), text("b"), () => reply([toolUseBlock("d1", "DailyNote", { text: "Shipped the build fix on main" })], "tool_use"), text("done")],
+      LONG,
+    );
+    const { runtime: rt } = await runtime();
+    const events: AgentEvent[] = [];
+    const agent = rt.newAgent({ emit: (e) => events.push(e), askPermission: allow });
+    await agent.run("one", signal());
+    expect(rt.finalReviewDue()).toBe(false);
+    await agent.run("two", signal());
+    expect(rt.finalReviewDue()).toBe(true);
+    await rt.shutdown();
+    expect(model.requests).toHaveLength(4);
+    expect(JSON.stringify(model.requests[2]!.messages.at(-1))).toContain("session is ending");
+    const [note] = await readdir(dailyNotesDir(ctx.home, dir));
+    expect(await readFile(join(dailyNotesDir(ctx.home, dir), note!), "utf8")).toContain("Shipped the build fix on main");
+    expect(notices(events)).toContainEqual(expect.stringContaining("💡 Learned: DailyNote"));
+    expect(await readCounters()).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
+  });
+
+  test("shutdown({ finalReview: false }) skips it; the counters carry to the next runtime", async () => {
+    const model = await setup([text("a"), text("b"), text("c")], LONG);
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    expect(rt.finalReviewDue()).toBe(true);
+    await rt.shutdown({ finalReview: false });
+    expect(model.requests).toHaveLength(2);
+    expect(await readCounters()).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
+    // A fresh runtime in the same project picks the counters up: one more turn and the final review is due.
+    const { runtime: next } = await runtime();
+    const agent2 = next.newAgent({ emit: () => {}, askPermission: allow });
+    expect(next.finalReviewDue()).toBe(false);
+    await agent2.run("three", signal());
+    expect(next.finalReviewDue()).toBe(true);
+    await next.shutdown({ finalReview: false });
+  });
+
+  test("clear returns before the final review ends; the next session starts from the carried counters", async () => {
+    const final = hanging();
+    const model = await setup([text("a"), text("b"), final.step, text("c")], LONG);
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    await rt.clear();
+    // clear is back while the final review still waits for its model reply.
+    await final.started;
+    expect(model.requests).toHaveLength(3);
+    expect(final.signal()!.aborted).toBe(false);
+    const fresh = rt.newAgent({ emit: () => {}, askPermission: allow });
+    // The new agent didn't cancel the detached review.
+    expect(final.signal()!.aborted).toBe(false);
+    final.release();
+    await fresh.run("three", signal());
+    // Carried: 2 turns from before /clear plus this one.
+    expect(rt.finalReviewDue()).toBe(true);
+    await rt.shutdown({ finalReview: false });
+    // The file follows the live session, whenever the detached review finished.
+    expect(await readCounters()).toEqual({ turnsSinceMemory: 3, toolsSinceSkill: 0 });
+  });
+
+  test("resume returns before the final review ends", async () => {
+    const final = hanging();
+    await setup([text("a"), text("b"), final.step], LONG);
+    const { session, runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    await rt.resume(session.id);
+    await final.started;
+    expect(final.signal()!.aborted).toBe(false);
+    // Shutting down without the final review also stops a detached one.
+    await rt.shutdown({ finalReview: false });
+    expect(final.signal()!.aborted).toBe(true);
+  });
+
+  test("a hanging final review is aborted after 30 s by shutdown()", async () => {
+    const final = hanging();
+    await setup([text("a"), text("b"), final.step], LONG);
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    jest.useFakeTimers();
+    try {
+      let closed = false;
+      const closing = rt.shutdown().then(() => void (closed = true));
+      await final.started;
+      jest.advanceTimersByTime(29_999);
+      await Promise.resolve();
+      expect(final.signal()!.aborted).toBe(false);
+      expect(closed).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(final.signal()!.aborted).toBe(true);
+      await closing;
+    } finally {
+      jest.useRealTimers();
+    }
+    // Aborted before it finished: the work stays counted for the next session.
+    expect(await readCounters()).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
   });
 
   test("shutdown closes the search index", async () => {

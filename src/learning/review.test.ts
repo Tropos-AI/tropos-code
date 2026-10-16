@@ -3,16 +3,18 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { FakeModel, reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
 import { makeToolContext } from "../../test/helpers/tool-context";
+import { settle, waitFor } from "../../test/helpers/wait";
 import type { AgentHooks } from "../agent/agent";
 import type { Mode } from "../config/constants";
 import { compileRules } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
 import { toolToApi } from "../api/model";
 import { defineTool, type Actor, type AnyTool } from "../tools/types";
-import { FLUSH_PROMPT, MEMORY_REVIEW_PROMPT, NOTHING, REVIEW_ALLOWED_TOOLS, REVIEW_WRITE_TOOLS } from "./review-prompts";
+import { FINAL_PROMPT, FLUSH_PROMPT, MEMORY_REVIEW_PROMPT, NOTHING, REVIEW_ALLOWED_TOOLS, REVIEW_WRITE_TOOLS } from "./review-prompts";
 import {
   LearningLoop,
   REVIEW_PROMPTS,
+  flushWindow,
   learnedNotice,
   reviewAskPermission,
   reviewToolGate,
@@ -22,6 +24,7 @@ import {
   type ReviewResult,
   type RunReviewAgentOptions,
 } from "./review";
+import type { LearningCounters } from "./counters";
 
 // --- fake tools -------------------------------------------------------------------------------------------
 
@@ -361,7 +364,7 @@ interface Call {
   reject(err: unknown): void;
 }
 
-function harness(settings: Partial<ReturnType<LearningLoopDeps["settings"]>> = {}) {
+function harness(settings: Partial<ReturnType<LearningLoopDeps["settings"]>> = {}, extra: Partial<LearningLoopDeps> = {}) {
   const calls: Call[] = [];
   const notices: string[] = [];
   const config = { review: true, interval: 3, flushAt: 0.7, ...settings };
@@ -373,6 +376,7 @@ function harness(settings: Partial<ReturnType<LearningLoopDeps["settings"]>> = {
       }),
     notice: (text) => notices.push(text),
     now: () => 42,
+    ...extra,
   });
   const done = (r: Partial<ReviewResult> = {}) => calls.at(-1)!.resolve({ changes: [], reply: NOTHING, ...r });
   return { loop, calls, notices, config, done };
@@ -605,7 +609,135 @@ describe("LearningLoop", () => {
   });
 });
 
+describe("LearningLoop.finish", () => {
+  test("finish runs one final review on the last history when the session has unreviewed work, then resets the counters", async () => {
+    const h = harness();
+    turns(h.loop, 2);
+    expect(h.loop.finalDue).toBe(true);
+    const done = h.loop.finish(1000);
+    h.done({ changes: [{ tool: "DailyNote", summary: "DailyNote noted" }] });
+    await done;
+    expect(h.calls.map((c) => c.kind)).toEqual(["final"]);
+    expect(h.calls[0]!.prompt).toBe(REVIEW_PROMPTS.final);
+    expect(h.calls[0]!.history).toEqual(history);
+    expect(h.notices).toEqual(["💡 Learned: DailyNote noted"]);
+    expect(h.loop.counters).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
+    expect(h.loop.finalDue).toBe(false);
+  });
+
+  test("finish does nothing below 2 turns and 5 tool calls, or when no turn ended in this loop", async () => {
+    const below = harness({ interval: 10 });
+    for (let i = 0; i < 4; i++) below.loop.onToolEnd("Read", "done");
+    turns(below.loop, 1);
+    expect(below.loop.finalDue).toBe(false);
+    await below.loop.finish(1000);
+    expect(below.calls).toEqual([]);
+    // The fifth tool call makes it due.
+    below.loop.onToolEnd("Read", "done");
+    expect(below.loop.finalDue).toBe(true);
+
+    // Counters carried in from an earlier session, but nothing happened in this one.
+    const idle = harness({ interval: 10 }, { initial: { turnsSinceMemory: 7, toolsSinceSkill: 9 } });
+    expect(idle.loop.finalDue).toBe(false);
+    await idle.loop.finish(1000);
+    expect(idle.calls).toEqual([]);
+    expect(idle.loop.counters).toEqual({ turnsSinceMemory: 7, toolsSinceSkill: 9 });
+
+    // Reviews switched off: no final review either.
+    const off = harness({ interval: 10, review: false });
+    turns(off.loop, 3);
+    expect(off.loop.finalDue).toBe(false);
+    await off.loop.finish(1000);
+    expect(off.calls).toEqual([]);
+  });
+
+  test("finish waits for a running review first and never starts two", async () => {
+    const h = harness({ interval: 2 });
+    turns(h.loop, 2);
+    expect(h.calls.map((c) => c.kind)).toEqual(["memory"]);
+    // Two more turns while the memory review runs: unreviewed work for the final review.
+    turns(h.loop, 2);
+    const first = h.loop.finish(1000);
+    const second = h.loop.finish(1000);
+    await settle();
+    expect(h.calls).toHaveLength(1);
+    h.calls[0]!.resolve({ changes: [], reply: NOTHING });
+    await waitFor(() => expect(h.calls).toHaveLength(2));
+    expect(h.calls.map((c) => c.kind)).toEqual(["memory", "final"]);
+    h.done();
+    await Promise.all([first, second]);
+    await h.loop.finish(1000);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  test("finish aborts a review still running after the timeout and resolves", async () => {
+    const h = harness();
+    turns(h.loop, 2);
+    await h.loop.finish(20);
+    expect(h.calls.map((c) => c.kind)).toEqual(["final"]);
+    expect(h.calls[0]!.signal.aborted).toBe(true);
+    // Not finished, so the work stays unreviewed.
+    expect(h.loop.counters).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
+    // Saves the aborted review made before it stopped are kept and announced.
+    h.calls[0]!.resolve({ changes: [{ tool: "DailyNote", summary: "DailyNote half" }], reply: "" });
+    await h.loop.whenIdle();
+    expect(h.notices).toEqual(["💡 Learned: DailyNote half"]);
+  });
+
+  test("finish never rejects, even when the final review throws", async () => {
+    const h = harness();
+    turns(h.loop, 2);
+    const done = h.loop.finish(1000);
+    h.calls[0]!.reject(new Error("model down"));
+    await done;
+    expect(h.loop.last).toMatchObject({ kind: "final", failed: true });
+    expect(h.loop.counters).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
+  });
+
+  test("counters start from initial and every change is saved", async () => {
+    const saved: LearningCounters[] = [];
+    const h = harness({ interval: 3 }, { initial: { turnsSinceMemory: 1, toolsSinceSkill: 0 }, saveCounters: (c) => saved.push(c) });
+    expect(h.loop.counters).toEqual({ turnsSinceMemory: 1, toolsSinceSkill: 0 });
+    turns(h.loop, 1);
+    h.loop.onToolEnd("Read", "done");
+    h.loop.onToolEnd("Memory", "done");
+    expect(saved).toEqual([
+      { turnsSinceMemory: 2, toolsSinceSkill: 0 },
+      { turnsSinceMemory: 2, toolsSinceSkill: 1 },
+      { turnsSinceMemory: 0, toolsSinceSkill: 2 },
+    ]);
+    // The third turn starts a memory review, which consumes the turn counter; a failed one gives it back.
+    turns(h.loop, 3);
+    expect(h.calls.map((c) => c.kind)).toEqual(["memory"]);
+    expect(saved.at(-1)).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 2 });
+    h.calls[0]!.reject(new Error("down"));
+    await h.loop.whenIdle();
+    expect(saved.at(-1)).toEqual({ turnsSinceMemory: 3, toolsSinceSkill: 2 });
+    // A finished final review saves zeros.
+    const done = h.loop.finish(1000);
+    h.done();
+    await done;
+    expect(saved.at(-1)).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
+    // Saved values are copies, never the loop's live state.
+    expect(saved[0]).toEqual({ turnsSinceMemory: 2, toolsSinceSkill: 0 });
+  });
+
+  test("flushWindow: known models cap at the compaction trigger; unknown ones use 128,000", () => {
+    expect(flushWindow("claude-opus-5-5")).toBe(150_000);
+    expect(flushWindow("ollama/llama3")).toBe(128_000);
+  });
+});
+
 describe("review prompts", () => {
+  test("the final prompt says the session is ending and covers the journal, memory and skills", () => {
+    expect(REVIEW_PROMPTS.final).toBe(FINAL_PROMPT);
+    expect(FINAL_PROMPT).toContain("session is ending");
+    for (const tool of ["DailyNote", "Memory", "SkillManage"]) expect(FINAL_PROMPT).toContain(tool);
+    expect(FINAL_PROMPT).toContain("Never only remove");
+    expect(FINAL_PROMPT).toContain("Never save:");
+    expect(FINAL_PROMPT).toContain(`exactly ${NOTHING}`);
+  });
+
   test("every kind has a prompt that says when to reply NOTHING", () => {
     for (const prompt of Object.values(REVIEW_PROMPTS)) expect(prompt).toContain(`exactly ${NOTHING}`);
     expect(REVIEW_PROMPTS.flush).toContain("DailyNote");
