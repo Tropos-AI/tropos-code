@@ -7,13 +7,19 @@
 // Removal never follows a link: a command may have replaced a parent (`.git/modules/x`) with a link to a host
 // directory. Every component from the real `.git` down is lstat'ed, the parent must still resolve inside it, and only
 // the single entry is unlinked. A planted directory, or anything that fails the check, is left alone and reported.
-import { lstatSync, realpathSync, unlinkSync } from "node:fs";
+//
+// The same goes for whole git dirs a command creates under `.git/modules` or `.git/worktrees` (bwrap can only make
+// the ones that already exist read-only): after the command, each new one loses its hooks, config and commondir.
+import { lstatSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { isInside } from "../paths";
 
 export const COMMONDIR_TAMPERED = "tropos sandbox: a command tried to redirect git's hooks (.git/commondir); it was undone";
 export const commondirUnsafe = (path: string): string =>
   `tropos sandbox: a command tried to redirect git's hooks (.git/commondir); it could not be undone safely; check ${path}`;
+export const GIT_METADATA_TAMPERED = "tropos sandbox: a command created git metadata with hooks/config; it was undone";
+export const gitMetadataUnsafe = (path: string): string =>
+  `tropos sandbox: a command created git metadata with hooks/config; it could not be undone safely; check ${path}`;
 
 export interface CommondirSnapshot {
   /** The workspace's `.git` as configured, and its real path when the snapshot was taken. */
@@ -73,7 +79,7 @@ function chain(gitRoot: string, dir: string): string[] | null {
 }
 
 /** Whether `path`'s parent chain is links-free real directories that still resolve inside the real `.git`. */
-function parentsAreSafe(snap: CommondirSnapshot, path: string): boolean {
+function parentsAreSafe(snap: Pick<CommondirSnapshot, "gitRoot" | "realGitRoot">, path: string): boolean {
   const dirs = chain(snap.gitRoot, dirname(path));
   if (!dirs) return false;
   try {
@@ -140,4 +146,153 @@ export function commondirGuardShell(snap: CommondirSnapshot, quote: (s: string) 
     );
   }
   return lines;
+}
+
+/** How many directory levels below `.git` the nested-git-dir search goes; anything deeper is reported, not skipped. */
+const MAX_NESTING = 10;
+
+export interface NestedGitDirs {
+  /** Directories with a HEAD under `modules/` (any path segments) and `worktrees/`, and under theirs in turn. */
+  gitDirs: string[];
+  /** Links met on the way; git would follow them, the search never does. */
+  links: string[];
+  /** Directories at the depth limit that were not searched. */
+  deep: string[];
+}
+
+/**
+ * The repo's nested git dirs (submodules, linked worktrees), found without following a link. Inside a git dir only its
+ * own `modules/` and `worktrees/` are searched (not objects/ or refs/); any other directory is a path segment of a
+ * submodule's name (`libs` in `libs/foo`) and is searched through.
+ */
+export function findNestedGitDirs(gitRoot: string): NestedGitDirs {
+  const found: NestedGitDirs = { gitDirs: [], links: [], deep: [] };
+  const searchGitDir = (dir: string, depth: number) => {
+    for (const name of ["modules", "worktrees"]) search(join(dir, name), depth + 1);
+  };
+  const search = (dir: string, depth: number) => {
+    let info: ReturnType<typeof lstatSync>;
+    try {
+      info = lstatSync(dir);
+    } catch {
+      return;
+    }
+    if (info.isSymbolicLink()) return void found.links.push(dir);
+    if (!info.isDirectory()) return;
+    if (depth > MAX_NESTING) return void found.deep.push(dir);
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const sub = join(dir, entry.name);
+      if (entry.isSymbolicLink()) found.links.push(sub);
+      else if (!entry.isDirectory()) continue;
+      else if (presentOrUnknown(join(sub, "HEAD"))) {
+        found.gitDirs.push(sub);
+        searchGitDir(sub, depth + 1);
+      } else search(sub, depth + 1);
+    }
+  };
+  searchGitDir(gitRoot, 0);
+  return found;
+}
+
+function presentOrUnknown(path: string): boolean {
+  try {
+    return present(path);
+  } catch {
+    return true;
+  }
+}
+
+export interface GitDirsSnapshot {
+  gitRoot: string;
+  realGitRoot: string;
+  /** The nested git dirs before the command. */
+  gitDirs: string[];
+  /** Everything the search met before the command: git dirs, links and unsearched deep dirs. */
+  known: Set<string>;
+}
+
+/** Null when `.git` is missing or not a real directory: there is nothing to check then. */
+export function gitDirsSnapshot(gitRoot: string): GitDirsSnapshot | null {
+  try {
+    const info = lstatSync(gitRoot);
+    if (info.isSymbolicLink() || !info.isDirectory()) return null;
+    const found = findNestedGitDirs(gitRoot);
+    return { gitRoot, realGitRoot: realpathSync(gitRoot), gitDirs: found.gitDirs, known: new Set([...found.gitDirs, ...found.links, ...found.deep]) };
+  } catch {
+    return null;
+  }
+}
+
+/** What git would run from a git dir: its hooks and config, and the commondir pointer that moves both. */
+const GIT_DIR_CODE = ["hooks", "config", "config.worktree", "commondir"];
+
+/**
+ * After the command: a link planted on the way is removed (never followed); every git dir that is new loses its hooks
+ * (file by file; a directory inside is left and reported), config and commondir. A deep dir, or anything that fails
+ * the link check, is left alone and reported. The caller fails the command on `message`.
+ */
+export function enforceNewGitDirs(snap: GitDirsSnapshot): CommondirCheck {
+  const removed: string[] = [];
+  const unsafe: string[] = [];
+  const unlinkIfSafe = (path: string) => {
+    if (!parentsAreSafe(snap, path)) return void unsafe.push(path);
+    try {
+      unlinkSync(path);
+      removed.push(path);
+    } catch {
+      unsafe.push(path);
+    }
+  };
+  const found = findNestedGitDirs(snap.gitRoot);
+  for (const link of found.links) if (!snap.known.has(link)) unlinkIfSafe(link);
+  for (const deep of found.deep) if (!snap.known.has(deep)) unsafe.push(deep);
+  for (const dir of found.gitDirs) {
+    if (snap.known.has(dir)) continue;
+    for (const name of GIT_DIR_CODE) {
+      const path = join(dir, name);
+      let info: ReturnType<typeof lstatSync>;
+      try {
+        info = lstatSync(path);
+      } catch {
+        continue; // not there
+      }
+      if (!info.isDirectory()) {
+        unlinkIfSafe(path);
+        continue;
+      }
+      if (name !== "hooks" || !parentsAreSafe(snap, path)) {
+        unsafe.push(path); // never recurse
+        continue;
+      }
+      removeHooksDir(path, removed, unsafe);
+    }
+  }
+  const message = unsafe.length > 0 ? unsafe.map(gitMetadataUnsafe).join("\n") : removed.length > 0 ? GIT_METADATA_TAMPERED : null;
+  return { removed, unsafe, message };
+}
+
+/** Unlinks each file or link in a (parent-checked) hooks dir, then the dir; a directory inside is left and reported. */
+function removeHooksDir(hooks: string, removed: string[], unsafe: string[]): void {
+  try {
+    let clean = true;
+    for (const entry of readdirSync(hooks, { withFileTypes: true })) {
+      const path = join(hooks, entry.name);
+      if (entry.isDirectory()) {
+        unsafe.push(path);
+        clean = false;
+      } else unlinkSync(path);
+    }
+    if (clean) {
+      rmdirSync(hooks);
+      removed.push(hooks);
+    }
+  } catch {
+    unsafe.push(hooks);
+  }
 }

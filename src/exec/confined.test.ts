@@ -1,12 +1,12 @@
 // src/exec/confined.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, unconfinedBackend } from "./confined";
+import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, TRUSTED_PATH, unconfinedBackend } from "./confined";
 import { ConfinementError } from "./confinement-paths";
-import { COMMONDIR_TAMPERED } from "./git-integrity";
+import { COMMONDIR_TAMPERED, GIT_METADATA_TAMPERED } from "./git-integrity";
 
 const until = async (check: () => boolean, ms = 5000) => {
   const end = Date.now() + ms;
@@ -187,30 +187,64 @@ test("unconfinedBackend runs on the host with the allowlisted environment", asyn
   }
 });
 
-// bwrap itself only exists on Linux; a stand-in that runs the command after `--` (in --chdir) checks the host-side
-// commondir guard on any machine. The real confinement of bwrapArgs is covered by bwrap-args.test.ts.
-describe("the bwrap backend's commondir check (fake bwrap)", () => {
+// bwrap itself only exists on Linux; a stand-in that applies --setenv and --chdir and runs the command after `--`
+// checks the wrapper, the environment split and the host-side git checks on any machine. It records the environment
+// the wrapper gave it. The real confinement of bwrapArgs is covered by bwrap-args.test.ts.
+describe("the bwrap backend (fake bwrap)", () => {
   const FAKE_BWRAP = [
     "#!/bin/sh",
+    'env > "$(dirname "$0")/wrapper-env"',
     'dir=""',
-    'while [ "$#" -gt 0 ]; do case "$1" in --chdir) dir="$2"; shift 2;; --) shift; break;; *) shift;; esac; done',
+    'while [ "$#" -gt 0 ]; do case "$1" in --chdir) dir="$2"; shift 2;; --setenv) export "$2=$3"; shift 3;; --) shift; break;; *) shift;; esac; done',
     'cd "$dir" || exit 1',
     'exec "$@"',
     "",
   ].join("\n");
   let f: ReturnType<typeof fixture>;
   let backend: ConfinedBackend;
+  let bin: string;
   beforeAll(() => {
     f = fixture();
-    const bin = join(f.fx, "bwrap");
+    bin = join(f.fx, "bwrap");
     writeFileSync(bin, FAKE_BWRAP, { mode: 0o755 });
+    writeFileSync(join(f.project, ".git", "modules", "lib", "hooks", "pre-commit"), "owner's hook");
+    writeFileSync(join(f.project, ".git", "modules", "lib", "config"), "[core]");
     backend = new ConfinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, platform: "linux", bwrapBin: bin });
   });
   afterAll(() => rmSync(f.fx, { recursive: true, force: true }));
   const commondir = () => join(f.project, ".git", "commondir");
+  const sh = (script: string, cwd = f.project) => collect(backend.spawn({ shell: "/bin/sh", script, cwd, env: { PASSED: "no" } }));
+
+  test("the wrapper and bwrap get only the trusted PATH; the command gets the allowlisted environment", async () => {
+    const r = await sh('echo "$PATH|$npm_config_cache|${SECRET-unset}|${PASSED-unset}"');
+    expect(r).toMatchObject({ code: 0, out: `/usr/bin:/bin|${join(realpathSync(f.home), "sandbox-cache", "npm")}|unset|unset\n` });
+    const wrapperEnv = readFileSync(join(f.fx, "wrapper-env"), "utf8").split("\n");
+    expect(wrapperEnv).toContain(`PATH=${TRUSTED_PATH}`);
+    for (const key of ["HOME=", "TMPDIR=", "npm_config_cache=", "GIT_CONFIG_COUNT=", "SECRET="]) expect(wrapperEnv.some((l) => l.startsWith(key))).toBe(false);
+  });
+
+  test("a bwrap a confined command could write is refused", () => {
+    const opts = { project: f.project, home: f.home, userHome: f.userHome, env: f.env, platform: "linux" as const };
+    for (const planted of [join(f.fx, "tmp", "bwrap"), join(f.project, "bwrap")]) {
+      writeFileSync(planted, FAKE_BWRAP, { mode: 0o755 });
+      expect(() => new ConfinedBackend({ ...opts, bwrapBin: planted })).toThrow(ConfinementError);
+      rmSync(planted);
+    }
+    // A link from a trusted-looking place into a writable dir is judged by where it really points.
+    writeFileSync(join(f.fx, "tmp", "real-bwrap"), FAKE_BWRAP, { mode: 0o755 });
+    symlinkSync(join(f.fx, "tmp", "real-bwrap"), join(f.fx, "linked-bwrap"));
+    expect(() => new ConfinedBackend({ ...opts, bwrapBin: join(f.fx, "linked-bwrap") })).toThrow(ConfinementError);
+    expect(() => new ConfinedBackend({ ...opts, bwrapBin: join(f.fx, "missing-bwrap") })).toThrow(ConfinementError);
+  });
+
+  const trustedBwrap = TRUSTED_PATH.split(":").some((d) => existsSync(join(d, "bwrap")));
+  test.skipIf(trustedBwrap)("bwrap is looked up only on the trusted PATH, never the owner's", () => {
+    const env = { ...f.env, PATH: `${f.fx}:${f.env.PATH}` }; // the fake bwrap sits on this PATH
+    expect(() => new ConfinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env, platform: "linux" })).toThrow(ConfinementError);
+  });
 
   test("a command that plants .git/commondir fails with the host's message and the file is removed", async () => {
-    const r = await collect(backend.spawn({ shell: "/bin/sh", script: "pwd -P; echo /elsewhere > commondir; echo done", cwd: join(f.project, ".git"), env: {} }));
+    const r = await sh("pwd -P; echo /elsewhere > commondir; echo done", join(f.project, ".git"));
     expect(r.out).toBe(`${join(f.project, ".git")}\ndone\n`);
     expect(r.err).toContain(COMMONDIR_TAMPERED);
     expect(r.code).toBe(1);
@@ -218,30 +252,45 @@ describe("the bwrap backend's commondir check (fake bwrap)", () => {
   });
 
   test("a submodule's planted commondir is caught too, and a clean command keeps its exit code", async () => {
-    const r = await collect(backend.spawn({ shell: "/bin/sh", script: "ln -s /nowhere .git/modules/lib/commondir", cwd: f.project, env: {} }));
+    const r = await sh("ln -s /nowhere .git/modules/lib/commondir");
     expect(r.err).toContain(COMMONDIR_TAMPERED);
     expect(r.code).toBe(1);
     expect(() => lstatSync(join(f.project, ".git", "modules", "lib", "commondir"))).toThrow();
-    expect(await collect(backend.spawn({ shell: "/bin/sh", script: "exit 3", cwd: f.project, env: {} }))).toEqual({ out: "", err: "", code: 3 });
+    expect(await sh("exit 3")).toEqual({ out: "", err: "", code: 3 });
   });
 
-  test("a killed command that planted commondir is still caught on the host, even if it printed the message itself", async () => {
-    const script = `echo ${JSON.stringify(COMMONDIR_TAMPERED)} >&2; echo x > .git/commondir; sleep 30`;
+  test("a new submodule git dir with hooks and config fails the command and loses them; existing ones are untouched", async () => {
+    const fresh = join(f.project, ".git", "modules", "evil");
+    const r = await sh("mkdir -p .git/modules/evil/hooks && echo ref > .git/modules/evil/HEAD && echo x > .git/modules/evil/hooks/post-checkout && echo x > .git/modules/evil/config");
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(GIT_METADATA_TAMPERED);
+    expect(existsSync(join(fresh, "hooks"))).toBe(false);
+    expect(existsSync(join(fresh, "config"))).toBe(false);
+    expect(existsSync(join(fresh, "HEAD"))).toBe(true);
+    expect(readFileSync(join(f.project, ".git", "modules", "lib", "hooks", "pre-commit"), "utf8")).toBe("owner's hook");
+    expect(readFileSync(join(f.project, ".git", "modules", "lib", "config"), "utf8")).toBe("[core]");
+    rmSync(fresh, { recursive: true });
+  });
+
+  test("a killed command that planted git metadata is still caught on the host, even if it printed the message itself", async () => {
+    const script = `echo ${JSON.stringify(COMMONDIR_TAMPERED)} >&2; echo x > .git/commondir; mkdir -p .git/worktrees/w/hooks && echo r > .git/worktrees/w/HEAD && echo x > .git/worktrees/w/hooks/x; sleep 30`;
     const child = backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} });
     const result = collect(child);
-    await until(() => existsSync(commondir()));
-    backend.signal(child, "SIGKILL"); // the wrapper dies before its own check
+    await until(() => existsSync(join(f.project, ".git", "worktrees", "w", "hooks", "x")));
+    backend.signal(child, "SIGKILL"); // the wrapper dies before it can report to the host
     const r = await result;
     expect(r.code).not.toBe(0);
     expect(r.err.split(COMMONDIR_TAMPERED).length - 1).toBe(2); // the command's fake line, then the host's real one
+    expect(r.err).toContain(GIT_METADATA_TAMPERED);
     expect(existsSync(commondir())).toBe(false);
+    expect(existsSync(join(f.project, ".git", "worktrees", "w", "hooks"))).toBe(false);
+    rmSync(join(f.project, ".git", "worktrees"), { recursive: true });
   });
 
   test("a commondir that existed before the command is left alone", async () => {
     writeFileSync(commondir(), "../..\n");
     try {
-      const r = await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: f.project, env: {} }));
-      expect(r).toEqual({ out: "", err: "", code: 0 });
+      expect(await sh("true")).toEqual({ out: "", err: "", code: 0 });
       expect(readFileSync(commondir(), "utf8")).toBe("../..\n");
     } finally {
       rmSync(commondir(), { force: true });

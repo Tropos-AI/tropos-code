@@ -101,11 +101,12 @@ test("missing protected paths get read-only placeholders, so they can't be creat
   expect(at(args, ...emptyDir(join(project, ".tropos")))).toBeGreaterThan(0);
 });
 
-test("without a .git there is no .git bind and no git-internal masks", () => {
+test("without a .git, an empty read-only .git placeholder stops `git init` (as the macOS profile does)", () => {
   rmSync(join(project, ".git"), { recursive: true });
   const args = bwrapArgs(paths(), project);
   expect(at(args, "--bind", join(project, ".git"), join(project, ".git"))).toBe(-1);
-  expect(args.some((a) => a.startsWith(join(project, ".git")))).toBe(false);
+  expect(at(args, ...emptyDir(join(project, ".git")))).toBeGreaterThan(at(args, "--bind", project, project));
+  expect(args.filter((a) => a.startsWith(`${join(project, ".git")}/`))).toEqual([]);
 });
 
 test("commondir is bound read-only only when it already exists (an empty placeholder would break git)", () => {
@@ -120,8 +121,11 @@ test("nested git dirs (submodules and linked worktrees) get their own protection
   mkdirSync(join(project, ".git", "worktrees", "wt"), { recursive: true });
   writeFileSync(join(project, ".git", "worktrees", "wt", "HEAD"), "ref: x");
   writeFileSync(join(project, ".git", "worktrees", "wt", "commondir"), "../..");
+  mkdirSync(join(project, ".git", "modules", "libs", "foo"), { recursive: true });
+  writeFileSync(join(project, ".git", "modules", "libs", "foo", "HEAD"), "ref: x");
   const args = bwrapArgs(paths(), project);
   expect(at(args, ...emptyDir(join(project, ".git", "modules", "lib", "hooks")))).toBeGreaterThan(0);
+  expect(at(args, ...emptyDir(join(project, ".git", "modules", "libs", "foo", "hooks")))).toBeGreaterThan(0); // a submodule named libs/foo
   expect(at(args, ...nullFile(join(project, ".git", "worktrees", "wt", "config")))).toBeGreaterThan(0);
   expect(at(args, ...ro(join(project, ".git", "worktrees", "wt", "commondir")))).toBeGreaterThan(0);
 });

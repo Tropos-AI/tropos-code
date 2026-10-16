@@ -4,14 +4,16 @@
 // services masked, temp writable, secrets hidden, the cache and the default project reopened, the project writable,
 // then the read-only protections inside it. A protected path that exists is bound read-only onto itself (still
 // readable, so the chat's own git works); one that doesn't is covered by an empty read-only placeholder so it can't
-// be created. `commondir` is the exception (an empty one breaks git): the backend checks it after each command.
+// be created. `commondir` is the exception (an empty one breaks git), and git dirs a command creates can't be bound
+// in advance: the backend checks both after each command (git-integrity.ts).
 //
 // Residuals: `--share-net` keeps the host's network namespace, so abstract Unix sockets (no path to mask) stay
 // reachable; and a project at `~` makes the host caches under it writable through the project bind.
-import { lstatSync, readdirSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isInside } from "../paths";
 import { ConfinementError, type ConfinementPaths } from "./confinement-paths";
+import { findNestedGitDirs } from "./git-integrity";
 
 /** Host services a chat must not reach: the per-user runtime dir (ssh/gpg agents, session bus), Docker, D-Bus. */
 export function hostServicePaths(uid: number): string[] {
@@ -61,10 +63,14 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   if (carve && reopened.some((secret) => isInside(carveOut, secret))) args.push("--ro-bind", carveOut, carveOut);
 
   // `.git` as a mount point can't be renamed (EBUSY): `mv .git g2; write g2/hooks/x; mv g2 .git` fails.
-  for (const git of paths.gitDirs) {
-    if (!isRealDir(git)) continue;
+  for (const [i, git] of paths.gitDirs.entries()) {
+    if (!isRealDir(git)) {
+      // No `.git` at all: an empty read-only one, so `git init` (and planting hooks with it) fails as on macOS.
+      if (i === 0 && !exists(git)) args.push(...protect(git, "dir"));
+      continue;
+    }
     args.push("--bind", git, git);
-    for (const dir of [git, ...nestedGitDirs(git, 0)]) {
+    for (const dir of [git, ...findNestedGitDirs(git).gitDirs]) {
       args.push(...protect(join(dir, "hooks"), "dir"), ...protect(join(dir, "config"), "file"), ...protect(join(dir, "config.worktree"), "file"));
       const commondir = join(dir, "commondir");
       if (exists(commondir)) args.push("--ro-bind", commondir, commondir);
@@ -88,28 +94,6 @@ function hide(path: string): string[] {
 function protect(path: string, kind: Kind): string[] {
   if (exists(path)) return ["--ro-bind", path, path];
   return kind === "dir" ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path];
-}
-
-/** Git dirs under `.git/modules/**` and `.git/worktrees/*` (each has its own hooks and config). */
-export function nestedGitDirs(git: string, depth: number): string[] {
-  if (depth > 4) return [];
-  const found: string[] = [];
-  for (const parent of [join(git, "modules"), join(git, "worktrees")]) {
-    for (const entry of readDirs(parent)) {
-      const sub = join(parent, entry);
-      if (exists(join(sub, "HEAD"))) found.push(sub, ...nestedGitDirs(sub, depth + 1));
-      else found.push(...nestedGitDirs(sub, depth + 1)); // a path segment of a submodule's name
-    }
-  }
-  return found;
-}
-
-function readDirs(dir: string): string[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
-  } catch {
-    return [];
-  }
 }
 
 function requireRealDirOrAbsent(path: string): void {

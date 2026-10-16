@@ -1,9 +1,21 @@
 // src/exec/git-integrity.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { absentCommondirs, COMMONDIR_TAMPERED, type CommondirSnapshot, commondirSnapshot, commondirUnsafe, enforceCommondir } from "./git-integrity";
+import {
+  absentCommondirs,
+  COMMONDIR_TAMPERED,
+  type CommondirSnapshot,
+  commondirSnapshot,
+  commondirUnsafe,
+  enforceCommondir,
+  enforceNewGitDirs,
+  findNestedGitDirs,
+  GIT_METADATA_TAMPERED,
+  gitDirsSnapshot,
+  gitMetadataUnsafe,
+} from "./git-integrity";
 
 let fx: string;
 let git: string;
@@ -95,4 +107,79 @@ test("no snapshot without a real .git directory", () => {
   expect(commondirSnapshot(git, [git])).toBeNull();
   symlinkSync(outside, git);
   expect(commondirSnapshot(git, [git])).toBeNull();
+});
+
+/** A git dir (it has a HEAD) with a hook and a config, as a command could plant one. */
+const plantGitDir = (dir: string) => {
+  mkdirSync(join(dir, "hooks"), { recursive: true });
+  writeFileSync(join(dir, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(dir, "hooks", "post-checkout"), "#!/bin/sh\nevil");
+  writeFileSync(join(dir, "config"), "[core]\n\tfsmonitor = evil");
+};
+
+test("nested git dirs are found under modules (path segments included) and worktrees, never through a link", () => {
+  plantGitDir(join(git, "modules", "lib"));
+  plantGitDir(join(git, "modules", "libs", "foo"));
+  plantGitDir(join(git, "modules", "lib", "modules", "inner"));
+  plantGitDir(join(git, "worktrees", "wt"));
+  mkdirSync(join(git, "modules", "lib", "objects", "ab"), { recursive: true });
+  writeFileSync(join(git, "modules", "lib", "objects", "ab", "HEAD"), "not a git dir: inside a git dir only modules/ and worktrees/ are searched");
+  symlinkSync(outside, join(git, "modules", "linked"));
+  const found = findNestedGitDirs(git);
+  expect(found.gitDirs.sort()).toEqual([join(git, "modules", "lib"), join(git, "modules", "lib", "modules", "inner"), join(git, "modules", "libs", "foo"), join(git, "worktrees", "wt")].sort());
+  expect(found.links).toEqual([join(git, "modules", "linked")]);
+  expect(found.deep).toEqual([]);
+});
+
+test("a git dir created during the command loses its hooks and config, and the command is to be failed", () => {
+  plantGitDir(join(git, "modules", "old"));
+  const snap = gitDirsSnapshot(git);
+  if (!snap) throw new Error("no snapshot");
+  expect(snap.gitDirs).toEqual([join(git, "modules", "old")]);
+  const fresh = join(git, "modules", "new");
+  plantGitDir(fresh);
+  writeFileSync(join(fresh, "commondir"), "/elsewhere");
+  writeFileSync(join(fresh, "config.worktree"), "x");
+  const r = enforceNewGitDirs(snap);
+  expect(r.message).toBe(GIT_METADATA_TAMPERED);
+  expect(r.unsafe).toEqual([]);
+  expect(r.removed.sort()).toEqual(["commondir", "config", "config.worktree", "hooks"].map((n) => join(fresh, n)).sort());
+  expect(readdirSync(fresh)).toEqual(["HEAD"]);
+  // The git dir that was there before is untouched.
+  expect(existsSync(join(git, "modules", "old", "hooks", "post-checkout"))).toBe(true);
+  expect(existsSync(join(git, "modules", "old", "config"))).toBe(true);
+  expect(enforceNewGitDirs(snap)).toEqual({ removed: [], unsafe: [], message: null });
+});
+
+test("a link planted under modules is removed, never followed; a directory inside hooks is left and reported", () => {
+  const snap = gitDirsSnapshot(git)!;
+  writeFileSync(join(outside, "keep"), "precious");
+  symlinkSync(outside, join(git, "modules"));
+  let r = enforceNewGitDirs(snap);
+  expect(r).toEqual({ removed: [join(git, "modules")], unsafe: [], message: GIT_METADATA_TAMPERED });
+  expect(gone(join(git, "modules"))).toBe(true);
+  expect(readFileSync(join(outside, "keep"), "utf8")).toBe("precious");
+
+  const fresh = join(git, "worktrees", "wt");
+  plantGitDir(fresh);
+  mkdirSync(join(fresh, "hooks", "nested"));
+  writeFileSync(join(fresh, "hooks", "nested", "f"), "x");
+  r = enforceNewGitDirs(snap);
+  expect(r.unsafe).toEqual([join(fresh, "hooks", "nested")]);
+  expect(r.message).toBe(gitMetadataUnsafe(join(fresh, "hooks", "nested")));
+  expect(existsSync(join(fresh, "hooks", "nested", "f"))).toBe(true); // never deleted recursively
+  expect(existsSync(join(fresh, "hooks", "post-checkout"))).toBe(false);
+  expect(existsSync(join(fresh, "config"))).toBe(false);
+});
+
+test("git dirs nested beyond the search depth are reported, not silently skipped", () => {
+  const snap = gitDirsSnapshot(git)!;
+  let deep = join(git, "modules");
+  for (let i = 0; i < 12; i++) deep = join(deep, `d${i}`);
+  plantGitDir(deep);
+  const r = enforceNewGitDirs(snap);
+  expect(r.removed).toEqual([]);
+  expect(r.unsafe.length).toBe(1);
+  expect(r.message).toBe(gitMetadataUnsafe(r.unsafe[0]!));
+  expect(existsSync(join(deep, "config"))).toBe(true);
 });
