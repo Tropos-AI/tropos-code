@@ -109,3 +109,15 @@ test("run starts the job without waiting, or is refused without a gateway", asyn
   expect((await tool.run({ action: "run", id: job.id.slice(0, 4) }, ctx)).isError).toBeFalsy();
   expect(started).toEqual([job.id]);
 });
+
+test("from a chat, other chats' jobs cannot be listed, previewed, changed or run", async () => {
+  const mine = createCronTool({ store, defaultDeliver: () => "telegram:1" });
+  const theirs = store.add({ name: "secret", schedule: { kind: "every", ms: 120_000 }, prompt: "private", project: "default", deliver: "telegram:2", createdBy: "agent" });
+  expect(text(await mine.run({ action: "list" }, makeToolContext()))).toBe("No scheduled jobs.");
+  for (const action of ["remove", "enable", "disable", "run"] as const) {
+    const out = await mine.run({ action, id: theirs.id }, makeToolContext());
+    expect(out.isError).toBe(true);
+  }
+  expect((await mine.preview?.({ action: "remove", id: theirs.id }))?.text ?? "").not.toContain("private");
+  expect(store.list()).toHaveLength(1);
+});

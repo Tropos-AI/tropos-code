@@ -66,9 +66,15 @@ export function createCronTool(opts: CronToolOptions) {
     return lines.join("\n");
   }
 
+  // From a chat, only that chat's own jobs are visible: another chat's prompts, targets and ids stay out of reach.
+  function visible(j: CronJob | undefined): CronJob | undefined {
+    if (!j || !opts.defaultDeliver) return j;
+    return j.deliver === opts.defaultDeliver() ? j : undefined;
+  }
+
   function lookup(input: Input): CronJob {
     if (!input.id) throw new Error("id is required");
-    const job = store.find(input.id);
+    const job = visible(store.find(input.id));
     if (!job) throw new Error(`no job "${input.id}"`);
     return job;
   }
@@ -97,7 +103,7 @@ export function createCronTool(opts: CronToolOptions) {
           };
         }
         if (input.action === "list") return undefined;
-        const job = input.id ? store.find(input.id) : undefined;
+        const job = input.id ? visible(store.find(input.id)) : undefined;
         return { header: `Cron: ${input.action} job`, text: job ? jobText(job) : `no job "${input.id ?? ""}"` };
       } catch (e) {
         return { header: `Cron: ${input.action}`, text: errorText(e) };
@@ -107,7 +113,7 @@ export function createCronTool(opts: CronToolOptions) {
       try {
         switch (input.action) {
           case "list": {
-            const jobs = store.list();
+            const jobs = store.list().filter((j) => visible(j));
             return { content: jobs.length ? jobs.map(line).join("\n") : "No scheduled jobs.", summary: `${jobs.length} job${jobs.length === 1 ? "" : "s"}` };
           }
           case "add": {
