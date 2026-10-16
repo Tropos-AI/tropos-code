@@ -13,7 +13,8 @@ export interface SandboxProfile {
 }
 
 export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
-  for (const p of [paths.project, ...paths.gitDirs]) {
+  // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
+  for (const p of [paths.project, paths.cacheDir, paths.readCarveOut, ...paths.gitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
@@ -27,6 +28,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   const husky = named("K", paths.husky);
   const secrets = named("R", paths.deniedReads);
   params.push(["C0", paths.readCarveOut]);
+  params.push(["CD0", paths.cacheDir]);
 
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
@@ -46,17 +48,25 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(regex #"^${escapeRegex(paths.project)}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ];
 
+  const writeAllow = [`(subpath (param "PROJECT"))`, ...writable.map((p) => `(subpath ${p})`), `(subpath (param "CD0"))`];
   const profile = [
     "(version 1)",
     "(allow default)",
+    // Host services a chat must not reach: the Docker daemon, ssh-agent and gpg-agent (Unix sockets), and the
+    // keychain (securityd over Mach). Network over inet stays allowed; git/node/python/bun do not need these.
+    `(deny network-outbound (remote unix-socket))`,
+    `(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.SecurityServer") (global-name-regex #"^com\\.apple\\.security\\."))`,
     "(deny file-write*)",
-    `(allow file-write* (subpath (param "PROJECT")) ${writable.map((p) => `(subpath ${p})`).join(" ")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/(tty|fd/)"))`,
+    `(allow file-write* ${writeAllow.join(" ")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/(tty|fd/)"))`,
     `(deny file-write* ${protections}`,
     ...regexes.map((r) => `  ${r}`),
     ")",
+    // The cache sits inside the now write-denied ~/.tropos; re-allow writing it (last match wins).
+    `(allow file-write* (subpath (param "CD0")))`,
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
-    `(allow file-read* (subpath (param "C0")))`,
+    // Carve back out, after the secret read-deny: the default project and the per-sandbox cache (inside ~/.tropos).
+    `(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))`,
     "",
   ].join("\n");
   return { profile, params };

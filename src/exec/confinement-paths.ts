@@ -4,6 +4,7 @@ import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { isInside } from "../paths";
+import { sandboxCacheDir } from "./env";
 
 export class ConfinementError extends Error {
   override name = "ConfinementError";
@@ -80,8 +81,10 @@ export const CACHE_PATHS: readonly string[] = [
 
 export interface ConfinementPaths {
   project: string;
-  /** Writable besides the project: temp dirs and caches. */
+  /** Writable besides the project: temp dirs (not the per-sandbox cache, which `cacheDir` handles). */
   writable: string[];
+  /** The per-sandbox package-cache root `<home>/sandbox-cache`; writable and readable although it sits inside the denied `~/.tropos`. */
+  cacheDir: string;
   /** `<project>/.git` and, when it is a link, its target inside the project. */
   gitDirs: string[];
   /** `<project>/.husky` and, when it is a link, its target inside the project. */
@@ -105,14 +108,18 @@ export function confinementPaths(opts: { project: string; home: string; userHome
   writable.push(real(platform === "darwin" ? "/private/tmp" : "/tmp"));
   // macOS keeps a per-user cache dir (`getconf DARWIN_USER_CACHE_DIR`) next to the per-user temp dir.
   if (platform === "darwin" && temp && /^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/.test(temp)) writable.push(writablePath(join(dirname(temp), "C")));
-  for (const cache of CACHE_PATHS) writable.push(writablePath(join(userHome, cache)));
 
+  // Only the per-sandbox cache root is writable; the owner's host caches (CACHE_PATHS) stay readable but not writable,
+  // so a poisoned download can't reach the owner's own builds. `chatEnv` points each tool's cache var in here. It sits
+  // inside the denied `~/.tropos`, so the builders carve it back out for read and write (like the workspace).
+  const home = real(opts.home);
   return {
     project,
     writable: unique(writable),
+    cacheDir: real(sandboxCacheDir(opts.home)),
     gitDirs: withLinkTarget(join(project, ".git"), project),
     husky: withLinkTarget(join(project, ".husky"), project),
-    deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), real(opts.home)]),
+    deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
     readCarveOut: real(join(opts.home, "workspace")),
     platform,
   };

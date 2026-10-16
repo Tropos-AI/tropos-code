@@ -43,10 +43,26 @@ test("git's config-driven programs are switched off and its pager variables neve
   expect(overrides).toEqual({
     "core.fsmonitor": "false",
     "core.pager": "cat",
-    "diff.external": "",
     "core.hooksPath": "/dev/null",
     "log.showSignature": "false",
     "gpg.program": "/usr/bin/false",
   });
+  // diff.external is NOT overridden: git has no "off" value and an empty one breaks every patch-printing git diff.
+  expect(Object.keys(overrides)).not.toContain("diff.external");
   expect(env[`GIT_CONFIG_KEY_${count}`]).toBeUndefined();
+});
+
+test("package caches are redirected into the per-sandbox cache, never the owner's host caches", () => {
+  const withHome = chatEnv({ PATH: "/usr/bin" }, { project: "/w/app", troposHome: "/h/.tropos" });
+  expect(withHome.npm_config_cache).toBe("/h/.tropos/sandbox-cache/npm");
+  expect(withHome.npm_config_store_dir).toBe("/h/.tropos/sandbox-cache/pnpm");
+  expect(withHome.BUN_INSTALL_CACHE_DIR).toBe("/h/.tropos/sandbox-cache/bun");
+  expect(withHome.PIP_CACHE_DIR).toBe("/h/.tropos/sandbox-cache/pip");
+  expect(withHome.YARN_CACHE_FOLDER).toBe("/h/.tropos/sandbox-cache/yarn");
+  expect(withHome.GOMODCACHE).toBe("/h/.tropos/sandbox-cache/go-mod");
+  expect(withHome.GOCACHE).toBe("/h/.tropos/sandbox-cache/go-build");
+  // Toolchains stay reachable: CARGO_HOME is left alone so ~/.cargo/bin and rustup still resolve.
+  expect(withHome.CARGO_HOME).toBeUndefined();
+  // Without a home (e.g. a diagnostic call), no cache vars are set.
+  expect(chatEnv({ PATH: "/usr/bin" }, { project: "/w/app" }).npm_config_cache).toBeUndefined();
 });

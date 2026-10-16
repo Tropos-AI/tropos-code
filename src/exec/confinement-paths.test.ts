@@ -49,12 +49,14 @@ test("paths are real paths; Tropos's home is denied and its workspace carved out
   expect(paths.deniedReads).toContain(realpathOr("/Library/Keychains"));
   expect(paths.deniedReads).toHaveLength(SECRET_PATHS.length + 1);
   expect(paths.readCarveOut).toBe(join(fx, "home", ".tropos", "workspace"));
+  expect(paths.cacheDir).toBe(join(fx, "home", ".tropos", "sandbox-cache"));
   expect(paths.writable).toContain(join(fx, "tmp"));
   expect(paths.writable).toContain(realpathOr("/tmp")); // root's, so resolved even when it is a link (macOS)
-  expect(paths.writable).toContain(join(fx, "home", ".npm"));
-  expect(paths.writable).toContain(join(fx, "home", ".cache", "pnpm")); // missing caches may be created
+  // The owner's host caches are NOT writable; only the per-sandbox cache is (handled via cacheDir, not in writable).
+  expect(paths.writable).not.toContain(join(fx, "home", ".npm"));
+  expect(paths.writable).not.toContain(join(fx, "home", ".cache", "pnpm"));
   expect(paths.writable).toHaveLength(new Set(paths.writable).size);
-  for (const p of [...paths.writable, ...paths.deniedReads, ...paths.gitDirs, ...paths.husky]) expect(/homelink|projlink|fxlink/.test(p)).toBe(false);
+  for (const p of [...paths.writable, ...paths.deniedReads, ...paths.gitDirs, ...paths.husky, paths.cacheDir]) expect(/homelink|projlink|fxlink/.test(p)).toBe(false);
 });
 
 test("darwin adds /private/tmp, not /tmp", () => {
@@ -71,19 +73,20 @@ test.skipIf(!darwinTemp)("a darwin per-user temp dir brings its sibling C (the p
   expect(paths.writable).toContain(join(dirname(t), "C"));
 });
 
-test("a writable path whose last part is a link is left out, so one run can't widen the next run's writes", () => {
+test("a writable temp path whose last part is a link is left out, so one run can't widen the next run's writes", () => {
   mk("home", ".ssh");
-  mk("home", ".cache");
   mk("tmp");
-  // A chat may write a cache path itself (its subpath includes the path), so it can plant these links.
-  symlinkSync(join(fx, "home", ".ssh"), join(fx, "home", ".npm"));
-  symlinkSync(join(fx, "home"), join(fx, "home", ".cache", "pip"));
-  symlinkSync(join(fx, "tmp"), join(fx, "tmplink"));
+  // A chat can write inside its temp dir, so it can plant a link where TMPDIR points; following it would widen writes.
+  symlinkSync(join(fx, "home", ".ssh"), join(fx, "tmplink"));
   const paths = confinementPaths({ project: mk("proj"), home: join(fx, "home", ".tropos"), userHome: join(fx, "home"), env: { TMPDIR: join(fx, "tmplink") }, platform: "linux" });
-  for (const p of [join(fx, "home"), join(fx, "home", ".ssh"), join(fx, "home", ".npm"), join(fx, "home", ".cache", "pip"), join(fx, "tmp"), join(fx, "tmplink")]) {
-    expect(paths.writable).not.toContain(p);
-  }
-  expect(paths.writable).toContain(join(fx, "home", ".cache", "pnpm"));
+  for (const p of [join(fx, "home", ".ssh"), join(fx, "tmplink")]) expect(paths.writable).not.toContain(p);
+});
+
+test("the per-sandbox cache sits under Tropos's home and is not among the host-cache writables", () => {
+  const paths = confinementPaths({ project: mk("proj"), home: join(fx, "home", ".tropos"), userHome: mk("home"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
+  expect(paths.cacheDir).toBe(join(fx, "home", ".tropos", "sandbox-cache"));
+  // The owner's host caches appear nowhere in writable.
+  for (const cache of CACHE_PATHS) expect(paths.writable).not.toContain(join(fx, "home", cache));
 });
 
 test("a .git symlink to a folder inside the project protects that folder too", () => {

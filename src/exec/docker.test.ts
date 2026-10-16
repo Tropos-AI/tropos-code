@@ -93,9 +93,10 @@ describe("protectedPaths", () => {
     const ws = await makeTmpDir("tropos-prot-");
     try {
       await mkdir(join(ws, ".git"));
-      expect(protectedPaths(ws)).toEqual([join(ws, ".git", "hooks"), join(ws, ".git", "config")]);
+      expect(protectedPaths(ws)).toEqual([join(ws, ".git", "hooks"), join(ws, ".git", "config"), join(ws, ".git", "config.worktree")]);
       expect(existsSync(join(ws, ".git", "hooks"))).toBe(true);
       expect(readFileSync(join(ws, ".git", "config"), "utf8")).toBe("");
+      expect(readFileSync(join(ws, ".git", "config.worktree"), "utf8")).toBe("");
     } finally {
       await removeDir(ws);
     }
@@ -123,6 +124,18 @@ describe("protectedPaths", () => {
         expect(paths).toContain(join(ws, dir, "hooks"));
         expect(paths).toContain(join(ws, dir, "config"));
       }
+    } finally {
+      await removeDir(ws);
+    }
+  });
+  test("commondir is mounted read-only only when it already exists (an empty one would break git)", async () => {
+    const ws = await makeTmpDir("tropos-prot-");
+    try {
+      await mkdir(join(ws, ".git"));
+      expect(protectedPaths(ws)).not.toContain(join(ws, ".git", "commondir"));
+      expect(existsSync(join(ws, ".git", "commondir"))).toBe(false); // not created
+      await writeFile(join(ws, ".git", "commondir"), "../..\n");
+      expect(protectedPaths(ws)).toContain(join(ws, ".git", "commondir"));
     } finally {
       await removeDir(ws);
     }

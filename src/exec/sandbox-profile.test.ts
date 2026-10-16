@@ -8,7 +8,8 @@ import { sandboxProfile } from "./sandbox-profile";
 
 const base: ConfinementPaths = {
   project: "/w/app",
-  writable: ["/private/var/folders/x/y/T", "/private/tmp", "/u/.npm"],
+  writable: ["/private/var/folders/x/y/T", "/private/tmp"],
+  cacheDir: "/u/.tropos/sandbox-cache",
   gitDirs: ["/w/app/.git", "/w/app/realgit"],
   husky: ["/w/app/.husky"],
   deniedReads: ["/u/.ssh", "/u/.tropos", "/Library/Keychains"],
@@ -22,15 +23,19 @@ const ruleWith = (profile: string, head: string) => {
   return line;
 };
 
-test("the rules come in the order the sandbox needs: base write deny, allows, protections, read denies, carve-out last", () => {
+test("the rules come in the order the sandbox needs: service denies, base write deny, allows, protections, read denies, carve-out last", () => {
   const { profile } = sandboxProfile(base);
-  const order = ["(version 1)", "(allow default)", "(deny file-write*)", "(allow file-write* (subpath (param \"PROJECT\"))", "(deny file-write* (literal (param \"PROJECT\"))", "(deny file-read* (subpath (param \"R0\"))", "(allow file-read* (subpath (param \"C0\")))"];
+  const order = ["(version 1)", "(allow default)", "(deny network-outbound (remote unix-socket))", "(deny mach-lookup", "(deny file-write*)", "(allow file-write* (subpath (param \"PROJECT\"))", "(deny file-write* (literal (param \"PROJECT\"))", "(deny file-read* (subpath (param \"R0\"))", "(allow file-read* (subpath (param \"C0\")) (subpath (param \"CD0\")))"];
   const at = order.map((rule) => profile.indexOf(rule));
   for (const i of at) expect(i).toBeGreaterThanOrEqual(0);
   expect(at).toEqual([...at].sort((a, b) => a - b));
-  expect(profile.trimEnd().endsWith('(allow file-read* (subpath (param "C0")))')).toBe(true);
+  expect(profile.trimEnd().endsWith('(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))')).toBe(true);
+  // Host services: the keychain (securityd) over Mach and every Unix-socket connect (docker.sock, ssh/gpg agents).
+  const mach = ruleWith(profile, "(deny mach-lookup");
+  for (const svc of ['(global-name "com.apple.securityd")', '(global-name "com.apple.SecurityServer")']) expect(mach).toContain(svc);
+  expect(mach).toContain('(global-name-regex #"^com\\.apple\\.security\\.")');
   const allow = ruleWith(profile, "(allow file-write*");
-  for (const k of ["W0", "W1", "W2"]) expect(allow).toContain(`(subpath (param "${k}"))`);
+  for (const k of ["W0", "W1", "CD0"]) expect(allow).toContain(`(subpath (param "${k}"))`);
   for (const dev of ['(literal "/dev/null")', '(literal "/dev/zero")', '(literal "/dev/dtracehelper")', '(regex #"^/dev/(tty|fd/)")']) expect(allow).toContain(dev);
   const protect = ruleWith(profile, "(deny file-write* (literal");
   for (const k of ["G0", "G1"]) expect(protect).toContain(`(literal (param "${k}"))`);
@@ -46,13 +51,13 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     ["PROJECT", paths.project],
     ["W0", base.writable[0]!],
     ["W1", base.writable[1]!],
-    ["W2", base.writable[2]!],
     ["G0", paths.gitDirs[0]!],
     ["K0", paths.husky[0]!],
     ["R0", base.deniedReads[0]!],
     ["R1", base.deniedReads[1]!],
     ["R2", base.deniedReads[2]!],
     ["C0", base.readCarveOut],
+    ["CD0", base.cacheDir],
   ]);
   const escaped = "/w/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\^\\$\\|\\?\\*";
   const embedding = profile.split("\n").filter((l) => l.includes("/w/a"));
@@ -60,7 +65,7 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     `  (regex #"^${escaped}/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`,
     `  (regex #"^${escaped}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ]);
-  for (const p of [...base.writable, ...base.deniedReads, base.readCarveOut]) expect(profile).not.toContain(p);
+  for (const p of [...base.writable, ...base.deniedReads, base.readCarveOut, base.cacheDir]) expect(profile).not.toContain(p);
 
   expect(() => sandboxProfile({ ...base, project: '/w/a"b' })).toThrow(new ConfinementError(`/w/a"b can't be confined: its path contains a double quote.`));
   expect(() => sandboxProfile({ ...base, gitDirs: ["/w/app/.git", '/w/app/g"it'] })).toThrow(ConfinementError);
@@ -89,10 +94,11 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
     const fx = realpathSync(mkdtempSync(join(tmpdir(), "tropos-sbx-")));
     const userHome = join(fx, "home");
     const project = join(fx, "p.r+o(j) [1]");
-    for (const d of [join(userHome, ".ssh"), join(userHome, ".tropos", "workspace"), join(project, ".git", "hooks"), join(project, ".tropos"), join(fx, "tmp"), join(fx, "outside")]) mkdirSync(d, { recursive: true });
+    for (const d of [join(userHome, ".ssh"), join(userHome, ".tropos", "workspace"), join(userHome, ".tropos", "sandbox-cache"), join(userHome, ".npm"), join(project, ".git", "hooks"), join(project, ".tropos"), join(fx, "tmp"), join(fx, "outside")]) mkdirSync(d, { recursive: true });
     writeFileSync(join(userHome, ".ssh", "id"), "key");
     writeFileSync(join(userHome, ".tropos", "gateway.json"), "{}");
     writeFileSync(join(userHome, ".tropos", "workspace", "f"), "w");
+    writeFileSync(join(userHome, ".npm", "cached"), "pkg");
     writeFileSync(join(project, ".git", "config"), "");
     writeFileSync(join(project, ".tropos", "settings.json"), "{}");
     return { fx, userHome, project };
@@ -118,6 +124,64 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(paths, `cat "${join(userHome, ".tropos", "gateway.json")}"`)).not.toBe(0);
       expect(run(paths, `cat "${join(userHome, ".tropos", "workspace", "f")}"`)).toBe(0);
       expect(readdirSync(project).sort()).toEqual([".git", ".tropos", "src", "sub"]); // sub made by `mkdir -p`, its .tropos refused
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("the per-sandbox cache is writable and readable; the owner's host cache is not writable", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(paths, `echo pkg > "${join(paths.cacheDir, "x")}" && cat "${join(paths.cacheDir, "x")}"`)).toBe(0);
+      expect(run(paths, `echo poison > "${join(userHome, ".npm", "cached")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(userHome, ".npm", "cached")}"`)).toBe(0); // host cache stays readable
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("host services are denied: the keychain and Unix-domain sockets", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      // A throwaway keychain with a secret; the lookup goes through securityd, which the profile blocks.
+      const keychain = join(fx, "tk.keychain");
+      Bun.spawnSync(["/usr/bin/security", "create-keychain", "-p", "x", keychain]);
+      Bun.spawnSync(["/usr/bin/security", "add-generic-password", "-a", "me", "-s", "svc", "-w", "topsecret", keychain]);
+      try {
+        const open = Bun.spawnSync(["/usr/bin/security", "find-generic-password", "-s", "svc", "-w", keychain]);
+        expect(open.stdout.toString().trim()).toBe("topsecret"); // reachable without the sandbox
+        const { profile, params } = sandboxProfile(paths);
+        const denied = Bun.spawnSync(["/usr/bin/sandbox-exec", "-p", profile, ...params.flatMap(([k, v]) => ["-D", `${k}=${v}`]), "/usr/bin/security", "find-generic-password", "-s", "svc", "-w", keychain], { cwd: paths.project, env: { PATH: "/usr/bin:/bin" } });
+        expect(denied.stdout.toString()).not.toContain("topsecret");
+      } finally {
+        Bun.spawnSync(["/usr/bin/security", "delete-keychain", keychain]);
+      }
+      // A local Unix-domain socket a chat must not connect to (stands in for docker.sock / the ssh-agent socket).
+      const sockDir = realpathSync(mkdtempSync(join("/tmp", "ts-")));
+      const sock = join(sockDir, "s");
+      const server = Bun.listen({ unix: sock, socket: { data() {} } });
+      try {
+        const script = `cat <<'PY' | /usr/bin/python3 -I -\nimport socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry:\n  s.connect("${sock}"); print("CONNECTED")\nexcept Exception as e:\n  print("FAILED")\nPY`;
+        const { profile, params } = sandboxProfile(paths);
+        const r = Bun.spawnSync(["/usr/bin/sandbox-exec", "-p", profile, ...params.flatMap(([k, v]) => ["-D", `${k}=${v}`]), "/bin/sh", "-c", script], { cwd: paths.project, env: { PATH: "/usr/bin:/bin" } });
+        expect(r.stdout.toString()).toContain("FAILED");
+        expect(r.stdout.toString()).not.toContain("CONNECTED");
+      } finally {
+        server.stop(true);
+        rmSync(sockDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("git and python still run under the profile (the service denies don't break them)", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(paths, "/usr/bin/git --version >/dev/null && /usr/bin/python3 -c 'print(1)' >/dev/null")).toBe(0);
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }

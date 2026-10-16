@@ -12,6 +12,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { CwdMarker, ExecBackend, ExecSpawn } from "./backend";
+import { commondirSnapshot, enforceCommondir } from "./git-integrity";
 
 export interface DockerBackendOptions {
   workspace: string;
@@ -79,9 +80,15 @@ export function protectedPaths(workspace: string): string[] {
     for (const gitDir of [git, ...submoduleGitDirs(resolve(join(git, "modules")), 0)]) {
       const hooks = resolve(join(gitDir, "hooks"));
       const config = resolve(join(gitDir, "config"));
+      const configWorktree = resolve(join(gitDir, "config.worktree"));
       mkdirSync(hooks, { recursive: true });
       writeFileSync(config, "", { flag: "a" });
-      out.push(hooks, config);
+      writeFileSync(configWorktree, "", { flag: "a" });
+      out.push(hooks, config, configWorktree);
+      // `commondir` moves where git looks for hooks/config; it can't be pre-created empty (git then fails to read
+      // it), so it is mounted read-only only when it exists. Its creation is caught by the post-run guard below.
+      const commondir = resolve(join(gitDir, "commondir"));
+      if (existsSync(commondir)) out.push(commondir);
     }
   } else if (info?.isFile()) {
     out.push(git);
@@ -188,11 +195,39 @@ export class DockerBackend implements ExecBackend {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
+    // `.git/commondir` can't be mounted read-only when it doesn't exist (an empty one breaks git), so a command that
+    // creates one is caught here and the file removed before the owner's next host `git` runs.
+    const gitDirs = this.workspaceGitDirs();
+    const before = commondirSnapshot(gitDirs);
+    child.once("close", () => {
+      try {
+        enforceCommondir(gitDirs, before);
+      } catch {
+        // workspace gone; nothing to undo
+      }
+    });
     return child;
   }
 
   cwdMarker(id: string): CwdMarker {
     return { inside: `${INSIDE_RUN}/cwd-${id}`, host: join(this.runDir, `cwd-${id}`) };
+  }
+
+  /** The workspace's git dirs (repo, submodules, linked worktrees) for the `commondir` post-run check. */
+  private workspaceGitDirs(): string[] {
+    const git = join(this.workspace, ".git");
+    try {
+      if (!lstatSync(git).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    let worktrees: string[] = [];
+    try {
+      worktrees = readdirSync(join(git, "worktrees"), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(git, "worktrees", e.name));
+    } catch {
+      // no linked worktrees
+    }
+    return [git, ...submoduleGitDirs(join(git, "modules"), 0), ...worktrees];
   }
 
   signal(child: ChildProcess, sig: NodeJS.Signals): void {
