@@ -138,36 +138,95 @@ tcode pairing approve telegram <code>     # let a person in (also in the web UI 
 ```
 
 Scheduled work: ask the agent in a chat ("every weekday at 9, summarise the open PRs") or use Schedule in the web
-UI / `tcode cron add`. Each run is a fresh sandboxed session in its project; the result is delivered to your chat.
-A run has nobody to ask, so a command runs only if the job lists a rule for it (`allowCommands`).
+UI / `tcode cron add`. Each run is a fresh session in its project, at that project's autonomy level; the result is
+delivered to your chat. A run has nobody to ask, so whatever would still ask is denied, unless the job lists a rule
+for it (`allowCommands`).
 
-It is built so that a message from a chat can't do what a person at the keyboard can:
+### Where a chat's commands run
+
+Chats and scheduled runs run their commands on this machine, in the project's directory, confined by the operating
+system: `sandbox-exec` on macOS, `bwrap` (bubblewrap) on Linux. Docker is optional: `"chat": { "backend": "docker" }`
+in `~/.tropos/gateway.json`. A change there applies to the next session a chat starts.
+
+- **Writes** go only to the project, the temp directories and Tropos's per-sandbox package caches
+  (`~/.tropos/sandbox-cache/<tool>`: npm, pnpm, bun, pip, yarn and Go are pointed there, so a chat's download never
+  lands in your own caches; the first install in a chat downloads again). `.git/hooks`, `.git/config`, `.husky` (and
+  the same under submodules and worktrees) and the project's `.tropos/settings*.json` can't be written at all, nor can
+  anything in `~/.tropos`, `gateway.json` included: no chat can raise its own level.
+- **Reads** are allowed everywhere except your secrets: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.netrc`,
+  `~/.npmrc`, cloud and Docker credentials, keychains, browser profiles and `~/.tropos` (its managed workspace
+  excepted). The list is `SECRET_PATHS` in `src/exec/confinement-paths.ts`.
+- **Network** is on, so installs and `git fetch` work.
+- **The environment** is an allowlist: `PATH` (without relative or in-project entries), `HOME`, `USER`, `SHELL`,
+  `LANG`, `LC_*`, `TERM` and `TMPDIR`. Tokens and keys your shell exports (the bot token too) don't come along. Git
+  runs with hooks, `core.fsmonitor`, pagers and signing turned off.
+- Inside, setuid tools (`sudo`, `ps` on macOS) and nested sandboxes (Docker, another `sandbox-exec`/`bwrap`) don't
+  work.
+
+If a project can't be confined (a linked sandbox cache, a `bwrap` a chat could replace), the chat is told so and
+nothing runs. With Docker chosen and Docker not running, the same: there is no fallback to your shell.
+
+**Without confinement** (no `sandbox-exec`, `bwrap` not installed): commands run unconfined, as you, but with the same
+allowlisted environment. At `ask` that works as usual, since you approve every command. A higher level needs you to
+confirm "run unconfined" first (recorded as `chat.allowUnconfined`); until you do, chats keep asking.
+
+### How freely a chat acts
+
+| Level | File edits in the project | Read-only commands and the project's tests | Other commands | MCP tools |
+|---|---|---|---|---|
+| `ask` | ask | ask | ask | ask |
+| `balanced` (default) | allowed | allowed | ask | ask |
+| `autonomous` | allowed | allowed | allowed | ask |
+
+The level is `chat.autonomy` in `~/.tropos/gateway.json`, and a project entry's `autonomy` overrides it. Open chats
+follow a change as soon as the gateway reads the file again: on a dashboard save, or when any chat starts a session. A guest's chat (anyone you approved who isn't the owner) and a job made in one always ask.
+`balanced` lets the agent run code it wrote: it may edit a test file and then run the project's tests, inside the
+confinement. What it still asks for is installs, pushes, deletions, network tools and everything else; edits to the
+files that define the tests (`package.json`, `Makefile`, …) and to `.git`, `.husky` and `.tropos` settings ask at
+every level.
+
+**Existing installs** (a gateway set up before this setting existed) stay on Docker and `ask` until you switch them.
+
+### What confinement does not protect
+
+- Reads of files outside the project that aren't on the secret list are allowed (a chat can read your other
+  repositories), and the per-sandbox caches are writable, shared by every chat.
+- Git config that already runs programs keeps doing so: a `diff.external` or a textconv driver in your own or the
+  repo's config runs on `git diff` in a chat. A chat can't write `.git/config` to add one.
+- A repo whose `.git/hooks` is a link, or whose hooks link into the project, is refused on its first command (a chat
+  could change those hooks). Use `git config core.hooksPath <dir>` instead.
+- Git metadata a command plants anyway (a `commondir`, hooks or config in a new submodule or worktree, a link into a
+  writable folder) is undone after the command, and the command fails saying so. What can't be undone safely is moved
+  aside to `.git/hooks/.tropos-quarantine-*` and every later command fails until you look at it and remove it.
+- A command started in the background can outlive its tool call. It is checked again before the next chat command
+  and when the session closes, but a `git` command you run yourself in between can see what it planted.
+- A nested repository the chat writes into the working tree (`lib/.git` with hooks) is like an edited Makefile or
+  `package.json` script: it runs when you use it. So is `AGENTS.md`, which later sessions read as instructions.
+- On Linux, `bwrap` needs the protected paths to exist, so an empty `.git` (in a project without one), `.husky` and
+  `.tropos` appear in the project. Linux confinement is the newer one: its tests with real `bwrap` run only on a
+  Linux machine (or CI runner) that has it installed; elsewhere a stand-in checks the rest.
+
+### What else keeps a chat in check
 
 - **Nobody is in by default.** An unknown sender gets a one-time code (valid for an hour) and nothing
   they write reaches the agent until you approve the code on this machine. `tcode pairing list` and
   `revoke` manage who is in.
-- **Commands run in a Docker container.** It sees only the workspace (mounted at the same path), starts with an
-  empty environment, has no network (set `sandbox.network` to `bridge` in `gateway.json` to allow it), a
-  read-only root filesystem, no capabilities and memory, CPU and process limits. Your home directory,
-  `~/.ssh`, `~/.tropos` and your credentials are not in it, and neither can `.git/hooks`, `.git/config` or
-  `.husky` be changed from inside (nor the same under submodules), since your next `git` command would run
-  them. Run `git init` in a project first: without a `.git` there is nothing to protect, and the gateway warns
-  (the managed default project is initialised for you). If Docker isn't running, the
-  chat is told so and nothing runs: there is no fallback to your shell. A workspace that is your home directory,
-  a parent of it, or `~/.tropos` is refused.
-- **Every edit and command asks you first**, as Approve / Deny buttons in the chat. Your own "allow" rules
-  don't apply there, a chat can't grant "always allow", can't use bypass or accept-edits mode, and its file
-  tools are confined to the workspace (a path outside it, or a symlink out of it, is refused, not asked about).
-  A request too long to show in full is denied rather than put behind a button. MCP tools always ask. A chat
-  has no WebFetch and no session search (your other transcripts), and formatters and language servers are off.
+- **Your own "allow" rules don't apply** in a chat: what runs unasked is what the level allows. A chat can't grant
+  "always allow", can't use bypass or accept-edits mode, and its file tools are confined to the project (a path outside
+  it, or a symlink out of it, is refused, not asked about). A request too long to show in full is denied rather than
+  put behind a button. A chat has no WebFetch and no session search (your other transcripts), and formatters and
+  language servers are off. A project that is your home directory, a parent of it, or `~/.tropos` is refused.
 - **It doesn't learn from chats.** The background learning review is off for chat sessions, because what a
   chat says is untrusted and notes and skills outlive it.
+- **Docker, if you choose it**, runs each session in a container that sees only the project (at the same path), with
+  an empty environment, no network unless `sandbox.network` is `bridge`, a read-only root filesystem, no capabilities
+  and memory, CPU and process limits.
 
-What it does not do: the file tools (Read, Write, Edit, Glob, Grep) run on your machine, kept to the workspace
-by the permission engine rather than by the container, and a container is not a perfect boundary. Treat the
-workspace as the thing a chat can damage. A command that you approve can still edit `package.json` scripts or
-a Makefile, which run when you next use them, or `AGENTS.md`, which later sessions read as instructions: read what you approve. The TUI is not yet a client of the daemon; `tcode` still runs on its
-own. Design: `docs/superpowers/specs/2026-10-15-gateway-core-design.md` and `2026-10-15-control-plane-design.md`.
+Run `git init` in a project first: without a `.git` there is nothing to protect, and the gateway warns (the managed
+default project is initialised for you). Treat the project as the thing a chat can damage, and read what you approve.
+The TUI is not yet a client of the daemon; `tcode` still runs on its own. Design:
+`docs/superpowers/specs/2026-10-15-gateway-core-design.md`, `2026-10-15-control-plane-design.md` and
+`2026-10-16-setup-autonomy-access-design.md`.
 
 ## Permissions
 

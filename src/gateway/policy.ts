@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import type { Mode } from "../config/constants";
 import { isInside } from "../paths";
 import { STORE_TOOLS } from "../learning/stores";
-import { compileRules } from "../permissions/engine";
+import { compileRules, type AutonomyPolicy } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
 import { privateTelegramSender } from "./revocation";
@@ -42,9 +42,10 @@ const ALWAYS_ASK = ["mcp__*"];
 
 /**
  * The context for one chat's session: the gateway's workspace context, narrowed. It never widens anything:
- * the base rules and settings are the user's own, and what is changed only restricts.
+ * the base rules and settings are the user's own, and what is changed only restricts. The one thing that lets work
+ * run unasked is `autonomy`, read on every decision so a changed level applies to the open session.
  */
-export function channelContext(base: AppContext, exec: ExecBackend, opts: { role: SessionRole }): AppContext {
+export function channelContext(base: AppContext, exec: ExecBackend, opts: { role: SessionRole; autonomy?: () => AutonomyPolicy }): AppContext {
   const { role } = opts;
   const forced = compileRules({ allow: [], ask: ALWAYS_ASK, deny: [] }).rules;
   return {
@@ -52,6 +53,7 @@ export function channelContext(base: AppContext, exec: ExecBackend, opts: { role
     origin: "channel",
     role,
     exec,
+    autonomy: opts.autonomy,
     tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name) && (role === "owner" || !OWNER_ONLY_TOOLS.has(t.name))),
     // Formatters and language servers run on the host and load config from the project, which a sandboxed command can
     // write without the write guard noticing. The owner's notes and journal are private: a guest's chat or a scheduled

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { dockerCheck } from "../../src/gateway/daemon";
 import type { ChildProcess } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../helpers/fake-model";
@@ -12,6 +13,7 @@ import { localBackend } from "../../src/exec/local";
 import type { ExecBackend, ExecSpawn } from "../../src/exec/backend";
 import { FakeTelegramServer } from "../helpers/telegram-fake-server";
 import { TelegramApi } from "../../src/gateway/telegram/api";
+import { confinementAvailable } from "../../src/exec/confined";
 
 const CHAT = 4242;
 
@@ -50,7 +52,13 @@ function spyBackend() {
   } satisfies ExecBackend & { ran: string[]; closed: number };
 }
 
-function startGateway(steps: Step[], opts: { sandboxProblem?: string; backend?: ExecBackend; realDocker?: boolean } = {}) {
+/** Chats run in Docker, asking for everything: how installs from before the host backend keep running. */
+const useDocker = async () => {
+  await mkdir(home, { recursive: true });
+  await Bun.write(join(home, "gateway.json"), JSON.stringify({ chat: { backend: "docker", autonomy: "ask" } }));
+};
+
+function startGateway(steps: Step[], opts: { sandboxProblem?: string; backend?: ExecBackend; realDocker?: boolean; realHost?: boolean; env?: NodeJS.ProcessEnv } = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const model = new FakeModel(steps);
@@ -61,12 +69,12 @@ function startGateway(steps: Step[], opts: { sandboxProblem?: string; backend?: 
     model,
     out: (s) => out.push(s),
     err: (s) => err.push(s),
-    env: { TROPOS_HOME: home, SHELL: "/bin/bash", TROPOS_TELEGRAM_BOT_TOKEN: server.token },
+    env: { TROPOS_HOME: home, SHELL: "/bin/bash", TROPOS_TELEGRAM_BOT_TOKEN: server.token, ...opts.env },
     cwd: project,
     gatewayUntil: () => stopped,
     gatewaySeams: {
       sweep: false,
-      ...(opts.realDocker
+      ...(opts.realDocker || opts.realHost
         ? {}
         : {
             sandboxCheck: async () => opts.sandboxProblem,
@@ -94,6 +102,7 @@ const pair = async (code: string) => {
 const codeFrom = (text: string) => /approve telegram ([A-Z0-9]{8})/.exec(text)?.[1] ?? "";
 
 const dockerProblem = await dockerCheck()();
+const confinement = await confinementAvailable();
 
 describe("tcode gateway", () => {
   test("a stranger is paired by the owner, then a chat runs a sandboxed command after Approve", async () => {
@@ -232,7 +241,8 @@ describe("tcode gateway", () => {
     expect(await gw.done).toBe(0);
   });
 
-  test("with the sandbox unavailable the chat is told so and nothing runs", async () => {
+  test("with Docker chosen but unavailable the chat is told so and nothing runs", async () => {
+    await useDocker();
     const gw = startGateway([], { sandboxProblem: "Docker isn't running" });
     await server.waitFor(() => server.commands.length > 0);
     server.pushMessage(CHAT, CHAT, "hi");
@@ -270,6 +280,7 @@ describe("tcode gateway", () => {
   test.skipIf(dockerProblem !== undefined)("with the real Docker sandbox: the chat's command sees the workspace and nothing of the host", async () => {
     process.env.GATEWAY_E2E_HOST_SECRET = "host-only-value";
     try {
+      await useDocker();
       const gw = startGateway(
         [
           () => reply([toolUseBlock("t1", "Bash", { command: "pwd; echo HOME=$HOME; echo SECRET=${GATEWAY_E2E_HOST_SECRET:-unset}; ls /Users 2>&1 | head -1; echo written > real.txt; cat real.txt" })], "tool_use"),
@@ -298,4 +309,51 @@ describe("tcode gateway", () => {
       delete process.env.GATEWAY_E2E_HOST_SECRET;
     }
   }, 90_000);
+
+  test.skipIf(confinement === null)("with real confinement: the chat's command runs in the project with only the allowlisted environment", async () => {
+    // Tropos's own home, where gateway.json (the autonomy level) lives: a chat command can't write there.
+    const gatewayJson = join(home, "gateway.json");
+    // Not a secret, outside the project: readable on the host (confinement doesn't hide it), absent in a container.
+    const notes = join(dir, "notes.txt");
+    await Bun.write(notes, "host-notes");
+    const userHome = join(dir, "userhome");
+    await mkdir(userHome);
+    const gw = startGateway(
+      [
+        () =>
+          reply(
+            [
+              toolUseBlock("t1", "Bash", {
+                command: `pwd; echo HOME=$HOME; echo SECRET=\${GATEWAY_E2E_HOST_SECRET:-unset}; echo TOKEN=\${TROPOS_TELEGRAM_BOT_TOKEN:-unset}; cat '${notes}'; echo written > real.txt; cat real.txt; echo '{}' > '${gatewayJson}' || echo gateway-json-refused`,
+              }),
+            ],
+            "tool_use",
+          ),
+        () => reply([textBlock("inspected")]),
+      ],
+      { realHost: true, env: { PATH: "/usr/bin:/bin", HOME: userHome, GATEWAY_E2E_HOST_SECRET: "host-only-value" } },
+    );
+    await server.waitFor(() => server.commands.length > 0);
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.sent.length >= 1);
+    await pair(codeFrom(server.sent[0]!.text));
+    server.pushMessage(CHAT, CHAT, "look around");
+    // A fresh install is at balanced: the write asks.
+    const ask = await server.waitFor(() => server.sent.find((m) => m.replyMarkup));
+    server.pushCallback(CHAT, CHAT, ask.messageId, ask.replyMarkup!.inline_keyboard[0]![0]!.callback_data);
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("inspected")), 30_000);
+
+    const result = (gw.model.requests.at(-1)!.messages.at(-1)!.content as { type: string; content?: unknown }[]).find((b) => b.type === "tool_result");
+    const seen = String(result?.content);
+    expect(seen).toContain(realpathSync(project)); // pwd: the project, on the host
+    expect(seen).toContain(`HOME=${userHome}`); // the owner's HOME is on the allowlist
+    expect(seen).toContain("host-notes"); // on the host, not in a container
+    expect(seen).toContain("SECRET=unset"); // the owner's environment didn't come along
+    expect(seen).toContain("TOKEN=unset"); // nor the bot token
+    expect(seen).toContain("gateway-json-refused"); // and no command can raise its own level
+    expect(JSON.parse(await readFile(gatewayJson, "utf8")).chat).toEqual({ autonomy: "balanced", backend: "host" });
+    expect(await readFile(join(project, "real.txt"), "utf8")).toBe("written\n");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  }, 60_000);
 });

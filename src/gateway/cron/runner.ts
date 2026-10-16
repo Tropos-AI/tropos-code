@@ -19,8 +19,9 @@ export interface JobRunnerDeps {
 }
 
 /**
- * A scheduled run has nobody to approve anything: a request is allowed only when the job lists a rule for it
- * (`allowCommands`, e.g. "Bash(npm test:*)"), and then only for a command inside the sandbox. Everything else is denied.
+ * A scheduled run has nobody to approve anything. Its session carries its project's autonomy (at `balanced`, read-only
+ * commands and pinned tests run unasked); whatever still asks is denied here unless the job lists it (`allowCommands`,
+ * e.g. "Bash(npm test:*)"), and then only for a command inside the project.
  */
 export function allowedByJob(prompt: PermissionPrompt, job: CronJob, cwd: string, home: string): boolean {
   if (!job.allowCommands?.length || prompt.toolName !== "Bash") return false;

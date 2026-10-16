@@ -40,7 +40,7 @@ afterEach(async () => {
 
 type UntilInfo = Parameters<NonNullable<GatewayRun["until"]>>[0];
 
-function startGateway(steps: Step[], services: GatewayService[] = [], opts: { botTokenInEnv?: boolean } = {}) {
+function startGateway(steps: Step[], services: GatewayService[] = [], opts: { botTokenInEnv?: boolean; seams?: Partial<NonNullable<GatewayRun["seams"]>> } = {}) {
   const err: string[] = [];
   const workspaces: string[] = [];
   const backendsClosed: string[] = [];
@@ -65,11 +65,20 @@ function startGateway(steps: Step[], services: GatewayService[] = [], opts: { bo
       sandboxCheck: async () => undefined,
       backend: (workspace) => {
         workspaces.push(workspace);
-        return { ...localBackend, close: async () => void backendsClosed.push(workspace) } as ExecBackend;
+        // Commands run on the host; the backend only records that it was closed.
+        return {
+          kind: "local",
+          spawn: (o) => localBackend.spawn(o),
+          cwdMarker: (id) => localBackend.cwdMarker(id),
+          signal: (child, sig) => localBackend.signal(child, sig),
+          alive: (child) => localBackend.alive(child),
+          close: async () => void backendsClosed.push(workspace),
+        } satisfies ExecBackend;
       },
       telegramApi: new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} }),
       telegramOptions: { minIntervalMs: 0, pollTimeoutSec: 1 },
       assets: new Map(),
+      ...opts.seams,
     },
   });
   /** The `until` info, once the gateway is running. */
@@ -549,4 +558,156 @@ describe("revocation", () => {
     gw.stop();
     expect(await gw.done).toBe(0);
   }, 15_000);
+});
+
+describe("autonomy in chats and scheduled runs", () => {
+  const GUEST = 5151;
+  const bash = (id: string, command: string): Step => () => reply([toolUseBlock(id, "Bash", { command })], "tool_use");
+  const say = (text: string): Step => () => reply([textBlock(text)]);
+  const subagent = (id: string): Step => () => reply([toolUseBlock(id, "Agent", { description: "look", prompt: "list the files" })], "tool_use");
+  /** The tool result the model saw in request `i`. */
+  const resultIn = (model: FakeModel, i: number) => JSON.stringify(model.requests[i]!.messages.at(-1));
+  const keyboards = (chat: number) => server.sent.filter((m) => m.chatId === chat && m.replyMarkup);
+  const chatSettings = async () => (JSON.parse(await readFile(join(home, "gateway.json"), "utf8")) as { chat: unknown }).chat;
+  async function pair(chat: number) {
+    const before = server.sent.length;
+    server.pushMessage(chat, chat, "hello?");
+    const sent = await server.waitFor(() => server.sent.slice(before).find((m) => m.chatId === chat && m.text.includes("approve telegram")));
+    const code = /approve telegram ([A-Z0-9]{8})/.exec(sent.text)![1]!;
+    expect(await main(["pairing", "approve", "telegram", code], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
+  }
+  /** Presses Approve on the `n`th keyboard sent to `chat` (counting from 1) once it arrives, and returns its text. */
+  async function approve(chat: number, n: number): Promise<string> {
+    const ask = await server.waitFor(() => keyboards(chat)[n - 1]);
+    server.pushCallback(chat, chat, ask.messageId, ask.replyMarkup!.inline_keyboard[0]![0]!.callback_data);
+    return ask.text;
+  }
+  const writeGatewayJson = async (json: unknown) => {
+    await mkdir(home, { recursive: true });
+    await Bun.write(join(home, "gateway.json"), JSON.stringify(json));
+  };
+
+  test("a fresh install chats at balanced: a read-only command runs without asking, a write asks", async () => {
+    const gw = startGateway([bash("b1", "ls"), bash("b2", "touch x"), say("done")]);
+    await server.waitFor(() => server.commands.length > 0);
+    // Written at start, before anyone is approved: a later approval can't turn this into an existing install.
+    expect(await chatSettings()).toEqual({ autonomy: "balanced", backend: "host" });
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "list, then make a file");
+    expect(await approve(CHAT, 1)).toContain("touch x");
+    await server.waitFor(() => server.textsTo(CHAT).includes("done"));
+    expect(keyboards(CHAT)).toHaveLength(1);
+    expect(resultIn(gw.model, 1)).toContain("README.md"); // ls ran in the project
+    expect(await chatSettings()).toEqual({ autonomy: "balanced", backend: "host" });
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("an existing install (gateway.json without chat, an approved sender in pairing.json) keeps asking for everything", async () => {
+    await writeGatewayJson({ projects: [] });
+    const pairing = new FilePairing({ path: join(home, "gateway", "pairing.json") });
+    const challenge = await pairing.challenge("telegram", String(CHAT));
+    if (challenge.kind !== "code") throw new Error("expected a code");
+    expect(await pairing.approve("telegram", challenge.code)).toMatchObject({ ok: true });
+    const gw = startGateway([bash("b1", "ls"), say("done")]);
+    await server.waitFor(() => server.commands.length > 0);
+    expect(await chatSettings()).toEqual({ autonomy: "ask", backend: "docker" });
+    server.pushMessage(CHAT, CHAT, "list the files");
+    expect(await approve(CHAT, 1)).toContain("ls");
+    await server.waitFor(() => server.textsTo(CHAT).includes("done"));
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("without confinement or consent, a level raised in gateway.json still asks", async () => {
+    await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host" } });
+    // No backend seam: the gateway picks the real one, and with no confinement that is the bare host.
+    const gw = startGateway([bash("b1", "ls"), say("done")], [], { seams: { backend: undefined, confinement: async () => null } });
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "list the files");
+    expect(await approve(CHAT, 1)).toContain("ls");
+    await server.waitFor(() => server.textsTo(CHAT).includes("done"));
+    expect(gw.workspaces).toEqual([]);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a guest's chat asks even when the project is autonomous, and so does its subagent; the owner's and its subagent's don't", async () => {
+    await writeGatewayJson({ chat: { autonomy: "autonomous", backend: "host" } });
+    const gw = startGateway([
+      // The owner: a command, then a subagent with a command of its own, all unasked.
+      bash("o1", "ls"),
+      subagent("o2"),
+      bash("o3", "ls -a"),
+      say("owner's subagent done"),
+      say("owner done"),
+      // The guest: the same, and each command asks.
+      bash("g1", "ls"),
+      subagent("g2"),
+      bash("g3", "ls -a"),
+      say("guest's subagent done"),
+      say("guest done"),
+    ]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT); // the first approval is the owner
+    await pair(GUEST);
+
+    server.pushMessage(CHAT, CHAT, "look around");
+    await server.waitFor(() => server.textsTo(CHAT).includes("owner done"));
+    expect(keyboards(CHAT)).toHaveLength(0);
+    expect(resultIn(gw.model, 3)).toContain("README.md"); // the subagent's ls -a ran
+
+    server.pushMessage(GUEST, GUEST, "look around");
+    expect(await approve(GUEST, 1)).toContain("ls");
+    expect(await approve(GUEST, 2)).toContain("ls -a"); // the subagent's command
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest done"));
+    expect(keyboards(GUEST)).toHaveLength(2);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a gateway.json broken after start keeps the last good settings on reload; open chats keep their level", async () => {
+    const gw = startGateway([bash("b1", "ls"), say("one"), bash("b2", "ls"), say("two")]);
+    const info = await gw.running();
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "list the files");
+    await server.waitFor(() => server.textsTo(CHAT).includes("one"));
+    await Bun.write(join(home, "gateway.json"), "{not json");
+    await info.reload();
+    expect(gw.err.join("")).toContain("keeping the last good settings");
+    // The session reload retired is rebuilt on the next message, after the file is fixed, still at balanced.
+    await Bun.write(join(home, "gateway.json"), JSON.stringify({ chat: { autonomy: "balanced", backend: "host" } }));
+    server.pushMessage(CHAT, CHAT, "again");
+    await server.waitFor(() => server.textsTo(CHAT).includes("two"));
+    expect(keyboards(CHAT)).toHaveLength(0);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("a scheduled run uses the project's level: at balanced, a read-only command runs and an install is denied", async () => {
+    let deps: GatewayServiceDeps | undefined;
+    const service: GatewayService = { name: "probe", start: async (d) => void (deps = d), stop: async () => {} };
+    const gw = startGateway([bash("b1", "ls"), bash("b2", "npm install left-pad"), say("done")], [service]);
+    await gw.running();
+    const session = await deps!.openSession("default");
+    const asked: string[] = [];
+    // As the job runner does: nobody is there, so whatever still asks is denied.
+    session.attach({
+      event: () => {},
+      ask: (id, prompt) => {
+        asked.push(String((prompt.input as { command?: unknown }).command));
+        session.answer(id, { kind: "deny", message: "No one is here to approve this scheduled run." });
+      },
+      askClosed: () => {},
+      state: () => {},
+    });
+    expect(await session.prompt("check the project")).toBe("end_turn");
+    expect(asked).toEqual(["npm install left-pad"]);
+    expect(resultIn(gw.model, 1)).toContain("README.md");
+    expect(resultIn(gw.model, 2)).toContain("The user declined this action");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
 });

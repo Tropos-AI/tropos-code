@@ -9,8 +9,9 @@ import { createRuntime } from "../cli/runtime";
 import type { Runtime } from "../ui/runtime";
 import { SettingsError, settingsPaths } from "../config/settings";
 import { VERSION } from "../version";
-import { DockerBackend, sweepLeftoverContainers } from "../exec/docker";
-import type { ExecBackend } from "../exec/backend";
+import { sweepLeftoverContainers } from "../exec/docker";
+import type { Confinement, ExecBackend } from "../exec/backend";
+import { confinementAvailable } from "../exec/confined";
 import { SessionStore } from "../session/store";
 import { DARK } from "../ui/theme";
 import { MODES, type Mode } from "../config/constants";
@@ -19,9 +20,11 @@ import { WebHost } from "../web/host";
 import { DEFAULT_PORT } from "../web/protocol";
 import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
-import { loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
+import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
+import { ensureChatSettings, pinnedTestCommands, sessionAutonomy } from "./autonomy";
+import { chatBackend } from "./chat-exec";
 import { ProjectContexts } from "./contexts";
-import { SandboxUnavailableError, SenderNotApprovedError, UserFacingError } from "./errors";
+import { SenderNotApprovedError, UserFacingError } from "./errors";
 import {
   DEFAULT_PROJECT_ID,
   TEMPORARY_PROJECT_ID,
@@ -74,8 +77,12 @@ export interface GatewayRun {
   /** Test seams. */
   seams?: {
     backend?: (workspace: string) => ExecBackend;
-    /** Returns why the sandbox can't be used, or undefined when it can. */
+    /** Returns why Docker can't be used, or undefined when it can (asked only when chats run in Docker). */
     sandboxCheck?: () => Promise<string | undefined>;
+    /** Which OS confinement runs here (default: probe this machine). */
+    confinement?: () => Promise<Confinement | null>;
+    /** The owner's home, whose secrets confinement hides (default: os.homedir()). */
+    userHome?: string;
     telegramApi?: TelegramApi;
     /** Overrides for the Telegram adapter (pacing, timeouts). */
     telegramOptions?: Partial<TelegramAdapterOptions>;
@@ -151,11 +158,25 @@ const real = (path: string): string => {
 
 export async function runGateway(run: GatewayRun): Promise<number> {
   const { home } = run;
-  // Replaced by reload(): what is built from it afterwards (adapters, sandboxes of new sessions) uses the saved file.
-  let config = run.config;
+  // The saved file, re-read when a session starts and on reload: a level or backend changed in the dashboard or the
+  // terminal applies to the next session, and the autonomy of open ones (their policy reads this) at once.
+  let live = run.config;
+  const refreshConfig = async (): Promise<GatewayConfig> => {
+    try {
+      live = await loadGatewayConfig(home);
+    } catch (e) {
+      // A broken edit keeps the last good settings rather than stopping every chat.
+      if (!(e instanceof GatewayConfigError)) throw e;
+      run.err(`gateway: keeping the last good settings: ${e.message}\n`);
+    }
+    return live;
+  };
   const version = run.version ?? VERSION;
   const dir = gatewayDir(home);
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  // Before anyone can be approved: an approval must not turn this fresh install into an "existing" one (ask, docker).
+  await ensureChatSettings(home);
+  await refreshConfig();
 
   // The managed default project exists before anything asks for it: the sandbox relies on its .git.
   await ensureDefaultProject(home, { git: run.seams?.git });
@@ -202,15 +223,19 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const cron = createCronGatewayService({ log: (m) => run.err(`gateway: cron: ${m}\n`) });
   const cronStore = new CronStore(home);
 
+  // Docker's answer; asked only for sessions that run in Docker.
   const check = run.seams?.sandboxCheck ?? dockerCheck();
-  if (run.seams?.sweep !== false && !run.seams?.backend) await sweepLeftoverContainers().catch(() => 0);
+  const confinement = run.seams?.confinement ?? confinementAvailable;
+  const userHome = run.seams?.userHome ?? homedir();
+  if (run.seams?.sweep !== false && !run.seams?.backend && live.chat.backend === "docker") await sweepLeftoverContainers().catch(() => 0);
 
   // The role each open session was created with, so the reaper can close an owner session when ownership moves.
   const roles = new Map<string, SessionRole>();
   const pool = new SessionPool({
     statePath: join(dir, "sessions.json"),
-    idleMs: config.idleMinutes * 60_000,
+    idleMs: live.idleMinutes * 60_000,
     create: async (key, saved): Promise<HostHandle> => {
+      const config = await refreshConfig();
       // A closed chat reopens on its next message; a revoked sender's queued messages must not reopen it. The adapter
       // checks new messages, this checks every session, so the two can't disagree.
       const sender = privateTelegramSender(parseSessionKey(key)?.chatKey ?? "");
@@ -223,13 +248,22 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         const problem = workspaceProblem(project.path, home);
         if (problem) throw new UserFacingError(`Project "${project.name}" can't be used: ${problem}`);
       }
-      // Fail closed: a chat's commands run in the sandbox or not at all.
-      const sandboxProblem = await check();
-      if (sandboxProblem) throw new SandboxUnavailableError(sandboxProblem);
       // Held until the session closes: a reload meanwhile doesn't close its MCP servers under a running turn.
       const { pc, release } = await contexts.acquire(project);
+      let exec: { backend: ExecBackend; confined: boolean } | undefined;
       try {
-        const handle = await startSession(key, saved, pc);
+        // Fail closed: Docker chosen and not up, or a project that can't be confined, means no session.
+        exec = await chatBackend({
+          config,
+          workspace: pc.ctx.cwd,
+          home,
+          userHome,
+          env: run.env,
+          confinement,
+          dockerCheck: check,
+          override: run.seams?.backend,
+        });
+        const handle = await startSession(key, saved, pc, exec);
         return {
           ...handle,
           close: async () => {
@@ -241,21 +275,28 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           },
         };
       } catch (e) {
+        await exec?.backend.close().catch(() => {});
         release();
         throw e;
       }
     },
   });
 
-  /** A chat's session on its project's context: its sandbox, its role's tools, and its transcript (resumed when saved). */
-  const startSession = async (key: string, saved: string | undefined, pc: ProjectContext): Promise<HostHandle> => {
+  /**
+   * A chat's session on its project's context: its backend, its role's tools, its autonomy, and its transcript
+   * (resumed when saved).
+   */
+  const startSession = async (key: string, saved: string | undefined, pc: ProjectContext, exec: { backend: ExecBackend; confined: boolean }): Promise<HostHandle> => {
     const cwd = pc.ctx.cwd;
-    const backend =
-      run.seams?.backend?.(cwd) ??
-      new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
+    const { backend, confined } = exec;
+    const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
     const { ctx: base, setSessionId } = await pc.newSessionContext();
     const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
-    const sessionCtx = channelContext(base, backend, { role });
+    // Read on every permission decision, from the live config: guests and unconsented unconfined sessions stay at ask.
+    const sessionCtx = channelContext(base, backend, {
+      role,
+      autonomy: () => ({ level: sessionAutonomy({ config: live, projectId, role, confined }), testCommands: pinnedTestCommands(live, projectId) }),
+    });
     roles.set(key, role);
     // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
     // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
@@ -282,30 +323,26 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version, role });
     }
     setSessionId(session.id);
-    try {
-      const runtime = await createRuntime(sessionCtx, {
-        session,
-        history,
-        mode: "default",
-        modes: CHANNEL_MODES,
-        theme: DARK,
-        source: resumed ? "resume" : "startup",
-        interactive: false,
-        // Only the owner's chats learn; a guest's chat is not material for the owner's memory.
-        learn: role === "owner",
-        ownsExtensions: false,
-      });
-      const host = new WebHost(runtime);
-      await host.start();
-      return {
-        host,
-        sessionId: () => runtime.sessionId(),
-        close: () => backend.close(),
-      };
-    } catch (e) {
-      await backend.close().catch(() => {});
-      throw e;
-    }
+    // On a failure here the caller closes the backend.
+    const runtime = await createRuntime(sessionCtx, {
+      session,
+      history,
+      mode: "default",
+      modes: CHANNEL_MODES,
+      theme: DARK,
+      source: resumed ? "resume" : "startup",
+      interactive: false,
+      // Only the owner's chats learn; a guest's chat is not material for the owner's memory.
+      learn: role === "owner",
+      ownsExtensions: false,
+    });
+    const host = new WebHost(runtime);
+    await host.start();
+    return {
+      host,
+      sessionId: () => runtime.sessionId(),
+      close: () => backend.close(),
+    };
   };
 
   const sessions = new RoutedSessions(router, pool);
@@ -315,7 +352,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
     return [new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
-  let adapterToken = telegramToken(config, run.env);
+  let adapterToken = telegramToken(live, run.env);
   let adapters = buildAdapters(adapterToken);
 
   // What the dashboard calls after it saved a change: the project contexts and the sessions on them are rebuilt from
@@ -328,7 +365,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let reloading: Promise<void> = Promise.resolve();
   const reloadOnce = async (): Promise<void> => {
     if (stopping) return;
-    config = await loadGatewayConfig(home);
+    const config = await refreshConfig();
     // Only a new token restarts the channels: a restart cuts off running turns (their answers, approvals and queues).
     const token = telegramToken(config, run.env);
     if (token !== adapterToken) {
@@ -433,7 +470,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           reload,
         },
       });
-      const server = await startWebServer({ host: webHost, admin, assets, token: await persistentToken(dir), port: config.webPort ?? DEFAULT_PORT });
+      const server = await startWebServer({ host: webHost, admin, assets, token: await persistentToken(dir), port: live.webPort ?? DEFAULT_PORT });
       webStop = () => server.stop();
       webUrl = server.url;
       webPort = server.port;
@@ -451,7 +488,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   };
   const serviceDeps: GatewayServiceDeps = {
     home,
-    config,
+    config: live,
     projects: source,
     deliver,
     openSession: async (target, opts) => {

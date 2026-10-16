@@ -1,6 +1,8 @@
 // src/gateway/policy.test.ts
 import { describe, expect, test } from "bun:test";
 import { decide, compileRules } from "../permissions/engine";
+import { permissionContext } from "../cli/runtime";
+import type { Autonomy } from "./config";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
 import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
@@ -88,6 +90,30 @@ describe("channelContext", () => {
     const ctx = channelContext(base({ allow: ["mcp__gh__list"], ask: [] }), exec, { role: "guest" });
     const permission = { mode: "default" as const, rules: { ...ctx.rules, allow: compileRules({ allow: ["mcp__gh__list"], ask: [], deny: [] }).rules.allow }, cwd: ctx.cwd, home: "/h", allowedDirs: ctx.allowedDirs, confine: true };
     expect(decide({ toolName: "mcp__gh__list", kind: "exec", paths: [] }, permission).behavior).toBe("ask");
+  });
+
+  test("the autonomy policy reaches the permission context and stays live", () => {
+    let level: Autonomy = "balanced";
+    const ctx = channelContext(base(), exec, { role: "owner", autonomy: () => ({ level, testCommands: [] }) });
+    expect(ctx.autonomy!().level).toBe("balanced");
+    expect(permissionContext(ctx, "default").autonomy).toEqual({ level: "balanced", testCommands: [] });
+    level = "ask";
+    expect(ctx.autonomy!().level).toBe("ask");
+    expect(permissionContext(ctx, "default").autonomy?.level).toBe("ask");
+    // Without a policy, a chat asks as before.
+    expect(channelContext(base(), exec, { role: "owner" }).autonomy).toBeUndefined();
+  });
+
+  test("no chat tool can write gateway.json, even for the owner at autonomous", () => {
+    const ctx = channelContext(base(), exec, { role: "owner", autonomy: () => ({ level: "autonomous", testCommands: [] }) });
+    const permission = { ...permissionContext(ctx, "default"), home: "/h" };
+    expect(permission.confine).toBe(true);
+    expect(permission.allowedDirs).toEqual(["/work/app"]);
+    for (const toolName of ["Write", "Edit"]) {
+      expect(decide({ toolName, kind: "edit", paths: ["/h/.tropos/gateway.json"] }, permission).behavior).toBe("deny");
+    }
+    // The same level lets a write inside the project through.
+    expect(decide({ toolName: "Write", kind: "edit", paths: ["/work/app/a.ts"] }, permission).behavior).toBe("allow");
   });
 
   test("a deny rule of the user's still denies", () => {
