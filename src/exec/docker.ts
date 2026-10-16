@@ -4,15 +4,16 @@
 // synchronously, but the container takes a moment to start. The choice: spawn() immediately starts a real
 // host `sh` wrapper (detached, stdout/stderr piped, so bash.ts and the job table see an ordinary child). The
 // wrapper polls the run dir for a `ready` file (written once `docker run` succeeded) or a `failed-<n>` file
-// (holds the error text, printed to stderr, exit 125), then `exec`s `docker exec`, so the child's pid IS the
-// docker client. No fake ChildProcess, no event plumbing; startup failure is a non-zero exit with a message.
+// (holds the error text, printed to stderr, exit 125), then runs `docker exec` and, once it returns, checks that
+// the command didn't plant a `.git/commondir` (see git-integrity.ts). The wrapper and the docker client share the
+// child's process group. No fake ChildProcess, no event plumbing; a failure is a non-zero exit with a message.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { CwdMarker, ExecBackend, ExecSpawn } from "./backend";
-import { commondirSnapshot, enforceCommondir } from "./git-integrity";
+import { absentCommondirs, COMMONDIR_TAMPERED } from "./git-integrity";
 
 export interface DockerBackendOptions {
   workspace: string;
@@ -175,6 +176,8 @@ export class DockerBackend implements ExecBackend {
   }
 
   spawn(opts: ExecSpawn): ChildProcess {
+    // Taken before the command can run: the `commondir`s that don't exist and so can't be mounted read-only.
+    const absent = absentCommondirs(this.workspaceGitDirs());
     const attempt = this.begin();
     const id = randomBytes(8).toString("hex");
     const insidePid = `${INSIDE_RUN}/pid-${id}`;
@@ -186,7 +189,11 @@ export class DockerBackend implements ExecBackend {
       `  if [ -e ${quote(join(this.runDir, `failed-${attempt}`))} ]; then cat ${quote(join(this.runDir, `failed-${attempt}`))} >&2; exit 125; fi`,
       "  sleep 0.05",
       "done",
-      `exec ${quote(this.bin)} exec -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
+      `${quote(this.bin)} exec -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
+      "status=$?",
+      // A planted commondir would point the owner's next host `git` at hooks the container wrote: undo it and fail.
+      ...absent.map((p) => `if [ -e ${quote(p)} ] || [ -L ${quote(p)} ]; then rm -rf ${quote(p)}; echo ${quote(COMMONDIR_TAMPERED)} >&2; status=1; fi`),
+      'exit "$status"',
     ].join("\n");
     const child = spawn("/bin/sh", ["-c", wrapper], {
       cwd: tmpdir(),
@@ -195,17 +202,6 @@ export class DockerBackend implements ExecBackend {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
-    // `.git/commondir` can't be mounted read-only when it doesn't exist (an empty one breaks git), so a command that
-    // creates one is caught here and the file removed before the owner's next host `git` runs.
-    const gitDirs = this.workspaceGitDirs();
-    const before = commondirSnapshot(gitDirs);
-    child.once("close", () => {
-      try {
-        enforceCommondir(gitDirs, before);
-      } catch {
-        // workspace gone; nothing to undo
-      }
-    });
     return child;
   }
 

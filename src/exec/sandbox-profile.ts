@@ -1,11 +1,16 @@
 // src/exec/sandbox-profile.ts — the macOS sandbox-exec profile for a confined chat command.
 //
 // The last matching rule wins, so the order matters (verified with /usr/bin/sandbox-exec on macOS 26):
-// everything allowed; writes denied; writes reopened for the project, temp and caches; then the protections inside
-// them; then secret reads denied; then Tropos's default project readable again. Paths travel as -D params, never
-// inlined, except where a rule needs a regex. Profile paths must be real paths: the sandbox matches resolved paths.
+// everything allowed; host services denied (Unix sockets but DNS, the keychain); writes denied; writes reopened for
+// the project and temp; secrets write-denied; the per-sandbox cache contents reopened; then the protections, last
+// among the write rules so nothing can reopen them; then secret reads denied; then the workspace and cache readable.
+// Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
+// the sandbox matches resolved paths.
 import { isInside } from "../paths";
 import { ConfinementError, type ConfinementPaths } from "./confinement-paths";
+
+/** mDNSResponder's socket: every host-name lookup (getaddrinfo) goes through it. */
+const DNS_SOCKET = "/private/var/run/mDNSResponder";
 
 export interface SandboxProfile {
   profile: string;
@@ -38,7 +43,6 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(literal (param "PROJECT"))`,
     ...gitDirs.map((p) => `(literal ${p})`),
     ...husky.map((p) => `(literal ${p}) (subpath ${p})`),
-    ...writeDeniedSecrets.map((p) => `(subpath ${p})`),
   ].join(" ");
   const regexes = [
     // Hooks and config in the repo and in every nested git dir (submodules under modules/, worktrees/), and the
@@ -48,21 +52,24 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(regex #"^${escapeRegex(paths.project)}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ];
 
-  const writeAllow = [`(subpath (param "PROJECT"))`, ...writable.map((p) => `(subpath ${p})`), `(subpath (param "CD0"))`];
+  const writeAllow = [`(subpath (param "PROJECT"))`, ...writable.map((p) => `(subpath ${p})`)];
   const profile = [
     "(version 1)",
     "(allow default)",
     // Host services a chat must not reach: the Docker daemon, ssh-agent and gpg-agent (Unix sockets), and the
-    // keychain (securityd over Mach). Network over inet stays allowed; git/node/python/bun do not need these.
+    // keychain (securityd over Mach). DNS goes through mDNSResponder's socket, so that one stays reachable.
     `(deny network-outbound (remote unix-socket))`,
+    `(allow network-outbound (remote unix-socket (path-literal "${DNS_SOCKET}")))`,
     `(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.SecurityServer") (global-name-regex #"^com\\.apple\\.security\\."))`,
     "(deny file-write*)",
     `(allow file-write* ${writeAllow.join(" ")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/(tty|fd/)"))`,
+    ...(writeDeniedSecrets.length > 0 ? [`(deny file-write* ${writeDeniedSecrets.map((p) => `(subpath ${p})`).join(" ")})`] : []),
+    // The cache's contents, not the cache dir itself (it can't be renamed or replaced by a link). It sits inside the
+    // write-denied ~/.tropos, so it comes after that deny, and before the protections so it can never reopen them.
+    `(allow file-write* (regex #"^${escapeRegex(paths.cacheDir)}/.+"))`,
     `(deny file-write* ${protections}`,
     ...regexes.map((r) => `  ${r}`),
     ")",
-    // The cache sits inside the now write-denied ~/.tropos; re-allow writing it (last match wins).
-    `(allow file-write* (subpath (param "CD0")))`,
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project and the per-sandbox cache (inside ~/.tropos).

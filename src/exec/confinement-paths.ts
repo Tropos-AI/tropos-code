@@ -1,10 +1,10 @@
 // src/exec/confinement-paths.ts — the paths a confined chat command may write, must not touch, and must not read.
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { isInside } from "../paths";
-import { sandboxCacheDir } from "./env";
+import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
 
 export class ConfinementError extends Error {
   override name = "ConfinementError";
@@ -112,17 +112,43 @@ export function confinementPaths(opts: { project: string; home: string; userHome
   // Only the per-sandbox cache root is writable; the owner's host caches (CACHE_PATHS) stay readable but not writable,
   // so a poisoned download can't reach the owner's own builds. `chatEnv` points each tool's cache var in here. It sits
   // inside the denied `~/.tropos`, so the builders carve it back out for read and write (like the workspace).
+  // Residual: a project at `~` makes the host caches under it writable through the project itself.
   const home = real(opts.home);
   return {
     project,
     writable: unique(writable),
-    cacheDir: real(sandboxCacheDir(opts.home)),
+    cacheDir: prepareCacheDir(home),
     gitDirs: withLinkTarget(join(project, ".git"), project),
     husky: withLinkTarget(join(project, ".husky"), project),
     deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
     readCarveOut: real(join(opts.home, "workspace")),
     platform,
   };
+}
+
+/**
+ * Creates `<home>/sandbox-cache` and one dir per tool, and returns its real path. A chat may write inside the cache
+ * (its tool dirs included), so it could swap a tool dir for a link to `~/.ssh`; following that when the next
+ * confinement is built would widen what a command may write. So any link or non-directory there is refused.
+ */
+function prepareCacheDir(realHome: string): string {
+  const cache = sandboxCacheDir(realHome);
+  for (const dir of [cache, ...SANDBOX_CACHE_ENV.map(([, tool]) => join(cache, tool))]) {
+    requireDirOrAbsent(dir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  if (realpathSync(cache) !== cache) throw new ConfinementError(`${cache} can't be used as the sandbox cache: it resolves to ${realpathSync(cache)}.`);
+  return cache;
+}
+
+function requireDirOrAbsent(path: string): void {
+  let info: ReturnType<typeof lstatSync>;
+  try {
+    info = lstatSync(path);
+  } catch {
+    return;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) throw new ConfinementError(`${path} can't be used as the sandbox cache: it must be a real directory, not a symlink or file.`);
 }
 
 /** The real path, or for a missing path the real path of its nearest existing parent with the rest joined on. */

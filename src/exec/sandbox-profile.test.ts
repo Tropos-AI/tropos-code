@@ -25,7 +25,20 @@ const ruleWith = (profile: string, head: string) => {
 
 test("the rules come in the order the sandbox needs: service denies, base write deny, allows, protections, read denies, carve-out last", () => {
   const { profile } = sandboxProfile(base);
-  const order = ["(version 1)", "(allow default)", "(deny network-outbound (remote unix-socket))", "(deny mach-lookup", "(deny file-write*)", "(allow file-write* (subpath (param \"PROJECT\"))", "(deny file-write* (literal (param \"PROJECT\"))", "(deny file-read* (subpath (param \"R0\"))", "(allow file-read* (subpath (param \"C0\")) (subpath (param \"CD0\")))"];
+  const order = [
+    "(version 1)",
+    "(allow default)",
+    "(deny network-outbound (remote unix-socket))",
+    '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
+    "(deny mach-lookup",
+    "(deny file-write*)",
+    '(allow file-write* (subpath (param "PROJECT"))',
+    '(deny file-write* (subpath (param "R0"))',
+    '(allow file-write* (regex #"^/u/\\.tropos/sandbox-cache/.+"))',
+    '(deny file-write* (literal (param "PROJECT"))',
+    '(deny file-read* (subpath (param "R0"))',
+    '(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))',
+  ];
   const at = order.map((rule) => profile.indexOf(rule));
   for (const i of at) expect(i).toBeGreaterThanOrEqual(0);
   expect(at).toEqual([...at].sort((a, b) => a - b));
@@ -35,7 +48,9 @@ test("the rules come in the order the sandbox needs: service denies, base write 
   for (const svc of ['(global-name "com.apple.securityd")', '(global-name "com.apple.SecurityServer")']) expect(mach).toContain(svc);
   expect(mach).toContain('(global-name-regex #"^com\\.apple\\.security\\.")');
   const allow = ruleWith(profile, "(allow file-write*");
-  for (const k of ["W0", "W1", "CD0"]) expect(allow).toContain(`(subpath (param "${k}"))`);
+  for (const k of ["W0", "W1"]) expect(allow).toContain(`(subpath (param "${k}"))`);
+  // The cache root itself is never writable, only its contents (so it can't be renamed or swapped for a link).
+  expect(allow).not.toContain('(param "CD0")');
   for (const dev of ['(literal "/dev/null")', '(literal "/dev/zero")', '(literal "/dev/dtracehelper")', '(regex #"^/dev/(tty|fd/)")']) expect(allow).toContain(dev);
   const protect = ruleWith(profile, "(deny file-write* (literal");
   for (const k of ["G0", "G1"]) expect(protect).toContain(`(literal (param "${k}"))`);
@@ -73,10 +88,10 @@ test("paths travel as params; only the git and settings regexes embed an escaped
 
 test("secrets are write-protected too, except one that holds the project (Tropos's workspace)", () => {
   const inside = sandboxProfile({ ...base, project: "/u/.tropos/workspace", gitDirs: ["/u/.tropos/workspace/.git"], husky: ["/u/.tropos/workspace/.husky"] });
-  const protect = ruleWith(inside.profile, "(deny file-write* (literal");
-  expect(protect).toContain('(subpath (param "R0"))');
-  expect(protect).not.toContain('(subpath (param "R1"))'); // ~/.tropos holds the project; its other files sit outside every writable path
-  expect(protect).toContain('(subpath (param "R2"))');
+  const secretsDeny = ruleWith(inside.profile, '(deny file-write* (subpath (param "R');
+  expect(secretsDeny).toContain('(subpath (param "R0"))');
+  expect(secretsDeny).not.toContain('(subpath (param "R1"))'); // ~/.tropos holds the project; its other files sit outside every writable path
+  expect(secretsDeny).toContain('(subpath (param "R2"))');
 });
 
 const sandboxExec = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
@@ -172,6 +187,55 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
         server.stop(true);
         rmSync(sockDir, { recursive: true, force: true });
       }
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  const py = (paths: ConfinementPaths, code: string) => {
+    const { profile, params } = sandboxProfile(paths);
+    const r = Bun.spawnSync(["/usr/bin/sandbox-exec", "-p", profile, ...params.flatMap(([k, v]) => ["-D", `${k}=${v}`]), "/usr/bin/python3", "-I", "-c", code], {
+      cwd: paths.project,
+      env: { PATH: "/usr/bin:/bin" },
+      timeout: 20_000,
+    });
+    return r.stdout.toString().trim();
+  };
+  const resolves = (host: string) => `import socket\ntry:\n  socket.getaddrinfo(${JSON.stringify(host)}, 80); print("OK")\nexcept Exception as e:\n  print("FAILED", e)`;
+
+  test("DNS still works: localhost resolves and a loopback TCP connect reaches a listener", () => {
+    const { fx, userHome } = fixture();
+    const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(py(paths, resolves("localhost"))).toBe("OK");
+      const connect = `import socket\ns=socket.create_connection(("127.0.0.1", ${server.port}), timeout=5)\nprint("CONNECTED")`;
+      expect(py(paths, connect)).toBe("CONNECTED");
+    } finally {
+      server.stop(true);
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  const online = Bun.spawnSync(["/usr/bin/python3", "-I", "-c", resolves("example.com")], { timeout: 10_000 }).stdout.toString().trim() === "OK";
+  test.skipIf(!online)("a public host name resolves inside the sandbox (skipped offline)", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(py(paths, resolves("example.com"))).toBe("OK");
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("the cache's contents are writable but the cache dir itself can't be renamed or replaced", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const paths = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(paths, `echo a > "${join(paths.cacheDir, "npm", "x")}"`)).toBe(0);
+      expect(run(paths, `mv "${paths.cacheDir}" "${paths.cacheDir}2"`)).not.toBe(0);
+      expect(run(paths, `rm -rf "${paths.cacheDir}"`)).not.toBe(0);
+      expect(existsSync(paths.cacheDir)).toBe(true);
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }

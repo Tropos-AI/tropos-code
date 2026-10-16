@@ -1,7 +1,7 @@
 // src/exec/docker.test.ts — integration tests against a REAL container. Skipped when Docker (or the image) is unavailable.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { bashTool } from "../tools/bash/bash";
 import { DockerBackend, protectedPaths, sweepLeftoverContainers } from "./docker";
+import { COMMONDIR_TAMPERED } from "./git-integrity";
 
 const IMAGE = "alpine:3.22";
 const dockerUp = (() => {
@@ -150,6 +151,57 @@ describe("protectedPaths", () => {
     } finally {
       await removeDir(ws);
     }
+  });
+});
+
+describe("DockerBackend commondir check (fake docker client)", () => {
+  // Stands in for the docker CLI: `run`/`rm` succeed, `exec` runs the command on the host in the given -w dir.
+  const FAKE_DOCKER = [
+    "#!/bin/sh",
+    'case "$1" in',
+    "  exec) shift",
+    '    while [ "$#" -gt 0 ]; do case "$1" in -w) cd "$2" || exit 1; shift 2;; -e) shift 2;; *) break;; esac; done',
+    "    shift",
+    '    exec "$@" ;;',
+    "  *) exit 0 ;;",
+    "esac",
+    "",
+  ].join("\n");
+  let fx: string;
+  let ws: string;
+  let backend: DockerBackend;
+  beforeAll(async () => {
+    fx = await makeTmpDir("tropos-fakedocker-");
+    ws = join(fx, "ws");
+    await mkdir(join(ws, ".git"), { recursive: true });
+    await writeFile(join(fx, "docker"), FAKE_DOCKER, { mode: 0o755 });
+    backend = new DockerBackend({ workspace: ws, dockerBin: join(fx, "docker"), runDir: join(fx, "run") });
+  });
+  afterAll(async () => {
+    await backend.close();
+    await removeDir(fx);
+  });
+
+  test("a command that plants .git/commondir fails with a clear message and the file is removed", async () => {
+    const r = await collect(backend.spawn({ shell: "/bin/sh", script: "echo /elsewhere > .git/commondir; echo done", cwd: ws, env: {} }));
+    expect(r.out).toContain("done");
+    expect(r.err).toContain(COMMONDIR_TAMPERED);
+    expect(r.code).toBe(1);
+    expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
+  });
+
+  test("a dangling symlink planted as commondir is caught too", async () => {
+    const r = await collect(backend.spawn({ shell: "/bin/sh", script: "ln -s /nowhere .git/commondir", cwd: ws, env: {} }));
+    expect(r.err).toContain(COMMONDIR_TAMPERED);
+    expect(r.code).toBe(1);
+    expect(() => lstatSync(join(ws, ".git", "commondir"))).toThrow();
+  });
+
+  test("an ordinary command keeps its exit status and gets no message", async () => {
+    const r = await collect(backend.spawn({ shell: "/bin/sh", script: "echo hi; exit 3", cwd: ws, env: {} }));
+    expect(r.out).toContain("hi");
+    expect(r.err).not.toContain(COMMONDIR_TAMPERED);
+    expect(r.code).toBe(3);
   });
 });
 

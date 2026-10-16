@@ -1,9 +1,10 @@
 // src/exec/confinement-paths.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CACHE_PATHS, confinementPaths, SECRET_PATHS } from "./confinement-paths";
+import { CACHE_PATHS, ConfinementError, confinementPaths, SECRET_PATHS } from "./confinement-paths";
+import { SANDBOX_CACHE_ENV } from "./env";
 
 let fx: string;
 beforeEach(() => {
@@ -80,6 +81,28 @@ test("a writable temp path whose last part is a link is left out, so one run can
   symlinkSync(join(fx, "home", ".ssh"), join(fx, "tmplink"));
   const paths = confinementPaths({ project: mk("proj"), home: join(fx, "home", ".tropos"), userHome: join(fx, "home"), env: { TMPDIR: join(fx, "tmplink") }, platform: "linux" });
   for (const p of [join(fx, "home", ".ssh"), join(fx, "tmplink")]) expect(paths.writable).not.toContain(p);
+});
+
+test("the per-sandbox cache and its tool dirs are created up front", () => {
+  const paths = confinementPaths({ project: mk("proj"), home: join(fx, "home", ".tropos"), userHome: mk("home"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
+  expect(statSync(paths.cacheDir).isDirectory()).toBe(true);
+  for (const [, tool] of SANDBOX_CACHE_ENV) expect(statSync(join(paths.cacheDir, tool)).isDirectory()).toBe(true);
+});
+
+test("a sandbox cache or tool dir that is a link or a file is refused, so a chat can't widen the next run's writes", () => {
+  const opts = () => ({ project: mk("proj"), home: join(fx, "home", ".tropos"), userHome: mk("home"), env: { TMPDIR: mk("tmp") }, platform: "linux" as const });
+  mk("home", ".ssh");
+  // A chat can write inside the cache, so it can swap a tool dir for a link to ~/.ssh.
+  mk("home", ".tropos", "sandbox-cache");
+  symlinkSync(join(fx, "home", ".ssh"), join(fx, "home", ".tropos", "sandbox-cache", "npm"));
+  expect(() => confinementPaths(opts())).toThrow(ConfinementError);
+  rmSync(join(fx, "home", ".tropos", "sandbox-cache", "npm"));
+  writeFileSync(join(fx, "home", ".tropos", "sandbox-cache", "npm"), "");
+  expect(() => confinementPaths(opts())).toThrow(ConfinementError);
+  // The cache root as a link.
+  rmSync(join(fx, "home", ".tropos", "sandbox-cache"), { recursive: true });
+  symlinkSync(join(fx, "home", ".ssh"), join(fx, "home", ".tropos", "sandbox-cache"));
+  expect(() => confinementPaths(opts())).toThrow(ConfinementError);
 });
 
 test("the per-sandbox cache sits under Tropos's home and is not among the host-cache writables", () => {

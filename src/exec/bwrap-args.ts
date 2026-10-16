@@ -1,26 +1,46 @@
 // src/exec/bwrap-args.ts — the bubblewrap arguments for a confined chat command on Linux, kept at macOS parity.
 //
-// Later mounts cover earlier ones: a fresh namespace with only inet networking, the whole system read-only, temp and
-// the per-sandbox cache writable, secrets hidden, Tropos's default project and cache readable, the project writable,
-// then the read-only protections inside it. Protected paths that don't yet exist are masked so they can't be created.
+// Later mounts cover earlier ones: a fresh namespace with only inet networking, the whole system read-only, host
+// services masked, temp writable, secrets hidden, the cache and the default project reopened, the project writable,
+// then the read-only protections inside it. A protected path that exists is bound read-only onto itself (still
+// readable, so the chat's own git works); one that doesn't is covered by an empty read-only placeholder so it can't
+// be created. `commondir` is the exception (an empty one breaks git): the backend checks it after each command.
+//
+// Residuals: `--share-net` keeps the host's network namespace, so abstract Unix sockets (no path to mask) stay
+// reachable; and a project at `~` makes the host caches under it writable through the project bind.
 import { lstatSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isInside } from "../paths";
 import { ConfinementError, type ConfinementPaths } from "./confinement-paths";
 
-/** Host services a chat must not reach: the Docker daemon and D-Bus (the per-user runtime dir is masked separately). */
-const SERVICE_MASKS: readonly string[] = ["/run/docker.sock", "/var/run/docker.sock", "/run/dbus", "/var/run/dbus"];
+/** Host services a chat must not reach: the per-user runtime dir (ssh/gpg agents, session bus), Docker, D-Bus. */
+export function hostServicePaths(uid: number): string[] {
+  return [`/run/user/${uid}`, "/run/docker.sock", "/var/run/docker.sock", "/run/dbus", "/var/run/dbus"];
+}
+
+/** Masks for the host services that exist: a directory gets an empty tmpfs, a socket or file /dev/null. */
+export function hostServiceMasks(candidates: readonly string[]): string[] {
+  const args: string[] = [];
+  for (const path of candidates) {
+    let info: ReturnType<typeof statSync>;
+    try {
+      info = statSync(path);
+    } catch {
+      continue; // absent: nothing to reach
+    }
+    args.push(...(info.isDirectory() ? ["--tmpfs", path] : ["--ro-bind", "/dev/null", path]));
+  }
+  return args;
+}
 
 export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   const { project } = paths;
-  // Parity with the macOS profile needs real dirs; a symlinked or file `.git`/`.tropos` would let the protections be
-  // sidestepped (a worktree gitfile points its hooks elsewhere), so refuse rather than confine something weaker.
-  for (const name of [".git", ".tropos"]) requireRealDirOrAbsent(join(project, name));
+  // Parity with the macOS profile needs real dirs: a linked or file `.git`/`.husky`/`.tropos` (a worktree gitfile, a
+  // link a chat could swap) can't be made a read-only mount point, so refuse rather than confine something weaker.
+  for (const name of [".git", ".husky", ".tropos"]) requireRealDirOrAbsent(join(project, name));
 
   const args = ["--unshare-all", "--share-net", "--new-session", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
-  const uid = process.getuid?.() ?? 1000;
-  args.push("--tmpfs", `/run/user/${uid}`);
-  for (const sock of SERVICE_MASKS) args.push("--tmpfs", sock);
+  args.push(...hostServiceMasks(hostServicePaths(process.getuid?.() ?? 1000)));
 
   for (const dir of paths.writable) if (exists(dir)) args.push("--bind", dir, dir);
 
@@ -41,12 +61,18 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   if (carve && reopened.some((secret) => isInside(carveOut, secret))) args.push("--ro-bind", carveOut, carveOut);
 
   // `.git` as a mount point can't be renamed (EBUSY): `mv .git g2; write g2/hooks/x; mv g2 .git` fails.
-  const git = join(project, ".git");
-  if (isRealDir(git)) args.push("--bind", git, git);
-  for (const { path, kind } of protectedGitEntries(project)) args.push(...mask(path, kind));
-  // The repo's settings hold its deny rules; read-only (a mount point), existing or not, so a shell can't write them.
-  args.push(...mask(join(project, ".tropos"), "dir"));
-  for (const f of ["settings.json", "settings.local.json"]) args.push(...mask(join(project, ".tropos", f), "file"));
+  for (const git of paths.gitDirs) {
+    if (!isRealDir(git)) continue;
+    args.push("--bind", git, git);
+    for (const dir of [git, ...nestedGitDirs(git, 0)]) {
+      args.push(...protect(join(dir, "hooks"), "dir"), ...protect(join(dir, "config"), "file"), ...protect(join(dir, "config.worktree"), "file"));
+      const commondir = join(dir, "commondir");
+      if (exists(commondir)) args.push("--ro-bind", commondir, commondir);
+    }
+  }
+  for (const husky of paths.husky) args.push(...protect(husky, "dir"));
+  // The repo's settings hold its deny rules: the whole `.tropos` read-only, or an empty read-only one if missing.
+  args.push(...protect(join(project, ".tropos"), "dir"));
   args.push("--chdir", cwd);
   return args;
 }
@@ -54,33 +80,14 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
 type Kind = "file" | "dir";
 
 /** Hide a secret: an empty read-only tmpfs over a dir, /dev/null over a file. */
-function hide(p: string): string[] {
-  return statSync(p).isDirectory() ? ["--tmpfs", p, "--remount-ro", p] : ["--ro-bind", "/dev/null", p];
+function hide(path: string): string[] {
+  return statSync(path).isDirectory() ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path];
 }
 
-/** Read-only mask for a protected path, whether or not it exists, so it can neither be changed nor created. */
-function mask(path: string, kind: Kind): string[] {
+/** Read-only: an existing path onto itself; a missing one as an empty placeholder (bwrap creates the mount point). */
+function protect(path: string, kind: Kind): string[] {
+  if (exists(path)) return ["--ro-bind", path, path];
   return kind === "dir" ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path];
-}
-
-/**
- * The git-internal paths that must stay read-only in the repo and in every nested git dir (submodules under
- * `modules/`, linked worktrees under `worktrees/`). `commondir` is included only when it already exists: an empty
- * placeholder breaks git ("failed to read commondir"), so its creation is caught by the backend's post-run check.
- */
-function protectedGitEntries(project: string): { path: string; kind: Kind }[] {
-  const out: { path: string; kind: Kind }[] = [];
-  const git = join(project, ".git");
-  if (!isRealDir(git)) return out;
-  for (const dir of [git, ...nestedGitDirs(git, 0)]) {
-    out.push({ path: join(dir, "hooks"), kind: "dir" });
-    out.push({ path: join(dir, "config"), kind: "file" });
-    out.push({ path: join(dir, "config.worktree"), kind: "file" });
-    if (exists(join(dir, "commondir"))) out.push({ path: join(dir, "commondir"), kind: "file" });
-  }
-  const husky = join(project, ".husky");
-  if (isRealDir(husky)) out.push({ path: husky, kind: "dir" });
-  return out;
 }
 
 /** Git dirs under `.git/modules/**` and `.git/worktrees/*` (each has its own hooks and config). */
@@ -110,7 +117,7 @@ function requireRealDirOrAbsent(path: string): void {
   try {
     info = lstatSync(path);
   } catch {
-    return; // absent is fine: the mask creates it read-only
+    return; // absent is fine: a read-only placeholder covers it
   }
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new ConfinementError(`${path} can't be confined: it must be a real directory, not a symlink or file.`);
