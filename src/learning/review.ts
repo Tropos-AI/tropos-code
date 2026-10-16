@@ -355,12 +355,18 @@ function wrap(tool: AnyTool, over: Pick<AnyTool, "kind" | "subject" | "run">): A
   };
 }
 
-/** A Memory call that adds or replaces, or a batch of 1-50 operations with at least one add or replace (removes may ride along). */
+/**
+ * A Memory call that adds or replaces, or a batch of 1-50 operations with at least one add or replace, where removes
+ * may ride along but at most one more than the adds and replaces: merging two notes into one, not clearing memory.
+ */
 function consolidates(input: unknown): boolean {
   if (typeof input !== "object" || input === null) return false;
   const { action, operations } = input as { action?: unknown; operations?: unknown };
   if (Array.isArray(operations)) {
-    return operations.length >= 1 && operations.length <= 50 && operations.some((op) => ["add", "replace"].includes((op as { action?: unknown } | null)?.action as string));
+    const actions = operations.map((op) => (op as { action?: unknown } | null)?.action);
+    const writes = actions.filter((a) => a === "add" || a === "replace").length;
+    const removes = actions.filter((a) => a === "remove").length;
+    return operations.length >= 1 && operations.length <= 50 && writes >= 1 && removes <= writes + 1;
   }
   return action === "add" || action === "replace";
 }

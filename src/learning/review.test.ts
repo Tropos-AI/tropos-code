@@ -308,6 +308,20 @@ describe("reviewToolGate", () => {
     expect(reviewAskPermission({ toolName: "Memory", kind: "edit", summary: "", input: { action: "remove" } })).toMatchObject({ kind: "deny" });
   });
 
+  test("a review batch may remove at most one entry more than it adds and replaces", async () => {
+    const ran: Ran[] = [];
+    const memory = reviewToolGate(makeTools(ran)).find((t) => t.name === "Memory")!;
+    const ops = (removes: number, adds: number, replaces = 0) => ({
+      operations: [...Array(removes).fill({ action: "remove" }), ...Array(adds).fill({ action: "add" }), ...Array(replaces).fill({ action: "replace" })],
+    });
+    for (const ok of [ops(2, 1), ops(3, 1, 1), ops(1, 1)]) expect(await memory.run(ok, ctx)).toEqual({ content: "Memory ok" });
+    for (const bad of [ops(3, 1), ops(5, 1, 2), ops(10, 1)]) {
+      expect(await memory.run(bad, ctx)).toMatchObject({ isError: true });
+      expect(reviewAskPermission({ toolName: "Memory", kind: "edit", summary: "", input: bad })).toMatchObject({ kind: "deny" });
+    }
+    expect(ran).toHaveLength(3);
+  });
+
   test("the memory rules tell the review to replace and consolidate, never only remove", () => {
     expect(MEMORY_REVIEW_PROMPT).toContain("Never only remove");
   });
