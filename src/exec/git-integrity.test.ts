@@ -183,3 +183,19 @@ test("git dirs nested beyond the search depth are reported, not silently skipped
   expect(r.message).toBe(gitMetadataUnsafe(r.unsafe[0]!));
   expect(existsSync(join(deep, "config"))).toBe(true);
 });
+
+test("a modules dir replaced by a link is caught: the link goes, the moved dir and the target stay", () => {
+  plantGitDir(join(git, "modules", "lib"));
+  const snap = gitDirsSnapshot(git)!;
+  renameSync(join(git, "modules"), join(git, "modules-old"));
+  plantGitDir(join(outside, "lib"));
+  symlinkSync(outside, join(git, "modules"));
+  expect(enforceNewGitDirs(snap)).toEqual({ removed: [join(git, "modules")], unsafe: [], message: GIT_METADATA_TAMPERED });
+  expect(gone(join(git, "modules"))).toBe(true);
+  expect(existsSync(join(outside, "lib", "hooks", "post-checkout"))).toBe(true);
+  // A link that was already there before the command is the owner's: left alone.
+  symlinkSync(outside, join(git, "worktrees"));
+  const withLink = gitDirsSnapshot(git)!;
+  expect(enforceNewGitDirs(withLink)).toEqual({ removed: [], unsafe: [], message: null });
+  expect(lstatSync(join(git, "worktrees")).isSymbolicLink()).toBe(true);
+});

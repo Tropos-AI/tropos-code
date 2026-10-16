@@ -172,6 +172,41 @@ describe.skipIf(available === null)("with real confinement", () => {
     await until(() => !backend.alive(child));
     expect(() => backend.signal(child, "SIGKILL")).not.toThrow();
   });
+
+  test("a clean command keeps its exit code and output", async () => {
+    expect(await run("echo hi; exit 3")).toEqual({ out: "hi\n", err: "", code: 3 });
+  });
+
+  // The profile can't stop a link in .git pointing at a writable dir (it matches resolved paths): the host sweeps it.
+  const evil = () => join(f.fx, "tmp", "evil");
+  const plantLinkedWorktrees = 'mkdir -p "$TMPDIR/evil/wt/hooks" && echo r > "$TMPDIR/evil/wt/HEAD" && echo x > "$TMPDIR/evil/wt/hooks/post-checkout" && ln -s "$TMPDIR/evil" .git/worktrees';
+
+  test("a .git/worktrees created as a link into the temp dir is removed, never followed, and the command fails", async () => {
+    const r = await run(plantLinkedWorktrees);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(GIT_METADATA_TAMPERED);
+    expect(() => lstatSync(join(f.project, ".git", "worktrees"))).toThrow();
+    expect(readFileSync(join(evil(), "wt", "hooks", "post-checkout"), "utf8")).toBe("x\n"); // the target is untouched
+    rmSync(evil(), { recursive: true });
+  });
+
+  test("a killed command's planted link is still removed on the host, with the message", async () => {
+    const child = backend.spawn({ shell: "/bin/sh", script: `${plantLinkedWorktrees}; sleep 30`, cwd: f.project, env: {} });
+    const result = collect(child);
+    await until(() => {
+      try {
+        return lstatSync(join(f.project, ".git", "worktrees")).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    });
+    backend.signal(child, "SIGKILL");
+    const r = await result;
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain(GIT_METADATA_TAMPERED);
+    expect(() => lstatSync(join(f.project, ".git", "worktrees"))).toThrow();
+    rmSync(evil(), { recursive: true });
+  });
 });
 
 test("unconfinedBackend runs on the host with the allowlisted environment", async () => {

@@ -1,11 +1,12 @@
 // src/exec/confined.ts — runs a chat's commands on the host, confined to its project by the OS: macOS sandbox-exec
 // with the profile from sandbox-profile.ts, or Linux bubblewrap with the arguments from bwrap-args.ts.
 //
-// sandbox-exec execs the shell in place, so the child is the shell itself and process-group signals work exactly
-// as in LocalBackend. bwrap runs under a small host `sh` wrapper (same process group). bwrap can't mask in advance a
-// `.git/commondir` or a nested git dir that doesn't exist yet (the macOS profile can: its path denies apply to paths
-// that don't exist), so the host checks for them after each command (git-integrity.ts): the wrapper reports bwrap's
-// status on fd 3 and exits with the host's verdict; when the wrapper is killed first, the host checks on close.
+// Both run under a small host `sh` wrapper that leads the command's process group, so signals work as in
+// LocalBackend. Neither confinement can stop everything in `.git` in advance: bwrap can't mask a `commondir` or a
+// nested git dir that doesn't exist yet, and the macOS profile matches resolved paths, so a `.git/modules` link to a
+// writable dir slips past it. So the host checks after each command (git-integrity.ts), with the same code on both:
+// the wrapper reports the tool's status on fd 3 and exits with the host's verdict; when the wrapper is killed
+// first, the host checks on close. Residual: a nested repo or `gitdir:` file in the working tree (`lib/.git`).
 import { type ChildProcess, spawn } from "node:child_process";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import type { Socket } from "node:net";
@@ -21,6 +22,7 @@ import { LocalBackend } from "./local";
 import { type SandboxProfile, sandboxProfile } from "./sandbox-profile";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+const ENV = "/usr/bin/env";
 
 /**
  * Where the confinement tool is looked up, and the only PATH its wrapper gets. Never the owner's PATH (`~/bin`,
@@ -29,8 +31,8 @@ const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 export const TRUSTED_PATH = "/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin";
 
 /**
- * Runs bwrap (`"$@"`, without fd 3), reports its status to the host on fd 3 and exits with the host's answer; with
- * no answer (the host closed fd 3), with bwrap's own status.
+ * Runs the confinement tool (`"$@"`, without fd 3), reports its status to the host on fd 3 and exits with the host's
+ * answer; with no answer (the host closed fd 3), with the tool's own status.
  */
 const WRAPPER = '"$@" 3>&-; status=$?; echo "$status" >&3; read -r verdict <&3 || verdict=$status; case $verdict in ""|*[!0-9]*) verdict=$status;; esac; exit "$verdict"';
 
@@ -46,7 +48,7 @@ export interface ConfinedBackendOptions {
   bwrapBin?: string;
 }
 
-/** The checks one bwrap command gets after it ran. */
+/** The checks one command gets after it ran. */
 interface PostRun {
   commondir: CommondirSnapshot | null;
   gitDirs: GitDirsSnapshot | null;
@@ -83,42 +85,34 @@ export class ConfinedBackend implements ExecBackend {
     }
   }
 
-  spawn(opts: ExecSpawn): ChildProcess {
-    if (!this.profile) return this.spawnBwrap(opts, { cwd: opts.cwd, detached: true });
-    const params = this.profile.params.flatMap(([k, v]) => ["-D", `${k}=${v}`]);
-    return spawn(SANDBOX_EXEC, ["-p", this.profile.profile, ...params, opts.shell, "-c", opts.script], {
-      cwd: opts.cwd,
-      env: this.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  }
-
   /**
-   * bwrap's arguments depend on the command's cwd (`--chdir`) and on the git dirs that exist now (a bind of one
-   * removed since would stop every later command), so they are rebuilt for each command. The wrapper and bwrap get
-   * only TRUSTED_PATH; the command gets the chat environment through `--setenv`.
+   * Both confinements run under the same host wrapper and the same post-run checks. The wrapper (and the tool) get
+   * only TRUSTED_PATH; the command gets the chat environment, through `env -i` (sandbox-exec) or `--setenv` (bwrap).
+   * sandbox-exec and env exec in place, so the shell stays in the wrapper's process group, as bwrap's sandbox does.
    */
-  private spawnBwrap(opts: ExecSpawn, options: { cwd: string; detached: boolean }): ChildProcess {
-    const hostEnv = { PATH: TRUSTED_PATH };
-    let args: string[];
-    try {
-      args = bwrapArgs(this.paths, opts.cwd);
-    } catch (err) {
-      // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare.
-      const message = `tropos sandbox: ${(err as Error).message}`;
-      return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, env: hostEnv, stdio: ["ignore", "pipe", "pipe"] });
+  spawn(opts: ExecSpawn): ChildProcess {
+    const options = { cwd: opts.cwd, env: { PATH: TRUSTED_PATH }, detached: true };
+    const vars = Object.entries(this.env).filter((entry): entry is [string, string] => entry[1] !== undefined);
+    let command: string[];
+    if (this.profile) {
+      const params = this.profile.params.flatMap(([k, v]) => ["-D", `${k}=${v}`]);
+      command = [ENV, "-i", ...vars.map(([k, v]) => `${k}=${v}`), SANDBOX_EXEC, "-p", this.profile.profile, ...params, opts.shell, "-c", opts.script];
+    } else {
+      try {
+        // Rebuilt per command: they depend on the cwd (`--chdir`) and on the git dirs that exist now (a bind of
+        // one removed since would stop every later command).
+        command = [this.bwrap, ...bwrapArgs(this.paths, opts.cwd), ...vars.flatMap(([k, v]) => ["--setenv", k, v]), "--", opts.shell, "-c", opts.script];
+      } catch (err) {
+        // The repo changed into something that can't be confined (a linked .git): fail the command, never run it bare.
+        const message = `tropos sandbox: ${(err as Error).message}`;
+        return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
+      }
     }
-    const setenv = Object.entries(this.env).flatMap(([k, v]) => (v === undefined ? [] : ["--setenv", k, v]));
-    // Taken before the command runs: the `commondir`s and nested git dirs that don't exist, so can't be bound read-only.
+    // Taken before the command runs: the `commondir`s and nested git dirs that don't exist yet, and the links in .git.
     const git = join(this.paths.project, ".git");
     const gitDirs = gitDirsSnapshot(git);
     const post: PostRun = { commondir: commondirSnapshot(git, [git, ...(gitDirs?.gitDirs ?? [])]), gitDirs };
-    const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", this.bwrap, ...args, ...setenv, "--", opts.shell, "-c", opts.script], {
-      ...options,
-      env: hostEnv,
-      stdio: ["ignore", "pipe", "pipe", "pipe"],
-    });
+    const child = spawn("/bin/sh", ["-c", WRAPPER, "tropos-confined", ...command], { ...options, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     // Each message is the host's own, so it is always reported when the host acted: the command's output can't be
     // trusted to say whether it already was. Both listeners come before bash.ts's, so the message lands in the
     // command's stderr before its result is read.
@@ -135,7 +129,7 @@ export class ConfinedBackend implements ExecBackend {
         if (checked) return;
         line += String(chunk);
         if (!line.includes("\n")) return;
-        // bwrap has returned, so nothing in the sandbox still runs: the check can't race the command.
+        // The tool has returned, so nothing confined still runs: the check can't race the command.
         const message = check();
         if (message) child.stderr?.emit("data", `\n${message}\n`);
         const status = Number.parseInt(line, 10);
@@ -224,7 +218,7 @@ export function confinementAvailable(): Promise<Confinement | null> {
   return available;
 }
 
-/** Undoes what a bwrap command planted in `.git` (see git-integrity.ts); the message to fail it with, or null. */
+/** Undoes what a command planted in `.git` (see git-integrity.ts); the message to fail it with, or null. */
 function postRunMessage(post: PostRun): string | null {
   const messages: string[] = [];
   try {
