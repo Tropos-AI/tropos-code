@@ -812,4 +812,28 @@ describe("TelegramAdapter", () => {
     server.pushMessage(CHAT, CHAT, "a");
     await server.waitFor(() => server.textsTo(CHAT).includes("Ran: make"));
   });
+
+  test("recording stops at a cap but the summary keeps true counts; ..foo is inside the project, ../x is outside", async () => {
+    const { projects } = fakeProjects();
+    const { server, session } = await setup({ projects });
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    session().onPrompt = async (_t, s) => {
+      for (let i = 0; i < 105; i++) {
+        s.emit({ type: "tool_start", id: `c${i}`, name: "Bash", summary: "x", input: { command: `cmd${i}` } });
+        s.emit({ type: "tool_end", id: `c${i}`, name: "Bash", output: { content: "" } as never, status: "done" });
+      }
+      for (const [id, f] of [["f1", "/h/workspace/..foo"], ["f2", "/h/outside.ts"]] as const) {
+        s.emit({ type: "tool_start", id, name: "Write", summary: "x", input: { file_path: f } });
+        s.emit({ type: "tool_end", id, name: "Write", output: { content: "" } as never, status: "done" });
+      }
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "go");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Changed:")));
+    const text = server.textsTo(CHAT).find((t) => t.startsWith("Changed:"))!;
+    expect(text).toContain("Changed: ..foo, /h/outside.ts");
+    expect(text).toContain("cmd7 and 97 more");
+  });
 });

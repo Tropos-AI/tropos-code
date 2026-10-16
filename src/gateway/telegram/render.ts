@@ -30,19 +30,32 @@ export function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+const REDACTED = "‹redacted›";
+
+/** Hides credentials in command text before it goes to a chat (summaries and tool lines). */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${REDACTED}@`)
+    .replace(/\b(Bearer|Basic)\s+[^\s'"]+/gi, `$1 ${REDACTED}`)
+    .replace(/(\b[\w.-]*(?:TOKEN|KEY|SECRET|PASS(?:WORD)?)[\w.-]*=)("[^"]*"|'[^']*'|[^\s'"]+)/gi, `$1${REDACTED}`)
+    .replace(/[A-Za-z0-9_-]{32,}/g, REDACTED);
+}
+
 const SUMMARY_FILES = 10;
 const SUMMARY_COMMANDS = 8;
 
-function capped(items: string[], max: number, sep: string): string {
-  return items.length > max ? `${items.slice(0, max).join(sep)} and ${items.length - max} more` : items.join(sep);
+function capped(items: string[], max: number, sep: string, extra = 0): string {
+  const more = Math.max(items.length - max, 0) + extra;
+  return more > 0 ? `${items.slice(0, max).join(sep)} and ${more} more` : items.join(sep);
 }
 
 /** What a turn changed and ran, for a chat where it happened without asking. Nothing when it did neither. */
-export function taskSummaryText(done: { files: string[]; commands: string[] }): string | undefined {
-  const files = [...new Set(done.files)];
+export function taskSummaryText(done: { files: string[]; commands: string[]; moreFiles?: number; moreCommands?: number }): string | undefined {
+  const files = [...new Set(done.files)].map((f) => oneLine(f, 100));
   const lines: string[] = [];
-  if (files.length > 0) lines.push(`Changed: ${capped(files, SUMMARY_FILES, ", ")}`);
-  if (done.commands.length > 0) lines.push(`Ran: ${capped(done.commands.map((c) => oneLine(c, 80)), SUMMARY_COMMANDS, " · ")}`);
+  const commands = done.commands.map((c) => oneLine(redactSecrets(c), 80));
+  if (files.length > 0) lines.push(`Changed: ${capped(files, SUMMARY_FILES, ", ", done.moreFiles)}`);
+  if (commands.length > 0) lines.push(`Ran: ${capped(commands, SUMMARY_COMMANDS, " · ", done.moreCommands)}`);
   return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
@@ -58,7 +71,7 @@ export function renderToolBatch(lines: ToolLine[]): string {
   return lines
     .map((l) => {
       const mark = l.status === "error" ? " (failed)" : l.status === "denied" ? " (denied)" : "";
-      return `• ${oneLine(`${l.name}: ${l.summary}`, 160)}${mark}`;
+      return `• ${oneLine(redactSecrets(`${l.name}: ${l.summary}`), 160)}${mark}`;
     })
     .join("\n");
 }

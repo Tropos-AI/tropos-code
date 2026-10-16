@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, splitMessage, statusText, taskSummaryText } from "./render";
+import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, redactSecrets, splitMessage, statusText, taskSummaryText } from "./render";
 
 describe("splitMessage", () => {
   test("short text is one part", () => {
@@ -97,5 +97,35 @@ describe("taskSummaryText", () => {
     expect(taskSummaryText({ files: Array.from({ length: 12 }, (_, i) => `f${i}`), commands: [] })).toEndWith(" and 2 more");
     expect(taskSummaryText({ files: [], commands: Array.from({ length: 10 }, (_, i) => `c${i}`) })).toEndWith(" and 2 more");
     expect(taskSummaryText({ files: ["a.ts"], commands: ["x\n".repeat(60)] })!.split("\n")[1]!.length).toBeLessThanOrEqual(5 + 80);
+  });
+});
+
+describe("redactSecrets", () => {
+  const R = "‹redacted›";
+  const cases: [string, string][] = [
+    ["curl -H 'Authorization: Bearer abc.def' x", `curl -H 'Authorization: Bearer ${R}' x`],
+    ["curl -H 'Authorization: Basic dXNlcjpwdw==' x", `curl -H 'Authorization: Basic ${R}' x`],
+    ["API_KEY=sk123 bun run x", `API_KEY=${R} bun run x`],
+    ["GITHUB_TOKEN='a b' make", `GITHUB_TOKEN=${R} make`],
+    ["DB_PASSWORD=hunter2", `DB_PASSWORD=${R}`],
+    ["git clone https://user:pw@github.com/a/b", `git clone https://${R}@github.com/a/b`],
+    ["echo " + "a".repeat(32), `echo ${R}`],
+    ["bun test src/foo.test.ts --bail", "bun test src/foo.test.ts --bail"],
+    ["echo " + "a".repeat(31), "echo " + "a".repeat(31)],
+  ];
+  for (const [input, want] of cases) test(input.slice(0, 40), () => expect(redactSecrets(input)).toBe(want));
+
+  test("is applied to tool lines and the summary", () => {
+    expect(renderToolBatch([{ id: "1", name: "Bash", summary: "TOKEN=abc curl x" }])).toBe(`• Bash: TOKEN=${R} curl x`);
+    expect(taskSummaryText({ files: [], commands: ["TOKEN=abc curl x"] })).toBe(`Ran: TOKEN=${R} curl x`);
+  });
+  test("summary bounds file paths, flattening newlines", () => {
+    const out = taskSummaryText({ files: ["a/" + "b".repeat(300), "x\ny.ts"], commands: [] })!;
+    expect(out).not.toContain("\n" + "y");
+    expect(out.split(", ")[0]!.length).toBeLessThanOrEqual(9 + 100);
+    expect(out).toContain("x y.ts");
+  });
+  test("extra counts add to 'and N more'", () => {
+    expect(taskSummaryText({ files: ["a"], commands: [], moreFiles: 5 })).toBe("Changed: a and 5 more");
   });
 });

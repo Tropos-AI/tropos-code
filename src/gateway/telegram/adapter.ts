@@ -28,6 +28,8 @@ import {
 
 const CHANNEL = "telegram";
 const MAX_TOOL_LINES = 12;
+/** Past this many per turn the summary only counts them. */
+const MAX_RECORDED = 100;
 const MAX_UNPAIRED_MEMORY = 1000;
 /** How long start() waits for the bot's command list to be registered. */
 const COMMANDS_WAIT_MS = 10_000;
@@ -107,7 +109,7 @@ interface Chat {
   /** Learned notices that arrived during a turn: sent after its answer. */
   heldNotices: string[];
   /** This turn's finished edits and commands, for the summary after the answer. */
-  done: { files: Set<string>; commands: string[]; pending: Map<string, { name: string; input: unknown }> };
+  done: { files: Set<string>; commands: string[]; moreFiles: number; moreCommands: number; pending: Map<string, { name: string; input: unknown }> };
   /** The chat's project folder, to show changed files relative to it. */
   root: string | undefined;
 }
@@ -355,7 +357,7 @@ export class TelegramAdapter implements ChannelAdapter {
       asks: new Map(),
       errorSent: false,
       heldNotices: [],
-      done: { files: new Set(), commands: [], pending: new Map() },
+      done: { files: new Set(), commands: [], moreFiles: 0, moreCommands: 0, pending: new Map() },
       root: undefined,
     };
     chat.detach = session.attach({
@@ -448,19 +450,30 @@ export class TelegramAdapter implements ChannelAdapter {
     chat.done.pending.delete(id);
     if (!call || status !== "done" || typeof call.input !== "object" || call.input === null) return;
     const input = call.input as { command?: unknown; file_path?: unknown };
-    if (call.name === "Bash" && typeof input.command === "string") chat.done.commands.push(input.command);
-    else if (typeof input.file_path === "string") {
+    if (call.name === "Bash" && typeof input.command === "string") {
+      if (chat.done.commands.length < MAX_RECORDED) chat.done.commands.push(input.command);
+      else chat.done.moreCommands++;
+    } else if (typeof input.file_path === "string") {
       const rel = chat.root && isAbsolute(input.file_path) ? relative(chat.root, input.file_path) : input.file_path;
-      chat.done.files.add(rel.startsWith("..") ? input.file_path : rel);
+      const file = rel === ".." || rel.startsWith("../") ? input.file_path : rel;
+      if (chat.done.files.has(file)) return;
+      if (chat.done.files.size < MAX_RECORDED) chat.done.files.add(file);
+      else chat.done.moreFiles++;
     }
+  }
+
+  private resetDone(chat: Chat): void {
+    chat.done.files.clear();
+    chat.done.commands.length = 0;
+    chat.done.moreFiles = 0;
+    chat.done.moreCommands = 0;
+    chat.done.pending.clear();
   }
 
   /** Sent once per turn, after the answer and before any learned notices. */
   private flushSummary(chat: Chat): void {
-    const text = taskSummaryText({ files: [...chat.done.files], commands: chat.done.commands });
-    chat.done.files.clear();
-    chat.done.commands.length = 0;
-    chat.done.pending.clear();
+    const text = taskSummaryText({ files: [...chat.done.files], commands: chat.done.commands, moreFiles: chat.done.moreFiles, moreCommands: chat.done.moreCommands });
+    this.resetDone(chat);
     if (text) this.sendAll(chat, text);
   }
 
@@ -550,9 +563,7 @@ export class TelegramAdapter implements ChannelAdapter {
     chat.errorSent = false;
     // Another client's turn may be in flight (busy): keep what it has recorded so far.
     if (!chat.session.state().busy) {
-      chat.done.files.clear();
-      chat.done.commands.length = 0;
-      chat.done.pending.clear();
+      this.resetDone(chat);
     }
     chat.root = (await this.projects?.current(`${CHANNEL}:${chat.chatId}`).catch(() => undefined))?.path;
     let reason: TurnEndReason | undefined;
