@@ -38,20 +38,25 @@ async function until(check: () => boolean, ms = 10_000) {
 }
 
 describe("protectedPaths", () => {
-  test("links that leave the workspace are ignored and nothing is created through them", async () => {
+  test("links that leave the workspace (or dangle) make the sandbox refuse, and nothing is created through them", async () => {
     const ws = await makeTmpDir("tropos-prot-");
     const outside = await makeTmpDir("tropos-out-");
     try {
       await symlink(outside, join(ws, ".git"));
-      expect(protectedPaths(ws)).toEqual([]);
+      expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
       expect(existsSync(join(outside, "hooks"))).toBe(false);
       await removeDir(join(ws, ".git"));
       await mkdir(join(ws, ".git"));
       await symlink(join(outside, "missing"), join(ws, ".git", "hooks"));
-      expect(protectedPaths(ws)).toEqual([]);
+      expect(() => protectedPaths(ws)).toThrow(/broken link/);
       expect(existsSync(join(outside, "missing"))).toBe(false);
+      await removeDir(join(ws, ".git", "hooks"));
+      // The other half is still checked when only one of the two is bad.
+      await symlink(outside, join(ws, ".git", "config"));
+      expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
+      await removeDir(join(ws, ".git", "config"));
       await symlink(outside, join(ws, ".husky"));
-      expect(protectedPaths(ws)).toEqual([]);
+      expect(() => protectedPaths(ws)).toThrow(/leaves the workspace/);
     } finally {
       await removeDir(ws);
       await removeDir(outside);

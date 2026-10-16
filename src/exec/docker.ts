@@ -45,19 +45,11 @@ const OWNER_LABEL = "tropos.pid";
 export function protectedPaths(workspace: string): string[] {
   const out: string[] = [];
   // A symlink is followed to what it really points at: that is what git (and a hook) uses, so that is what must be
-  // read-only. Protecting only the link's own path would leave a symlinked `.git/hooks` or `.husky` target writable.
-  // Only targets inside the workspace count: a link pointing elsewhere on the host must not make us create files
-  // there or mount that host path into the container (a repo is untrusted input). Outside the workspace the
-  // container can't write anyway, so there is nothing to protect.
+  // read-only. A link that leaves the workspace (or dangles) can't be protected from inside the container, and the
+  // container could swap the link itself, so the sandbox refuses to start rather than run without protection. This
+  // also keeps us from creating files or mounting host paths through a link in an untrusted repo.
   const root = realpathSync(workspace);
   const inside = (p: string): boolean => p === root || p.startsWith(root + sep);
-  const real = (p: string): string => {
-    try {
-      return realpathSync(p);
-    } catch {
-      return p;
-    }
-  };
   const isLink = (p: string): boolean => {
     try {
       return lstatSync(p).isSymbolicLink();
@@ -65,29 +57,37 @@ export function protectedPaths(workspace: string): string[] {
       return false;
     }
   };
-  const git = real(join(workspace, ".git"));
+  const resolve = (p: string): string => {
+    if (!isLink(p)) return p;
+    let target: string;
+    try {
+      target = realpathSync(p);
+    } catch {
+      throw new Error(`${p} is a broken link; the sandbox won't run until it is removed.`);
+    }
+    if (!inside(target)) throw new Error(`${p} is a link that leaves the workspace (to ${target}); the sandbox won't run until it is replaced by a real file or folder.`);
+    return target;
+  };
+  const git = resolve(join(workspace, ".git"));
   let info: ReturnType<typeof lstatSync> | undefined;
   try {
     info = lstatSync(git);
   } catch {
     info = undefined;
   }
-  if (inside(git) && info?.isDirectory()) {
+  if (info?.isDirectory()) {
     for (const gitDir of [git, ...submoduleGitDirs(join(git, "modules"), 0)]) {
-      const hooks = join(gitDir, "hooks");
-      const config = join(gitDir, "config");
-      // A link that leaves the workspace (or dangles) is left alone: creating its target would write outside.
-      const safe = (p: string): boolean => !isLink(p) || (inside(real(p)) && existsSync(p));
-      if (!safe(hooks) || !safe(config)) continue;
+      const hooks = resolve(join(gitDir, "hooks"));
+      const config = resolve(join(gitDir, "config"));
       mkdirSync(hooks, { recursive: true });
       writeFileSync(config, "", { flag: "a" });
-      for (const p of [real(hooks), real(config)]) if (inside(p)) out.push(p);
+      out.push(hooks, config);
     }
-  } else if (inside(git) && info?.isFile()) {
+  } else if (info?.isFile()) {
     out.push(git);
   }
   const husky = join(workspace, ".husky");
-  if (existsSync(husky) && inside(real(husky))) out.push(real(husky));
+  if (existsSync(husky) || isLink(husky)) out.push(resolve(husky));
   return out;
 }
 
