@@ -36,3 +36,18 @@ test("the terminal's Cron tool delivers to the owner's chat by default, or nowhe
   expect((await tool.run({ action: "remove", id: theirs.id }, makeToolContext())).isError).toBeFalsy();
   expect(new CronStore(home).get(theirs.id)).toBeUndefined();
 });
+
+test("the owner is looked up when the tool is used: one paired after the tool was made gets the job, and the preview says so", async () => {
+  const tool = await ownerCronTool(home);
+  const pairing = new FilePairing({ path: join(gatewayDir(home), "pairing.json") });
+  const c = await pairing.challenge("telegram", "42");
+  if (c.kind !== "code") throw new Error("expected a code");
+  await pairing.approve("telegram", c.code);
+  expect(tool.preview!(add)!.text).toContain("deliver: telegram:42");
+  await tool.run(add, makeToolContext());
+  expect(new CronStore(home).list()[0]!.deliver).toBe("telegram:42");
+  // A former owner no longer gets new jobs.
+  await pairing.revoke("telegram", "42");
+  await tool.run({ ...add, name: "after" }, makeToolContext());
+  expect(new CronStore(home).list().find((j) => j.name === "after")!.deliver).toBe("none");
+});

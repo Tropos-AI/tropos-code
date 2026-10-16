@@ -1,5 +1,6 @@
 // src/gateway/pairing.ts — deny-by-default allowlist of senders, with hashed one-time pairing codes.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { troposHome } from "../paths";
@@ -214,6 +215,21 @@ export class FilePairing implements Pairing {
     return { version: 2, salt: Buffer.from(this.random(16)).toString("hex"), approved: [], pending: [], issued: [], failures: [] };
   }
 
+  /**
+   * The owner as the file says right now, without waiting on queued operations: for callers that can't await (a tool's
+   * permission preview). The file is replaced atomically, so the read is never half a write.
+   */
+  ownerNow(): { channel: string; senderId: string } | undefined {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(this.path, "utf8"));
+    } catch {
+      return undefined;
+    }
+    const owner = this.parse(raw).state.owner;
+    return owner && { channel: owner.channel, senderId: owner.senderId };
+  }
+
   private async load(): Promise<{ state: State; migrated: boolean }> {
     let raw: unknown;
     try {
@@ -221,6 +237,10 @@ export class FilePairing implements Pairing {
     } catch {
       return { state: this.fresh(), migrated: false };
     }
+    return this.parse(raw);
+  }
+
+  private parse(raw: unknown): { state: State; migrated: boolean } {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { state: this.fresh(), migrated: false };
     const r = raw as Record<string, unknown>;
     if (!isStr(r.salt) || r.salt.length < 16) return { state: this.fresh(), migrated: false };
