@@ -9,3 +9,10 @@ export class SandboxUnavailableError extends UserFacingError {
     super(`The sandbox isn't available, so I can't start a session: ${detail}`);
   }
 }
+
+/** The chat's sender is no longer approved: no session starts for them, and nothing is said. */
+export class SenderNotApprovedError extends Error {
+  constructor() {
+    super("This sender is no longer approved.");
+  }
+}

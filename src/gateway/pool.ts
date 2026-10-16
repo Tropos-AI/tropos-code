@@ -40,12 +40,17 @@ interface Chat {
   sinks: Set<ChatSink>;
   /** The session behind the chat now, or the one it had last. */
   last: Entry;
+  /** Prompts waiting for a session to be (re)built, and whether /stop came meanwhile. */
+  waiting: number;
+  stopRequested: boolean;
 }
 
 export class SessionPool implements SessionProvider {
   private readonly entries = new Map<string, Entry>();
   private readonly opening = new Map<string, Promise<Entry>>();
   private readonly chats = new Map<string, Chat>();
+  /** Sessions still shutting down, by key: a fresh one must not share the transcript with them. */
+  private readonly closing = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private saving: Promise<void> = Promise.resolve();
@@ -72,7 +77,7 @@ export class SessionPool implements SessionProvider {
     const entry = await this.live(key);
     let chat = this.chats.get(key);
     if (!chat) {
-      chat = { chat: undefined as unknown as ChatSession, sinks: new Set(), last: entry };
+      chat = { chat: undefined as unknown as ChatSession, sinks: new Set(), last: entry, waiting: 0, stopRequested: false };
       chat.chat = this.wrap(key, chat);
       this.chats.set(key, chat);
     }
@@ -80,7 +85,13 @@ export class SessionPool implements SessionProvider {
   }
 
   /** The key's open session; built when there is none, replaced when it was retired and its turn has ended. */
-  private live(key: string): Promise<Entry> {
+  private async live(key: string): Promise<Entry> {
+    const entry = await this.liveOnce(key);
+    // Once more when a reload overtook the build: nothing should start on what the reload replaced.
+    return this.closable(entry) ? this.liveOnce(key) : entry;
+  }
+
+  private liveOnce(key: string): Promise<Entry> {
     if (this.stopped) return Promise.reject(new Error("The gateway is stopping."));
     const existing = this.entries.get(key);
     if (existing && !this.closable(existing)) {
@@ -89,9 +100,9 @@ export class SessionPool implements SessionProvider {
     }
     let pending = this.opening.get(key);
     if (!pending) {
-      // The retired session is closed first, so the fresh one never shares the transcript with it.
-      const retired = existing ? this.closeEntry(key, { finalReview: false }) : Promise.resolve();
-      pending = retired.then(() => this.build(key)).finally(() => this.opening.delete(key));
+      // The last session is closed first (or finishes closing), so the fresh one never shares the transcript with it.
+      const before = existing ? this.closeEntry(key, { finalReview: false }) : (this.closing.get(key) ?? Promise.resolve());
+      pending = before.then(() => this.build(key)).finally(() => this.opening.delete(key));
       this.opening.set(key, pending);
     }
     return pending;
@@ -157,10 +168,19 @@ export class SessionPool implements SessionProvider {
     await Promise.all([...this.entries.keys()].map((key) => this.closeEntry(key, { finalReview: false })));
   }
 
-  private async closeEntry(key: string, opts?: { finalReview?: boolean }): Promise<void> {
+  private closeEntry(key: string, opts?: { finalReview?: boolean }): Promise<void> {
     const entry = this.entries.get(key);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
     this.entries.delete(key);
+    const done = this.shutdown(entry, opts);
+    this.closing.set(key, done);
+    void done.then(() => {
+      if (this.closing.get(key) === done) this.closing.delete(key);
+    });
+    return done;
+  }
+
+  private async shutdown(entry: Entry, opts?: { finalReview?: boolean }): Promise<void> {
     await entry.handle.host.shutdown(opts).catch(() => {});
     // After the shutdown, so what the final review reports still reaches the chat.
     for (const detach of entry.attached.values()) detach();
@@ -209,7 +229,21 @@ export class SessionPool implements SessionProvider {
     return {
       key,
       prompt: async (text) => {
-        const entry = await this.live(key);
+        chat.waiting++;
+        let entry: Entry;
+        try {
+          entry = await this.live(key);
+        } catch (e) {
+          if (chat.waiting === 1) chat.stopRequested = false;
+          throw e;
+        } finally {
+          chat.waiting--;
+        }
+        // /stop arrived while the session was being built: the turn it would have stopped never starts.
+        if (chat.stopRequested) {
+          chat.stopRequested = false;
+          return "aborted";
+        }
         touch(entry);
         try {
           return await entry.handle.host.call("prompt", { text });
@@ -218,6 +252,7 @@ export class SessionPool implements SessionProvider {
         }
       },
       interrupt: () => {
+        if (chat.waiting > 0) chat.stopRequested = true;
         const entry = this.entries.get(key);
         if (!entry) return;
         touch(entry);

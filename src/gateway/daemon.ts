@@ -20,7 +20,7 @@ import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
 import { ProjectContexts } from "./contexts";
-import { SandboxUnavailableError, UserFacingError } from "./errors";
+import { SandboxUnavailableError, SenderNotApprovedError, UserFacingError } from "./errors";
 import {
   DEFAULT_PROJECT_ID,
   TEMPORARY_PROJECT_ID,
@@ -31,7 +31,7 @@ import {
   type Project,
 } from "./projects";
 import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
-import { reapRevoked } from "./revocation";
+import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { CHANNEL_MODES, channelContext, chatRole, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
@@ -202,6 +202,10 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     statePath: join(dir, "sessions.json"),
     idleMs: config.idleMinutes * 60_000,
     create: async (key, saved): Promise<HostHandle> => {
+      // A closed chat reopens on its next message; a revoked sender's queued messages must not reopen it. The adapter
+      // checks new messages, this checks every session, so the two can't disagree.
+      const sender = privateTelegramSender(parseSessionKey(key)?.chatKey ?? "");
+      if (sender !== undefined && !(await run.pairing.isApproved("telegram", sender))) throw new SenderNotApprovedError();
       const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
       const project = await source.get(projectId);
       if (!project) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");

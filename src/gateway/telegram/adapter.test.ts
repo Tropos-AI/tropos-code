@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SandboxUnavailableError, UserFacingError } from "../errors";
+import { SandboxUnavailableError, SenderNotApprovedError, UserFacingError } from "../errors";
 import type { ChatProjects } from "../types";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
@@ -207,6 +207,51 @@ describe("TelegramAdapter", () => {
     release();
     await server.waitFor(() => server.textsTo(CHAT).includes("ran queued"));
     expect(session().prompts).toEqual(["warm", "slow", "queued"]);
+  });
+
+  test("a sender who lost approval mid-queue: the chat and its queue are dropped, nothing queued runs, nothing is said", async () => {
+    const { server, session, sessions } = await setup();
+    server.pushMessage(CHAT, CHAT, "warm");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: warm"));
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    session().onPrompt = async (text, s) => {
+      if (text === "slow") await gate;
+      s.emit(assistantEvent(`ran ${text}`));
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "slow");
+    server.pushMessage(CHAT, CHAT, "queued 1");
+    server.pushMessage(CHAT, CHAT, "queued 2");
+    await Bun.sleep(50);
+    // Revoked meanwhile: the session behind the chat refuses to start again.
+    session().onPrompt = async (text, s) => {
+      if (text === "slow") return (await gate, s.emit(assistantEvent("ran slow")), "end_turn");
+      throw new SenderNotApprovedError();
+    };
+    release();
+    await server.waitFor(() => session().prompts.includes("queued 1"));
+    await Bun.sleep(50);
+    expect(session().prompts).toEqual(["warm", "slow", "queued 1"]);
+    expect(server.textsTo(CHAT).join("\n")).not.toContain("went wrong");
+    // Approved again later: the next message opens the chat afresh.
+    session().onPrompt = async (text, s) => (s.emit(assistantEvent(`echo: ${text}`)), "end_turn");
+    const opens = sessions.opens;
+    server.pushMessage(CHAT, CHAT, "back");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: back"));
+    expect(sessions.opens).toBe(opens + 1);
+    expect(session().prompts).not.toContain("queued 2");
+  });
+
+  test("a turn that fails with a user-facing error says so in its own words", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "warm");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: warm"));
+    session().onPrompt = async () => {
+      throw new UserFacingError('Project "App" can\'t be used: it moved.');
+    };
+    server.pushMessage(CHAT, CHAT, "again");
+    await server.waitFor(() => server.textsTo(CHAT).includes('Project "App" can\'t be used: it moved.'));
   });
 
   async function withAsk(opts: { askTimeoutMs?: number } = {}) {

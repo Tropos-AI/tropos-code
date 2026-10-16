@@ -1,6 +1,6 @@
 // src/gateway/telegram/adapter.ts — routes Telegram private chats to agent sessions.
 import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/events";
-import { UserFacingError } from "../errors";
+import { SenderNotApprovedError, UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
 import type { ChannelAdapter, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
@@ -288,6 +288,7 @@ export class TelegramAdapter implements ChannelAdapter {
       session = await this.sessions.open(key);
     } catch (e) {
       this.log(`could not open session ${key}`, e);
+      if (e instanceof SenderNotApprovedError) return undefined;
       await this.api.sendMessage(chatId, e instanceof UserFacingError ? e.message : "Could not start a session right now.").catch(() => {});
       return undefined;
     }
@@ -469,9 +470,14 @@ export class TelegramAdapter implements ChannelAdapter {
         busy = true;
         chat.queue.unshift(text);
         chat.blocked = chat.session.state().busy;
+      } else if (e instanceof SenderNotApprovedError) {
+        // Revoked while this waited in the queue: nothing more of theirs runs, and nothing is said.
+        chat.running = false;
+        this.dropChat(chat);
+        return;
       } else {
         this.log("prompt failed", e);
-        this.sendAll(chat, "Something went wrong running that. Try again, or send /new.");
+        this.sendAll(chat, e instanceof UserFacingError ? e.message : "Something went wrong running that. Try again, or send /new.");
       }
     }
     chat.running = false;
@@ -485,6 +491,16 @@ export class TelegramAdapter implements ChannelAdapter {
       if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
     }
     this.drain(chat);
+  }
+
+  /** Forgets the chat and what it queued; a later message that passes the approval check opens it afresh. */
+  private dropChat(chat: Chat): void {
+    const key = `${CHANNEL}:${chat.chatId}`;
+    chat.queue.length = 0;
+    for (const ask of chat.asks.values()) clearTimeout(ask.timer);
+    chat.detach();
+    if (this.chats.get(key) === chat) this.chats.delete(key);
+    this.opening.delete(key);
   }
 
   private async currentProject(chat: Chat): Promise<{ id: string; name: string } | undefined> {

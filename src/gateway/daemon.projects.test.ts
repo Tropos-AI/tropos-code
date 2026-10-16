@@ -263,6 +263,9 @@ describe("reload", () => {
       [service],
     );
     const info = await gw.running();
+    // A private chat whose sender isn't approved gets no session at all.
+    await expect(deps!.openSession("telegram:777")).rejects.toThrow("no longer approved");
+    await pairChat();
     const chatKey = `telegram:${CHAT}`;
     const chat = await deps!.openSession(chatKey);
     const allow: ChatSink = { event: () => {}, ask: (id) => chat.answer(id, { kind: "allow" }), askClosed: () => {}, state: () => {} };
@@ -348,4 +351,32 @@ describe("reload", () => {
     gw.stop();
     expect(await gw.done).toBe(0);
   });
+});
+
+describe("revocation", () => {
+  test("a message queued when its sender is revoked never runs", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const gw = startGateway([async () => (await gate, reply([textBlock("first answer")])), () => reply([textBlock("must never run")])]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat(); // update 100
+    server.pushMessage(CHAT, CHAT, "first question"); // update 101
+    await server.waitFor(() => gw.model.requests.length === 1);
+    server.pushMessage(CHAT, CHAT, "queued question"); // update 102, queued behind the running turn
+    await server.waitFor(() => Math.max(...server.getUpdatesOffsets) >= 103);
+
+    expect(await main(["pairing", "revoke", "telegram", String(CHAT)], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
+    // The reaper (every 5 s) closes the running session.
+    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"), 8_000);
+    const sent = server.sent.length;
+    release();
+    await Bun.sleep(300);
+    // The queued text didn't get a fresh session and a turn of its own, and the revoked chat isn't answered.
+    expect(gw.model.requests).toHaveLength(1);
+    expect(server.textsTo(CHAT).join("\n")).not.toContain("must never run");
+    expect(server.sent.slice(sent).map((m) => m.text).join("\n")).not.toContain("went wrong");
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  }, 15_000);
 });

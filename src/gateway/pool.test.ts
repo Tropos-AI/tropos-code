@@ -245,7 +245,7 @@ describe("idle sessions", () => {
     expect(await chat.prompt("second")).toBe("end_turn");
     expect(created.at(-1)).toEqual({ key: "telegram:1", saved: "session-1" });
     expect(await pool.open("telegram:1")).toBe(chat);
-    // Closed by someone else (the reaper): the same again.
+    // Closed by someone else (the reaper, when the owner changed; a revoked sender's create refuses): the same again.
     await pool.close("telegram:1");
     expect(await chat.prompt("third")).toBe("end_turn");
     expect(closed).toEqual(["telegram:1", "telegram:1"]);
@@ -280,6 +280,80 @@ describe("idle sessions", () => {
     await chat.prompt("hello");
     expect(closed).toEqual(["session-1"]);
     expect(n).toBe(2);
+  });
+
+  /** A pool whose create waits on `gates[n]` (1-based) when given, and whose sessions' close waits on `closeGates[n]`. */
+  function gated(opts: { gates?: Record<number, Promise<void>>; closeGates?: Record<number, Promise<void>> } = {}) {
+    const closed: string[] = [];
+    const runtimes: ReturnType<typeof fakeRuntime>[] = [];
+    let n = 0;
+    const pool = new SessionPool({
+      statePath: join(dir, "sessions.json"),
+      idleMs: 60_000,
+      sweepEveryMs: 0,
+      create: async (): Promise<HostHandle> => {
+        const i = ++n;
+        await opts.gates?.[i];
+        const runtime = fakeRuntime([() => reply([textBlock(`from session-${i}`)])]);
+        runtimes.push(runtime);
+        return {
+          host: new WebHost(runtime),
+          sessionId: () => "session-1",
+          close: async () => {
+            await opts.closeGates?.[i];
+            closed.push(`session-${i}`);
+          },
+        };
+      },
+    });
+    return { pool, closed, runtimes, created: () => n };
+  }
+
+  test("/stop while the chat's session is being reopened stops the prompt that waits for it", async () => {
+    let release!: () => void;
+    const { pool, runtimes } = gated({ gates: { 2: new Promise<void>((r) => (release = r)) } });
+    const chat = await pool.open("telegram:1");
+    await pool.close("telegram:1");
+    const turn = chat.prompt("long job");
+    await settle();
+    chat.interrupt();
+    release();
+    expect(await turn).toBe("aborted");
+    expect(runtimes[1]!.model.requests).toHaveLength(0);
+    // The stop was for that prompt only: the next one runs.
+    expect(await chat.prompt("again")).toBe("end_turn");
+  });
+
+  test("a prompt whose own reopen was overtaken by a reload runs on a session built after it", async () => {
+    let release!: () => void;
+    const { pool, runtimes, closed, created } = gated({ gates: { 2: new Promise<void>((r) => (release = r)) } });
+    const chat = await pool.open("telegram:1");
+    await pool.close("telegram:1");
+    const turn = chat.prompt("hello");
+    await settle();
+    await pool.retire();
+    release();
+    expect(await turn).toBe("end_turn");
+    expect(created()).toBe(3);
+    expect(closed).toEqual(["session-1", "session-2"]);
+    expect(runtimes[1]!.model.requests).toHaveLength(0);
+    expect(runtimes[2]!.model.requests).toHaveLength(1);
+  });
+
+  test("a chat's next session waits until its last one has finished closing", async () => {
+    let release!: () => void;
+    const { pool, closed, created } = gated({ closeGates: { 1: new Promise<void>((r) => (release = r)) } });
+    const chat = await pool.open("telegram:1");
+    const closing = pool.close("telegram:1");
+    const turn = chat.prompt("hello");
+    await settle();
+    // The old runtime still holds the transcript: nothing new is built on it yet.
+    expect(created()).toBe(1);
+    release();
+    await closing;
+    expect(await turn).toBe("end_turn");
+    expect(closed).toEqual(["session-1"]);
+    expect(created()).toBe(2);
   });
 
   test("closeAll shuts hosts down without a final review; close(key) keeps it", async () => {
