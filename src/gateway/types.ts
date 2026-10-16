@@ -52,6 +52,11 @@ export interface Pairing {
   approve(channel: string, code: string): Promise<{ ok: true; senderId: string } | { ok: false; reason: string }>;
   list(): Promise<PairedSender[]>;
   revoke(channel: string, senderId: string): Promise<boolean>;
+  /** The one approved sender with owner rights, or null when none is set. */
+  owner(): Promise<{ channel: string; senderId: string } | null>;
+  /** Rejects with `only an approved sender can be the owner` when the sender isn't approved. */
+  setOwner(channel: string, senderId: string): Promise<void>;
+  isOwner(channel: string, senderId: string): Promise<boolean>;
 }
 
 /** A channel adapter: connects to a messaging service and routes its chats to sessions. */

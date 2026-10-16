@@ -20,9 +20,15 @@ interface PendingEntry {
   issuedAt: number;
   expiresAt: number;
 }
+interface OwnerEntry {
+  channel: string;
+  senderId: string;
+  since: number;
+}
 interface State {
-  version: 1;
+  version: 2;
   salt: string;
+  owner?: OwnerEntry;
   approved: PairedSender[];
   pending: PendingEntry[];
   /** Every code issued (for the per-sender rolling-hour limit). */
@@ -57,10 +63,24 @@ export class FilePairing implements Pairing {
   }
 
   isApproved(channel: string, senderId: string): Promise<boolean> {
-    return this.run(async () => {
-      const s = await this.load();
+    return this.run(async (s) => {
       return s.approved.some((a) => a.channel === channel && a.senderId === senderId);
     }, false);
+  }
+
+  owner(): Promise<{ channel: string; senderId: string } | null> {
+    return this.run(async (s) => (s.owner ? { channel: s.owner.channel, senderId: s.owner.senderId } : null), false);
+  }
+
+  setOwner(channel: string, senderId: string): Promise<void> {
+    return this.run(async (s) => {
+      if (!s.approved.some((a) => a.channel === channel && a.senderId === senderId)) throw new Error("only an approved sender can be the owner");
+      s.owner = { channel, senderId, since: this.now() };
+    });
+  }
+
+  isOwner(channel: string, senderId: string): Promise<boolean> {
+    return this.run(async (s) => s.owner?.channel === channel && s.owner.senderId === senderId, false);
   }
 
   /** Throws if the sender is already approved (the adapter should not be challenging them). */
@@ -112,8 +132,11 @@ export class FilePairing implements Pairing {
       if (match && match.expiresAt > now) {
         const { senderId } = match;
         s.pending = s.pending.filter((p) => !(p.channel === channel && p.senderId === senderId));
+        // The first person ever approved is the owner; later ones are guests until the owner says otherwise.
+        const first = !s.owner && s.approved.every((a) => a.channel === channel && a.senderId === senderId);
         s.approved = s.approved.filter((a) => !(a.channel === channel && a.senderId === senderId));
         s.approved.push({ channel, senderId, approvedAt: now });
+        if (first) s.owner = { channel, senderId, since: now };
         return { ok: true as const, senderId };
       }
       s.failures.push({ channel, at: now });
@@ -139,6 +162,7 @@ export class FilePairing implements Pairing {
       s.approved = s.approved.filter((a) => !(a.channel === channel && a.senderId === senderId));
       s.pending = s.pending.filter((p) => !(p.channel === channel && p.senderId === senderId));
       this.shown.delete(`${channel}\u0000${senderId}`);
+      if (s.owner?.channel === channel && s.owner.senderId === senderId) delete s.owner;
       return s.approved.length + s.pending.length < before;
     });
   }
@@ -148,12 +172,15 @@ export class FilePairing implements Pairing {
   /** Serialises operations; re-reads the file first. Mutating operations write back (after pruning) when the state changed. */
   private run<T>(op: (s: State) => Promise<T>, mutates = true): Promise<T> {
     const next = this.queue.then(async () => {
-      const s = await this.load();
+      const { state: s, migrated } = await this.load();
       const before = JSON.stringify(s);
       const result = await op(s);
       if (mutates) {
         this.prune(s);
         if (JSON.stringify(s) !== before) await this.save(s);
+      } else if (migrated) {
+        // A version-1 file is rewritten as version 2 on first read, so the owner migration never runs twice.
+        await this.save(s);
       }
       return result;
     });
@@ -184,20 +211,20 @@ export class FilePairing implements Pairing {
   }
 
   private fresh(): State {
-    return { version: 1, salt: Buffer.from(this.random(16)).toString("hex"), approved: [], pending: [], issued: [], failures: [] };
+    return { version: 2, salt: Buffer.from(this.random(16)).toString("hex"), approved: [], pending: [], issued: [], failures: [] };
   }
 
-  private async load(): Promise<State> {
+  private async load(): Promise<{ state: State; migrated: boolean }> {
     let raw: unknown;
     try {
       raw = JSON.parse(await readFile(this.path, "utf8"));
     } catch {
-      return this.fresh();
+      return { state: this.fresh(), migrated: false };
     }
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return this.fresh();
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { state: this.fresh(), migrated: false };
     const r = raw as Record<string, unknown>;
-    if (!isStr(r.salt) || r.salt.length < 16) return this.fresh();
-    const s: State = { version: 1, salt: r.salt, approved: [], pending: [], issued: [], failures: [] };
+    if (!isStr(r.salt) || r.salt.length < 16) return { state: this.fresh(), migrated: false };
+    const s: State = { version: 2, salt: r.salt, approved: [], pending: [], issued: [], failures: [] };
     for (const a of arr(r.approved)) {
       if (isStr(a.channel) && isStr(a.senderId) && isNum(a.approvedAt)) s.approved.push({ channel: a.channel, senderId: a.senderId, approvedAt: a.approvedAt });
     }
@@ -212,7 +239,19 @@ export class FilePairing implements Pairing {
     for (const f of arr(r.failures)) {
       if (isStr(f.channel) && isNum(f.at)) s.failures.push({ channel: f.channel, at: f.at });
     }
-    return s;
+    const o = r.owner;
+    if (typeof o === "object" && o !== null && !Array.isArray(o)) {
+      const { channel, senderId, since } = o as Record<string, unknown>;
+      if (isStr(channel) && isStr(senderId) && isNum(since) && s.approved.some((a) => a.channel === channel && a.senderId === senderId)) {
+        s.owner = { channel, senderId, since };
+      }
+    }
+    if (r.version === 1) {
+      // Only a version-1 file is migrated: a lone sender was the only person who could ever have been the owner.
+      if (s.approved.length === 1) s.owner = { channel: s.approved[0].channel, senderId: s.approved[0].senderId, since: this.now() };
+      return { state: s, migrated: true };
+    }
+    return { state: s, migrated: false };
   }
 
   /** Atomic: private temp file, then rename over the target. */
@@ -232,4 +271,10 @@ export class FilePairing implements Pairing {
 
 function normalize(code: string): string {
   return code.replace(/[\s-]/g, "").toUpperCase();
+}
+
+/** The owner's chat key (`<channel>:<senderId>`; a Telegram private chat's id is the sender's id), or undefined with no owner. */
+export async function ownerChatKey(pairing: Pick<Pairing, "owner">): Promise<string | undefined> {
+  const o = await pairing.owner();
+  return o ? `${o.channel}:${o.senderId}` : undefined;
 }

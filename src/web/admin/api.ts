@@ -114,6 +114,7 @@ export interface PairingView {
   approved: { channel: string; senderId: string; approvedAt: number }[];
   /** Codes handed out and not yet approved: the code itself is not stored, only when it was asked for and when it lapses. */
   pending: { channel: string; requestedAt: number; expiresAt: number }[];
+  owner?: { channel: string; senderId: string };
 }
 
 export interface PairingAdmin {
@@ -121,6 +122,8 @@ export interface PairingAdmin {
   /** The owner enters the code the person was shown in the chat. */
   "pairing.approve": { params: { channel: string; code: string }; result: { senderId: string } };
   "pairing.revoke": { params: { channel: string; senderId: string }; result: { removed: boolean } };
+  /** Makes an approved sender the owner. */
+  "pairing.setOwner": { params: { channel: string; senderId: string }; result: PairingView };
 }
 
 // ---------- projects ----------
@@ -388,6 +391,7 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "pairing.list",
   "pairing.approve",
   "pairing.revoke",
+  "pairing.setOwner",
   "projects.list",
   "projects.add",
   "projects.remove",

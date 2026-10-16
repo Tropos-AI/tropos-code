@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FilePairing } from "./pairing";
+import { FilePairing, ownerChatKey } from "./pairing";
 
 const HOUR = 3_600_000;
 const ALPHABET = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{8}$/;
@@ -229,5 +229,77 @@ describe("FilePairing", () => {
     expect(await p.pending()).toEqual([]);
     await p.approve("telegram", await codeOf(p, "u2"));
     expect(await p.pending()).toEqual([]);
+  });
+});
+
+describe("owner", () => {
+  const v1 = (approved: { channel: string; senderId: string; approvedAt: number }[]) =>
+    mkdir(join(dir, "gateway"), { recursive: true }).then(() =>
+      writeFile(path, JSON.stringify({ version: 1, salt: "0123456789abcdef0123456789abcdef", approved, pending: [], issued: [], failures: [] })),
+    );
+  const approvedAt = (senderId: string) => ({ channel: "telegram", senderId, approvedAt: 1 });
+  const approveNew = async (p: FilePairing, sender: string) => {
+    const r = await p.approve("telegram", await codeOf(p, sender));
+    if (!r.ok) throw new Error(r.reason);
+  };
+
+  test("a version-1 file with exactly one approved sender gets that sender as owner, written back once", async () => {
+    await v1([approvedAt("7")]);
+    const p = new FilePairing({ path, now: () => t, random });
+    expect(await p.isApproved("telegram", "7")).toBe(true); // a read-only call still migrates
+    const file = JSON.parse(await readFile(path, "utf8"));
+    expect(file.version).toBe(2);
+    expect(file.owner).toMatchObject({ channel: "telegram", senderId: "7" });
+    expect(typeof file.owner.since).toBe("number");
+  });
+
+  test("a version-1 file with two approved senders gets no owner", async () => {
+    await v1([approvedAt("7"), approvedAt("8")]);
+    const p = make();
+    expect(await p.owner()).toBeNull();
+    expect(JSON.parse(await readFile(path, "utf8")).version).toBe(2);
+  });
+
+  test("revoking the owner clears it and the remaining single sender is not promoted", async () => {
+    await v1([approvedAt("7"), approvedAt("8")]);
+    const p = make();
+    await p.setOwner("telegram", "7");
+    expect(await p.revoke("telegram", "7")).toBe(true);
+    expect(await make().owner()).toBeNull();
+    expect(await make().isApproved("telegram", "8")).toBe(true);
+  });
+
+  test("the first approval on a fresh store becomes the owner; the second doesn't", async () => {
+    const p = make();
+    expect(await p.owner()).toBeNull();
+    await approveNew(p, "u1");
+    expect(await p.owner()).toMatchObject({ channel: "telegram", senderId: "u1" });
+    await approveNew(p, "u2");
+    expect(await p.owner()).toMatchObject({ senderId: "u1" });
+  });
+
+  test("setOwner refuses a sender that isn't approved and switches between approved ones", async () => {
+    const p = make();
+    await approveNew(p, "u1");
+    await approveNew(p, "u2");
+    await expect(p.setOwner("telegram", "nobody")).rejects.toThrow("only an approved sender can be the owner");
+    await p.setOwner("telegram", "u2");
+    expect(await p.owner()).toMatchObject({ senderId: "u2" });
+    expect(await p.isOwner("telegram", "u2")).toBe(true);
+    expect(await p.isOwner("telegram", "u1")).toBe(false);
+  });
+
+  test("isOwner is false for another channel with the same sender id", async () => {
+    const p = make();
+    await approveNew(p, "u1");
+    expect(await p.isOwner("telegram", "u1")).toBe(true);
+    expect(await p.isOwner("slack", "u1")).toBe(false);
+  });
+
+  test("ownerChatKey is telegram:<id> or undefined", async () => {
+    const p = make();
+    expect(await ownerChatKey(p)).toBeUndefined();
+    await approveNew(p, "u1");
+    expect(await ownerChatKey(p)).toBe("telegram:u1");
   });
 });

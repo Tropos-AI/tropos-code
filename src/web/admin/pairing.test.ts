@@ -46,3 +46,14 @@ test("revoke removes an approved sender", async () => {
   expect(await a.handle("pairing.revoke", { channel: "telegram", senderId: "u1" })).toEqual({ removed: true });
   expect(await a.handle("pairing.revoke", { channel: "telegram", senderId: "u1" })).toEqual({ removed: false });
 });
+
+test("pairing.list shows the owner; pairing.setOwner changes it and refuses strangers", async () => {
+  await store.approve("telegram", await code("u1"));
+  await store.approve("telegram", await code("u2"));
+  const a = admin();
+  expect(((await a.handle("pairing.list", undefined)) as any).owner).toMatchObject({ channel: "telegram", senderId: "u1" });
+  const view = (await a.handle("pairing.setOwner", { channel: "telegram", senderId: "u2" })) as any;
+  expect(view.owner).toMatchObject({ senderId: "u2" });
+  expect(view.approved).toHaveLength(2);
+  expect(await failure(a, "pairing.setOwner", { channel: "telegram", senderId: "ghost" })).toBe("only an approved sender can be the owner");
+});

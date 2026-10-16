@@ -80,6 +80,8 @@ export class FakePairing implements Pairing {
   readonly limited = new Set<string>();
   readonly challenges: string[] = [];
   readonly code = "ABCD2345";
+  /** Owners as `<channel>:<senderId>`. */
+  readonly owners = new Set<string>();
 
   isApproved(channel: string, senderId: string): Promise<boolean> {
     return Promise.resolve(this.approved.has(`${channel}:${senderId}`));
@@ -97,5 +99,18 @@ export class FakePairing implements Pairing {
   }
   async revoke(channel: string, senderId: string): Promise<boolean> {
     return this.approved.delete(`${channel}:${senderId}`);
+  }
+  async owner(): Promise<{ channel: string; senderId: string } | null> {
+    const first = [...this.owners][0];
+    if (!first) return null;
+    const i = first.indexOf(":");
+    return { channel: first.slice(0, i), senderId: first.slice(i + 1) };
+  }
+  async setOwner(channel: string, senderId: string): Promise<void> {
+    this.owners.clear();
+    this.owners.add(`${channel}:${senderId}`);
+  }
+  async isOwner(channel: string, senderId: string): Promise<boolean> {
+    return this.owners.has(`${channel}:${senderId}`);
   }
 }
