@@ -199,7 +199,7 @@ test("more directories than the search may visit fail closed, on this command an
 });
 
 const root = process.getuid?.() === 0;
-test.skipIf(root)("a directory the search can't read fails closed when it is new, and is known once it was there before", () => {
+test.skipIf(root)("a directory the search can't read fails closed, also when it was there before", () => {
   const snap = gitDirsSnapshot(git)!;
   const locked = join(git, "modules", "locked");
   plantGitDir(join(locked, "inner"));
@@ -207,7 +207,9 @@ test.skipIf(root)("a directory the search can't read fails closed when it is new
   try {
     const r = enforceNewGitDirs(snap);
     expect(r).toEqual({ removed: [], unsafe: [locked], message: gitMetadataUnsafe(locked) });
-    expect(enforceNewGitDirs(gitDirsSnapshot(git)!).message).toBeNull();
+    const next = gitDirsSnapshot(git)!;
+    expect(next.known.has(locked)).toBe(false); // never part of a baseline
+    expect(enforceNewGitDirs(next).message).toBe(gitMetadataUnsafe(locked));
   } finally {
     chmodSync(locked, 0o755);
   }

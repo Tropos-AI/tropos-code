@@ -10,7 +10,7 @@
 // and in close(). Residuals: a nested repo or `gitdir:` file in the working tree (`lib/.git`); and an owner's host
 // git run while a chat background job is alive can see what it planted after the last check.
 import { type ChildProcess, spawn } from "node:child_process";
-import { accessSync, constants, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -26,6 +26,7 @@ import {
   enforceNewGitDirs,
   type GitDirsSnapshot,
   gitDirsSnapshot,
+  gitMetadataUnsafe,
   OWNER_HOOK_LINKS,
   writableLinks,
 } from "./git-integrity";
@@ -90,6 +91,11 @@ export class ConfinedBackend implements ExecBackend {
    * removed. While any is left, commands are refused instead. Null until the first baseline; it only shrinks.
    */
   private ownerLinks: Set<string> | null = null;
+  /**
+   * Everything a check reported unsafe and left in place. A later baseline could absorb it (its git dir becomes
+   * known), so it is checked on its own and fails every command until the owner removes it.
+   */
+  private readonly tainted = new Set<string>();
 
   constructor(opts: ConfinedBackendOptions) {
     const platform = opts.platform ?? process.platform;
@@ -187,7 +193,12 @@ export class ConfinedBackend implements ExecBackend {
     return child;
   }
 
-  /** Whether a command this backend started may still run something; forgets the ones that are over. */
+  /**
+   * Whether a command this backend started may still run something; forgets the ones that are over. Tracked by
+   * process group. Residual (ruled): on macOS a process that calls setsid leaves its group, so it can outlive this
+   * tracking and plant after the baseline is re-taken; the writable-link rule and the profile's .git write denies
+   * still apply to it. On Linux the pid namespace ends with bwrap.
+   */
   private anyRunning(): boolean {
     for (const child of this.running.keys()) {
       if (this.closed.has(child) && !this.host.alive(child)) this.running.delete(child);
@@ -203,7 +214,16 @@ export class ConfinedBackend implements ExecBackend {
 
   /** Undoes what was planted in `.git` since the baseline; the message to report, or null. */
   private verify(): string | null {
-    return postRunMessage(this.baseline);
+    const result = postRun(this.baseline);
+    const git = join(this.paths.project, ".git");
+    // The overflow marker (`.git` itself) is not tainted: every search recomputes it.
+    for (const path of result.unsafe) if (path !== git) this.tainted.add(path);
+    const lines = result.message ? [result.message] : [];
+    for (const path of this.tainted) {
+      if (!existsOrUnknown(path)) this.tainted.delete(path);
+      else if (!result.unsafe.includes(path)) lines.push(gitMetadataUnsafe(path));
+    }
+    return lines.length > 0 ? lines.join("\n") : null;
   }
 
   cwdMarker(id: string): CwdMarker {
@@ -289,17 +309,31 @@ function failed(message: string, options: { cwd: string; env: NodeJS.ProcessEnv;
   return spawn("/bin/sh", ["-c", 'echo "$1" >&2; exit 126', "tropos-confined", message], { ...options, stdio: ["ignore", "pipe", "pipe"] });
 }
 
-/** Undoes what a command planted in `.git` (see git-integrity.ts); the message to fail it with, or null. */
-function postRunMessage(post: PostRun): string | null {
+/** Undoes what a command planted in `.git` (see git-integrity.ts): the message to fail it with, and what was left. */
+function postRun(post: PostRun): { message: string | null; unsafe: string[] } {
   const messages: string[] = [];
-  try {
-    if (post.commondir) messages.push(enforceCommondir(post.commondir).message ?? "");
-    if (post.gitDirs) messages.push(enforceNewGitDirs(post.gitDirs).message ?? "");
-  } catch {
-    // project gone; nothing to undo
+  const unsafe: string[] = [];
+  for (const check of [() => (post.commondir ? enforceCommondir(post.commondir) : null), () => (post.gitDirs ? enforceNewGitDirs(post.gitDirs) : null)]) {
+    try {
+      const result = check();
+      if (result?.message) messages.push(result.message);
+      if (result) unsafe.push(...result.unsafe);
+    } catch {
+      // project gone; nothing to undo
+    }
   }
-  const text = messages.filter(Boolean).join("\n");
-  return text === "" ? null : text;
+  return { message: messages.length > 0 ? messages.join("\n") : null, unsafe };
+}
+
+/** Whether something is at `path` (not following a last link); true when that can't be told. */
+function existsOrUnknown(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code !== "ENOENT" && code !== "ENOTDIR";
+  }
 }
 
 /** `name` itself when it is a path, else its first match on TRUSTED_PATH; null when not an executable file. */

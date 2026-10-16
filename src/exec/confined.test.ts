@@ -340,6 +340,9 @@ describe("the bwrap backend (fake bwrap)", () => {
       const r = await sh("mkdir .git/modules/locked && chmod 000 .git/modules/locked");
       expect(r.code).toBe(1);
       expect(r.err).toContain(gitMetadataUnsafe(locked));
+      const again = await sh("echo next"); // it is never absorbed into the next baseline
+      expect(again.code).toBe(1);
+      expect(again.err).toContain(gitMetadataUnsafe(locked));
     } finally {
       chmodSync(locked, 0o755);
       rmSync(locked, { recursive: true });
@@ -437,6 +440,25 @@ describe("the bwrap backend (fake bwrap)", () => {
       expect(readFileSync(join(own.project, "scripts", "pre-commit"), "utf8")).toBe("owner's hook");
     } finally {
       rmSync(own.fx, { recursive: true, force: true });
+    }
+  });
+
+  test("what was left in place as unsafe keeps failing later commands until the owner removes it", async () => {
+    const leftover = join(f.project, ".git", "modules", "odd", "hooks", "nested");
+    try {
+      const r = await sh("mkdir -p .git/modules/odd/hooks/nested && echo r > .git/modules/odd/HEAD && echo x > .git/modules/odd/hooks/nested/f");
+      expect(r.code).toBe(1);
+      expect(r.err).toContain(gitMetadataUnsafe(leftover));
+      expect(existsSync(join(leftover, "f"))).toBe(true); // never deleted recursively
+      // Nothing runs now, so the next command re-takes the baseline: the leftover must not be absorbed by it.
+      const again = await sh("echo next");
+      expect(again.out).toBe("next\n");
+      expect(again.code).toBe(1);
+      expect(again.err).toContain(gitMetadataUnsafe(leftover));
+      rmSync(leftover, { recursive: true });
+      expect(await sh("true")).toEqual({ out: "", err: "", code: 0 });
+    } finally {
+      rmSync(join(f.project, ".git", "modules", "odd"), { recursive: true, force: true });
     }
   });
 

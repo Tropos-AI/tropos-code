@@ -234,7 +234,7 @@ export interface GitDirsSnapshot {
   realGitRoot: string;
   /** The nested git dirs before the command. */
   gitDirs: string[];
-  /** What the search met before the command: git dirs, links and unreadable dirs. Never an overflow. */
+  /** What the search met before the command: git dirs and links. Never an unreadable dir or an overflow. */
   known: Set<string>;
   /** Real paths a confined command can write; a link in .git into one of them is never trusted. */
   writable: string[];
@@ -248,7 +248,8 @@ export function gitDirsSnapshot(gitRoot: string, opts: { writable?: string[]; ma
     const info = lstatSync(gitRoot);
     if (info.isSymbolicLink() || !info.isDirectory()) return null;
     const found = findNestedGitDirs(gitRoot, maxVisits);
-    const known = new Set([...found.gitDirs, ...found.links, ...found.unreadable]);
+    // Never an unreadable dir: it can't be checked, so every walk that meets one fails closed.
+    const known = new Set([...found.gitDirs, ...found.links]);
     return { gitRoot, realGitRoot: realpathSync(gitRoot), gitDirs: found.gitDirs, known, writable: opts.writable ?? [], maxVisits };
   } catch {
     return null;
@@ -264,7 +265,7 @@ const GIT_DIR_CODE = ["hooks", "config", "config.worktree", "commondir"];
  * link that points into a sandbox-writable path is removed: in `modules/` and `worktrees/`, and as (or in) any git
  * dir's hooks, or as its config or commondir (a background job may have planted it after the snapshot was taken, and
  * an owner's link there would run whatever a chat writes). Anything that fails the link check is left alone and
- * reported, and so is a search that overflowed or met a new dir it can't read. The caller fails the command on `message`.
+ * reported, and so is a search that overflowed or met a dir it can't read. The caller fails the command on `message`.
  */
 export function enforceNewGitDirs(snap: GitDirsSnapshot): CommondirCheck {
   const removed: string[] = [];
@@ -280,9 +281,9 @@ export function enforceNewGitDirs(snap: GitDirsSnapshot): CommondirCheck {
     }
   };
   const found = findNestedGitDirs(snap.gitRoot, snap.maxVisits);
-  // Fail closed: a search that couldn't finish, or a new dir it couldn't read, may hide a git dir.
+  // Fail closed: a search that couldn't finish, or a dir it couldn't read, may hide a git dir.
   if (found.overflow) unsafe.push(snap.gitRoot);
-  for (const dir of found.unreadable) if (!snap.known.has(dir)) unsafe.push(dir);
+  unsafe.push(...found.unreadable);
   for (const link of found.links) if (!snap.known.has(link)) unlinkIfSafe(link);
   for (const dir of found.gitDirs) {
     if (snap.known.has(dir)) continue;
