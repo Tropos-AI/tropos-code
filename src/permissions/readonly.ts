@@ -1,5 +1,13 @@
 // src/permissions/readonly.ts
 // Decides which shell commands a chat at the `balanced` level may run without asking.
+//
+// What this classifier cannot see, and what covers it instead:
+// - Symlinks: paths are resolved lexically, so a repo symlink (`link -> ~/.ssh`) passes.
+// - Git config: repo or user config can make plain `git diff` / `git log` run programs
+//   (per-driver textconv, core.fsmonitor, core.pager, diff.external).
+// - Shell start-up files (`.zshenv`): options, cdpath, functions this file does not model.
+// The execution layer covers these: the confinement profile (no secret reads, no writes to
+// .git/config or hooks) and the chat environment's git overrides (P2 Task 5).
 import { resolve } from "node:path";
 import { expandHome, isInside } from "../paths";
 import { hasLeadingPrefix, isCodeRunner, splitBashCommand } from "./rules";
@@ -7,9 +15,13 @@ import { hasLeadingPrefix, isCodeRunner, splitBashCommand } from "./rules";
 // Conservative on purpose: unknown means not read-only. A command, subcommand or option that is
 // not listed here asks, so adding to these lists needs the same care as writing a permission rule.
 
-/** Commands that cannot write or run other code whatever their arguments are. */
+/**
+ * Commands that cannot write, run other code or change the shell's state whatever their
+ * arguments are. Builtins that change state (export, read, set, alias, hash, umask, trap,
+ * pushd, history, `printf -v` ...) are absent; printf is checked with its options.
+ */
 const PLAIN: ReadonlySet<string> = new Set([
-  "cd", "ls", "pwd", "echo", "printf", "true", "false", "cat", "head", "tail", "wc", "stat", "du", "df",
+  "cd", "ls", "pwd", "echo", "true", "false", "cat", "head", "tail", "wc", "stat", "du", "df",
   "basename", "dirname", "realpath", "readlink", "which", "type", "uname", "whoami", "id", "printenv", "grep", "egrep",
   "fgrep", "cut", "tr", "nl", "comm", "cmp", "diff", "od", "hexdump", "md5", "md5sum", "shasum", "sha1sum", "sha256sum",
   "column", "jq",
@@ -27,7 +39,12 @@ const GIT_BRANCH_ARGS: ReadonlySet<string> = new Set([
   "-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--list", "--show-current", "--no-color", "--color",
 ]);
 /** `--output` writes a file, `--ext-diff` runs a configured program, `--exec` runs a command. */
-const GIT_FORBIDDEN_LONG = ["--output*", "--ext-diff", "--exec*"];
+/** `--textconv` runs the diff driver's conversion program. */
+const GIT_FORBIDDEN_LONG = ["--output*", "--ext-diff", "--exec*", "--textconv"];
+/** Exact option names git matches before abbreviations, which only look like forbidden ones. */
+const GIT_SAFE_LONG: ReadonlySet<string> = new Set([
+  "--output-indicator-new", "--output-indicator-old", "--output-indicator-context", "--text",
+]);
 
 /** The only redirects a read-only part may carry (besides `<file`, checked separately). */
 const SAFE_REDIRECTS: ReadonlySet<string> = new Set(["2>&1", ">&2", ">/dev/null", "2>/dev/null", "&>/dev/null"]);
@@ -120,7 +137,8 @@ function gitReadOnly(args: readonly string[]): boolean {
   }
   const sub = args[i];
   const rest = args.slice(i + 1);
-  if (sub === undefined || args.some((a) => hasLong(a, GIT_FORBIDDEN_LONG))) return false;
+  const forbidden = (a: string): boolean => hasLong(a, GIT_FORBIDDEN_LONG) && !GIT_SAFE_LONG.has(a.split("=")[0]!);
+  if (sub === undefined || args.some(forbidden)) return false;
   // `git grep -O<cmd>` opens the matches with a command of the caller's choosing.
   if (sub === "grep") return !rest.some((a) => hasShort(a, "O") || hasLong(a, ["--open-files-in-pager*"]));
   if (GIT_SUBCOMMANDS.has(sub)) return true;
@@ -169,6 +187,11 @@ function optionsReadOnly(command: string, args: readonly string[]): boolean {
     case "date":
       // An operand other than `+FORMAT` sets the clock (POSIX and BSD `date MMDDhhmm`).
       return !args.some((a) => hasShort(a, "s") || hasLong(a, ["--set*"]) || (!a.startsWith("-") && !a.startsWith("+")));
+    case "printf": {
+      // `printf -v VAR` assigns a shell variable. Options end at `--` or the format.
+      const end = args.findIndex((a) => a === "--" || !a.startsWith("-"));
+      return !(end === -1 ? args : args.slice(0, end)).some((a) => hasShort(a, "v"));
+    }
     case "file":
       // `-C` compiles a magic file and writes `<name>.mgc`.
       return !args.some((a) => hasShort(a, "C") || hasLong(a, ["--compile"]));

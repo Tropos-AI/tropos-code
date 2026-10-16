@@ -91,3 +91,28 @@ describe("pathsStayInside — escapes", () => {
     expect(pathsStayInside("cat /w/lib/a.ts", "/w/app", "/home/u", ["/w/app", "/w/lib"])).toBe(true);
   });
 });
+
+describe("isReadOnlyCommand — shell state and git config-driven execution", () => {
+  // Builtins that change the shell's own state (variables, PATH lookups, limits, traps, options, cwd stack).
+  test.each([
+    "printf -v PATH /tmp", "printf -vPATH /tmp", "printf -v x hi", "printf * x", "export PATH=/tmp", "read x", "set -o noclobber", "alias ls=rm",
+    "hash -p /tmp/x ls", "ulimit -n 1", "umask 000", "trap 'rm a' EXIT", "source x", ". x", "eval ls", "exec ls", "builtin cd /",
+    "enable -n cd", "shopt -s dotglob", "typeset x=1", "declare x=1", "local x=1", "pushd src", "popd", "history -s rm", "fc -s",
+    "unset PATH", "unalias ls", "setopt extendedglob", "unsetopt nomatch", "let x=1", "readonly x", "getopts a x", "bind x",
+    "complete -r", "dirs -c", "disown", "kill 1", "shift", "autoload x", "zmodload x", "bindkey x y", "rehash", "emulate sh",
+    "functions -c a b", "print -v x hi", "zle x", "vared x",
+  ])("refused builtin: %p", (c) => expect(isReadOnlyCommand(c)).toBe(false));
+  test.each(["printf hi", "printf '%s\\n' a b", "printf '%s' -v", "printf -- -v", "echo -n hi", "type ls", "which -a ls", "pwd -P"])(
+    "allowed: %p",
+    (c) => expect(isReadOnlyCommand(c)).toBe(true),
+  );
+  // --textconv runs the diff driver's program; -c / --config-env can point core.pager or diff.external anywhere.
+  test.each(["git show --textconv HEAD:a.bin", "git diff --textconv", "git log -p --textconv", "git blame --textconv a", "git diff --textc",
+    "git cat-file --textconv HEAD:a", "git diff --ext-diff", "git diff --ext", "git -c core.pager=sh log", "git -cdiff.external=x diff",
+    "git --config-env=core.pager=X log", "git --output=x log", "git log --output=x", "git log --output x", "git log --outp=x"])(
+    "refused git: %p",
+    (c) => expect(isReadOnlyCommand(c)).toBe(false),
+  );
+  test.each(["git log -p --output-indicator-new=+", "git diff --output-indicator-old=- --output-indicator-context=' '", "git diff --text",
+    "git diff --no-textconv", "git log --no-ext-diff"])("allowed git: %p", (c) => expect(isReadOnlyCommand(c)).toBe(true));
+});
