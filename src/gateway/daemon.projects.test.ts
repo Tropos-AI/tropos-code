@@ -2,15 +2,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { FakeModel, reply, textBlock } from "../../test/helpers/fake-model";
+import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { FakeTelegramServer } from "../../test/helpers/telegram-fake-server";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { main } from "../cli/main";
 import { localBackend } from "../exec/local";
 import type { ExecBackend } from "../exec/backend";
+import { gatewayConfigSchema, saveGatewayConfig } from "./config";
+import { readGatewayState, type GatewayRun } from "./daemon";
 import { addProject } from "./projects";
 import { TelegramApi } from "./telegram/api";
-import type { ChatSession, GatewayService, GatewayServiceDeps } from "./types";
+import type { ChatSession, ChatSink, GatewayService, GatewayServiceDeps } from "./types";
 
 const CHAT = 4242;
 
@@ -30,19 +32,26 @@ afterEach(async () => {
   await removeDir(dir);
 });
 
-function startGateway(steps: (() => ReturnType<typeof reply>)[], services: GatewayService[] = []) {
+type UntilInfo = Parameters<NonNullable<GatewayRun["until"]>>[0];
+
+function startGateway(steps: Step[], services: GatewayService[] = [], opts: { botTokenInEnv?: boolean } = {}) {
   const err: string[] = [];
   const workspaces: string[] = [];
+  const backendsClosed: string[] = [];
   const model = new FakeModel(steps);
   let stop!: () => void;
   const stopped = new Promise<void>((r) => (stop = r));
+  let info: UntilInfo | undefined;
   const done = main(["gateway", "--no-web"], {
     model,
     out: () => {},
     err: (s) => err.push(s),
-    env: { TROPOS_HOME: home, SHELL: "/bin/bash", TROPOS_TELEGRAM_BOT_TOKEN: server.token },
+    env: { TROPOS_HOME: home, SHELL: "/bin/bash", ...(opts.botTokenInEnv === false ? {} : { TROPOS_TELEGRAM_BOT_TOKEN: server.token }) },
     cwd: dir,
-    gatewayUntil: () => stopped,
+    gatewayUntil: (i) => {
+      info = i;
+      return stopped;
+    },
     gatewayServices: services,
     gatewaySeams: {
       sweep: false,
@@ -50,14 +59,16 @@ function startGateway(steps: (() => ReturnType<typeof reply>)[], services: Gatew
       sandboxCheck: async () => undefined,
       backend: (workspace) => {
         workspaces.push(workspace);
-        return { ...localBackend, close: async () => {} } as ExecBackend;
+        return { ...localBackend, close: async () => void backendsClosed.push(workspace) } as ExecBackend;
       },
       telegramApi: new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} }),
       telegramOptions: { minIntervalMs: 0, pollTimeoutSec: 1 },
       assets: new Map(),
     },
   });
-  return { done, stop, err, model, workspaces };
+  /** The `until` info, once the gateway is running. */
+  const running = () => server.waitFor(() => info);
+  return { done, stop, err, model, workspaces, backendsClosed, running };
 }
 
 /** Pairs the chat so its messages reach a session. */
@@ -209,5 +220,82 @@ describe("gateway services", () => {
     expect(await gw.done).toBe(0);
     expect(bad.log).toEqual([]);
     expect(good.log).toEqual(["start", "stop"]);
+  });
+});
+
+describe("reload", () => {
+  const MCP_SERVER = join(import.meta.dir, "../../test/helpers/mcp-test-server.ts");
+  const mcpServer = () => ({ type: "stdio", command: process.execPath, args: [MCP_SERVER] });
+  const toolNames = (i: number, model: FakeModel) => model.requests[i]!.tools.map((t) => t.name);
+
+  test("a bot token saved after start works after reload, without a restart", async () => {
+    const gw = startGateway([], [], { botTokenInEnv: false });
+    const info = await gw.running();
+    // No token yet: no channel was started.
+    expect(server.commands).toEqual([]);
+    expect((await readGatewayState(home))?.telegram).toBe(false);
+
+    await saveGatewayConfig(home, gatewayConfigSchema.parse({ telegram: { botToken: server.token } }));
+    await info.reload();
+    server.pushMessage(CHAT, CHAT, "hello?");
+    const pairingReply = await server.waitFor(() => server.sent.find((m) => m.chatId === CHAT && m.text.includes("approve telegram")));
+    expect(pairingReply.text).toContain("This bot is private");
+    expect((await readGatewayState(home))?.telegram).toBe(true);
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("reload during a running turn lets it finish; the next message continues the same transcript", async () => {
+    await mkdir(home, { recursive: true });
+    await Bun.write(join(home, "settings.json"), JSON.stringify({ mcpServers: { t: mcpServer() } }));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let deps: GatewayServiceDeps | undefined;
+    const service: GatewayService = { name: "probe", start: async (d) => void (deps = d), stop: async () => {} };
+    const gw = startGateway(
+      [
+        // The turn calls an MCP tool only after the reload has happened.
+        async () => (await gate, reply([toolUseBlock("t1", "mcp__t__echo", { text: "still here" })], "tool_use")),
+        () => reply([textBlock("first answer")]),
+        () => reply([textBlock("second answer")]),
+      ],
+      [service],
+    );
+    const info = await gw.running();
+    const chatKey = `telegram:${CHAT}`;
+    const chat = await deps!.openSession(chatKey);
+    const allow: ChatSink = { event: () => {}, ask: (id) => chat.answer(id, { kind: "allow" }), askClosed: () => {}, state: () => {} };
+    chat.attach(allow);
+    const turn = chat.prompt("first question");
+    await server.waitFor(() => gw.model.requests.length === 1);
+    const sessionId = (await sessionsFile())[`${chatKey}@default`];
+
+    // Meanwhile a second MCP server is saved in the dashboard, which reloads the gateway.
+    await Bun.write(join(home, "settings.json"), JSON.stringify({ mcpServers: { t: mcpServer(), u: mcpServer() } }));
+    await info.reload();
+    expect(gw.backendsClosed).toEqual([]);
+
+    release();
+    expect(await turn).toBe("end_turn");
+    // The tool ran after the reload on the old context's MCP server, which was still open.
+    const toolResult = JSON.stringify(gw.model.requests[1]!.messages.at(-1));
+    expect(toolResult).toContain("still here");
+    expect(toolResult).not.toContain('"is_error":true');
+    expect(toolNames(1, gw.model)).not.toContain("mcp__u__echo");
+
+    // The next message: the old session is closed, and a fresh one on a fresh context resumes the same transcript.
+    const next = await deps!.openSession(chatKey);
+    expect(next).not.toBe(chat);
+    expect(gw.backendsClosed).toEqual([join(home, "workspace")]);
+    expect(await next.prompt("second question")).toBe("end_turn");
+    const resumed = JSON.stringify(gw.model.requests[2]!.messages);
+    expect(resumed).toContain("first question");
+    expect(resumed).toContain("first answer");
+    expect(toolNames(2, gw.model)).toContain("mcp__u__echo");
+    expect((await sessionsFile())[`${chatKey}@default`]).toBe(sessionId!);
+
+    gw.stop();
+    expect(await gw.done).toBe(0);
   });
 });

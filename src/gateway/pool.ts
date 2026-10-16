@@ -29,6 +29,8 @@ interface Entry {
   handle: HostHandle;
   chat: ChatSession;
   lastActive: number;
+  /** Retired while a turn ran (the gateway reloaded): closed as soon as it is no longer busy. */
+  retired?: boolean;
 }
 
 export class SessionPool implements SessionProvider {
@@ -50,16 +52,22 @@ export class SessionPool implements SessionProvider {
 
   open(key: string): Promise<ChatSession> {
     const existing = this.entries.get(key);
-    if (existing) {
+    if (existing && !this.closable(existing)) {
       existing.lastActive = this.now();
       return Promise.resolve(existing.chat);
     }
     let pending = this.opening.get(key);
     if (!pending) {
-      pending = this.build(key).finally(() => this.opening.delete(key));
+      // A retired session whose turn has ended: the chat's next message gets a fresh one, on the same transcript.
+      const retired = existing ? this.closeEntry(key, { finalReview: false }) : Promise.resolve();
+      pending = retired.then(() => this.build(key)).finally(() => this.opening.delete(key));
       this.opening.set(key, pending);
     }
     return pending;
+  }
+
+  private closable(entry: Entry): boolean {
+    return entry.retired === true && !entry.handle.host.state().busy;
   }
 
   private async build(key: string): Promise<ChatSession> {
@@ -75,6 +83,24 @@ export class SessionPool implements SessionProvider {
   /** Ends a chat's session; its final learning review runs first unless `finalReview` is false. */
   close(key: string, opts?: { finalReview?: boolean }): Promise<void> {
     return this.closeEntry(key, opts);
+  }
+
+  /**
+   * The gateway reloaded: every session closes so that its chat's next message resumes it on the new contexts. A busy
+   * one finishes its turn first, on what it has, and is closed once it is idle. No final review: the conversation
+   * goes on in the resumed session.
+   */
+  async retire(): Promise<string[]> {
+    const closed: string[] = [];
+    await Promise.all(
+      [...this.entries].map(async ([key, entry]) => {
+        entry.retired = true;
+        if (entry.handle.host.state().busy) return;
+        closed.push(key);
+        await this.closeEntry(key, { finalReview: false });
+      }),
+    );
+    return closed;
   }
 
   /** The gateway is stopping: no final reviews, so a stop never waits on them. */
@@ -108,6 +134,11 @@ export class SessionPool implements SessionProvider {
     for (const [key, entry] of [...this.entries]) {
       // Closed and reopened while this sweep closed others: the fresh session is not the idle one seen here.
       if (this.entries.get(key) !== entry) continue;
+      if (this.closable(entry)) {
+        await this.close(key, { finalReview: false });
+        closed.push(key);
+        continue;
+      }
       if (entry.handle.host.state().busy || this.now() - entry.lastActive < this.opts.idleMs) continue;
       await this.close(key);
       closed.push(key);

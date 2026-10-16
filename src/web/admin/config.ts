@@ -49,6 +49,8 @@ function refusal(err: unknown): AdminError {
 }
 
 export function configHandlers(ctx: AdminContext): AdminHandlers {
+  // The running gateway rebuilds what the saved file feeds (channels, project contexts); the save stands either way.
+  const reload = () => ctx.gateway?.reload().catch(() => undefined);
   const view = async (name: unknown): Promise<ConfigView> => {
     const file = fileOf(ctx, name);
     try {
@@ -80,6 +82,7 @@ export function configHandlers(ctx: AdminContext): AdminHandlers {
       } catch (err) {
         throw refusal(err);
       }
+      await reload();
       return view(p.file);
     },
     "config.apply": async (p) => {
@@ -104,6 +107,7 @@ export function configHandlers(ctx: AdminContext): AdminHandlers {
       } catch (err) {
         throw err instanceof AdminError ? err : refusal(err);
       }
+      await reload();
       return view(p.file);
     },
   };

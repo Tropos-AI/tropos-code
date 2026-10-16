@@ -18,7 +18,8 @@ import { WebHost } from "../web/host";
 import { DEFAULT_PORT } from "../web/protocol";
 import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
-import { telegramToken, gatewayDir, type GatewayConfig } from "./config";
+import { loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
+import { ProjectContexts } from "./contexts";
 import { SandboxUnavailableError, UserFacingError } from "./errors";
 import {
   DEFAULT_PROJECT_ID,
@@ -64,8 +65,8 @@ export interface GatewayRun {
   services?: GatewayService[];
   /** Print the web UI link with its key (default: only when stdout is a terminal). */
   showLink?: boolean;
-  /** Tests stop the gateway themselves instead of waiting for a signal. */
-  until?: (info: { webUrl?: string }) => Promise<void>;
+  /** Tests stop the gateway themselves instead of waiting for a signal; `reload` is what the dashboard calls after a save. */
+  until?: (info: { webUrl?: string; reload(): Promise<void> }) => Promise<void>;
   /** Test seams. */
   seams?: {
     backend?: (workspace: string) => ExecBackend;
@@ -145,7 +146,9 @@ const real = (path: string): string => {
 };
 
 export async function runGateway(run: GatewayRun): Promise<number> {
-  const { home, config } = run;
+  const { home } = run;
+  // Replaced by reload(): what is built from it afterwards (adapters, sandboxes of new sessions) uses the saved file.
+  let config = run.config;
   const version = run.version ?? VERSION;
   const dir = gatewayDir(home);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -168,30 +171,23 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const router = new ChatRouter({ home, source });
 
   // One context per project directory, built the first time something needs it: settings, skills, memory and MCP
-  // servers are per project, and a broken settings file in one must not stop the others.
-  const contexts = new Map<string, Promise<ProjectContext>>();
+  // servers are per project, and a broken settings file in one must not stop the others. A reload replaces them.
   const warned = new Set<string>();
-  const contextFor = (project: Project): Promise<ProjectContext> => {
-    let pending = contexts.get(project.path);
-    if (!pending) {
-      pending = loadProjectContext({ cwd: project.path, home, env: run.env, version, model: run.model }).then(
-        (pc) => {
-          for (const w of pc.warnings) run.err(`tcode: ${project.id}: ${w}\n`);
-          if (!project.builtin && !warned.has(project.path) && !existsSync(join(pc.ctx.cwd, ".git"))) warnNoGit(run, pc.ctx.cwd);
-          warned.add(project.path);
-          return pc;
-        },
-        (e: unknown) => {
-          // Not cached: once the file is fixed, the next message works without restarting the gateway.
-          contexts.delete(project.path);
-          if (e instanceof SettingsError) throw new UserFacingError(`The settings of project "${project.name}" are invalid, so I can't start a session there: ${e.message}`);
-          throw e;
-        },
-      );
-      contexts.set(project.path, pending);
-    }
-    return pending;
-  };
+  const contexts = new ProjectContexts((project) =>
+    loadProjectContext({ cwd: project.path, home, env: run.env, version, model: run.model }).then(
+      (pc) => {
+        for (const w of pc.warnings) run.err(`tcode: ${project.id}: ${w}\n`);
+        if (!project.builtin && !warned.has(project.path) && !existsSync(join(pc.ctx.cwd, ".git"))) warnNoGit(run, pc.ctx.cwd);
+        warned.add(project.path);
+        return pc;
+      },
+      (e: unknown) => {
+        // Not cached: once the file is fixed, the next message works without restarting the gateway.
+        if (e instanceof SettingsError) throw new UserFacingError(`The settings of project "${project.name}" are invalid, so I can't start a session there: ${e.message}`);
+        throw e;
+      },
+    ),
+  );
 
   // The scheduler: jobs run in fresh sandboxed sessions of their project and are delivered through the channels.
   const cron = createCronGatewayService({ log: (m) => run.err(`gateway: cron: ${m}\n`) });
@@ -217,73 +213,116 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       // Fail closed: a chat's commands run in the sandbox or not at all.
       const sandboxProblem = await check();
       if (sandboxProblem) throw new SandboxUnavailableError(sandboxProblem);
-      const pc = await contextFor(project);
-      const cwd = pc.ctx.cwd;
-      const backend =
-        run.seams?.backend?.(cwd) ??
-        new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
-      const { ctx: base, setSessionId } = await pc.newSessionContext();
-      const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
-      const sessionCtx = channelContext(base, backend, { role });
-      roles.set(key, role);
-      // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
-      // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
-      const chatKey = parseSessionKey(key)?.chatKey;
-      if (chatKey && !chatKey.startsWith("project:")) {
-        sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
-      }
-      let session: SessionStore;
-      let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
-      let resumed = false;
+      // Held until the session closes: a reload meanwhile doesn't close its MCP servers under a running turn.
+      const { pc, release } = await contexts.acquire(project);
       try {
-        if (saved) {
-          ({ store: session, messages: history } = await SessionStore.open(home, cwd, saved));
-          resumed = true;
-        } else {
-          session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
-        }
-      } catch {
-        // The remembered session is gone: start over rather than fail the chat.
-        session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
-      }
-      setSessionId(session.id);
-      try {
-        const runtime = await createRuntime(sessionCtx, {
-          session,
-          history,
-          mode: "default",
-          modes: CHANNEL_MODES,
-          theme: DARK,
-          source: resumed ? "resume" : "startup",
-          interactive: false,
-          // Only the owner's chats learn; a guest's chat is not material for the owner's memory.
-          learn: role === "owner",
-          ownsExtensions: false,
-        });
-        const host = new WebHost(runtime);
-        await host.start();
+        const handle = await startSession(key, saved, pc);
         return {
-          host,
-          sessionId: () => runtime.sessionId(),
-          close: () => backend.close(),
+          ...handle,
+          close: async () => {
+            try {
+              await handle.close();
+            } finally {
+              release();
+            }
+          },
         };
       } catch (e) {
-        await backend.close().catch(() => {});
+        release();
         throw e;
       }
     },
   });
 
+  /** A chat's session on its project's context: its sandbox, its role's tools, and its transcript (resumed when saved). */
+  const startSession = async (key: string, saved: string | undefined, pc: ProjectContext): Promise<HostHandle> => {
+    const cwd = pc.ctx.cwd;
+    const backend =
+      run.seams?.backend?.(cwd) ??
+      new DockerBackend({ workspace: cwd, image: config.sandbox.image, network: config.sandbox.network, memory: config.sandbox.memory, cpus: config.sandbox.cpus });
+    const { ctx: base, setSessionId } = await pc.newSessionContext();
+    const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
+    const sessionCtx = channelContext(base, backend, { role });
+    roles.set(key, role);
+    // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
+    // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
+    const chatKey = parseSessionKey(key)?.chatKey;
+    if (chatKey && !chatKey.startsWith("project:")) {
+      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
+    }
+    let session: SessionStore;
+    let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
+    let resumed = false;
+    try {
+      if (saved) {
+        ({ store: session, messages: history } = await SessionStore.open(home, cwd, saved));
+        resumed = true;
+      } else {
+        session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
+      }
+    } catch {
+      // The remembered session is gone: start over rather than fail the chat.
+      session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
+    }
+    setSessionId(session.id);
+    try {
+      const runtime = await createRuntime(sessionCtx, {
+        session,
+        history,
+        mode: "default",
+        modes: CHANNEL_MODES,
+        theme: DARK,
+        source: resumed ? "resume" : "startup",
+        interactive: false,
+        // Only the owner's chats learn; a guest's chat is not material for the owner's memory.
+        learn: role === "owner",
+        ownsExtensions: false,
+      });
+      const host = new WebHost(runtime);
+      await host.start();
+      return {
+        host,
+        sessionId: () => runtime.sessionId(),
+        close: () => backend.close(),
+      };
+    } catch (e) {
+      await backend.close().catch(() => {});
+      throw e;
+    }
+  };
+
   const sessions = new RoutedSessions(router, pool);
   const chatProjects: ChatProjects = { current: (k) => router.current(k), list: () => source.list(), select: (k, id) => router.select(k, id) };
-  const adapters: ChannelAdapter[] = [];
-  const token = telegramToken(config, run.env);
-  if (token) {
+  const buildAdapters = (from: GatewayConfig): ChannelAdapter[] => {
+    const token = telegramToken(from, run.env);
+    if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    adapters.push(
-      new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions }),
-    );
-  }
+    return [new TelegramAdapter({ api, sessions, projects: chatProjects, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
+  };
+  let adapters = buildAdapters(config);
+
+  // What the dashboard calls after it saved a change: the channels, the project contexts and the sessions on them are
+  // rebuilt from what is on disk now. One reload at a time, and none once the gateway is stopping.
+  let state: GatewayState | undefined;
+  let stopping = false;
+  let reloading: Promise<void> = Promise.resolve();
+  const reloadOnce = async (): Promise<void> => {
+    if (stopping) return;
+    config = await loadGatewayConfig(home);
+    await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
+    adapters = buildAdapters(config);
+    for (const adapter of adapters) {
+      await adapter.start().catch((e: unknown) => run.err(`gateway: ${adapter.name} failed to start: ${e instanceof Error ? e.message : String(e)}\n`));
+    }
+    // A running turn keeps its context (and its MCP servers) until its session closes after the turn.
+    contexts.invalidate();
+    await pool.retire();
+    if (state) {
+      state = { ...state, telegram: adapters.length > 0 };
+      await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
+    }
+  };
+  const reload = (): Promise<void> => (reloading = reloading.catch(() => {}).then(reloadOnce));
 
   let webStop: (() => Promise<void>) | undefined;
   let webHost: WebHost | undefined;
@@ -293,7 +332,10 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     try {
       // The local web UI works in the default project.
       const project = (await source.get(await source.defaultId())) ?? builtinProject(home);
-      const { ctx, newSessionContext } = await contextFor(project);
+      // The dashboard's own chat keeps the context it started with until the gateway stops (closeAll closes it).
+      const {
+        pc: { ctx, newSessionContext },
+      } = await contexts.acquire(project);
       const { ctx: localCtx, setSessionId } = await newSessionContext();
       const session = await SessionStore.create(home, { cwd: ctx.cwd, model: ctx.settings.model, version });
       setSessionId(session.id);
@@ -327,7 +369,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
               throw new AdminError(e instanceof Error ? e.message : "The job could not be started.");
             });
           },
-          reload: async () => {},
+          reload,
         },
       });
       const server = await startWebServer({ host: webHost, admin, assets, token: await persistentToken(dir), port: config.webPort ?? DEFAULT_PORT });
@@ -358,7 +400,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     },
   };
 
-  const state: GatewayState = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };
+  state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };
   await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
   const startedServices: GatewayService[] = [];
@@ -395,9 +437,11 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     }, 5000);
     reaper.unref();
     stopReaper = () => clearInterval(reaper);
-    await (run.until ? run.until({ webUrl }) : untilSignal());
+    await (run.until ? run.until({ webUrl, reload }) : untilSignal());
   } finally {
+    stopping = true;
     stopReaper();
+    await reloading.catch(() => {});
     await Promise.all(startedServices.map((s) => s.stop().catch(() => {})));
     await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
     await pool.closeAll();
@@ -405,7 +449,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     // Like the chats: the gateway is stopping, so the dashboard's session skips its final review.
     await webHost?.shutdown({ finalReview: false }).catch(() => {});
     // Sessions are closed first; then what the projects' extensions hold open (MCP servers, language servers).
-    await Promise.all([...contexts.values()].map((p) => p.then((pc) => pc.close()).catch(() => {})));
+    await contexts.closeAll();
     await rm(stateFile(home), { force: true });
   }
   return 0;

@@ -152,3 +152,23 @@ test("end to end over the WebSocket", async () => {
     await ws.close();
   }
 });
+
+test("mcp.add, mcp.remove and plugins.setEnabled ask the gateway to reload once saved; a refused change doesn't", async () => {
+  let reloads = 0;
+  const own = await makeKit({ gateway: { runCronNow: async () => {}, reload: async () => void reloads++ } });
+  try {
+    await mkdir(join(own.home, "plugins", "alpha"), { recursive: true });
+    await writeFile(join(own.home, "plugins", "alpha", "plugin.json"), JSON.stringify({ name: "alpha" }));
+    const h = extensionsHandlers(own.ctx);
+    await h["mcp.add"]!({ name: "files", server: stdio() });
+    expect(reloads).toBe(1);
+    await h["mcp.remove"]!({ name: "files" });
+    expect(reloads).toBe(2);
+    await h["plugins.setEnabled"]!({ name: "alpha", enabled: false });
+    expect(reloads).toBe(3);
+    await expect(h["mcp.remove"]!({ name: "files" })).rejects.toThrow(/no server/);
+    expect(reloads).toBe(3);
+  } finally {
+    await own.cleanup();
+  }
+});

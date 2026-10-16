@@ -111,3 +111,14 @@ test("mcpServers env and headers are masked completely and the mask round trip k
   await a.handle("config.set", { file: "settings", path: "mcpServers.s.env", value: { REGION: "••••", DEBUG_LEVEL: "trace" } });
   expect((await onDisk()).mcpServers.s.env).toEqual({ REGION: "eu-west", DEBUG_LEVEL: "trace" });
 });
+
+test("config.set and config.apply ask the gateway to reload once the file is saved; a refused change doesn't", async () => {
+  const a = admin();
+  await a.handle("config.set", { file: "gateway", path: "telegram.botToken", value: "123:abc" });
+  expect(kit.reloads).toBe(1);
+  await a.handle("config.apply", { file: "settings", text: '{"snapshots": true}' });
+  expect(kit.reloads).toBe(2);
+  await failure(a, "config.set", { file: "settings", path: "autoUpdatesChannel", value: "nightly" });
+  await failure(a, "config.apply", { file: "settings", text: "[1]" });
+  expect(kit.reloads).toBe(2);
+});

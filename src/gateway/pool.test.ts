@@ -181,6 +181,53 @@ describe("idle sessions", () => {
     expect(runtimes.get("telegram:1")!.shutdowns).toEqual([{ finalReview: false }]);
   });
 
+  test("retire closes idle sessions at once and a busy one when its turn ends; the chat resumes its session id", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { pool, closed, created, runtimes } = setup([async () => (await gate, reply([textBlock("slow answer")]))]);
+    const busy = await pool.open("telegram:1");
+    await pool.open("telegram:2");
+    const turn = busy.prompt("long job");
+    await Bun.sleep(5);
+    // Recently active and still the idle time away from a sweep: retire closes it anyway, without a final review.
+    expect(await pool.retire()).toEqual(["telegram:2"]);
+    expect(closed).toEqual(["telegram:2"]);
+    expect(runtimes.get("telegram:2")!.shutdowns).toEqual([{ finalReview: false }]);
+    // The busy one keeps running on what it has, and an ordinary sweep leaves it alone while the turn runs.
+    expect(await pool.sweep()).toEqual([]);
+    release();
+    expect(await turn).toBe("end_turn");
+    // Its turn is over: the next sweep closes it though it was active a moment ago.
+    expect(await pool.sweep()).toEqual(["telegram:1"]);
+    expect(closed).toEqual(["telegram:2", "telegram:1"]);
+    // Both chats come back to the session they had.
+    await pool.open("telegram:1");
+    await pool.open("telegram:2");
+    expect(created.slice(2)).toEqual([
+      { key: "telegram:1", saved: "session-1" },
+      { key: "telegram:2", saved: "session-2" },
+    ]);
+  });
+
+  test("a retired session whose turn has ended is not handed out again: the next open starts afresh", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { pool, closed, created } = setup([async () => (await gate, reply([textBlock("done")]))]);
+    const first = await pool.open("telegram:1");
+    const turn = first.prompt("long job");
+    await Bun.sleep(5);
+    expect(await pool.retire()).toEqual([]);
+    // Still running: whoever asks gets the running session.
+    expect(await pool.open("telegram:1")).toBe(first);
+    release();
+    await turn;
+    // No sweep yet: the next message still gets a fresh session, resuming the same transcript.
+    const next = await pool.open("telegram:1");
+    expect(next).not.toBe(first);
+    expect(closed).toEqual(["telegram:1"]);
+    expect(created.at(-1)).toEqual({ key: "telegram:1", saved: "session-1" });
+  });
+
   test("closeAll shuts hosts down without a final review; close(key) keeps it", async () => {
     const { pool, runtimes } = setup();
     await pool.open("telegram:1");
