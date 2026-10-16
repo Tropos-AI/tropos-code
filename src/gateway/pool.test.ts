@@ -8,7 +8,7 @@ import { fakeRuntime } from "../../test/helpers/fake-runtime";
 import { settle } from "../../test/helpers/wait";
 import { WebHost } from "../web/host";
 import { SessionPool, type HostHandle } from "./pool";
-import { UserFacingError } from "./errors";
+import { UnknownCommandError, UserFacingError } from "./errors";
 import type { ChatSink } from "./types";
 import type { AgentEvent, PermissionPrompt } from "../agent/events";
 
@@ -102,12 +102,21 @@ describe("a chat's session", () => {
     expect(await chat.command("deploy", "prod")).toBe("end_turn");
     expect(runtimes.get("telegram:1")!.inputs).toEqual(["/deploy prod"]);
     const error = await chat.command("nope", "").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error).toBeInstanceOf(UnknownCommandError);
     expect((error as Error).message).toContain("Unknown command /nope.");
     expect((await chat.learned()).title).toBeDefined();
     expect(runtimes.get("telegram:1")!.described).toEqual(["learned"]);
     expect(await chat.undoLearned()).toEqual({ ok: true, summary: "removed note: x" });
     expect(undone).toEqual([undefined]);
+  });
+
+  test("a command failure that only mentions 'Unknown command' is not an unknown command", async () => {
+    const { pool } = setup([], { t: 1_000 }, { expand: async () => ({ ok: false, reason: "you declined `echo Unknown command`" }) });
+    const chat = await pool.open("telegram:1");
+    const error = await chat.command("deploy", "").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect(error).not.toBeInstanceOf(UnknownCommandError);
+    expect((error as Error).message).toBe("/deploy: you declined `echo Unknown command`");
   });
 
   test("command is refused with busy during a turn, and undoLearned reports why it couldn't", async () => {

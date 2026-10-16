@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SandboxUnavailableError, SenderNotApprovedError, UserFacingError } from "../errors";
+import { SandboxUnavailableError, UnknownCommandError, SenderNotApprovedError, UserFacingError } from "../errors";
 import type { ChatProjects } from "../types";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
@@ -495,10 +495,13 @@ describe("TelegramAdapter", () => {
     const { server, sessions, pairing } = await setup();
     server.pushNonText(CHAT, CHAT, "photo");
     await server.waitFor(() => server.textsTo(CHAT).includes("I can only read text for now."));
+    // An album is many messages: one reply.
+    server.pushNonText(CHAT, CHAT, "photo");
     server.pushNonText(CHAT, CHAT, "voice");
+    server.pushMessage(CHAT, CHAT, "/start");
     await server.waitFor(() => server.textsTo(CHAT).length >= 2);
-    expect(server.textsTo(CHAT)).toEqual(["I can only read text for now.", "I can only read text for now."]);
-    expect(sessions.opens).toBe(0);
+    expect(server.textsTo(CHAT)).toEqual(["I can only read text for now.", HELP_TEXT]);
+    expect(sessions.opens).toBe(1);
 
     const stranger = await setup({ approved: false });
     stranger.server.pushNonText(CHAT, CHAT, "document");
@@ -527,7 +530,7 @@ describe("TelegramAdapter", () => {
     server.pushMessage(CHAT, CHAT, "hello");
     await server.waitFor(() => session());
     session().onCommand = async (name) => {
-      throw new UserFacingError(`/${name}: Unknown command /${name}.`);
+      throw new UnknownCommandError(`/${name}: Unknown command /${name}.`);
     };
     server.pushMessage(CHAT, CHAT, "/nope");
     await server.waitFor(() => server.textsTo(CHAT).includes(`Unknown command.\n${HELP_TEXT}`));
@@ -537,11 +540,13 @@ describe("TelegramAdapter", () => {
     const { server, session } = await setup();
     server.pushMessage(CHAT, CHAT, "hello");
     await server.waitFor(() => session());
+    // A reason that merely mentions "Unknown command" is a real failure and is shown as is.
     session().onCommand = async () => {
-      throw new UserFacingError("/deploy: a PreToolUse hook refused it");
+      throw new UserFacingError("/deploy: you declined `echo Unknown command`");
     };
     server.pushMessage(CHAT, CHAT, "/deploy");
-    await server.waitFor(() => server.textsTo(CHAT).includes("/deploy: a PreToolUse hook refused it"));
+    await server.waitFor(() => server.textsTo(CHAT).includes("/deploy: you declined `echo Unknown command`"));
+    expect(server.textsTo(CHAT).some((t) => t.startsWith("Unknown command."))).toBe(false);
 
     let calls = 0;
     session().busy = true;
@@ -584,15 +589,13 @@ describe("TelegramAdapter", () => {
   });
 
   test("/learned from an approved guest is refused", async () => {
-    const { server, session, pairing } = await setup();
+    const { server, sessions, pairing } = await setup();
     pairing.owners.add("telegram:1");
-    server.pushMessage(CHAT, CHAT, "hello");
-    await server.waitFor(() => session());
     server.pushMessage(CHAT, CHAT, "/learned");
     server.pushMessage(CHAT, CHAT, "/learned undo");
     await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned.").length === 2);
-    expect(session().undos).toBe(0);
-    expect(session().commands).toEqual([]);
+    // Refused before any session was opened.
+    expect(sessions.opens).toBe(0);
   });
 
   test("a learned notice during a turn is sent after the answer; one between turns at once; other info notices stay silent", async () => {
@@ -616,5 +619,17 @@ describe("TelegramAdapter", () => {
     expect(server.textsTo(CHAT).some((t) => t.includes("resumed session"))).toBe(false);
     // Each was sent once.
     expect(server.textsTo(CHAT).filter((t) => t.startsWith("💡"))).toHaveLength(2);
+  });
+
+  test("a learned notice held during a turn that ends without turn_end is still sent", async () => {
+    const { server, session } = await setup();
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hello"));
+    session().onPrompt = async (_t, s) => {
+      s.emit({ type: "notice", level: "info", text: "💡 Remembered: x", learned: true });
+      return "error";
+    };
+    server.pushMessage(CHAT, CHAT, "go");
+    await server.waitFor(() => server.textsTo(CHAT).includes("💡 Remembered: x"));
   });
 });

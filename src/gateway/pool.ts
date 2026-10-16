@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import type { PermissionAnswer, TurnEndReason } from "../agent/events";
 import { BUSY_ERROR, type ServerMessage } from "../web/protocol";
 import { RpcError, type WebHost } from "../web/host";
-import { UserFacingError } from "./errors";
+import { UnknownCommandError, UserFacingError } from "./errors";
 import type { ChatSession, ChatSink, SessionProvider } from "./types";
 
 /** What the pool needs from whoever builds a session (the daemon builds the real one). */
@@ -258,7 +258,10 @@ export class SessionPool implements SessionProvider {
           return await turn({ text: "", command: { name, args } });
         } catch (e) {
           // The host's reason (unknown name, a hook that refused) is for the person at the chat; "busy" stays as is.
-          if (e instanceof RpcError && e.message !== BUSY_ERROR) throw new UserFacingError(e.message);
+          if (e instanceof RpcError && e.message !== BUSY_ERROR) {
+            // The host words it exactly `/<name>: Unknown command /<name>.`; a reason that merely mentions it is a real failure.
+            throw e.message === `/${name}: Unknown command /${name}.` ? new UnknownCommandError(e.message) : new UserFacingError(e.message);
+          }
           throw e;
         }
       },

@@ -1,6 +1,6 @@
 // src/gateway/telegram/adapter.ts — routes Telegram private chats to agent sessions.
 import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/events";
-import { SenderNotApprovedError, UserFacingError } from "../errors";
+import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
 import type { ChannelAdapter, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
@@ -26,6 +26,8 @@ import {
 const CHANNEL = "telegram";
 const MAX_TOOL_LINES = 12;
 const MAX_UNPAIRED_MEMORY = 1000;
+const LEARNED_REFUSAL = "Only the owner can see what I've learned.";
+const NON_TEXT_REPLY_GAP_MS = 10_000;
 
 export interface TelegramAdapterOptions {
   api: TelegramApi;
@@ -137,6 +139,8 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly opening = new Map<string, Promise<Chat | undefined>>();
   /** Sender id -> pairing code already shown, so a code is sent once. */
   private readonly notified = new Map<string, string>();
+  /** Chat id -> when "I can only read text" was last said there. */
+  private readonly nonTextRepliedAt = new Map<number, number>();
 
   constructor(opts: TelegramAdapterOptions) {
     this.api = opts.api;
@@ -248,6 +252,11 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
     if (msg.text === undefined) {
+      // One reply per chat per 10 s (an album is many messages), and none for a group's service messages.
+      const now = Date.now();
+      if (msg.chat.type !== "private" || now - (this.nonTextRepliedAt.get(msg.chat.id) ?? 0) < NON_TEXT_REPLY_GAP_MS) return;
+      if (this.nonTextRepliedAt.size >= MAX_UNPAIRED_MEMORY) this.nonTextRepliedAt.clear();
+      this.nonTextRepliedAt.set(msg.chat.id, now);
       await this.reply(msg.chat.id, "I can only read text for now.");
       return;
     }
@@ -256,6 +265,11 @@ export class TelegramAdapter implements ChannelAdapter {
     // Before the session is opened: switching away from a project whose session can't start must still work.
     if (text.startsWith("/") && /^project(s)?$/.test(commandWord(text))) {
       await this.handleProjectCommand(msg.chat.id, text);
+      return;
+    }
+    // Before the session is opened: a guest's /learned is refused without starting one.
+    if (text.startsWith("/") && commandWord(text) === "learned" && !(await this.pairing.isOwner(CHANNEL, senderId))) {
+      await this.reply(msg.chat.id, LEARNED_REFUSAL);
       return;
     }
     const chat = await this.chatFor(msg.chat.id, senderId);
@@ -499,7 +513,7 @@ export class TelegramAdapter implements ChannelAdapter {
         return;
       } else {
         this.log("prompt failed", e);
-        const unknown = "command" in item && e instanceof UserFacingError && /Unknown command/.test(e.message);
+        const unknown = e instanceof UnknownCommandError;
         this.sendAll(chat, unknown ? `Unknown command.\n${HELP_TEXT}` : e instanceof UserFacingError ? e.message : "Something went wrong running that. Try again, or send /new.");
       }
     }
@@ -636,8 +650,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** `/learned` and `/learned undo`: what the agent saved on its own. Only the owner's chat may see or change it. */
   private async handleLearned(chat: Chat, senderId: string, arg: string | undefined): Promise<void> {
+    // The owner check is in handleMessage; this re-check covers an owner change since.
     if (!(await this.pairing.isOwner(CHANNEL, senderId))) {
-      this.sendAll(chat, "Only the owner can see what I've learned.");
+      this.sendAll(chat, LEARNED_REFUSAL);
       return;
     }
     try {
