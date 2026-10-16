@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import type { Model } from "../api/model";
 import { loadProjectContext, type ProjectContext } from "../cli/context";
 import { createRuntime } from "../cli/runtime";
-import { SettingsError } from "../config/settings";
+import { SettingsError, settingsPaths } from "../config/settings";
 import { VERSION } from "../version";
 import { DockerBackend, sweepLeftoverContainers } from "../exec/docker";
 import type { ExecBackend } from "../exec/backend";
@@ -186,8 +186,9 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         // Not cached: once the file is fixed, the next message works without restarting the gateway.
         // The chat never sees file paths or parse detail; the log does.
         if (e instanceof SettingsError) {
-          run.err(`tcode: ${project.id}: ${e.message}\n`);
-          throw new UserFacingError(`I can't start a session in "${project.name}" because its settings have a problem. The owner can fix it with tcode doctor --fix or in the dashboard.`);
+          const layer = Object.entries(settingsPaths(project.path, home)).find(([, p]) => p === e.path)?.[0] ?? "unknown";
+          run.err(`tcode: ${project.id}: ${layer} settings ${e.path}: ${e.message}\n`);
+          throw new UserFacingError(`I can't start a session in "${project.name}" because its settings have a problem. The owner can see what's wrong in the dashboard (Status → Logs) or with tcode logs gateway.`);
         }
         throw e;
       },

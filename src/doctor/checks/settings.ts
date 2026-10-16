@@ -1,4 +1,5 @@
 // src/doctor/checks/settings.ts — every settings file Tropos would read parses and validates.
+import { constants, existsSync } from "node:fs";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { SettingsError, readSettingsFile, settingsLayerSchema, settingsPaths } from "../../config/settings";
 import type { Check } from "../types";
@@ -31,26 +32,30 @@ export const settingsCheck: Check = {
     const path = String(f.data?.path ?? "");
     if (!path) return { ok: false, message: "no settings file named" };
     const text = await readFile(path, "utf8");
+    let raw: unknown;
+    let parseable = true;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      parseable = false; // nothing in it can be trusted: start from empty
+    }
+    const parsed = parseable ? settingsLayerSchema.safeParse(raw) : null;
+    if (parsed?.success) return { ok: false, message: "the file is valid now; nothing changed" };
     const d = new Date();
     const p2 = (n: number) => String(n).padStart(2, "0");
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    const backup = `${path}.broken-${stamp}`;
-    await copyFile(path, backup);
+    let backup = `${path}.broken-${stamp}`;
+    for (let n = 2; existsSync(backup); n++) backup = `${path}.broken-${stamp}-${n}`;
+    await copyFile(path, backup, constants.COPYFILE_EXCL);
     let kept = "{}\n";
-    try {
-      const raw: unknown = JSON.parse(text);
-      const parsed = settingsLayerSchema.safeParse(raw);
-      if (parsed.success) return { ok: false, message: "the file is valid now; nothing changed" };
-      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-        const bad = new Set(parsed.error.issues.map((i) => i.path[0]).filter((k): k is string => typeof k === "string"));
-        const rest = Object.fromEntries(Object.entries(raw).filter(([k]) => !bad.has(k)));
-        kept = `${JSON.stringify(rest, null, 2)}\n`;
-      }
-    } catch {
-      // Unparsable JSON: nothing in it can be trusted, start from empty.
+    let dropped: string[] = [];
+    if (parsed && !parsed.success && raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+      const bad = new Set(parsed.error.issues.map((i) => i.path[0]).filter((k): k is string => typeof k === "string"));
+      dropped = [...bad];
+      kept = `${JSON.stringify(Object.fromEntries(Object.entries(raw).filter(([k]) => !bad.has(k))), null, 2)}\n`;
     }
     await writeFile(path, kept, { mode: 0o600 });
     await readSettingsFile(path); // throws (-> fix failed) if what we wrote is still invalid
-    return { ok: true, message: `kept the valid settings; the old file is at ${backup}` };
+    return { ok: true, message: dropped.length ? `kept the valid settings; dropped: ${dropped.join(", ")}. The original is in ${backup}` : `kept the valid settings; the old file is at ${backup}` };
   },
 };

@@ -42,7 +42,7 @@ test("--fix moves a broken user settings file aside and keeps its valid keys", a
   expect(byId(plain, "settings.parse.user")).toMatchObject({ fixable: true, safe: false, data: { path } });
   const r = await runOne(fx, settingsCheck, { fix: true });
   expect(byId(r, "settings.parse.user")).toMatchObject({ fixed: true });
-  expect(byId(r, "settings.parse.user")!.fixMessage).toContain("kept the valid settings; the old file is at ");
+  expect(byId(r, "settings.parse.user")!.fixMessage).toContain("kept the valid settings; dropped: effort. The original is in ");
   expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark" });
   expect((await readdir(fx.home)).some((n) => /^settings\.json\.broken-\d{14}$/.test(n))).toBe(true);
 });
@@ -61,4 +61,23 @@ test("unparsable user settings become {} with a backup; a broken repo file is no
   expect(p.fixable).toBeUndefined();
   expect(p.fixed).toBeUndefined();
   expect(await readFile(project, "utf8")).toContain("purple");
+});
+
+test("the fix message names the dropped keys; a nested bad entry drops its top-level key and unknown keys survive", async () => {
+  fx = await makeFixture();
+  const path = await fx.write("settings.json", JSON.stringify({ theme: "dark", futureKey: 1, hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command" }] }] } }));
+  const r = await runOne(fx, settingsCheck, { fix: true });
+  const f = byId(r, "settings.parse.user")!;
+  expect(f.fixed).toBe(true);
+  expect(f.fixMessage).toContain("dropped: hooks. The original is in ");
+  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ theme: "dark", futureKey: 1 });
+});
+
+test("fixing twice in one second does not overwrite the first backup", async () => {
+  fx = await makeFixture();
+  const path = await fx.write("settings.json", "{ nope");
+  await runOne(fx, settingsCheck, { fix: true });
+  await Bun.write(path, "{ again");
+  await runOne(fx, settingsCheck, { fix: true });
+  expect((await readdir(fx.home)).filter((n) => n.startsWith("settings.json.broken-"))).toHaveLength(2);
 });

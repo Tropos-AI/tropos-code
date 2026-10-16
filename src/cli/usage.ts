@@ -77,8 +77,8 @@ Options:
 
 export const UPDATE_HELP = `Usage: tcode update   (or: tcode upgrade)
 
-Updates to the newest release of your update channel ("autoUpdatesChannel": "latest" or "stable"
-in ~/.tropos/settings.json). Never installs an older version.
+Updates to the newest release of your update channel ("latest" or "stable"; change it in the
+dashboard: tcode dashboard). Never installs an older version.
 
 Options:
   -h, --help     show this help
@@ -105,8 +105,8 @@ directory (no home, no credentials, no network unless you allow it), and every e
 buttons in the chat. Nobody can talk to it until you approve them: tcode pairing approve telegram <code>.
 Nothing needs a workspace: until you add projects (tcode projects add <path>) chats work in ~/.tropos/workspace.
 
-Setup: create a bot with @BotFather, then set TROPOS_TELEGRAM_BOT_TOKEN (or telegram.botToken in
-~/.tropos/gateway.json, which is kept private) and make sure Docker is running.
+Setup: create a bot with @BotFather, then connect it in the dashboard (tcode dashboard) or ask me
+to connect it, and make sure Docker is running.
 
 Options:
       --workspace <dir>   work in this directory for this run only (install: add it as a project and make it the default)
