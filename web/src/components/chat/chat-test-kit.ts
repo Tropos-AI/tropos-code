@@ -31,13 +31,35 @@ export class FakeSocket implements SocketLike {
   onerror: ((event: unknown) => void) | null = null;
   /** RPCs answered automatically (on a microtask); others wait for `reply`. */
   handlers: Partial<Record<RpcMethod, RpcHandler>> = {};
+  /** Admin calls answered the same way (a thrown error becomes a failed result). */
+  adminHandlers: Record<string, RpcHandler> = {};
 
   send(data: string): void {
     const message = JSON.parse(data) as ClientMessage;
     this.sent.push(message);
+    if (message.t === "admin") {
+      const handler = this.adminHandlers[message.method];
+      if (!handler) return;
+      queueMicrotask(() => {
+        try {
+          this.deliver({ t: "admin_result", id: message.id, ok: true, result: handler(message.params) ?? null });
+        } catch (error) {
+          this.deliver({ t: "admin_result", id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+      return;
+    }
     if (message.t !== "rpc") return;
     const handler = this.handlers[message.method];
-    if (handler) queueMicrotask(() => this.deliver({ t: "rpc_result", id: message.id, ok: true, result: handler(message.params) ?? null }));
+    if (handler) {
+      queueMicrotask(() => {
+        try {
+          this.deliver({ t: "rpc_result", id: message.id, ok: true, result: handler(message.params) ?? null });
+        } catch (error) {
+          this.deliver({ t: "rpc_result", id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+    }
   }
   close(): void {
     this.readyState = 3;
@@ -73,13 +95,14 @@ export const HELLO: HelloInfo = {
 export const IDLE: SessionState = { model: "claude-opus-5-5", effort: "high", mode: "default", busy: false, contextTokens: 1000, contextWindow: 200_000, totalCostUsd: 0.1, turns: 0 };
 
 /** A store whose socket is open and has said hello. */
-export function connectedStore(handlers: FakeSocket["handlers"] = {}): { store: AppStore; socket: FakeSocket } {
+export function connectedStore(handlers: FakeSocket["handlers"] = {}, adminHandlers: FakeSocket["adminHandlers"] = {}): { store: AppStore; socket: FakeSocket } {
   let socket: FakeSocket | null = null;
   const client = new TcodeClient({
     url: "ws://test/ws",
     socket: () => {
       socket = new FakeSocket();
       socket.handlers = handlers;
+      socket.adminHandlers = adminHandlers;
       return socket;
     },
     setTimer: () => null,

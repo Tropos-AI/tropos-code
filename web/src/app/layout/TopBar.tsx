@@ -5,12 +5,13 @@ import type { Transcript } from "@core/ui/transcript";
 import type { UndoResult } from "@core/web/protocol";
 
 import type { PageInfo } from "@/app/routes";
+import { ProjectPicker } from "@/components/chat/ProjectPicker";
 import { ProgressBar, type ProgressTone } from "@/components/interior/progress-bar";
 import { Tooltip, TooltipGroup } from "@/components/interior/tooltip-group";
 import { ValueFlash } from "@/components/interior/value-flash";
 import { IconButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { errorMessage, useAppSelector, useAppStore, useConnection, useSessionState } from "@/lib/store";
+import { errorMessage, useAppSelector, useAppStore, useConnection, useHello, useSessionState } from "@/lib/store";
 import { formatCost, formatTokens } from "@/lib/time";
 import { ui } from "@/lib/ui-store";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,7 @@ function ModelChip() {
       onClick={ui.openModelPicker}
       aria-haspopup="dialog"
       aria-label={`Model: ${session.model}, effort ${session.effort}. Change model`}
-      className="group inline-flex h-8 min-w-0 max-w-[9.5rem] items-center sm:max-w-[15rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2.5 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus"
+      className="group inline-flex h-8 min-w-0 max-w-[5rem] items-center min-[360px]:max-w-[6rem] min-[400px]:max-w-[9.5rem] sm:max-w-[15rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2.5 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus"
     >
       <span className="text-accent-ink">
         <Icon name="sparkles" size="sm" />
@@ -128,6 +129,8 @@ function UndoRedo() {
 
 export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
   const title = useAppSelector((s) => sessionTitle(s.transcript));
+  // The project picker needs the room the context meter and cost use on tablets and small laptops.
+  const inDashboard = useHello()?.project !== undefined;
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-rule bg-surface px-3 sm:px-4">
       {onOpenSidebar ? (
@@ -145,8 +148,9 @@ export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
+        <ProjectPicker />
         <ModelChip />
-        <div className="hidden items-center gap-3 md:flex">
+        <div className={cn("hidden items-center gap-3", inDashboard ? "xl:flex" : "md:flex")}>
           <ContextMeter />
           <span aria-hidden className="h-4 w-px bg-rule" />
           <Cost />
