@@ -1,5 +1,8 @@
 // src/web/admin/cron.ts — `cron.*`: the scheduler's jobs, read and written through CronStore (the gateway picks
 // changes up within a minute), plus "run now" through the running gateway.
+import { join } from "node:path";
+import { gatewayDir } from "../../gateway/config";
+import { FilePairing, ownerChatKey } from "../../gateway/pairing";
 import { listProjects } from "../../gateway/projects";
 import { ScheduleError, firstRun, parseHumanSchedule, scheduleSchema, type Schedule } from "../../gateway/cron/schedule";
 import { CronStore, CronStoreError } from "../../gateway/cron/store";
@@ -123,7 +126,8 @@ export function cronHandlers(ctx: AdminContext, deps: Partial<CronDeps> = {}): A
         schedule: schedule(p.schedule, tz),
         prompt: text(p.prompt, "The prompt", PROMPT_MAX),
         project: await projectId(p.project ?? "default"),
-        deliver: deliver(p.deliver ?? "none"),
+        // No target: the owner's chat, since the dashboard is the owner's.
+        deliver: deliver(p.deliver ?? (await ownerChatKey(new FilePairing({ path: join(gatewayDir(ctx.home), "pairing.json"), now: ctx.now }))) ?? "none"),
         createdBy: "user",
       });
       return view(job);

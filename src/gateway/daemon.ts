@@ -33,6 +33,7 @@ import {
 import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
 import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
+import { ownerCronTool } from "../tools/cron/owner-cron";
 import { CHANNEL_MODES, channelContext, chatRole, workspaceProblem } from "./policy";
 import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
@@ -252,7 +253,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
     const chatKey = parseSessionKey(key)?.chatKey;
     if (chatKey && !chatKey.startsWith("project:")) {
-      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
+      // The owner's chats see every job; a guest's chat only its own.
+      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, seeAll: role === "owner", defaultDeliver: () => chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
     }
     let session: SessionStore;
     let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
@@ -348,6 +350,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const { ctx: localCtx, setSessionId } = await newSessionContext();
       const session = await SessionStore.create(home, { cwd: ctx.cwd, model: ctx.settings.model, version });
       setSessionId(session.id);
+      // The dashboard is the owner's: its Cron tool sees every job and delivers to the owner's chat.
+      localCtx.tools = [...localCtx.tools, await ownerCronTool(home, { runNow: (id) => cron.runNow(id) })];
       const runtime = await createRuntime(localCtx, {
         session,
         history: [],

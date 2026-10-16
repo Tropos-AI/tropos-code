@@ -35,6 +35,8 @@ export interface CronToolOptions {
   store: CronStore;
   /** The chat the tool is being used from (the daemon fills this in); used when `deliverTo` is not given. */
   defaultDeliver?: () => string | undefined;
+  /** The owner's sessions: every job is visible and changeable, and `defaultDeliver` only supplies the default target. */
+  seeAll?: boolean;
   /** Starts a job now without waiting for it (the daemon's scheduler); `run` is refused when absent. */
   runNow?: (id: string) => Promise<RunRecord>;
 }
@@ -68,13 +70,13 @@ export function createCronTool(opts: CronToolOptions) {
 
   // From a chat, only that chat's own jobs are visible: another chat's prompts, targets and ids stay out of reach.
   function visible(j: CronJob | undefined): CronJob | undefined {
-    if (!j || !opts.defaultDeliver) return j;
+    if (!j || !opts.defaultDeliver || opts.seeAll) return j;
     return j.deliver === opts.defaultDeliver() ? j : undefined;
   }
 
   // Resolves an id or prefix among the visible jobs only, so an ambiguous-prefix error cannot name other chats' ids.
   function findVisible(idOrPrefix: string): CronJob | undefined {
-    if (!opts.defaultDeliver) return store.find(idOrPrefix);
+    if (!opts.defaultDeliver || opts.seeAll) return store.find(idOrPrefix);
     const mine = store.list().filter((j) => visible(j));
     const exact = mine.find((j) => j.id === idOrPrefix);
     if (exact || !idOrPrefix) return exact;

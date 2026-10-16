@@ -205,4 +205,15 @@ describe("CronPage", () => {
     const select = within(dialog).getByLabelText("Send the result to") as HTMLSelectElement;
     expect([...select.options].map((o) => o.value)).toEqual(["none", "__custom__"]);
   });
+
+  test("a new job defaults to the owner's chat", async () => {
+    const { socket } = await mountAdminPage(CronPage, base({ "pairing.list": () => ({ ...PAIRING, owner: { channel: "telegram", senderId: "4242" } }) }));
+    fireEvent.click(await screen.findByRole("button", { name: "New job" }));
+    const dialog = await screen.findByRole("dialog", { name: "New scheduled job" });
+    fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Nightly" } });
+    fireEvent.change(within(dialog).getByLabelText("What should the agent do?"), { target: { value: "Summarise today." } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create job" }));
+    await waitFor(() => expect(socket.adminOf("cron.add")).toHaveLength(1));
+    expect(socket.adminOf("cron.add")[0]!.params).toMatchObject({ deliver: "telegram:4242" });
+  });
 });

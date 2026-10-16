@@ -42,7 +42,9 @@ function Form({ job, projects, pairing, onClose, onSaved }: Omit<Props, "open">)
   const [tz, setTz] = useState(initialZone);
   const [project, setProject] = useState(job?.project && job.project !== "default" ? job.project : "");
   const deliveries = useMemo(() => (pairing?.approved ?? []).filter((s) => s.channel === "telegram").map((s) => ({ value: `telegram:${s.senderId}`, label: `Telegram chat ${s.senderId}` })), [pairing]);
-  const initialDeliver = job?.deliver ?? NO_DELIVERY;
+  // A new job goes to the owner's chat unless the owner picks otherwise.
+  const ownerDeliver = pairing?.owner ? `telegram:${pairing.owner.senderId}` : undefined;
+  const initialDeliver = job?.deliver ?? (ownerDeliver && pairing?.owner?.channel === "telegram" ? ownerDeliver : NO_DELIVERY);
   const knownDeliver = initialDeliver === NO_DELIVERY || deliveries.some((d) => d.value === initialDeliver);
   const [deliverChoice, setDeliverChoice] = useState(knownDeliver ? initialDeliver : CUSTOM_DELIVERY);
   const [deliverText, setDeliverText] = useState(knownDeliver ? "" : initialDeliver);

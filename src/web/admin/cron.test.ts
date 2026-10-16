@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
+import { FilePairing } from "../../gateway/pairing";
 import { CronStore } from "../../gateway/cron/store";
 import { cronHandlers, scheduleText } from "./cron";
 import { adminOverWs, makeKit, writeText, type Kit } from "./ops-testkit";
@@ -114,4 +115,15 @@ test("end to end over the WebSocket", async () => {
   } finally {
     await ws.close();
   }
+});
+
+test("cron.add without deliver sends to the owner's chat when there is an owner, else nowhere", async () => {
+  const h = cronHandlers(kit.ctx);
+  expect((await h["cron.add"]!(base)).deliver).toBe("none");
+  const pairing = new FilePairing({ path: join(kit.home, "gateway", "pairing.json") });
+  const c = await pairing.challenge("telegram", "42");
+  if (c.kind !== "code") throw new Error("expected a code");
+  await pairing.approve("telegram", c.code);
+  expect((await h["cron.add"]!(base)).deliver).toBe("telegram:42");
+  expect((await h["cron.add"]!({ ...base, deliver: "none" })).deliver).toBe("none");
 });

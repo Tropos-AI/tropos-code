@@ -1,4 +1,5 @@
 import { render } from "ink";
+import { ownerCronTool } from "../tools/cron/owner-cron";
 import type { Model } from "../api/model";
 import { ProviderRouter } from "../providers/router";
 import { MODES, type Mode } from "../config/constants";
@@ -290,6 +291,8 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     modelPrefs: new ModelPrefs(home),
     role: "owner",
   };
+  // The owner's terminal can schedule too; results go to the owner's chat.
+  ctx.tools = [...ctx.tools, await ownerCronTool(home)];
   try {
     return await runSession();
   } finally {

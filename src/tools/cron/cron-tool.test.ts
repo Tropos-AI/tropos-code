@@ -132,3 +132,20 @@ test("from a chat, an ambiguous prefix never names jobs of other chats", async (
   expect(text(out)).not.toContain(a.id);
   expect(text(out)).not.toContain(b.id);
 });
+
+test("with seeAll a session lists every job and new jobs go to the default target", async () => {
+  const other = store.add({ name: "theirs", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:2", createdBy: "agent" });
+  const tool = createCronTool({ store, seeAll: true, defaultDeliver: () => "telegram:1" });
+  expect(text(await tool.run({ action: "list" }, makeToolContext()))).toContain(other.id);
+  expect((await tool.run({ action: "disable", id: other.id }, makeToolContext())).isError).toBeFalsy();
+  expect(store.get(other.id)!.enabled).toBe(false);
+  expect((await tool.run({ action: "add", name: "mine", schedule: "every 5m", prompt: "p" }, makeToolContext())).isError).toBeFalsy();
+  expect(store.list().find((j) => j.name === "mine")!.deliver).toBe("telegram:1");
+  expect((await tool.run({ action: "remove", id: other.id }, makeToolContext())).isError).toBeFalsy();
+});
+
+test("without a default target a new job delivers nowhere", async () => {
+  const tool = createCronTool({ store, seeAll: true, defaultDeliver: () => undefined });
+  await tool.run({ action: "add", name: "n", schedule: "every 5m", prompt: "p" }, makeToolContext());
+  expect(store.list()[0]!.deliver).toBe("none");
+});
