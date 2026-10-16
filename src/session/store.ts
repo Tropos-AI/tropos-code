@@ -1,4 +1,5 @@
 // src/session/store.ts
+import type { SessionRole } from "../gateway/types";
 import type Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -18,6 +19,8 @@ export interface SessionMeta {
   /** Subagent transcripts only: the session that started it, and the agent that ran. */
   parentId?: string;
   agent?: string;
+  /** Who the session answered to; SessionSearch never shows a guest's transcript. Absent in older transcripts. */
+  role?: SessionRole;
 }
 
 type SessionLine =
@@ -110,7 +113,7 @@ export class SessionStore {
     private titled: boolean,
   ) {}
 
-  static async create(home: string, meta: { cwd: string; model: string; version: string }): Promise<SessionStore> {
+  static async create(home: string, meta: { cwd: string; model: string; version: string; role?: SessionRole }): Promise<SessionStore> {
     const id = randomUUID();
     const dir = projectDir(home, meta.cwd);
     await mkdir(dir, { recursive: true, mode: DIR_MODE });
@@ -125,7 +128,7 @@ export class SessionStore {
    */
   static async createSubagent(
     home: string,
-    meta: { cwd: string; parentId: string; agent: string; model: string; version: string },
+    meta: { cwd: string; parentId: string; agent: string; model: string; version: string; role?: SessionRole },
   ): Promise<SessionStore> {
     if (!SESSION_ID.test(meta.parentId)) throw new Error("Invalid session id");
     const id = randomUUID();

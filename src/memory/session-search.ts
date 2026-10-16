@@ -15,6 +15,7 @@ import {
   SearchIndex,
   messageTexts,
   noteEntries,
+  isGuestSession,
   parseSession,
   type SearchResult,
   type SearchSource,
@@ -126,7 +127,7 @@ function scanSession(text: string, words: string[]): Pick<SearchResult, "title" 
       const lower = raw.toLowerCase();
       if (!safe.every((w) => lower.includes(w))) continue;
     }
-    let line: { type?: unknown; title?: unknown; cwd?: unknown; message?: MessageParam };
+    let line: { type?: unknown; title?: unknown; cwd?: unknown; role?: unknown; message?: MessageParam };
     try {
       line = JSON.parse(raw);
     } catch {
@@ -134,6 +135,7 @@ function scanSession(text: string, words: string[]): Pick<SearchResult, "title" 
     }
     if (typeof line !== "object" || line === null) continue;
     if (line.type === "meta") {
+      if (typeof line.role === "string" && isGuestSession({ role: line.role })) return null;
       if (typeof line.title === "string") result.title = line.title;
       if (typeof line.cwd === "string") result.cwd = line.cwd;
       continue;
@@ -221,6 +223,7 @@ async function readSession(dirs: string[], id: string, around: number | undefine
     return { content: `No session ${id} in ${input.all_projects ? "any project" : "this project"}.${hint}`, isError: true };
   }
   const parsed = parseSession(await readFile(path, "utf8"));
+  if (isGuestSession(parsed)) return { content: `Session ${id} was a guest's chat; it can't be read here.`, isError: true };
   const total = parsed.messages.length === 0 ? 0 : parsed.messages.at(-1)!.index + 1;
   const center = around ?? READ_RADIUS;
   const from = Math.max(0, center - READ_RADIUS);

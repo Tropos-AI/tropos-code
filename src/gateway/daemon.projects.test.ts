@@ -1,6 +1,6 @@
 // src/gateway/daemon.projects.test.ts — projects and services in the running gateway: Telegram and the model are fakes.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { FakeTelegramServer } from "../../test/helpers/telegram-fake-server";
@@ -137,6 +137,14 @@ describe("chat roles reach the session", () => {
     await server.waitFor(() => server.textsTo(GUEST).includes("guest d"));
     await Bun.sleep(200);
     expect(gw.model.requests).toHaveLength(5);
+    // Each transcript records the role it ran as (SessionSearch leaves the guest's out).
+    const ids = await sessionsFile();
+    const roleOf = async (chat: number) => {
+      const path = join(home, "projects", (await readdir(join(home, "projects")))[0]!, `${ids[`telegram:${chat}@default`]}.jsonl`);
+      return JSON.parse((await readFile(path, "utf8")).split("\n")[0]!).role;
+    };
+    expect(await roleOf(CHAT)).toBe("owner");
+    expect(await roleOf(GUEST)).toBe("guest");
     gw.stop();
     expect(await gw.done).toBe(0);
   });

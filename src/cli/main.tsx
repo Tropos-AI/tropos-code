@@ -313,7 +313,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       } else if (opts.resumeId) {
         ({ store: session, messages: history } = await SessionStore.open(home, cwd, opts.resumeId));
       } else {
-        session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION });
+        session = await SessionStore.create(home, { cwd, model: settings.model, version: VERSION, role: ctx.role });
       }
     } catch (e) {
       err(`tcode: ${(e as Error).message}\n`);

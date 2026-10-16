@@ -271,11 +271,11 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         ({ store: session, messages: history } = await SessionStore.open(home, cwd, saved));
         resumed = true;
       } else {
-        session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
+        session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version, role });
       }
     } catch {
       // The remembered session is gone: start over rather than fail the chat.
-      session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version });
+      session = await SessionStore.create(home, { cwd, model: pc.ctx.settings.model, version, role });
     }
     setSessionId(session.id);
     try {
@@ -365,7 +365,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           const { ctx: sessionCtx, setSessionId } = await pc.newSessionContext();
           const localCtx = gatewayHosted(sessionCtx);
           const opened = resume ? await SessionStore.open(home, localCtx.cwd, resume.sessionId) : undefined;
-          const session = opened?.store ?? (await SessionStore.create(home, { cwd: localCtx.cwd, model: localCtx.settings.model, version }));
+          const session = opened?.store ?? (await SessionStore.create(home, { cwd: localCtx.cwd, model: localCtx.settings.model, version, role: localCtx.role }));
           setSessionId(session.id);
           // The dashboard is the owner's: its Cron tool sees every job and delivers to the owner's chat.
           localCtx.tools = [...localCtx.tools, await ownerCronTool(home, { runNow: (id) => cron.runNow(id) })];

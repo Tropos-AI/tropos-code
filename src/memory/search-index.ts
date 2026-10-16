@@ -42,6 +42,8 @@ export interface SessionMessage {
 export interface ParsedSession {
   title?: string;
   cwd?: string;
+  /** Who the session answered to (src/session/store.ts SessionMeta.role); absent in older transcripts. */
+  role?: string;
   messages: SessionMessage[];
 }
 
@@ -52,7 +54,7 @@ export function parseSession(text: string): ParsedSession {
   for (const raw of text.split("\n")) {
     if (!raw.trim()) continue;
     const at = raw.startsWith(MESSAGE_LINE_PREFIX) ? index++ : -1;
-    let line: { type?: unknown; title?: unknown; cwd?: unknown; message?: MessageParam };
+    let line: { type?: unknown; title?: unknown; cwd?: unknown; role?: unknown; message?: MessageParam };
     try {
       line = JSON.parse(raw);
     } catch {
@@ -62,6 +64,7 @@ export function parseSession(text: string): ParsedSession {
     if (line.type === "meta") {
       if (typeof line.title === "string") out.title = line.title;
       if (typeof line.cwd === "string") out.cwd = line.cwd;
+      if (typeof line.role === "string") out.role = line.role;
       continue;
     }
     const message = line.message;
@@ -76,6 +79,9 @@ export function parseSession(text: string): ParsedSession {
   }
   return out;
 }
+
+/** A transcript of a guest's chat (or of a subagent it ran): search never shows it. */
+export const isGuestSession = (parsed: Pick<ParsedSession, "role">): boolean => parsed.role === "guest";
 
 /** Splits a day file into entries: a line starting with "- " opens one, indented lines continue it. */
 export function noteEntries(text: string): string[] {
@@ -381,7 +387,8 @@ export class SearchIndex {
       title = parsed.title ?? "(untitled)";
       cwd = parsed.cwd ?? null;
       date = new Date(file.mtime).toISOString().slice(0, 10);
-      for (const m of parsed.messages) {
+      // A guest's words never reach the owner's sessions through search: indexed (so it isn't re-read), with no text.
+      for (const m of isGuestSession(parsed) ? [] : parsed.messages) {
         const body = m.texts.join("\n\n").trim();
         if (body && m.index < STRIDE) chunks.push({ index: m.index, role: m.role, body });
       }

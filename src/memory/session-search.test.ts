@@ -359,3 +359,23 @@ describe("read mode", () => {
     expect(out.text).toStartWith("Session search failed:");
   });
 });
+
+for (const mode of ["fts", "scan"] as const) {
+  test(`${mode}: a guest's transcript (and its subagents') is never found or read; the owner's and older ones without a role are`, async () => {
+    await session(CWD, 1, [meta({ sessionId: ID(1), title: "guest chat", role: "guest" }), msg("user", "the zebra password is hunter2")], 5);
+    await session(CWD, 2, [meta({ sessionId: ID(2), title: "owner chat", role: "owner" }), msg("user", "zebra crossing plans")], 10);
+    await session(CWD, 3, [meta({ sessionId: ID(3), title: "older chat" }), msg("user", "zebra stripes")], 15);
+    const sub = join(projectDir(home, CWD), "subagents", ID(1));
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, `${ID(4)}.jsonl`), `${[meta({ sessionId: ID(4), parentId: ID(1), role: "guest" }), msg("assistant", "zebra notes from the guest's helper")].join("\n")}\n`);
+    const tool = makeTool(mode);
+    const { text } = await run(tool, { query: "zebra" });
+    expect(text).toContain("owner chat");
+    expect(text).toContain("older chat");
+    expect(text).not.toContain("hunter2");
+    expect(text).not.toContain("guest's helper");
+    const read = await run(tool, { session_id: ID(1) });
+    expect(read.isError).toBe(true);
+    expect(read.text).not.toContain("hunter2");
+  });
+}

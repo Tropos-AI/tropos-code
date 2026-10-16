@@ -562,6 +562,21 @@ describe("learning and identity", () => {
     }
   });
 
+  test("transcripts record the session's role: after /clear, and a subagent's", async () => {
+    await setup([text("a")]);
+    const exec = {} as Parameters<typeof channelContext>[1];
+    ctx = channelContext(ctx, exec, { role: "guest" });
+    const { runtime: rt } = await runtime();
+    await rt.clear();
+    const metaOf = async (path: string) => JSON.parse((await readFile(path, "utf8")).split("\n")[0]!);
+    expect((await metaOf(join(projectDir(ctx.home, dir), `${rt.sessionId()}.jsonl`))).role).toBe("guest");
+    rt.newAgent({ emit: () => {}, askPermission: allow });
+    await ctx.subagents.deps!.openTranscript!("helper");
+    const subDir = join(projectDir(ctx.home, dir), "subagents", rt.sessionId());
+    const [file] = await readdir(subDir);
+    expect((await metaOf(join(subDir, file!))).role).toBe("guest");
+  });
+
   test("an Identity save tells the runtime to refresh the header identity", async () => {
     await mkdir(ctx.home, { recursive: true });
     await writeFile(join(ctx.home, "IDENTITY.md"), "- Name: Nova\n");

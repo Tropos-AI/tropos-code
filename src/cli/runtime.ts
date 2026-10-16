@@ -210,7 +210,7 @@ export function makeAgent(
     onAllowAlways,
     recordCost: (cost) => agent?.addCost(cost),
     openTranscript: (name) =>
-      SessionStore.createSubagent(ctx.home, { cwd: ctx.cwd, parentId: opts.session().id, agent: name, model: config().model, version: ctx.version }),
+      SessionStore.createSubagent(ctx.home, { cwd: ctx.cwd, parentId: opts.session().id, agent: name, model: config().model, version: ctx.version, role: ctx.role }),
     hooks: opts.hooks,
     beforeChange,
     postWrite: afterWrite,
@@ -694,7 +694,7 @@ export async function createRuntime(
       await detachLearning();
       ctx.ext.tracker.reset();
       await sessionEnd(hooks, "clear");
-      session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version });
+      session = await SessionStore.create(ctx.home, { cwd: ctx.cwd, model: state.model, version: ctx.version, role: ctx.role });
       history = [];
       pendingContext = await sessionStart(hooks, "clear", () => {}, harnessNonce(session.id)).catch(() => null);
     },
