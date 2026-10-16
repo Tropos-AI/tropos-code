@@ -3,12 +3,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
+import { troposStorePaths } from "../learning/stores";
+import { PLAN_MODE_REASON, compileRules, decide, inGitControlDir, isStoreSave, suggestRule, type PermissionContext, type PermissionRequest } from "./engine";
 
 const cwd = "/work/app";
 function ctx(over: Partial<PermissionContext> & { allow?: string[]; ask?: string[]; deny?: string[] } = {}): PermissionContext {
-  const { rules } = compileRules({ allow: over.allow ?? [], ask: over.ask ?? [], deny: over.deny ?? [] });
-  return { mode: over.mode ?? "default", rules, cwd, home: "/home/u", allowedDirs: over.allowedDirs ?? [cwd] };
+  const { allow = [], ask = [], deny = [], ...rest } = over;
+  const { rules } = compileRules({ allow, ask, deny });
+  return { mode: "default", cwd, home: "/home/u", allowedDirs: [cwd], ...rest, rules };
 }
 const bash = (command: string): PermissionRequest => ({ toolName: "Bash", kind: "exec", command, paths: [] });
 const edit = (path: string): PermissionRequest => ({ toolName: "Edit", kind: "edit", paths: [path] });
@@ -411,5 +413,90 @@ describe("decide — confine (sessions from a messaging channel)", () => {
   });
   test("without confine the same path asks, as before", () => {
     expect(decide(read("/etc/passwd"), ctx()).behavior).toBe("ask");
+  });
+});
+
+describe("decide — saving to Tropos's stores", () => {
+  let home: string;
+  let outside: string;
+  let m: string;
+  beforeAll(async () => {
+    home = await makeTmpDir();
+    outside = await makeTmpDir();
+    m = join(home, "memories", "MEMORY.md");
+  });
+  afterAll(async () => {
+    await removeDir(home);
+    await removeDir(outside);
+  });
+  const owner = (over: Parameters<typeof ctx>[0] = {}) => ctx({ role: "owner", stores: { paths: troposStorePaths(home), askBeforeSaving: false }, ...over });
+  const memory = (p: string): PermissionRequest => ({ toolName: "Memory", kind: "edit", paths: [p] });
+
+  test("the owner's Memory save inside the store is allowed without asking", () => {
+    expect(decide(memory(join(home, "memories", "MEMORY.md")), owner())).toEqual({ behavior: "allow" });
+  });
+  test("each store tool saving into its store is allowed for the owner", () => {
+    const saves: PermissionRequest[] = [
+      { toolName: "Memory", kind: "edit", paths: [join(home, "memories", "USER.md")] },
+      { toolName: "SkillManage", kind: "edit", paths: [join(home, "skills", "deploy", "SKILL.md")] },
+      { toolName: "SkillManage", kind: "edit", paths: [join(home, "skills-learned", "deploy", "SKILL.md")] },
+      { toolName: "AgentManage", kind: "edit", paths: [join(home, "agents", "george.md")] },
+      { toolName: "Identity", kind: "edit", paths: [join(home, "IDENTITY.md"), join(home, "identity.json")] },
+      { toolName: "Identity", kind: "edit", paths: [join(home, "SOUL.md")] },
+    ];
+    for (const req of saves) expect(decide(req, owner())).toEqual({ behavior: "allow" });
+    const notes = join(home, "projects", "p", "notes");
+    const journal = owner({ stores: { paths: [...troposStorePaths(home), notes], askBeforeSaving: false } });
+    expect(decide({ toolName: "DailyNote", kind: "edit", paths: [join(notes, "2026-10-16.md")] }, journal)).toEqual({ behavior: "allow" });
+  });
+  test("askBeforeSaving brings the prompt back", () => {
+    expect(decide(memory(m), owner({ stores: { paths: troposStorePaths(home), askBeforeSaving: true } })).behavior).toBe("ask");
+  });
+  test("a guest or scheduled role, or no role, still asks", () => {
+    expect(decide(memory(m), owner({ role: "guest" })).behavior).toBe("ask");
+    expect(decide(memory(m), owner({ role: "scheduled" })).behavior).toBe("ask");
+    expect(decide(memory(m), owner({ role: undefined })).behavior).toBe("ask");
+    expect(decide(memory(m), owner({ stores: undefined })).behavior).toBe("ask");
+  });
+  test("another tool on the same path still asks (Write to MEMORY.md)", () => {
+    expect(decide(write(m), owner()).behavior).toBe("ask");
+  });
+  test("a store tool aimed outside the stores still asks", () => {
+    expect(decide(memory("/etc/x"), owner()).behavior).toBe("ask");
+    // Every path must be in a store, not just one; the home itself (settings.json) is not a store.
+    expect(decide({ toolName: "Identity", kind: "edit", paths: [join(home, "IDENTITY.md"), "/etc/x"] }, owner()).behavior).toBe("ask");
+    expect(decide(memory(join(home, "settings.json")), owner()).behavior).toBe("ask");
+    expect(decide(memory(join(home, "memories", "..", "settings.json")), owner()).behavior).toBe("ask");
+    expect(isStoreSave({ toolName: "Memory", kind: "edit", paths: [] }, owner())).toBe(false);
+  });
+  test("confinement lets the owner's store save through and denies a guest's", () => {
+    expect(decide(memory(m), owner({ confine: true })).behavior).toBe("allow");
+    expect(decide(memory(m), owner({ confine: true, role: "guest" })).behavior).toBe("deny");
+    // The carve-out covers the stores only: anything else outside the workspace is still denied.
+    expect(decide(memory("/etc/x"), owner({ confine: true })).behavior).toBe("deny");
+  });
+  test("a deny rule or an ask rule still wins", () => {
+    expect(decide(memory(m), owner({ deny: ["Memory"] })).behavior).toBe("deny");
+    expect(decide(memory(m), owner({ ask: ["Memory"] })).behavior).toBe("ask");
+    expect(decide(memory(m), owner({ confine: true, ask: ["Edit"] })).behavior).toBe("ask");
+  });
+  test("plan mode still refuses a store save", () => {
+    expect(decide(memory(m), owner({ mode: "plan" }))).toEqual({ behavior: "deny", reason: PLAN_MODE_REASON });
+  });
+  test("a store folder that is a symlink out of the home is not a store save", async () => {
+    await symlink(outside, join(home, "skills"));
+    try {
+      const req: PermissionRequest = { toolName: "SkillManage", kind: "edit", paths: [join(home, "skills", "x", "SKILL.md")] };
+      expect(isStoreSave(req, owner())).toBe(false);
+      expect(decide(req, owner()).behavior).toBe("ask");
+      expect(decide(req, owner({ confine: true })).behavior).toBe("deny");
+    } finally {
+      await removeDir(join(home, "skills"));
+    }
+  });
+  test("a file in a store that links out of the home is not a store save", async () => {
+    await mkdir(join(home, "agents"), { recursive: true });
+    await symlink(join(outside, "x.md"), join(home, "agents", "evil.md"));
+    expect(isStoreSave({ toolName: "AgentManage", kind: "edit", paths: [join(home, "agents", "evil.md")] }, owner())).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProviderRouter } from "../providers/router";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
@@ -17,7 +17,9 @@ import { createTools } from "../tools/registry";
 import { DARK } from "../ui/theme";
 import { ModelPrefs } from "../config/model-prefs";
 import { loadExtensions, sessionTools } from "./extensions";
-import { createRuntime, createToolContext, makeAgent, type AppContext } from "./runtime";
+import { troposStorePaths } from "../learning/stores";
+import { dailyNotesDir } from "../memory/daily";
+import { createRuntime, createToolContext, makeAgent, permissionContext, type AppContext } from "./runtime";
 
 let dir: string;
 let ctx: AppContext;
@@ -90,6 +92,22 @@ test("input history is saved per project and reloaded", async () => {
   await Bun.sleep(20);
   const { runtime: second } = await runtime();
   expect(second.inputHistory()).toEqual(["run the tests"]);
+});
+
+test("permissionContext carries the role, the origin's confinement and the stores, the project journal included", () => {
+  const local = permissionContext(ctx, "plan");
+  expect(local).toMatchObject({ mode: "plan", cwd: dir, allowedDirs: [dir], confine: false, role: "owner", stores: { askBeforeSaving: false } });
+  expect(local.stores!.paths).toEqual([...troposStorePaths(ctx.home), dailyNotesDir(ctx.home, ctx.cwd)]);
+  const asking = { ...ctx, origin: "channel" as const, role: "guest" as const, settings: { ...DEFAULT_SETTINGS, learning: { ...DEFAULT_SETTINGS.learning, askBeforeSaving: true } } };
+  expect(permissionContext(asking, "default")).toMatchObject({ mode: "default", confine: true, role: "guest", stores: { askBeforeSaving: true } });
+});
+
+test("permissionContext leaves out a journal reached through a link out of the home", async () => {
+  const outside = join(dir, "outside");
+  await mkdir(outside);
+  await mkdir(ctx.home, { recursive: true });
+  await symlink(outside, join(ctx.home, "projects"));
+  expect(permissionContext(ctx, "default").stores!.paths).toEqual(troposStorePaths(ctx.home));
 });
 
 describe("extensions in the runtime", () => {
@@ -275,7 +293,7 @@ describe("extensions in the runtime", () => {
 });
 
 describe("learning and identity", () => {
-  const LEARNING = { review: true, interval: 2, flushAt: 0.7, curator: false };
+  const LEARNING = { review: true, interval: 2, flushAt: 0.7, curator: false, askBeforeSaving: false };
   const text = (t: string): Step => () => reply([textBlock(t)]);
   const signal = () => new AbortController().signal;
   const allow = async (): Promise<PermissionAnswer> => ({ kind: "allow" });

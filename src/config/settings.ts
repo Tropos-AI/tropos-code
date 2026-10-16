@@ -53,6 +53,8 @@ export interface LearningSettings {
   flushAt: number;
   /** Periodic skill-library curation. */
   curator: boolean;
+  /** Ask before Memory, DailyNote, SkillManage, AgentManage or Identity save to Tropos's own stores (the owner's saves run unasked by default). */
+  askBeforeSaving: boolean;
 }
 
 export const HOOK_EVENTS = [
@@ -123,7 +125,7 @@ export const DEFAULT_SETTINGS: Settings = {
   snapshots: true,
   memory: true,
   disabledPlugins: [],
-  learning: { review: true, interval: 10, flushAt: 0.7, curator: true },
+  learning: { review: true, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false },
 };
 
 export interface SettingsPaths {
@@ -229,6 +231,7 @@ const layerSchema = z.object({
       interval: z.number().int().min(2).max(100),
       flushAt: z.number().min(0.3).max(0.95),
       curator: z.boolean(),
+      askBeforeSaving: z.boolean(),
     })
     .partial()
     .optional(),

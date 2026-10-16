@@ -1,7 +1,10 @@
 // src/permissions/engine.ts
 import { dirname, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
+import type { SessionRole } from "../gateway/types";
+import { STORE_TOOLS } from "../learning/stores";
 import { isInside } from "../paths";
+import { resolveToolPath } from "../tools/paths";
 import {
   bashPatternMatches,
   createRestrictBudget,
@@ -40,6 +43,10 @@ export interface PermissionContext {
   allowedDirs: string[];
   /** Paths outside allowedDirs are denied, not asked about: sessions started from a messaging channel. */
   confine?: boolean;
+  /** Who the session answers to; only the owner's saves to Tropos's stores skip the prompt. */
+  role?: SessionRole;
+  /** Tropos's own stores (canonical paths, src/learning/stores.ts) and whether saving there still asks. */
+  stores?: { paths: string[]; askBeforeSaving: boolean };
 }
 
 export type Decision =
@@ -142,12 +149,34 @@ function isAllowed(req: PermissionRequest, ctx: PermissionContext): boolean {
   );
 }
 
+const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
+
+/**
+ * True when a store tool saves only inside Tropos's stores. Each path is resolved again on disk, so a link inside a
+ * store that points elsewhere doesn't count; a path that won't resolve doesn't either.
+ */
+export function isStoreSave(req: PermissionRequest, ctx: PermissionContext): boolean {
+  if (!STORE_TOOL_NAMES.has(req.toolName) || req.paths.length === 0 || !ctx.stores) return false;
+  const stores = ctx.stores.paths;
+  return req.paths.every((p) => {
+    let real: string;
+    try {
+      real = resolveToolPath(p, "/");
+    } catch {
+      return false;
+    }
+    return stores.some((dir) => isInside(real, dir));
+  });
+}
+
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
   // One work allowance covers every deny and ask rule, so many rules cannot multiply the cost.
   const budget = createRestrictBudget();
   const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true, budget));
   if (denied) return { behavior: "deny", reason: `Blocked by the deny rule ${formatRule(denied)}.` };
-  if (ctx.confine) {
+  // The owner's own notes, skills and identity live under the Tropos home, outside any workspace.
+  const ownerStoreSave = ctx.role === "owner" && isStoreSave(req, ctx);
+  if (ctx.confine && !ownerStoreSave) {
     const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));
     if (outside) return { behavior: "deny", reason: `This session is confined to the workspace; ${outside} is outside it.` };
   }
@@ -156,6 +185,8 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
     return { behavior: "deny", reason: PLAN_MODE_REASON };
   }
   if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
+  // Asking hooks still turn this allow into a prompt (src/agent/agent.ts).
+  if (ownerStoreSave && !ctx.stores!.askBeforeSaving) return { behavior: "allow" };
   if (isAllowed(req, ctx)) return { behavior: "allow" };
 
   const outside = req.paths.find((p) => !ctx.allowedDirs.some((dir) => isInside(p, dir)));

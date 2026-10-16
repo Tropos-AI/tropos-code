@@ -18,13 +18,15 @@ import { createSkillManageTool } from "../memory/skill-manage";
 import { LearningLoop, runReviewAgent } from "../learning/review";
 import { loadIdentity } from "../context/identity";
 import { runCurator } from "../learning/curator";
+import { canonicalStorePath, troposStorePaths } from "../learning/stores";
+import { dailyNotesDir } from "../memory/daily";
 import { commandMessage, expandCommand, MAX_EXTENSION_BYTES, type CommandIO } from "../extensions/commands";
 import { renderSkill, skillListing } from "../extensions/skills";
 import type { HookRunner } from "../hooks/runner";
 import { MEMORY_LIMITS, notesLabel, notesSize, usageHeader } from "../memory/notes";
 import { harnessNonce, nonceBlock } from "../context/tags";
 import { isInside } from "../paths";
-import { decide, type PermissionRules } from "../permissions/engine";
+import { decide, type PermissionContext, type PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { bashTool } from "../tools/bash/bash";
@@ -85,6 +87,27 @@ export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> 
   };
 }
 
+/**
+ * What the permission engine weighs for a session's calls. Built per call: the stores are resolved on disk each time,
+ * so a store folder swapped for a link mid-session stops counting at once.
+ */
+export function permissionContext(ctx: AppContext, mode: Mode): PermissionContext {
+  return {
+    mode,
+    rules: ctx.rules,
+    cwd: ctx.cwd,
+    home: homedir(),
+    allowedDirs: ctx.allowedDirs,
+    confine: ctx.origin === "channel",
+    role: ctx.role,
+    stores: {
+      // The journal is still per project, so it is a store of its own here, held to the same no-links check.
+      paths: [...troposStorePaths(ctx.home), canonicalStorePath(ctx.home, dailyNotesDir(ctx.home, ctx.cwd))].filter((p) => p !== undefined),
+      askBeforeSaving: ctx.settings.learning.askBeforeSaving,
+    },
+  };
+}
+
 /** Hooks for a session; their session id and transcript follow /clear and resume. */
 export function sessionHooks(ctx: AppContext, session: () => SessionStore, mode: () => Mode): HookRunner | undefined {
   return createHookRunner(ctx.ext, {
@@ -142,7 +165,7 @@ export function makeAgent(
   },
 ): Agent {
   const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
-  const permissions = () => ({ mode: opts.state().mode, rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs, confine: ctx.origin === "channel" });
+  const permissions = () => permissionContext(ctx, opts.state().mode);
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
   const nonce = () => harnessNonce(opts.session().id);
@@ -272,7 +295,7 @@ export function commandIO(
   signal: AbortSignal,
   hooks?: HookRunner,
 ): CommandIO {
-  const permissions = () => ({ mode: mode(), rules: ctx.rules, cwd: ctx.cwd, home: homedir(), allowedDirs: ctx.allowedDirs, confine: ctx.origin === "channel" });
+  const permissions = () => permissionContext(ctx, mode());
   return {
     async runShell(original) {
       let command = original;

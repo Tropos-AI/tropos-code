@@ -255,19 +255,27 @@ describe("extension settings", () => {
 describe("learning settings", () => {
   test("defaults", async () => {
     const { settings } = await loadSettings(paths);
-    expect(settings.learning).toEqual({ review: true, interval: 10, flushAt: 0.7, curator: true });
+    expect(settings.learning).toEqual({ review: true, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false });
   });
 
   test("user layers merge per field", async () => {
     await put(paths.user, { learning: { review: false, interval: 20 } });
     await put(paths.userProject, { learning: { interval: 5, flushAt: 0.8 } });
     const { settings } = await loadSettings(paths);
-    expect(settings.learning).toEqual({ review: false, interval: 5, flushAt: 0.8, curator: true });
+    expect(settings.learning).toEqual({ review: false, interval: 5, flushAt: 0.8, curator: true, askBeforeSaving: false });
   });
 
   test("CLI overrides merge per field too", async () => {
     const { settings } = await loadSettings(paths, { learning: { review: false } });
-    expect(settings.learning).toEqual({ review: false, interval: 10, flushAt: 0.7, curator: true });
+    expect(settings.learning).toEqual({ review: false, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false });
+  });
+
+  test("askBeforeSaving is the user's to turn on; a repo can't turn it off", async () => {
+    await put(paths.user, { learning: { askBeforeSaving: true } });
+    await put(paths.project, { learning: { askBeforeSaving: false } });
+    const { settings, warnings } = await loadSettings(paths);
+    expect(settings.learning.askBeforeSaving).toBe(true);
+    expect(warnings[0]).toContain("ignored learning");
   });
 
   test("repo layers cannot turn the reviewer on or change its budget", async () => {
@@ -275,14 +283,14 @@ describe("learning settings", () => {
     await put(paths.project, { learning: { review: true, interval: 2 } });
     await put(paths.local, { learning: { flushAt: 0.3 } });
     const { settings, warnings } = await loadSettings(paths);
-    expect(settings.learning).toEqual({ review: false, interval: 10, flushAt: 0.7, curator: true });
+    expect(settings.learning).toEqual({ review: false, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false });
     expect(warnings).toHaveLength(2);
     expect(warnings[0]).toContain("ignored learning");
     expect(warnings[1]).toContain("ignored learning");
   });
 
   test("out-of-range values are reported", async () => {
-    for (const learning of [{ interval: 1 }, { interval: 101 }, { interval: 2.5 }, { flushAt: 0.2 }, { flushAt: 0.96 }, { review: "yes" }]) {
+    for (const learning of [{ interval: 1 }, { interval: 101 }, { interval: 2.5 }, { flushAt: 0.2 }, { flushAt: 0.96 }, { review: "yes" }, { askBeforeSaving: "no" }]) {
       await put(paths.user, { learning });
       await expect(loadSettings(paths)).rejects.toThrow("learning.");
     }

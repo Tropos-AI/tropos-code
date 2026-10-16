@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname } from "node:path";
 import type { Mode } from "../config/constants";
 import { isInside } from "../paths";
+import { STORE_TOOLS } from "../learning/stores";
 import { compileRules } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
@@ -19,8 +20,11 @@ export const CHANNEL_MODES: Mode[] = ["default", "plan"];
  */
 const WITHHELD_TOOLS = new Set(["WebFetch"]);
 
-/** SessionSearch reads the owner's other transcripts, which are nobody else's business. */
-const OWNER_ONLY_TOOLS = new Set(["SessionSearch"]);
+/**
+ * SessionSearch reads the owner's other transcripts, which are nobody else's business. The store tools save under the
+ * Tropos home, which confinement denies to everyone but the owner: elsewhere they could never succeed.
+ */
+const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["SessionSearch", ...STORE_TOOLS]);
 
 /** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups included). */
 export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner">): Promise<SessionRole> {

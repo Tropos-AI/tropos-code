@@ -57,6 +57,15 @@ describe("channelContext", () => {
     expect(names("scheduled")).toEqual(["Read", "Bash", "mcp__gh__list"]);
   });
 
+  test("guests and scheduled runs don't get the store tools, which could never succeed there; the owner keeps them", () => {
+    const stores = ["Memory", "DailyNote", "SkillManage", "AgentManage", "Identity"];
+    const withStores = { ...base(), tools: ["Read", ...stores].map((name) => ({ name })) } as unknown as AppContext;
+    const names = (role: "owner" | "guest" | "scheduled") => channelContext(withStores, exec, { role }).tools.map((t) => t.name);
+    expect(names("owner")).toEqual(["Read", ...stores]);
+    expect(names("guest")).toEqual(["Read"]);
+    expect(names("scheduled")).toEqual(["Read"]);
+  });
+
   test("formatters and language servers, which run on the host, are off", () => {
     const b = base();
     const ctx = channelContext(b, exec, { role: "guest" });
