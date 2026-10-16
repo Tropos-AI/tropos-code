@@ -13,6 +13,8 @@ export interface AdminContext {
   scriptPath?: string;
   cwd: string;
   now(): number;
+  /** Which OS confinement this machine has (default: the real probe). Injectable for tests. */
+  probeConfinement?: () => Promise<"sandbox-exec" | "bwrap" | null>;
   fetch: typeof fetch;
   /**
    * Things only the running gateway can do. Absent in a plain `tcode web`, where the matching admin calls answer

@@ -353,6 +353,41 @@ export interface OnboardAdmin {
   "onboard.reopen": { params: undefined; result: OnboardState };
 }
 
+// ---------- autonomy (how freely chats act) ----------
+
+export type AutonomyLevel = "ask" | "balanced" | "autonomous"; // = Autonomy in src/gateway/autonomy.ts
+
+export interface AutonomyProjectView {
+  id: string;
+  name: string;
+  builtin?: boolean;
+  /** The project's own level; absent when it follows the global one. */
+  level?: AutonomyLevel;
+  /** What an owner chat really runs at (unconfined without consent stays at ask). */
+  effective: AutonomyLevel;
+  testCommands: string[];
+  detectedTests: string[];
+}
+
+export interface AutonomyView {
+  level: AutonomyLevel;
+  backend: "host" | "docker";
+  confinement: "sandbox-exec" | "bwrap" | null;
+  unconfinedAccepted: boolean;
+  /** Host commands run with no confinement, with consent, at a level above ask. */
+  unconfined: boolean;
+  projects: AutonomyProjectView[];
+}
+
+export interface AutonomyAdmin {
+  "autonomy.get": { params: undefined; result: AutonomyView };
+  /** No projectId: the global level. With one: that project's level; null clears it. */
+  "autonomy.set": { params: { level: AutonomyLevel | null; projectId?: string; acceptUnconfined?: boolean }; result: AutonomyView };
+  "autonomy.setBackend": { params: { backend: "host" | "docker"; acceptUnconfined?: boolean }; result: AutonomyView };
+  /** Pins detected test commands for a project; [] unpins. */
+  "autonomy.confirmTests": { params: { projectId: string; commands: string[] }; result: AutonomyView };
+}
+
 // ---------- the whole API ----------
 
 export type AdminMap = StatusAdmin &
@@ -368,7 +403,8 @@ export type AdminMap = StatusAdmin &
   BackupAdmin &
   CronAdmin &
   ExtensionsAdmin &
-  OnboardAdmin;
+  OnboardAdmin &
+  AutonomyAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -433,4 +469,8 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "onboard.validateKey",
   "onboard.finish",
   "onboard.reopen",
+  "autonomy.get",
+  "autonomy.set",
+  "autonomy.setBackend",
+  "autonomy.confirmTests",
 ];
