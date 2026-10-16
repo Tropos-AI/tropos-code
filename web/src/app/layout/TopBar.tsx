@@ -34,7 +34,7 @@ type Props = {
   sidebarOpen?: boolean;
 };
 
-function ModelChip() {
+function ModelChip({ inDashboard }: { inDashboard: boolean }) {
   const session = useSessionState();
   if (!session) {
     return <span aria-hidden className="h-8 w-36 rounded-[9px] bg-paper-2 shadow-well" />;
@@ -45,7 +45,11 @@ function ModelChip() {
       onClick={ui.openModelPicker}
       aria-haspopup="dialog"
       aria-label={`Model: ${session.model}, effort ${session.effort}. Change model`}
-      className="group inline-flex h-8 min-w-0 max-w-[5rem] items-center min-[360px]:max-w-[6rem] min-[400px]:max-w-[9.5rem] sm:max-w-[15rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2.5 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus"
+      className={cn(
+        "group inline-flex h-8 min-w-0 items-center sm:max-w-[15rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2.5 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus",
+        // Next to the project picker the chip gives way on phones; plain `tcode web` keeps its room.
+        inDashboard ? "max-w-[5rem] min-[360px]:max-w-[6rem] min-[400px]:max-w-[9.5rem]" : "max-w-[9.5rem]",
+      )}
     >
       <span className="text-accent-ink">
         <Icon name="sparkles" size="sm" />
@@ -129,7 +133,9 @@ function UndoRedo() {
 
 export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
   const title = useAppSelector((s) => sessionTitle(s.transcript));
-  // The project picker needs the room the context meter and cost use on tablets and small laptops.
+  // The project picker needs the room the context meter and cost use on tablets and small laptops. Before the first
+  // hello there is no session either (the chip is a placeholder, the meter and cost render nothing), so deciding late
+  // moves nothing visible; the hello stays through reconnects.
   const inDashboard = useHello()?.project !== undefined;
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-3 border-b border-rule bg-surface px-3 sm:px-4">
@@ -149,7 +155,7 @@ export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
 
       <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
         <ProjectPicker />
-        <ModelChip />
+        <ModelChip inDashboard={inDashboard} />
         <div className={cn("hidden items-center gap-3", inDashboard ? "xl:flex" : "md:flex")}>
           <ContextMeter />
           <span aria-hidden className="h-4 w-px bg-rule" />

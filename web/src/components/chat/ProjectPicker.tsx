@@ -45,13 +45,16 @@ export function ProjectPicker() {
   const select = async (target: string, opts: { restore?: boolean } = {}): Promise<void> => {
     const from = store.getState();
     const waiting = from.asks.length > 0 || busy;
+    // Remembered before sending: the server's hello for the new project arrives before the rpc result, and the
+    // reconnect effect must already see the choice or it would switch back.
+    const previous = remembered();
+    remember(target);
     try {
       await store.rpc("project.select", target);
-      remember(target);
       // The old project's turn keeps waiting for its answers until a tab returns there.
       if (waiting && project) store.toast({ tone: "warn", title: `A turn in ${project.name} is still waiting for you` });
     } catch (error) {
-      if (opts.restore) remember(null);
+      remember(opts.restore ? null : previous);
       store.toast({ tone: "error", title: "Could not switch project", description: errorMessage(error) });
     }
   };
@@ -103,7 +106,11 @@ export function ProjectPicker() {
 
   // A turn that starts while the list is open (another tab) closes it.
   useEffect(() => {
-    if (busy) setOpen(false);
+    if (!busy) return;
+    setOpen((was) => {
+      if (was && list.current?.contains(document.activeElement)) trigger.current?.focus({ preventScroll: true });
+      return false;
+    });
   }, [busy]);
 
   if (!project) return null;
@@ -150,7 +157,8 @@ export function ProjectPicker() {
         break;
       }
       case "Tab":
-        setOpen(false);
+        // Let Tab move on from the button, not from a list that is about to unmount.
+        close(true);
         break;
     }
   };
@@ -160,14 +168,16 @@ export function ProjectPicker() {
       <button
         ref={trigger}
         type="button"
-        disabled={busy}
-        title={busy ? "Finish or stop the current turn first" : undefined}
-        onClick={() => setOpen((o) => !o)}
+        aria-disabled={busy || undefined}
+        title={busy ? "Finish or stop the current turn first" : project.name}
+        onClick={() => {
+          if (!busy) setOpen((o) => !o);
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         aria-label={`Project: ${project.name}. Change project`}
-        className="group inline-flex h-8 min-w-0 max-w-[3.75rem] items-center min-[400px]:max-w-[5.5rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus active:bg-paper-3 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-paper-2 sm:max-w-[8rem] xl:max-w-[15rem]"
+        className="group inline-flex h-8 min-w-0 max-w-[3.75rem] items-center min-[400px]:max-w-[5.5rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus active:bg-paper-3 aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:bg-paper-2 sm:max-w-[8rem] xl:max-w-[15rem]"
       >
         <span className="shrink-0 text-accent-ink">
           <Icon name="folder" size="sm" />

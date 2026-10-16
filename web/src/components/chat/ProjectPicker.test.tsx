@@ -113,10 +113,28 @@ describe("ProjectPicker", () => {
     expect(store.getState().toasts.at(-1)).toMatchObject({ tone: "error", title: "Could not switch project", description: expect.stringContaining("gone") });
   });
 
+  test("a manual switch is not bounced back when the new hello arrives before the rpc result", async () => {
+    window.sessionStorage.setItem(KEY, "app");
+    const ctx = await mount({ project: { id: "app", name: "App" }, rpc: {} });
+    ctx.socket.handlers["project.select"] = () => {
+      ctx.socket.deliver({ t: "hello", server: helloIn("site", "Site") });
+      return helloIn("site", "Site");
+    };
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: "Site" }));
+      await wait(20);
+    });
+    expect(ctx.socket.rpcs("project.select").map((r) => r.params)).toEqual(["site"]);
+    expect(window.sessionStorage.getItem(KEY)).toBe("site");
+  });
+
   test("disabled while a turn runs", async () => {
     const { socket } = await mount({ project: { id: "app", name: "App" } });
     await act(async () => void socket.deliver({ t: "state", state: { ...IDLE, busy: true } }));
-    expect((button() as HTMLButtonElement).disabled).toBe(true);
+    expect(button().getAttribute("aria-disabled")).toBe("true");
+    await act(async () => void fireEvent.click(button()));
+    expect(screen.queryByRole("listbox")).toBeNull();
     expect(button().getAttribute("title")).toBe("Finish or stop the current turn first");
   });
 
