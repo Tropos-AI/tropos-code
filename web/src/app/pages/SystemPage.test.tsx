@@ -92,7 +92,7 @@ describe("SystemPage updates", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
     expect(socket.callsOf("update.run").length).toBe(0);
     fireEvent.click(screen.getByRole("button", { name: "Install update" }));
-    await screen.findByText(/Updated 0\.4\.0 to 0\.5\.0\./);
+    await screen.findByText(/Updated 0\.4\.1 to 0\.5\.0\./);
     expect(screen.getByText(/runs after you restart the gateway/)).toBeTruthy();
     expect(socket.callsOf("update.run").length).toBe(1);
   });
