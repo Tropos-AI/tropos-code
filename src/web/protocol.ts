@@ -119,6 +119,8 @@ export const RPC_METHODS: RpcMethod[] = [
 
 export type ClientMessage =
   | { t: "rpc"; id: number; method: RpcMethod; params?: unknown }
+  /** Host-level admin call (src/web/admin/api.ts): no session needed. */
+  | { t: "admin"; id: number; method: string; params?: unknown }
   | { t: "permission"; id: number; answer: PermissionAnswer };
 
 export type ServerMessage =
@@ -130,7 +132,9 @@ export type ServerMessage =
   | { t: "ask"; id: number; prompt: PermissionPrompt }
   | { t: "ask_closed"; id: number }
   | { t: "rpc_result"; id: number; ok: true; result: unknown }
-  | { t: "rpc_result"; id: number; ok: false; error: string };
+  | { t: "rpc_result"; id: number; ok: false; error: string }
+  | { t: "admin_result"; id: number; ok: true; result: unknown }
+  | { t: "admin_result"; id: number; ok: false; error: string };
 
 /** The path the WebSocket lives on. */
 export const WS_PATH = "/ws";

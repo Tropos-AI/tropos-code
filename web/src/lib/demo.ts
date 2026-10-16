@@ -222,6 +222,11 @@ class DemoServer {
       resolve(message.answer);
       return;
     }
+    // The demo has no admin API: those pages show their "not available" state.
+    if (message.t === "admin") {
+      this.send({ t: "admin_result", id: message.id, ok: false, error: "Not available in the demo." });
+      return;
+    }
     void this.rpc(message.id, message.method, message.params);
   }
 

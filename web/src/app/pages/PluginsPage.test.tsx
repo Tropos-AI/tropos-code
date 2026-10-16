@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { PanelData } from "@core/ui/runtime";
 
 import { mountPage, stubMatchMedia } from "@/components/pages/page-test-kit";
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { screen, cleanup, fireEvent } = await import("@testing-library/react");
+const { screen, cleanup, fireEvent, waitFor } = await import("@testing-library/react");
 const { PluginsPage } = await import("@/app/pages/PluginsPage");
 
 const PLUGINS: PanelData = {
@@ -49,5 +50,28 @@ describe("PluginsPage", () => {
     await mountPage(PluginsPage, { panel: () => ({ ...PLUGINS, sections: [] }) });
     expect(await screen.findByText("No plugins")).toBeTruthy();
     expect(screen.getByText("~/.tropos/plugins/").tagName).toBe("CODE");
+  });
+
+  test("each plugin has a switch that calls plugins.setEnabled", async () => {
+    const { socket } = await mountAdminPage(PluginsPage, { "plugins.setEnabled": (p: { name: string; enabled: boolean }) => p }, { panel: () => PLUGINS });
+    const off = await screen.findByRole("switch", { name: "Enable old-theme" });
+    expect(off.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Disable tropos-essentials" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(off);
+    await waitFor(() => expect(socket.adminOf("plugins.setEnabled")[0]?.params).toEqual({ name: "old-theme", enabled: true }));
+    await waitFor(() => expect(document.querySelector('[role="switch"][aria-label="Disable old-theme"]')).not.toBeNull());
+    expect(screen.getByRole("button", { name: /old-theme/ }).closest("li")!.textContent).toContain("enabled");
+    expect(document.body.textContent).toContain("2 enabled");
+  });
+
+  test("when the admin call fails the panel keeps working and the reason shows in the details", async () => {
+    await mountAdminPage(PluginsPage, { "plugins.setEnabled": () => Promise.reject(new Error("Not available in the demo.")) }, { panel: () => PLUGINS });
+    fireEvent.click(await screen.findByRole("switch", { name: "Enable old-theme" }));
+    await waitFor(() => expect(document.querySelector('[role="switch"][aria-label="Enable old-theme"]')).not.toBeNull());
+    const row = screen.getByRole("button", { name: /old-theme/ });
+    fireEvent.click(row);
+    const detail = document.getElementById(row.getAttribute("aria-controls")!)!;
+    expect((await screen.findByText(/Not available in the demo\./)).closest('[role="alert"]')).toBeTruthy();
+    expect(detail.textContent).toContain("/home/me/.tropos/plugins/old-theme");
   });
 });

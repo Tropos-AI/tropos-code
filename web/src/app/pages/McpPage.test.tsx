@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { PanelData } from "@core/ui/runtime";
 
 import { mountPage, stubClipboard, stubMatchMedia } from "@/components/pages/page-test-kit";
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
@@ -96,5 +97,54 @@ describe("McpPage", () => {
     });
     await waitFor(() => expect(written).toHaveLength(1));
     expect(JSON.parse(written[0]!)).toHaveProperty("mcpServers.github.command", "github-mcp-server");
+  });
+
+  test("saved servers list with state; Remove asks first", async () => {
+    stubMatchMedia({ width: 1280 });
+    let servers = [{ name: "github", type: "stdio" as const, target: "github-mcp-server stdio", state: "connected" as const, tools: 41 }];
+    const { socket } = await mountAdminPage(McpPage, { "mcp.list": () => servers, "mcp.remove": () => { servers = []; return servers; } }, { panel: () => MCP });
+    const list = await screen.findByRole("list", { name: "Saved servers" });
+    expect(list.textContent).toContain("github-mcp-server stdio");
+    fireEvent.click(within(list).getByRole("button", { name: "Remove github" }));
+    await screen.findByText("Remove github?");
+    expect(socket.adminOf("mcp.remove")).toHaveLength(0);
+    fireEvent.click(await screen.findByText("Remove server"));
+    await waitFor(() => expect(socket.adminOf("mcp.remove")[0]?.params).toEqual({ name: "github" }));
+    await waitFor(() => expect(document.querySelector('[aria-label="Saved servers"]') !== null).toBe(false));
+  });
+
+  test("Add server: test shows tools, then mcp.add sends a stdio server", async () => {
+    stubMatchMedia({ width: 1280 });
+    const { socket } = await mountAdminPage(McpPage, { "mcp.list": () => [], "mcp.test": () => ({ ok: true, tools: ["read", "write"] }), "mcp.add": () => [] }, { panel: () => MCP });
+    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
+    await screen.findByText("Add an MCP server");
+    const dialog = document.body;
+    fireEvent.change(within(document.body).getByLabelText("Name"), { target: { value: "fs" } });
+    fireEvent.change(within(dialog).getByLabelText("Command"), { target: { value: "npx" } });
+    fireEvent.change(within(dialog).getByLabelText("Arguments"), { target: { value: '-y server "my dir"' } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add variable" }));
+    fireEvent.change(within(dialog).getByLabelText("Variable 1"), { target: { value: "TOKEN" } });
+    fireEvent.change(within(dialog).getByLabelText("Value 1"), { target: { value: "s3cret" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    expect(await within(dialog).findByText(/Connected\. 2 tools: read, write/)).toBeTruthy();
+    fireEvent.click(document.querySelector('form button[type="submit"]')!);
+    const server = { type: "stdio", command: "npx", args: ["-y", "server", "my dir"], env: { TOKEN: "s3cret" } };
+    await waitFor(() => expect(socket.adminOf("mcp.add")[0]?.params).toEqual({ name: "fs", server }));
+    expect(socket.adminOf("mcp.test")[0]?.params).toEqual({ server });
+  });
+
+  test("a failing test shows the error; http needs a URL; admin failure keeps the panel", async () => {
+    stubMatchMedia({ width: 1280 });
+    await mountAdminPage(McpPage, { "mcp.list": () => Promise.reject(new Error("Not available in the demo.")), "mcp.test": () => ({ ok: false, tools: [], error: "spawn nope ENOENT" }) }, { panel: () => MCP });
+    expect(await screen.findByRole("table", { name: "MCP servers" })).toBeTruthy();
+    expect(await screen.findByText(/isn't available right now/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add an MCP server" });
+    fireEvent.change(within(dialog).getByLabelText("Command"), { target: { value: "nope" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    expect(await within(dialog).findByText(/spawn nope ENOENT/)).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText("Type"), { target: { value: "http" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    expect(await within(dialog).findByText(/starting with http/)).toBeTruthy();
   });
 });

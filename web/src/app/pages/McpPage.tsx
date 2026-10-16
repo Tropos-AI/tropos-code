@@ -2,6 +2,8 @@
 // Tools, Error); below 720px the rows become stacked cards. A server's name opens a Drawer with its details.
 import { useCallback, useMemo, useState } from "react";
 
+import type { McpServerView as ManagedServer } from "@core/web/admin/api";
+
 import type { PanelData, PanelItem } from "@core/ui/runtime";
 
 import { PageFrame } from "@/app/layout/PageFrame";
@@ -10,7 +12,11 @@ import { PageActions } from "@/components/pages/page-actions";
 import { splitEmptyText, withInlineCode } from "@/components/pages/panel-empty";
 import { CommandBlock, DetailField, DetailList, MonoChip, STATUS_TONE, StatusDot, type PanelStatus } from "@/components/pages/panel-parts";
 import { ResourceView } from "@/components/pages/resource-view";
-import { isPanelEmpty, usePanel } from "@/components/pages/use-rpc-resource";
+import { isPanelEmpty, usePanel, useRpcResource } from "@/components/pages/use-rpc-resource";
+import { AddMcpDialog } from "@/components/setup/AddMcpDialog";
+import { ConfirmDialog, Notice, useAction } from "@/components/setup/admin-ui";
+import { Button } from "@/components/ui/button";
+import { useAdmin } from "@/lib/store";
 import { Drawer } from "@/components/interior/drawer";
 import { SortableTable, type SortableColumn } from "@/components/interior/sortable-table";
 import { Badge } from "@/components/ui/badge";
@@ -254,18 +260,96 @@ function McpServers({ data }: { data: PanelData }) {
   );
 }
 
+const MANAGED_TONE = { connected: "ok", failed: "error", disabled: "off", unknown: "neutral" } as const;
+
+/** Saved servers from mcp.list with Remove; renders nothing while loading or when the admin API is unavailable. */
+function ManagedServers({ servers, onChanged }: { servers: ManagedServer[]; onChanged: () => void }) {
+  const admin = useAdmin();
+  const [removing, setRemoving] = useState<ManagedServer | null>(null);
+  const remove = useAction();
+  if (servers.length === 0) return null;
+  const confirm = async () => {
+    if (!removing) return;
+    const done = await remove.run(() => admin("mcp.remove", { name: removing.name }));
+    if (done) {
+      setRemoving(null);
+      onChanged();
+    }
+  };
+  return (
+    <section aria-labelledby="mcp-saved" className="overflow-hidden rounded-[14px] border border-rule bg-surface shadow-card">
+      <h2 id="mcp-saved" className="border-b border-rule px-5 py-3.5 text-[15px] font-medium text-ink">
+        Saved servers
+      </h2>
+      <ul aria-label="Saved servers" className="divide-y divide-rule">
+        {servers.map((server) => (
+          <li key={server.name} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5">
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2">
+                <strong className="text-[14px] font-medium text-ink">{server.name}</strong>
+                <MonoChip>{server.type}</MonoChip>
+                <Badge tone={MANAGED_TONE[server.state]}>{server.state}</Badge>
+                {server.tools !== undefined ? <span className="font-mono text-[12px] text-ink-3">{server.tools} tools</span> : null}
+              </p>
+              <p className="mt-0.5 break-all font-mono text-[12px] text-ink-2">{server.target}</p>
+              {server.error ? <p className="mt-1 break-words font-mono text-[12px] text-error">{server.error}</p> : null}
+            </div>
+            <Button variant="danger" size="sm" icon="trash-2" aria-label={`Remove ${server.name}`} onClick={() => { remove.clear(); setRemoving(server); }}>
+              Remove
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={removing !== null}
+        title={`Remove ${removing?.name ?? "server"}?`}
+        description="The server is deleted from your settings. Its tools disappear from the agent."
+        confirmLabel="Remove server"
+        pending={remove.pending}
+        error={remove.error}
+        onConfirm={() => void confirm()}
+        onCancel={() => setRemoving(null)}
+      />
+    </section>
+  );
+}
+
 export function McpPage() {
+  const admin = useAdmin();
   const resource = usePanel("mcp");
+  const managed = useRpcResource("mcp.list", () => admin("mcp.list"));
+  const [adding, setAdding] = useState(false);
+  const reload = () => {
+    managed.refresh();
+    resource.refresh();
+  };
   return (
     <PageFrame
       title="MCP servers"
       eyebrow="Extensions"
       description="Model Context Protocol servers and the tools they give the agent."
-      actions={<PageActions resource={resource} summary={resource.data?.subtitle} noun="MCP servers" />}
+      actions={
+        <>
+          <PageActions resource={resource} summary={resource.data?.subtitle} noun="MCP servers" />
+          <Button variant="primary" size="sm" icon="plus" onClick={() => setAdding(true)} aria-haspopup="dialog">
+            Add server
+          </Button>
+        </>
+      }
     >
       <ResourceView resource={resource} noun="MCP servers">
         {(data) => <McpServers data={data} />}
       </ResourceView>
+      {managed.data ? <ManagedServers servers={managed.data} onChanged={reload} /> : null}
+      {managed.status === "error" ? <Notice tone="info">Managing servers from here isn't available right now ({managed.error}). The list above still shows what is loaded.</Notice> : null}
+      <AddMcpDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        onAdded={() => {
+          setAdding(false);
+          reload();
+        }}
+      />
     </PageFrame>
   );
 }

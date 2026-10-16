@@ -6,6 +6,8 @@ import type { SessionStore, MessageParam } from "../session/store";
 import { DARK } from "../ui/theme";
 import { createRuntime, type AppContext } from "../cli/runtime";
 import { loadAssets, type AssetMap } from "./assets";
+import { homedir } from "node:os";
+import { createAdmin } from "./admin";
 import { WebHost } from "./host";
 import { DEFAULT_PORT } from "./protocol";
 import { startWebServer, type RunningWebServer } from "./server";
@@ -62,7 +64,18 @@ export async function runWeb(ctx: AppContext, o: RunWebOptions): Promise<number>
   const assets = o.assets ?? (await loadAssets());
   if (!assets.has("/index.html")) o.err("tcode: the web app isn't built into this binary (run: bun run build:web)\n");
   const token = randomBytes(32).toString("base64url");
-  const server = await startWebServer({ host, assets, token, port: o.web.port ?? DEFAULT_PORT, dev: o.web.dev });
+  const admin = createAdmin({
+    home: ctx.home,
+    userHome: homedir(),
+    env: ctx.env,
+    version: ctx.version,
+    execPath: process.execPath,
+    scriptPath: process.argv[1],
+    cwd: ctx.cwd,
+    now: Date.now,
+    fetch,
+  });
+  const server = await startWebServer({ host, admin, assets, token, port: o.web.port ?? DEFAULT_PORT, dev: o.web.dev });
   o.out(`Tropos Code is running at:\n\n  ${server.url}\n\nThe link carries a secret key for this run; keep it to yourself. Press ctrl+c to stop.\n`);
   if (o.web.open) (o.openBrowser ?? openInBrowser)(server.url);
   try {

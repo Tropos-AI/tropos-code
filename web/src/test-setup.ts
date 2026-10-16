@@ -150,4 +150,7 @@ export async function uninstallDom(): Promise<void> {
 export function withDom(): void {
   installDom();
   afterAll(uninstallDom);
+  // The default 1 s waitFor is tight when the whole suite runs these files beside heavy ones (Docker, installer
+  // e2e): a page that takes 1.2 s under load is not a failing page. Passing tests are not slower for a longer ceiling.
+  void import("@testing-library/dom").then((dom) => dom.configure({ asyncUtilTimeout: 5000 })).catch(() => {});
 }

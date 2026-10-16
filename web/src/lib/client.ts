@@ -2,6 +2,7 @@
 // permission answers, and reconnection with backoff. No React here; lib/store.ts subscribes to it.
 import type { PermissionAnswer } from "@core/agent/events";
 import { WS_PATH, type ClientMessage, type RpcMap, type RpcMethod, type ServerMessage } from "@core/web/protocol";
+import type { AdminMethod, AdminParams, AdminResult } from "@core/web/admin/api";
 
 export type ConnectionStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed";
 
@@ -50,8 +51,8 @@ const DEFAULT_BACKOFF: Backoff = { initial: 500, max: 8000, factor: 2 };
 
 /** An RPC that failed on the server ("busy", "unknown session" …) or because the socket went away. */
 export class RpcError extends Error {
-  readonly method: RpcMethod;
-  constructor(method: RpcMethod, message: string) {
+  readonly method: string;
+  constructor(method: string, message: string) {
     super(message);
     this.name = "RpcError";
     this.method = method;
@@ -73,8 +74,10 @@ function isServerMessage(value: unknown): value is ServerMessage {
   return !!value && typeof value === "object" && typeof (value as { t?: unknown }).t === "string";
 }
 
+export type AdminArgs<M extends AdminMethod> = AdminParams<M> extends undefined ? [] : undefined extends AdminParams<M> ? [params?: AdminParams<M>] : [params: AdminParams<M>];
+
 interface Pending {
-  method: RpcMethod;
+  method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 }
@@ -159,6 +162,24 @@ export class TcodeClient {
     });
   }
 
+  /** Calls a host-level admin method (src/web/admin/api.ts). Rejects with RpcError like rpc(). */
+  admin<M extends AdminMethod>(method: M, ...args: AdminArgs<M>): Promise<AdminResult<M>> {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== OPEN) return Promise.reject(new RpcError(method, "not connected"));
+    const id = this.nextId++;
+    const params = args[0];
+    const message: ClientMessage = params === undefined ? { t: "admin", id, method } : { t: "admin", id, method, params };
+    return new Promise<AdminResult<M>>((resolve, reject) => {
+      this.pending.set(id, { method, resolve: resolve as (value: unknown) => void, reject });
+      try {
+        socket.send(JSON.stringify(message));
+      } catch (error) {
+        this.pending.delete(id);
+        reject(new RpcError(method, error instanceof Error ? error.message : "send failed"));
+      }
+    });
+  }
+
   /** Answers a server "ask". Returns false when there is no open socket to answer on. */
   answerPermission(id: number, answer: PermissionAnswer): boolean {
     const socket = this.socket;
@@ -217,7 +238,7 @@ export class TcodeClient {
       return;
     }
     if (!isServerMessage(parsed)) return;
-    if (parsed.t === "rpc_result") {
+    if (parsed.t === "rpc_result" || parsed.t === "admin_result") {
       const pending = this.pending.get(parsed.id);
       if (!pending) return;
       this.pending.delete(parsed.id);

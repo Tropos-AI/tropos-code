@@ -4,8 +4,15 @@ import { contentType, type AssetMap } from "./assets";
 import type { WebHost } from "./host";
 import { SESSION_COOKIE, WS_PATH, type ClientMessage, type ServerMessage } from "./protocol";
 
+/** Answers host-level admin calls (src/web/admin). Throws an Error whose message is shown to the user. */
+export interface AdminDispatcher {
+  handle(method: string, params: unknown): Promise<unknown>;
+}
+
 export interface WebServerOptions {
   host: WebHost;
+  /** Admin API; without it every admin call is answered "not available". */
+  admin?: AdminDispatcher;
   assets: AssetMap;
   /** The launch secret: only a browser that opened the printed link gets the session cookie. */
   token: string;
@@ -84,6 +91,7 @@ export function parseClientMessage(raw: string | Buffer): ClientMessage | null {
   if (!value || typeof value !== "object") return null;
   const m = value as Record<string, unknown>;
   if (m.t === "rpc" && Number.isInteger(m.id) && typeof m.method === "string") return m as unknown as ClientMessage;
+  if (m.t === "admin" && Number.isInteger(m.id) && typeof m.method === "string" && m.method.length <= 64) return m as unknown as ClientMessage;
   if (m.t === "permission" && Number.isInteger(m.id) && m.answer && typeof m.answer === "object") {
     const kind = (m.answer as { kind?: unknown }).kind;
     if (kind === "allow" || kind === "deny" || kind === "allow_always") return m as unknown as ClientMessage;
@@ -173,6 +181,16 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
         message(ws, raw) {
           const message = parseClientMessage(raw as string | Buffer);
           if (!message || !ws.data.send) return;
+          if (message.t === "admin") {
+            const send = ws.data.send;
+            const { id, method, params } = message;
+            const admin = opts.admin;
+            void (admin ? admin.handle(method, params) : Promise.reject(new Error("Not available here."))).then(
+              (result) => send({ t: "admin_result", id, ok: true, result: result ?? null }),
+              (error: unknown) => send({ t: "admin_result", id, ok: false, error: error instanceof Error ? error.message : "Failed." }),
+            );
+            return;
+          }
           void opts.host.handle(message, ws.data.send);
         },
         close(ws) {

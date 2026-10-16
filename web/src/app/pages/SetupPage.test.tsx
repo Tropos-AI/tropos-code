@@ -1,0 +1,244 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import type { OnboardState, OnboardStep } from "@core/web/admin/api";
+import type { ProviderInfoView } from "@core/web/protocol";
+
+import { stubMatchMedia } from "@/components/pages/page-test-kit";
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
+import { withDom } from "@/test-setup";
+
+withDom();
+const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
+const { SetupPage, firstOpenStep } = await import("@/app/pages/SetupPage");
+
+const has = (selector: string): boolean => document.querySelector(selector) !== null;
+const SECRET = "sk-test-VERY-SECRET-987654";
+
+const STEPS: OnboardStep[] = [
+  { id: "provider", title: "Connect a provider", status: "todo", optional: false },
+  { id: "model", title: "Choose a model", status: "todo", optional: false },
+  { id: "telegram", title: "Telegram bot", status: "todo", optional: true },
+  { id: "pairing", title: "Approve yourself", status: "todo", optional: true },
+  { id: "sandbox", title: "Docker sandbox", status: "warn", optional: true, detail: "Docker is not running" },
+  { id: "service", title: "Run at login", status: "todo", optional: true },
+  { id: "health", title: "Health check", status: "todo", optional: false },
+];
+
+const PROVIDERS = (saved: boolean): ProviderInfoView[] => [
+  { id: "openai", name: "OpenAI", keyRequired: true, keyURL: "https://platform.openai.com/api-keys", keyEnv: ["OPENAI_API_KEY"], key: saved ? { kind: "saved" } : null },
+  { id: "ollama", name: "Ollama", keyRequired: false, keyURL: null, keyEnv: [], noKeyNote: "Runs on this machine.", key: null },
+];
+
+function server(over: Record<string, (p: never) => unknown> = {}) {
+  let steps = STEPS;
+  let dismissed = false;
+  let saved = false;
+  let telegram = false;
+  const state = (): OnboardState => ({ steps, complete: steps.filter((s) => !s.optional).every((s) => s.status === "done"), dismissed });
+  const mark = (id: string, status: OnboardStep["status"]) => (steps = steps.map((s) => (s.id === id ? { ...s, status } : s)));
+  const admin = {
+    "onboard.state": state,
+    "onboard.validateKey": (p: { key: string }) => (p.key === SECRET ? { ok: true, models: ["gpt-a", "gpt-b", "gpt-c", "gpt-d", "gpt-e"] } : { ok: false, models: [], error: `bad key ${p.key}` }),
+    "onboard.finish": () => {
+      dismissed = true;
+      return state();
+    },
+    "onboard.reopen": () => {
+      dismissed = false;
+      return state();
+    },
+    "channels.get": () => ({ telegram: telegram ? { configured: true, source: "file", bot: { username: "tropos_bot", name: "Tropos" } } : { configured: false, source: null } }),
+    "channels.telegram.set": () => {
+      telegram = true;
+      mark("telegram", "done");
+      return { configured: true, source: "file", bot: { username: "tropos_bot", name: "Tropos" } };
+    },
+    "pairing.list": () => ({ approved: [], pending: [] }),
+    "pairing.approve": () => ({ senderId: "4242" }),
+    "sandbox.check": (p: { pull?: boolean } | undefined) => (p?.pull ? { ok: true, docker: true, image: "tropos/sandbox:1", imagePresent: true } : { ok: false, docker: true, image: "tropos/sandbox:1", imagePresent: false }),
+    "service.status": () => ({ manager: "launchd", installed: false, running: false, logPath: "/tmp/gateway.log" }),
+    "service.install": () => ({ manager: "launchd", installed: true, running: true, unitPath: "/Library/x.plist" }),
+    "doctor.run": () => ({
+      findings: [
+        { id: "perm", area: "files", level: "warn", message: "gateway.json is readable by others", fixable: true },
+        { id: "node", area: "install", level: "ok", message: "Node ok" },
+      ],
+      summary: { ok: 1, info: 0, warn: 1, error: 0, fixed: 0 },
+    }),
+    "doctor.fix": () => ({ ok: true, message: "chmod 600 gateway.json" }),
+    ...over,
+  };
+  const rpc = {
+    "providers.status": () => PROVIDERS(saved),
+    "providers.connect": () => {
+      saved = true;
+      mark("provider", "done");
+      return null;
+    },
+    "providers.models": (id: string) => (id === "openai" ? ["gpt-a", "gpt-b"] : []),
+    setModel: () => null,
+  };
+  return { admin: admin as never, rpc: rpc as never };
+}
+
+beforeEach(() => stubMatchMedia());
+afterEach(() => cleanup());
+
+describe("firstOpenStep", () => {
+  test("is the first required step still to do, else an optional one", () => {
+    expect(firstOpenStep(STEPS, new Set())).toBe("provider");
+    const required = STEPS.map((s) => (s.optional ? s : { ...s, status: "done" as const }));
+    expect(firstOpenStep(required, new Set())).toBe("telegram");
+    expect(firstOpenStep(required, new Set(["telegram", "pairing", "sandbox", "service"]))).toBeNull();
+  });
+});
+
+describe("SetupPage", () => {
+  test("renders the steps from the server and opens the first one to do", async () => {
+    const s = server();
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    const list = await screen.findByRole("list", { name: "Setup steps" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(7);
+    expect(screen.getByText("0 of 3 required steps done")).toBeTruthy();
+    const provider = screen.getByRole("button", { name: /Connect a provider/ });
+    expect(provider.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: /Telegram bot/ }).textContent).toContain("optional");
+    expect(screen.getByRole("button", { name: /Docker sandbox/ }).textContent).toContain("Docker is not running");
+  });
+
+  test("calm error with retry when the admin API is unavailable", async () => {
+    let fail = true;
+    const s = server({ "onboard.state": () => (fail ? Promise.reject(new Error("Not available in the demo.")) : { steps: STEPS, complete: false, dismissed: false }) });
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    expect((await screen.findByRole("alert")).textContent).toContain("Not available in the demo.");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("list", { name: "Setup steps" })).toBeTruthy();
+  });
+
+  test("provider: Check key lists models, Save key connects and never keeps the key", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    const field = (await screen.findByLabelText("OpenAI API key")) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: SECRET } });
+    fireEvent.click(screen.getByRole("button", { name: "Check key" }));
+    expect((await screen.findByText(/The key works\. Found 5 models/)).textContent).toContain("and 1 more");
+    expect(socket.adminOf("onboard.validateKey")[0]?.params).toEqual({ provider: "openai", key: SECRET });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    await waitFor(() => expect(socket.callsOf("providers.connect")[0]?.params).toEqual({ id: "openai", key: SECRET }));
+    await waitFor(() => expect(document.body.textContent).toContain("1 of 3 required steps done"));
+    expect(document.body.innerHTML).not.toContain(SECRET);
+  });
+
+  test("provider: a rejected key shows the reason without echoing it", async () => {
+    const s = server();
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.change(await screen.findByLabelText("OpenAI API key"), { target: { value: "sk-wrong-key-0000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check key" }));
+    const note = await screen.findByText(/didn't accept that key/);
+    expect(note.textContent).toContain("bad key");
+    expect(document.body.textContent).not.toContain("sk-wrong-key-0000");
+  });
+
+  test("provider: a local provider needs no key", async () => {
+    const s = server();
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("radio", { name: /Ollama/ }));
+    expect(await screen.findByText(/Runs on this machine/)).toBeTruthy();
+    expect(has('input[type="password"]')).toBe(false);
+  });
+
+  test("model: lists the models and sets one", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Choose a model/ }));
+    // OpenAI needs a key, so only Ollama is ready until one is saved.
+    expect(await screen.findByText(/didn't list any models/)).toBeTruthy();
+    expect(socket.callsOf("providers.models").length).toBeGreaterThan(0);
+  });
+
+  test("model: after a key is saved, picking a model calls setModel", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.change(await screen.findByLabelText("OpenAI API key"), { target: { value: SECRET } });
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+    await waitFor(() => expect(socket.callsOf("providers.connect")).toHaveLength(1));
+    await waitFor(() => expect(document.body.textContent).toContain("1 of 3"));
+    // The wizard moves on to the model step by itself once the provider is done.
+    fireEvent.click(await screen.findByRole("radio", { name: "OpenAI" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Use gpt-b" }));
+    await waitFor(() => expect(socket.callsOf("setModel")[0]?.params).toBe("openai/gpt-b"));
+  });
+
+  test("telegram: instructions, token goes to channels.telegram.set, skip works", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram bot/ }));
+    expect(await screen.findByText(/@BotFather/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Bot token"), { target: { value: "123:abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify and save" }));
+    await waitFor(() => expect(socket.adminOf("channels.telegram.set")[0]?.params).toEqual({ token: "123:abc" }));
+    await waitFor(() => expect(has('input[type="password"]')).toBe(false));
+  });
+
+  test("telegram: Skip moves on and the step reads skipped", async () => {
+    const s = server();
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram bot/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Skip Telegram" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Telegram bot/ }).textContent).toContain("skipped"));
+  });
+
+  test("pairing: approves a code and says to add the bot first", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Approve yourself/ }));
+    expect(await screen.findByText(/Add your Telegram bot first/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "ABCD-1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(socket.adminOf("pairing.approve")[0]?.params).toEqual({ channel: "telegram", code: "ABCD-1234" }));
+    expect(await screen.findByText(/Approved sender 4242/)).toBeTruthy();
+  });
+
+  test("sandbox: explains Docker, pulls the image", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Docker sandbox/ }));
+    expect(await screen.findByText(/isn't downloaded yet/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Skip: chats will not run commands until Docker is available/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Pull image" }));
+    await waitFor(() => expect(socket.adminOf("sandbox.check").some((c) => (c.params as { pull?: boolean } | undefined)?.pull === true)).toBe(true));
+    expect(await screen.findByText("The sandbox image is ready.")).toBeTruthy();
+  });
+
+  test("service: Run at login installs it and says what it does", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Run at login/, expanded: false }));
+    expect(await screen.findByText(/adds a launchd \(macOS\) entry/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Run at login" }));
+    await waitFor(() => expect(socket.adminOf("service.install")).toHaveLength(1));
+  });
+
+  test("health: runs the doctor and applies a single fix", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Health check/ }));
+    const findings = await screen.findByRole("list", { name: "Findings" });
+    expect(findings.textContent).toContain("gateway.json is readable by others");
+    fireEvent.click(within(findings).getByRole("button", { name: /Fix: gateway.json/ }));
+    await waitFor(() => expect(socket.adminOf("doctor.fix")[0]?.params).toEqual({ id: "perm" }));
+    expect(await screen.findByText("chmod 600 gateway.json")).toBeTruthy();
+  });
+
+  test("Dismiss setup calls onboard.finish with the optional steps left undone; Reopen setup brings it back", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss setup" }));
+    await waitFor(() => expect(socket.adminOf("onboard.finish")).toHaveLength(1));
+    expect(socket.adminOf("onboard.finish")[0]?.params).toEqual({ skipped: ["telegram", "pairing", "sandbox", "service"] });
+    fireEvent.click(await screen.findByRole("button", { name: "Reopen setup" }));
+    await waitFor(() => expect(socket.adminOf("onboard.reopen")).toHaveLength(1));
+    expect(await screen.findByRole("button", { name: "Dismiss setup" })).toBeTruthy();
+  });
+});

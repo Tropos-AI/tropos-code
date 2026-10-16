@@ -2,7 +2,7 @@
 // The same content renders in the desktop <aside> and inside the narrow-screen Drawer.
 import { m } from "motion/react";
 
-import { hrefFor, PAGES, type PageId } from "@/app/routes";
+import { hrefFor, NAV_GROUPS, PAGES, type PageId } from "@/app/routes";
 import { SessionList } from "@/app/layout/SessionList";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -94,39 +94,44 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
         }}
       />
 
-      <nav aria-label="Pages" className="border-t border-rule px-2 pb-3 pt-2">
-        <ul className="grid grid-cols-2 gap-0.5">
-          {PAGES.map((p) => {
-            const active = p.id === page;
-            return (
-              <li key={p.id} className="relative">
-                {active ? (
-                  <m.span
-                    aria-hidden
-                    layoutId={reduced ? undefined : `${idPrefix}-nav-plate`}
-                    transition={reduced ? INSTANT : CELL}
-                    className="absolute inset-0 rounded-[9px] border border-rule bg-surface shadow-card"
-                  />
-                ) : null}
-                <a
-                  href={hrefFor(p.id)}
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => onNavigated?.()}
-                  className={cn(
-                    "relative flex h-9 items-center gap-2 rounded-[9px] px-2.5 text-[13px] outline-none transition-colors duration-150",
-                    "focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]",
-                    active ? "font-medium text-ink" : "text-ink-2 hover:bg-paper-3 hover:text-ink",
-                  )}
-                >
-                  <span className={cn("grid place-items-center", active ? "text-accent-ink" : "text-ink-3")}>
-                    <Icon name={p.icon} />
-                  </span>
-                  {p.label}
-                </a>
-              </li>
-            );
-          })}
-        </ul>
+      <nav aria-label="Pages" className="scroll-quiet min-h-0 shrink-0 overflow-y-auto border-t border-rule px-2 pb-3 pt-1">
+        {NAV_GROUPS.map((group) => (
+          <section key={group} aria-label={group}>
+            <h2 className="px-2.5 pb-1 pt-3 text-[10.5px] font-medium uppercase tracking-[0.08em] text-ink-3">{group}</h2>
+            <ul className="grid grid-cols-2 gap-0.5">
+              {PAGES.filter((p) => p.group === group).map((p) => {
+                const active = p.id === page;
+                return (
+                  <li key={p.id} className="relative">
+                    {active ? (
+                      <m.span
+                        aria-hidden
+                        layoutId={reduced ? undefined : `${idPrefix}-nav-plate`}
+                        transition={reduced ? INSTANT : CELL}
+                        className="absolute inset-0 rounded-[9px] border border-rule bg-surface shadow-card"
+                      />
+                    ) : null}
+                    <a
+                      href={hrefFor(p.id)}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => onNavigated?.()}
+                      className={cn(
+                        "relative flex h-9 items-center gap-2 rounded-[9px] px-2.5 text-[13px] outline-none transition-colors duration-150",
+                        "focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]",
+                        active ? "font-medium text-ink" : "text-ink-2 hover:bg-paper-3 hover:text-ink",
+                      )}
+                    >
+                      <span className={cn("grid place-items-center", active ? "text-accent-ink" : "text-ink-3")}>
+                        <Icon name={p.icon} />
+                      </span>
+                      {p.label}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
       </nav>
     </div>
   );

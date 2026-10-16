@@ -3,13 +3,14 @@
 import { createContext, createElement, useCallback, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 import type { PermissionAnswer, TurnEndReason } from "@core/agent/events";
+import type { AdminMethod, AdminResult } from "@core/web/admin/api";
 import type { HelloInfo, RpcMethod, SessionState } from "@core/web/protocol";
 import type { Transcript } from "@core/ui/transcript";
 import { BUSY_ERROR } from "@core/web/protocol";
 import { parseCommand } from "@core/ui/commands";
 
 import { appReducer, initialAppState, isBusy, nextQueued, type AppAction, type AppState, type ConnectionState, type PendingAsk, type QueuedMessage, type Toast, type ToastTone } from "@/lib/app-state";
-import { RpcError, TcodeClient, type RpcArgs, type RpcResult } from "@/lib/client";
+import { RpcError, TcodeClient, type AdminArgs, type RpcArgs, type RpcResult } from "@/lib/client";
 import { createDemoSocket, DEMO_QUEUED } from "@/lib/demo";
 
 export type { AppState, ConnectionState, PendingAsk, QueuedMessage, Toast, ToastTone } from "@/lib/app-state";
@@ -29,6 +30,8 @@ export interface AppStore {
   readonly demo: boolean;
   /** Typed RPC; failures reject with RpcError. */
   rpc<M extends RpcMethod>(method: M, ...args: RpcArgs<M>): Promise<RpcResult<M>>;
+  /** Typed host-level admin call (status, doctor, config, projects, cron …); failures reject with RpcError. */
+  admin<M extends AdminMethod>(method: M, ...args: AdminArgs<M>): Promise<AdminResult<M>>;
   /**
    * Shows the prompt in the transcript and runs one turn. Resolves with the turn's end reason, or null when the server
    * refused it ("busy" — the composer queues instead) or the connection dropped; refusals other than busy also toast.
@@ -168,6 +171,7 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
     client,
     demo: options.demo ?? false,
     rpc: (method, ...args) => client.rpc(method, ...args),
+    admin: (method, ...args) => client.admin(method, ...args),
     async sendPrompt(text, opts = {}) {
       dispatch({ type: "sending", sending: true });
       try {
@@ -300,6 +304,11 @@ export function useToasts(): ToastsApi {
   const store = useAppStore();
   const toasts = useAppSelector((s) => s.toasts);
   return useMemo(() => ({ toasts, push: store.toast, dismiss: store.dismissToast }), [toasts, store]);
+}
+
+/** The typed admin function, stable for the store's lifetime. */
+export function useAdmin(): AppStore["admin"] {
+  return useAppStore().admin;
 }
 
 /** The typed RPC function, stable for the store's lifetime. */

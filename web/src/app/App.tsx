@@ -8,6 +8,15 @@ import { SidebarContent } from "@/app/layout/Sidebar";
 import { Toasts } from "@/app/layout/Toasts";
 import { TopBar } from "@/app/layout/TopBar";
 import { AgentsPage } from "@/app/pages/AgentsPage";
+import { ChannelsPage } from "@/app/pages/ChannelsPage";
+import { ConfigPage } from "@/app/pages/ConfigPage";
+import { CronPage } from "@/app/pages/CronPage";
+import { LogsPage } from "@/app/pages/LogsPage";
+import { ProjectsPage } from "@/app/pages/ProjectsPage";
+import { SetupPage } from "@/app/pages/SetupPage";
+import { StatusPage } from "@/app/pages/StatusPage";
+import { SystemPage } from "@/app/pages/SystemPage";
+import { UsagePage } from "@/app/pages/UsagePage";
 import { ChatPage } from "@/app/pages/ChatPage";
 import { HooksPage } from "@/app/pages/HooksPage";
 import { McpPage } from "@/app/pages/McpPage";
@@ -17,6 +26,7 @@ import { SettingsPage } from "@/app/pages/SettingsPage";
 import { SkillsPage } from "@/app/pages/SkillsPage";
 import { pageInfo, useRoute, type PageId } from "@/app/routes";
 import { Drawer } from "@/components/interior/drawer";
+import { FirstRunRedirect } from "@/components/setup/FirstRunRedirect";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useHello } from "@/lib/store";
 
@@ -29,6 +39,15 @@ const PAGE_COMPONENTS: Record<PageId, ComponentType> = {
   plugins: PluginsPage,
   memory: MemoryPage,
   settings: SettingsPage,
+  projects: ProjectsPage,
+  cron: CronPage,
+  setup: SetupPage,
+  status: StatusPage,
+  channels: ChannelsPage,
+  usage: UsagePage,
+  logs: LogsPage,
+  system: SystemPage,
+  config: ConfigPage,
 };
 
 export const WIDE_QUERY = "(min-width: 1024px)";
@@ -64,6 +83,7 @@ export function App() {
       <div className="relative flex min-w-0 flex-1 flex-col">
         <TopBar page={pageInfo(page)} onOpenSidebar={wide ? undefined : () => setDrawerOpen(true)} sidebarOpen={!wide && drawerOpen} />
         <ConnectionBanner />
+        <FirstRunRedirect />
         <main id="main" tabIndex={-1} aria-label={pageInfo(page).title} className="relative min-h-0 flex-1 outline-none">
           <Page />
         </main>

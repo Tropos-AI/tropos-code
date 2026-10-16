@@ -227,3 +227,12 @@ test("a taken port falls back to a free one", async () => {
     blocker.stop(true);
   }
 });
+
+describe("admin messages", () => {
+  test("parseClientMessage accepts a well-formed admin call and nothing else shaped like one", () => {
+    expect(parseClientMessage(JSON.stringify({ t: "admin", id: 3, method: "status.get" }))).toEqual({ t: "admin", id: 3, method: "status.get" });
+    expect(parseClientMessage(JSON.stringify({ t: "admin", id: "3", method: "status.get" }))).toBeNull();
+    expect(parseClientMessage(JSON.stringify({ t: "admin", id: 3, method: 7 }))).toBeNull();
+    expect(parseClientMessage(JSON.stringify({ t: "admin", id: 3, method: "x".repeat(65) }))).toBeNull();
+  });
+});
