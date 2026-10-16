@@ -79,6 +79,7 @@ describe("compiled binary", () => {
       "SkillManage",
       "AgentManage",
       "Identity",
+      "Cron",
     ]);
     expect(body.tools.every((t: { eager_input_streaming: boolean }) => t.eager_input_streaming)).toBe(true);
     expect(body.tool_choice).toBeUndefined();
