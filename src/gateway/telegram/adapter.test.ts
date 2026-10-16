@@ -67,7 +67,21 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
 describe("TelegramAdapter", () => {
   test("registers the bot commands on start", async () => {
     const { server } = await setup();
-    await server.waitFor(() => server.commands.length > 0);
+    // Registered by the time start() resolves: what starts after the channels can rely on it.
+    expect(server.commands.length).toBeGreaterThan(0);
+  });
+
+  test("start() waits for the command registration; a failed one is logged and start still resolves", async () => {
+    const { api, adapter, logs } = await setup({ start: false });
+    let release!: (fail: boolean) => void;
+    api.setMyCommands = () => new Promise<void>((resolve, reject) => (release = (fail) => (fail ? reject(new Error("no network")) : resolve())));
+    let started = false;
+    const starting = adapter.start().then(() => void (started = true));
+    await Bun.sleep(20);
+    expect(started).toBe(false);
+    release(true);
+    await starting;
+    expect(logs).toContain("telegram: setMyCommands failed: no network");
   });
 
   test("unknown sender gets a pairing code once and the text never reaches a session", async () => {

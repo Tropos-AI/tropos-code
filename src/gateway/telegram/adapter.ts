@@ -26,6 +26,8 @@ import {
 const CHANNEL = "telegram";
 const MAX_TOOL_LINES = 12;
 const MAX_UNPAIRED_MEMORY = 1000;
+/** How long start() waits for the bot's command list to be registered. */
+const COMMANDS_WAIT_MS = 10_000;
 const LEARNED_REFUSAL = "Only the owner can see what I've learned, in their private chat with me.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
@@ -165,8 +167,13 @@ export class TelegramAdapter implements ChannelAdapter {
     if (this.loop) return;
     this.stopped = false;
     this.abort = new AbortController();
-    this.api.setMyCommands(BOT_COMMANDS).catch((e) => this.log("setMyCommands failed", e));
     this.loop = this.poll();
+    // Awaited, so what starts after the channels finds the commands registered; a slow Telegram holds the start for
+    // at most COMMANDS_WAIT_MS, and the registration carries on in the background.
+    const registered = this.api.setMyCommands(BOT_COMMANDS).catch((e) => this.log("setMyCommands failed", e));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([registered, new Promise<void>((resolve) => (timer = setTimeout(resolve, COMMANDS_WAIT_MS)))]);
+    clearTimeout(timer);
   }
 
   async stop(): Promise<void> {
