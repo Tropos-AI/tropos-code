@@ -206,3 +206,40 @@ test("hello carries the live conversation, so a tab opened mid-session (or reloa
   expect(history.map((m) => m.role)).toEqual(["user", "assistant"]);
   expect(JSON.stringify(history)).toContain("hi there");
 });
+
+describe("replaceRuntime", () => {
+  test("a prompt sent while the runtime is being swapped waits and runs wholly on the new runtime", async () => {
+    const { host, runtime: old } = setup();
+    const next = fakeRuntime([() => reply([textBlock("from the new runtime")])]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const swap = host.replaceRuntime(async () => (await gate, next));
+    const prompt = host.call("prompt", { text: "hi" });
+    release();
+    await swap;
+    expect(await prompt).toBe("end_turn");
+    expect(next.inputs).toEqual(["hi"]);
+    expect(next.turnModels).toEqual([undefined, undefined]);
+    expect(old.inputs).toEqual([]);
+    expect(old.turnModels).toEqual([]);
+    expect(next.model.requests).toHaveLength(1);
+  });
+
+  test("a running turn finishes on the old runtime before the swap", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { host, runtime: old } = setup({}, [async () => (await gate, reply([textBlock("old answer")]))]);
+    const next = fakeRuntime([]);
+    const turn = host.call("prompt", { text: "hi" });
+    let built = false;
+    const swap = host.replaceRuntime(async () => ((built = true), next));
+    await Bun.sleep(10);
+    expect(built).toBe(false);
+    release();
+    await turn;
+    await swap;
+    expect(built).toBe(true);
+    expect(old.inputs).toEqual(["hi"]);
+    expect(host.hello().history).toEqual(next.history());
+  });
+});

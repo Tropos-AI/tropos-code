@@ -215,13 +215,15 @@ export class WebHost {
   /** `origin` is the tab that asked, when there is one: it already shows its own prompt. */
   async call<M extends RpcMethod>(method: M, raw: unknown, origin?: Send): Promise<RpcMap[M]["result"]> {
     const params = raw as RpcMap[M]["params"];
+    // A request sent during a runtime swap waits for it, then reads the runtime: it must act on the one (and the
+    // permissions) that replaced the old. Only when there is a swap: an await here would let one start before a turn.
+    if (this.swapping && method !== "interrupt") await this.swapping;
     const r = this.runtime;
     switch (method) {
       case "prompt": {
         const p = params as RpcMap["prompt"]["params"];
         const command = p?.command && typeof p.command.name === "string" ? { name: p.command.name, args: typeof p.command.args === "string" ? p.command.args : "" } : null;
         if (!command && (typeof p?.text !== "string" || !p.text.trim())) throw new RpcError("Nothing to send.");
-        await this.swapping;
         this.needIdle();
         this.turnStartedAt = Date.now();
         try {
