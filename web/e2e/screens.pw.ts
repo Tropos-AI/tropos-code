@@ -30,6 +30,8 @@ async function open(browser: Browser, opts: { width: number; scheme?: "light" | 
   });
   const page = await context.newPage();
   if (opts.loggedIn !== false) await page.addInitScript(([k, v]) => localStorage.setItem(k!, v!), [DEVICE_KEY_STORAGE, key()]);
+  // Setup opens by itself once per browser session; these tests are about the other pages, so it has already.
+  await page.addInitScript(() => sessionStorage.setItem("tropos.firstRun.opened", "1"));
   return page;
 }
 

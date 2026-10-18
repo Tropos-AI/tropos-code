@@ -119,7 +119,78 @@ describe("flags", () => {
   test("there is no colour unless stdout is a terminal", async () => {
     const r = await (await sandbox()).run(["1.0.0"]);
     expect(r.stdout).not.toContain("\u001b[");
-    expect(r.stdout).toContain("==> Installing...");
+    expect(r.stdout).toContain("*  Installing...");
+  });
+});
+
+describe("the flow look (same gutter as the terminal wizard)", () => {
+  const ascii = ["+  Install Tropos Code", "o  Verified signature", `o  Verified Tropos Code 1.0.0 for ${platform}`, "*  Installing...", "o  Installed 1.0.0 to ~/.local/share/tropos", "o  Added ~/.local/bin to PATH", "|  ~/.zshrc", "|    tcode onboard           finish the guided setup", "+  Run: tcode onboard"];
+  const utf8 = ["┌  Install Tropos Code", "◇  Verified signature", `◇  Verified Tropos Code 1.0.0 for ${platform}`, "◆  Installing...", "◇  Installed 1.0.0 to ~/.local/share/tropos", "◇  Added ~/.local/bin to PATH", "│  ~/.zshrc", "│    tcode onboard           finish the guided setup", "└  Run: tcode onboard"];
+  // Each expected line appears, in this order.
+  const inOrder = (out: string, lines: string[]) => {
+    let at = 0;
+    for (const l of lines) {
+      const i = out.indexOf(l, at);
+      expect(i, `"${l}" after offset ${at} in:\n${out}`).toBeGreaterThanOrEqual(at);
+      at = i + l.length;
+    }
+  };
+
+  test("a locale that is not UTF-8 gets the ASCII gutter (| * o +)", async () => {
+    const r = await (await sandbox()).run(["1.0.0"], { env: { LANG: "C" } });
+    expect(r.code).toBe(0);
+    inOrder(r.stdout, ascii);
+    expect(r.stdout).not.toMatch(/[┌│◆◇└]/u);
+    expect(r.stdout).toContain("\n|\n");
+  });
+
+  test("a UTF-8 locale gets ┌ │ ◆ ◇ └", async () => {
+    const r = await (await sandbox()).run(["1.0.0"], { env: { LANG: "en_US.UTF-8" } });
+    expect(r.code).toBe(0);
+    inOrder(r.stdout, utf8);
+    expect(r.stdout).toContain("\n│\n");
+  });
+
+  test("NO_COLOR forces ASCII even in a UTF-8 locale; LC_ALL wins over LANG", async () => {
+    const plain = await (await sandbox()).run(["1.0.0"], { env: { LANG: "en_US.UTF-8", NO_COLOR: "1" } });
+    inOrder(plain.stdout, ascii);
+    const lcAll = await (await sandbox()).run(["1.0.0"], { env: { LANG: "en_US.UTF-8", LC_ALL: "C" } });
+    inOrder(lcAll.stdout, ascii);
+  });
+
+  test("an upgrade shows the checks as finished steps, in both modes", async () => {
+    for (const [env, done] of [[{}, "o  "], [{ LANG: "en_US.UTF-8" }, "◇  "]] as const) {
+      const sb = await sandbox();
+      await seedTcode(sb, "1.0.0");
+      await mkdir(join(sb.home, "Library/LaunchAgents"), { recursive: true });
+      await writeFile(join(sb.home, "Library/LaunchAgents/ai.tropos.gateway.plist"), "<plist/>");
+      const r = await sb.run(["1.1.0"], { env });
+      inOrder(r.stdout, [`${done}Upgraded 1.0.0 -> 1.1.0`, `${done}Checked your setup`, `${done}Restarted the gateway service`, `${done}Tropos Code 1.1.0`]);
+      expect(r.stdout).toMatch(/Done\n$/);
+    }
+  });
+
+  test("--verbose prints the binary's output inside the gutter and keeps the log", async () => {
+    const sb = await sandbox();
+    const r = await sb.run(["--verbose", "1.0.0"]);
+    expect(r.stdout).toContain("|  self-install-output");
+    expect(await read(join(sb.home, ".local/state/tropos/install.log"))).toContain("self-install-output");
+  });
+
+  test("--dry-run uses the gutter too and ends with an outro", async () => {
+    const sb = await sandbox();
+    const a = await sb.run(["--dry-run"]);
+    inOrder(a.stdout, ["+  Install Tropos Code (dry run)", "o  Install plan", "|  Version", "+  Nothing was changed"]);
+    const b = await sb.run(["--dry-run"], { env: { LANG: "en_US.UTF-8" } });
+    inOrder(b.stdout, ["┌  Install Tropos Code (dry run)", "◇  Install plan", "│  Version", "└  Nothing was changed"]);
+  });
+
+  test("--non-interactive keeps the plain flow and still writes install.log", async () => {
+    const sb = await sandbox();
+    const r = await sb.run(["--non-interactive", "1.0.0"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("+  Run: tcode onboard");
+    expect(await read(join(sb.home, ".local/state/tropos/install.log"))).toContain("ok: Installed 1.0.0");
   });
 });
 
@@ -239,7 +310,7 @@ describe("PATH block", () => {
     expect(r.stderr).toBe("");
     expect(await read(join(sb.home, ".zshrc"))).toBe(POSIX_PATH_BLOCK);
     expect(await exists(join(sb.home, ".zprofile"))).toBe(false);
-    expect(r.stdout).toContain("Added the PATH block to:\n  ~/.zshrc\n");
+    expect(r.stdout).toContain("o  Added ~/.local/bin to PATH\n|  ~/.zshrc\n");
     expect(r.stdout).toContain("source ~/.zshrc");
     expect(r.stdout).not.toContain("Add " + join(sb.home, ".local/bin") + " to your PATH");
   });
@@ -462,7 +533,7 @@ describe("onboarding hand-off", () => {
     const r = await sb.run(["1.0.0"]);
     expect(r.code).toBe(0);
     expect((await calls(sb)).trim().split("\n")).toEqual(["onboard", "stdin: typed-answers"]);
-    expect(r.stdout).toContain("Starting onboarding");
+    expect(r.stdout).toContain("Starting the guided setup");
     expect(r.stdout).not.toContain("Run: tcode onboard");
   });
 

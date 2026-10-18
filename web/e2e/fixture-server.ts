@@ -43,7 +43,8 @@ await mkdir(dirname(keyFile), { recursive: true });
 await writeFile(keyFile, e2e.key);
 
 const config = await loadGatewayConfig(home);
-await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: true, httpsPort: 443, hostname: NAME } });
+// A Telegram token (the fake fetch below answers getMe), so the Setup page's owner-link step has a bot to show.
+await saveGatewayConfig(home, { ...config, telegram: { ...config.telegram, botToken: "123456:e2e-token" }, remoteAccess: { tailscale: true, httpsPort: 443, hostname: NAME } });
 
 const logins = loginCodesFor(home);
 const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
@@ -59,7 +60,8 @@ const ctx = {
   execPath: "/usr/local/bin/tcode",
   cwd: home,
   now: () => Date.now(),
-  fetch: (async () => {
+  fetch: (async (input: unknown) => {
+    if (String(input).endsWith("/getMe")) return Response.json({ ok: true, result: { id: 1, username: "tropos_e2e_bot", first_name: "Tropos" } });
     throw new Error("network is off in e2e");
   }) as unknown as typeof fetch,
   gateway: { runCronNow: async () => {}, reload: async () => {}, devicesChanged: async () => {} },

@@ -87,15 +87,42 @@ END {
   # ---- output ---------------------------------------------------------------------------------------------------
   log_file=
   log_detail=no
-  c_bold='' c_green='' c_off=''
+  c_bold='' c_green='' c_cyan='' c_dim='' c_off=''
+  # The flow glyphs match the terminal wizard (┌ │ ◆ ◇ └); plain ASCII when colour is off or the locale is not UTF-8.
+  g_top='+' g_bar='|' g_act='*' g_done='o' g_warn='!' g_end='+'
   say() { printf '%s\n' "$*"; }
   # log LINE… — appends to install.log when there is one (best effort, never fatal).
   log() { if [ -n "$log_file" ]; then printf '%s\n' "$*" >>"$log_file" 2>/dev/null || true; fi; }
   # log_file_of FILE — appends a captured command output to install.log.
   log_file_of() { if [ -n "$log_file" ]; then cat "$1" >>"$log_file" 2>/dev/null || true; fi; }
+  # intro TITLE / step TEXT (active) / done_step TEXT (finished) / note TEXT… (a line under the last marker) / outro TEXT.
+  # quiet_step only logs: short steps that need no line of their own on screen.
+  intro() { printf '%s%s%s  %s%s%s\n' "$c_dim" "$g_top" "$c_off" "$c_bold" "$*" "$c_off"; }
+  gap() { printf '%s%s%s\n' "$c_dim" "$g_bar" "$c_off"; }
+  quiet_step() { log "==> $*"; }
   step() {
     log "==> $*"
-    printf '%s==>%s %s\n' "$c_bold" "$c_off" "$*"
+    gap
+    printf '%s%s%s  %s\n' "$c_cyan" "$g_act" "$c_off" "$*"
+  }
+  done_step() {
+    log "ok: $*"
+    gap
+    printf '%s%s%s  %s\n' "$c_green" "$g_done" "$c_off" "$*"
+  }
+  note() {
+    if [ -z "$*" ]; then gap; return 0; fi
+    printf '%s%s%s  %s\n' "$c_dim" "$g_bar" "$c_off" "$*"
+  }
+  # note_lines TEXT — every line of TEXT as a note.
+  note_lines() {
+    while IFS= read -r note_line; do note "$note_line"; done <<NOTE_EOF
+$1
+NOTE_EOF
+  }
+  outro() {
+    gap
+    printf '%s%s%s  %s\n' "$c_dim" "$g_end" "$c_off" "$*"
   }
   warn() {
     log "warning: $*"
@@ -181,8 +208,13 @@ END {
 
   if [ -t 1 ] && [ -z "${NO_COLOR-}" ] && [ "${TERM-}" != dumb ]; then
     esc=$(printf '\033')
-    c_bold="${esc}[1m" c_green="${esc}[32m" c_off="${esc}[0m"
+    c_bold="${esc}[1m" c_green="${esc}[32m" c_cyan="${esc}[36m" c_dim="${esc}[2m" c_off="${esc}[0m"
   fi
+  case ${LC_ALL:-${LC_CTYPE:-${LANG-}}} in
+    *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*)
+      if [ -z "${NO_COLOR-}" ]; then g_top='┌' g_bar='│' g_act='◆' g_done='◇' g_warn='▲' g_end='└'; fi
+      ;;
+  esac
 
   [ "$positional" -le 1 ] || fail 64 "usage: install.sh [options] [stable|latest|<version>]"
   case $target in
@@ -323,14 +355,15 @@ END {
     log_file_of "$tmp/step.out"
     log "--- exit $run_status"
     log_detail=yes
-    if [ "$opt_verbose" = yes ]; then cat "$tmp/step.out"; fi
+    if [ "$opt_verbose" = yes ]; then note_lines "$(cat "$tmp/step.out")"; fi
     return 0
   }
 
   # ---- resolve the version ---------------------------------------------------------------------------------------
   version=
   from_latest_release=no
-  step "Resolving the $target release..."
+  if [ "$opt_dry" = yes ]; then intro "Install Tropos Code (dry run)"; else intro "Install Tropos Code"; fi
+  quiet_step "Resolving the $target release..."
   case $target in
     stable | latest)
       if [ -n "${TROPOS_INSTALL_FROM:-}" ]; then fail 64 "TROPOS_INSTALL_FROM needs an explicit version"; fi
@@ -354,13 +387,13 @@ END {
     fi
   }
 
-  step "Downloading the release manifest..."
+  quiet_step "Downloading the release manifest..."
   if ! get_asset manifest.json "$tmp/manifest.json" 65536 30; then
     if [ "$from_latest_release" = yes ]; then fail 69 "cannot resolve the latest release: no release has been published yet, or the release server could not be reached. Try again later, or install an explicit version"; fi
     fail 69 "could not download the release manifest"
   fi
   get_asset manifest.json.sig "$tmp/manifest.json.sig" 4096 30 || fail 69 "could not download the manifest signature"
-  step "Verifying the signature..."
+  quiet_step "Verifying the signature..."
   printf '%s' "$TROPOS_ALLOWED_SIGNERS" >"$tmp/allowed_signers"
   if ! ssh-keygen -Y verify -f "$tmp/allowed_signers" -I tropos-release -n tropos-manifest -s "$tmp/manifest.json.sig" <"$tmp/manifest.json" >"$tmp/sshverify.out" 2>&1; then
     log_file_of "$tmp/sshverify.out"
@@ -371,6 +404,7 @@ END {
     fail 65 "the release manifest's signature is not valid; nothing was installed"
   fi
   log_file_of "$tmp/sshverify.out"
+  done_step "Verified signature"
   LC_ALL=C tr -d '\012\040-\176' <"$tmp/manifest.json" >"$tmp/manifest.bad" || fail 65 "the release manifest is malformed"
   [ ! -s "$tmp/manifest.bad" ] || fail 65 "the release manifest is malformed"
   [ "$(tail -c 1 "$tmp/manifest.json" | od -An -c | tr -d ' ')" = '\n' ] || fail 65 "the release manifest is malformed"
@@ -548,7 +582,7 @@ END {
         if [ "$rc_ok" = yes ]; then append_block "$1" 2>/dev/null || rc_ok=no; fi
         if [ "$rc_ok" = yes ]; then
           log "path block written to $1"
-          rc_changed="$rc_changed  $(show_path "$1")
+          rc_changed="$rc_changed$(show_path "$1")
 "
           if [ -z "$rc_first" ]; then rc_first=$1; fi
         else
@@ -595,9 +629,8 @@ END {
   fi
 
   if [ "$opt_dry" = yes ]; then
-    row() { printf '  %-13s %s\n' "$1" "$2"; }
-    say ""
-    say "${c_bold}Install plan${c_off} (dry run: nothing was downloaded or written)"
+    row() { note "$(printf '%-13s %s' "$1" "$2")"; }
+    done_step "Install plan (dry run: nothing was downloaded or written)"
     row "Version" "$version"
     case $target in stable | latest) row "Channel" "$target" ;; *) row "Channel" "pinned ($target)" ;; esac
     row "Platform" "$platform"
@@ -616,7 +649,7 @@ END {
       rc_visit rc_plan_cb
       if [ -n "$rc_plan" ]; then
         row "Shell files" "(PATH block)"
-        printf '%s' "$rc_plan"
+        note_lines "${rc_plan%?}"
       else
         row "Shell files" "none"
       fi
@@ -625,6 +658,7 @@ END {
     fi
     if [ "$onboard_run" = yes ]; then row "Onboarding" "yes (tcode onboard)"; else row "Onboarding" "no ($onboard_why)"; fi
     row "Log" "$(show_path "$state_base/tropos/install.log") (not written in a dry run)"
+    outro "Nothing was changed"
     exit 0
   fi
 
@@ -637,7 +671,7 @@ END {
     fi
     if [ "$got" = no ]; then
       rm -f "$bin" "$tmp/tropos.zst"
-      say "The compressed download did not verify; downloading the uncompressed binary."
+      note "The compressed download did not verify; downloading the uncompressed binary."
     fi
   fi
   if [ "$got" = no ]; then
@@ -646,7 +680,7 @@ END {
   fi
 
   chmod 700 "$bin"
-  say "Verified Tropos Code $version for $platform."
+  done_step "Verified Tropos Code $version for $platform"
   step "Installing..."
   run_cmd "install --self" "$bin" install --self --manifest "$tmp/manifest.json" --signature "$tmp/manifest.json.sig"
   if [ "$run_status" -ne 0 ]; then
@@ -655,6 +689,18 @@ END {
       fail "$run_status" "the installer was stopped by a signal (exit $run_status)"
     fi
     fail "$run_status" "installing Tropos Code failed (exit $run_status)"
+  fi
+
+  if [ "$existing" = yes ]; then
+    if [ -n "$old_version" ] && [ "$old_version" != "$version" ]; then
+      done_step "Upgraded $old_version -> $version"
+    elif [ -n "$old_version" ]; then
+      done_step "Tropos Code $version is already installed; it was re-verified"
+    else
+      done_step "Upgraded to $version"
+    fi
+  else
+    done_step "Installed $version to $(show_path "$data_base/tropos")"
   fi
 
   # ---- upgrade: repair the setup, restart the gateway ---------------------------------------------------------------
@@ -668,42 +714,33 @@ END {
     if [ -x "$tcode_bin" ]; then
       step "Checking your setup (tcode doctor --fix --yes)..."
       run_cmd "doctor --fix --yes" "$tcode_bin" doctor --fix --yes </dev/null
-      if [ "$run_status" -ne 0 ]; then warn "tcode doctor --fix exited with $run_status; run \"tcode doctor\" to see what needs attention (details: ${log_file:-not logged})"; fi
+      if [ "$run_status" -ne 0 ]; then warn "tcode doctor --fix exited with $run_status; run \"tcode doctor\" to see what needs attention (details: ${log_file:-not logged})"; else done_step "Checked your setup"; fi
       if [ "$old_version" = "$version" ]; then
         log "same version as before; the gateway is not restarted"
       elif gateway_installed; then
         step "Restarting the gateway service..."
         run_cmd "gateway restart" "$tcode_bin" gateway restart </dev/null
-        if [ "$run_status" -ne 0 ]; then warn "tcode gateway restart exited with $run_status; restart it with \"tcode gateway restart\""; fi
+        if [ "$run_status" -ne 0 ]; then warn "tcode gateway restart exited with $run_status; restart it with \"tcode gateway restart\""; else done_step "Restarted the gateway service"; fi
       fi
     else
       warn "$(show_path "$tcode_bin") is missing after the install; skipping the post-upgrade checks"
     fi
-    if [ -n "$old_version" ] && [ "$old_version" != "$version" ]; then
-      say "${c_green}Upgraded $old_version -> $version${c_off}"
-    elif [ -n "$old_version" ]; then
-      say "${c_green}Tropos Code $version is already installed; it was re-verified${c_off}"
-    else
-      say "${c_green}Upgraded to $version${c_off}"
-    fi
-  else
-    say "${c_green}Installed Tropos Code $version${c_off}"
   fi
 
   # ---- PATH --------------------------------------------------------------------------------------------------------
   rc_any_block=no
   if [ "$modify_path" = yes ]; then
-    step "Setting up your PATH..."
+    quiet_step "Setting up your PATH..."
     rc_visit rc_apply_cb
     if [ -n "$rc_changed" ]; then
-      say "Added the PATH block to:"
-      printf '%s' "$rc_changed"
+      done_step "Added $(show_path "$bindir") to PATH"
+      note_lines "${rc_changed%?}"
     fi
   fi
   if [ "$on_path" = no ]; then
     if [ -n "$rc_first" ]; then
-      say "Run this to use tcode in the current shell (or open a new terminal):"
-      say "  source $(show_path "$rc_first")"
+      note "Run this to use tcode in the current shell (or open a new terminal):"
+      note "  source $(show_path "$rc_first")"
     else
       # shellcheck disable=SC2088 # display text for the user, not a path
       case $shell_name in
@@ -712,8 +749,9 @@ END {
         fish) rc='~/.config/fish/config.fish' ;;
         *) rc='~/.profile' ;;
       esac
-      say "Add $bindir to your PATH, for example with this line in $rc:"
-      if [ "$shell_name" = fish ]; then say "  fish_add_path $bindir"; else say "  export PATH=\"$bindir:\$PATH\""; fi
+      gap
+      printf '%s%s%s  %s\n' "$c_cyan" "$g_warn" "$c_off" "Add $bindir to your PATH, for example with this line in $rc:"
+      if [ "$shell_name" = fish ]; then note "  fish_add_path $bindir"; else note "  export PATH=\"$bindir:\$PATH\""; fi
     fi
   fi
 
@@ -721,7 +759,7 @@ END {
   onboarded=no
   if [ "$onboard_run" = yes ]; then
     if [ -x "$tcode_bin" ]; then
-      step "Starting onboarding (tcode onboard)..."
+      step "Starting the guided setup (tcode onboard)..."
       log "handing the terminal to tcode onboard"
       # Only this command reads the terminal. Redirecting the shell's own stdin (`exec <tty`) would make it read the
       # rest of its script, and anything typed afterwards, from the terminal when run as `curl ... | sh`.
@@ -736,22 +774,18 @@ END {
   fi
 
   # ---- summary -----------------------------------------------------------------------------------------------------
-  say ""
-  say "${c_bold}Tropos Code $version${c_off}"
-  say "  Location   $(show_path "$tcode_bin") -> $(show_path "$versions_dir/$version")"
-  if [ -n "$log_file" ]; then say "  Log        $(show_path "$log_file")"; fi
-  say ""
-  say "Next steps:"
-  if [ "$onboarded" = no ]; then say "  tcode onboard           set up a model provider"; fi
-  say "  tcode                   start a session"
-  say "  tcode doctor            check your setup"
-  say "  tcode gateway install   keep the gateway running in the background"
-  say "  tcode uninstall         remove Tropos Code"
-  if [ "$fresh" = yes ] && [ "$onboarded" = no ]; then
-    say ""
-    say "Run: tcode onboard"
-  fi
-  say "Docs: $DOCS_URL"
+  done_step "Tropos Code $version"
+  note "Location   $(show_path "$tcode_bin") -> $(show_path "$versions_dir/$version")"
+  if [ -n "$log_file" ]; then note "Log        $(show_path "$log_file")"; fi
+  note ""
+  note "Next steps:"
+  if [ "$onboarded" = no ]; then note "  tcode onboard           finish the guided setup"; fi
+  note "  tcode                   start a session"
+  note "  tcode doctor            check your setup"
+  note "  tcode gateway install   keep the gateway running in the background"
+  note "  tcode uninstall         remove Tropos Code"
+  note "Docs: $DOCS_URL"
+  if [ "$fresh" = yes ] && [ "$onboarded" = no ]; then outro "Run: tcode onboard"; else outro "Done"; fi
 }
 
 main "$@"

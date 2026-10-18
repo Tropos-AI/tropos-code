@@ -65,7 +65,7 @@ fish gets `fish_add_path "$HOME/.local/bin"` between the same two marker lines. 
 
 Everything the installer does, and the full output of each step, is appended to
 `$XDG_STATE_HOME/tropos/install.log` (default `~/.local/state/tropos/install.log`; directory mode 0700, file mode 0600),
-each run under a timestamped header. On a terminal you see short step lines (`==> Downloading…`); `--verbose` or `CI`
+each run under a timestamped header. The installer prints its progress in the same gutter look as `tcode onboard` (`┌ │ ◆ ◇ └`, with colour on a terminal; plain `+ | * o` when `NO_COLOR` is set or the locale is not UTF-8); `--verbose` or `CI`
 shows everything. When a step fails, the installer prints the last 20 lines of the log and its path. A dry run writes no log.
 
 ### What you are trusting

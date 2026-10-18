@@ -35,7 +35,7 @@ describe.each(SHELLS.map((s) => [s.join(" "), s]))("install.sh under %s", (_name
     const r = await sb.run();
     expect(r.stderr).toBe("");
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain(`Verified Tropos Code 1.1.0 for ${platform}.`);
+    expect(r.stdout).toContain(`Verified Tropos Code 1.1.0 for ${platform}`);
     const handoff = (await readFile(join(sb.home, "handoff"), "utf8")).trim();
     expect(handoff).toMatch(/^install --self --manifest .+\/manifest\.json --signature .+\/manifest\.json\.sig$/);
     expect(srv.requests).toContain(`/t/r/releases/download/v1.1.0/tropos-${platform}.zst`);
@@ -112,7 +112,7 @@ describe("install.sh platform detection and manifest bytes", () => {
     const sb = await sandbox({ shims: { uname: linuxUname, ldd: `#!/bin/sh\necho "musl libc (x86_64)"\necho "Version 1.2.4"\n` } });
     const r = await sb.run(["1.0.0"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Verified Tropos Code 1.0.0 for linux-x64-musl.");
+    expect(r.stdout).toContain("Verified Tropos Code 1.0.0 for linux-x64-musl");
     expect(srv.requests).toContain("/t/r/releases/download/v1.0.0/tropos-linux-x64-musl.zst");
   });
 
@@ -122,7 +122,7 @@ describe("install.sh platform detection and manifest bytes", () => {
     const sb = await sandbox({ shims: { uname: linuxUname, ldd: glibc } });
     const r = await sb.run(["1.0.0"]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("Verified Tropos Code 1.0.0 for linux-x64.");
+    expect(r.stdout).toContain("Verified Tropos Code 1.0.0 for linux-x64");
     expect(srv.requests).toContain("/t/r/releases/download/v1.0.0/tropos-linux-x64.zst");
     expect(srv.requests.some((p) => p.includes("musl"))).toBe(false);
   });

@@ -24,14 +24,41 @@ Release key fingerprint: SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
 ### Set up
 
 ```bash
-tcode onboard        # connect a provider, pick a model, optionally Telegram, the sandbox, run-at-login
+tcode onboard        # guided setup: model, name, projects, autonomy, Telegram, phone, run-at-login
 tcode dashboard      # open the web UI; everything below is also there under Setup, Status, Config …
 ```
 
-`tcode onboard` checks your key with a real request before saving it, only asks about what is not set up yet, and is
-safe to run again. Without a terminal: `tcode onboard --non-interactive --accept-risk --provider anthropic
---api-key-env ANTHROPIC_API_KEY`. Coming from OpenClaw or Hermes? `tcode migrate openclaw` (or `hermes`) brings over
-identity, memory and skills (`--dry-run` first; keys only with `--migrate-secrets`).
+`tcode onboard` is a guided setup in ten steps, drawn as a gutter you can read at a glance (`┌ │ ◆ ◇ ●`; plain
+`+ | * o` when `NO_COLOR` is set or the locale is not UTF-8), the same look as the installer and the web Setup page:
+1. **Welcome**, what is about to happen.
+2. **Provider**: pick one and paste its key (the key page is shown); the key is checked with a real request first.
+3. **Model**: the default model, from what that key can use.
+4. **Name**: optionally give your agent a name, emoji and vibe.
+5. **Projects**: the repos it finds under your home, or any you add.
+6. **Autonomy**: how freely chats act (Ask, Balanced, Autonomous) and where their commands run.
+7. **Telegram**: a bot token, then the owner link below.
+8. **Phone**: reach the dashboard from your phone through Tailscale, with a login code.
+9. **Run at login**: keep the gateway running in the background.
+10. **Done**: a summary of what is set and what you skipped.
+
+Enter confirms, `s` skips a step (it is remembered and mentioned once later, never nagged), `b` goes back. Quitting
+and running it again resumes: each step reads the real state from the machine and only asks about what is not done.
+
+**The owner-link step (Telegram, no pairing code).** After the token is saved, Setup shows a link
+`https://t.me/<your bot>?start=<one-time nonce>` and a QR code for it. Tap it (or scan it) and press Start; the
+terminal then shows who wrote and asks "is this you?". Only a message carrying that nonce, within the short window,
+can become the owner, and nothing is granted until you confirm on the Mac. No code to copy.
+
+**Phone access.** The Phone step turns on Tailscale phone access (see [Phone access (Tailscale)](#phone-access-tailscale)),
+then shows the address, a QR code and a 6-digit login code. The same steps, with the same wording, are in the web UI
+under Setup, which opens by itself once per session when something is still to set up.
+
+`--advanced` also asks where chat commands run and shows every model; `--quick` takes the defaults without asking;
+`--non-interactive` with its flags works as before: `tcode onboard --non-interactive --accept-risk --provider anthropic
+--api-key-env ANTHROPIC_API_KEY`. Setup may set chats to Balanced: they edit files and run read-only commands and your
+tests without asking, inside the OS sandbox; see [How freely a chat acts](#how-freely-a-chat-acts). Coming from
+OpenClaw or Hermes? `tcode migrate openclaw` (or `hermes`) brings over identity, memory and skills (`--dry-run`
+first; keys only with `--migrate-secrets`).
 
 ### Look after it
 
