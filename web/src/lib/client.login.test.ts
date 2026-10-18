@@ -200,7 +200,7 @@ describe("client login handshake", () => {
     sockets[0]!.open();
     const error = await client.rpc("sessions").catch((e: unknown) => e);
     expect((error as RpcError).message).toBe("not connected");
-    const adminError = await client.admin("status").catch((e: unknown) => e);
+    const adminError = await client.admin("status.get").catch((e: unknown) => e);
     expect((adminError as RpcError).message).toBe("not connected");
   });
 });
