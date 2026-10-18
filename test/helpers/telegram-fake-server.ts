@@ -45,8 +45,8 @@ export class FakeTelegramServer {
     this.server.stop(true);
   }
 
-  pushMessage(chatId: number, fromId: number, text: string, opts: { chatType?: string } = {}): void {
-    this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: opts.chatType ?? "private" }, from: { id: fromId, first_name: "T" }, text, date: 1 } });
+  pushMessage(chatId: number, fromId: number, text: string, opts: { chatType?: string; from?: { first_name?: string; last_name?: string; username?: string } } = {}): void {
+    this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: opts.chatType ?? "private" }, from: { id: fromId, first_name: "T", ...opts.from }, text, date: 1 } });
   }
 
   /** A message without text (a photo, a voice note or a file), as Telegram sends it. */
@@ -141,6 +141,8 @@ export class FakeTelegramServer {
       case "answerCallbackQuery":
         this.answered.push({ id: String(body.callback_query_id), text: body.text });
         return this.json(true);
+      case "getMe":
+        return this.json({ id: 1, is_bot: true, first_name: "Tropos", username: "tropos_bot" });
       case "setMyCommands":
         this.commands = body.commands;
         return this.json(true);

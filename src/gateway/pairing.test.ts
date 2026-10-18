@@ -315,3 +315,13 @@ describe("owner", () => {
     expect(await ownerChatKey(p)).toBe("telegram:u1");
   });
 });
+
+test("approveSender lets a sender in without a code, once, and drops their pending code", async () => {
+  const p = make();
+  await codeOf(p, "u1");
+  await p.approveSender("telegram", "u1");
+  await p.approveSender("telegram", "u1");
+  expect((await p.list()).filter((a) => a.senderId === "u1")).toHaveLength(1);
+  expect(await p.pending()).toEqual([]);
+  expect(await p.isApproved("telegram", "u1")).toBe(true);
+});

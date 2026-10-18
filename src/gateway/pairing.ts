@@ -145,6 +145,15 @@ export class FilePairing implements Pairing {
     });
   }
 
+  /** Approves without a code (setup, after the owner confirmed the sender on the computer). Idempotent; drops their pending code. */
+  approveSender(channel: string, senderId: string): Promise<void> {
+    return this.run(async (s) => {
+      s.pending = s.pending.filter((p) => !(p.channel === channel && p.senderId === senderId));
+      if (s.approved.some((a) => a.channel === channel && a.senderId === senderId)) return;
+      s.approved.push({ channel, senderId, approvedAt: this.now() });
+    });
+  }
+
   list(): Promise<PairedSender[]> {
     return this.run(async (s) => s.approved.map((a) => ({ ...a })), false);
   }

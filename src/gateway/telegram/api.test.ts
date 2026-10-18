@@ -87,3 +87,11 @@ describe("TelegramApi", () => {
     expect(err.status).toBe(500);
   });
 });
+
+test("getUpdates keeps the sender's names and username", async () => {
+  const { server, api } = setup();
+  server.pushMessage(42, 7, "hi", { from: { first_name: "Panagiotis", last_name: "K", username: "pk" } });
+  const [u] = await api.getUpdates(0, 0);
+  expect(u!.message!.from).toMatchObject({ id: 7, first_name: "Panagiotis", last_name: "K", username: "pk" });
+  expect((await api.getMe()).username).toBe("tropos_bot");
+});
