@@ -1,10 +1,13 @@
 // web/src/lib/client.ts — the browser side of the `tcode web` protocol (src/web/protocol.ts): one WebSocket, typed RPCs,
 // permission answers, and reconnection with backoff. No React here; lib/store.ts subscribes to it.
 import type { PermissionAnswer } from "@core/agent/events";
-import { WS_PATH, type ClientMessage, type RpcMap, type RpcMethod, type ServerMessage } from "@core/web/protocol";
+import { AUTH_CLOSE_CODE, WS_PATH, type ClientMessage, type RpcMap, type RpcMethod, type ServerMessage } from "@core/web/protocol";
 import type { AdminMethod, AdminParams, AdminResult } from "@core/web/admin/api";
 
-export type ConnectionStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed";
+import type { Credentials } from "@/lib/credentials";
+import { deviceNameFromUserAgent } from "@/lib/device-name";
+
+export type ConnectionStatus = "idle" | "connecting" | "open" | "reconnecting" | "closed" | "login";
 
 /** The part of the WebSocket API the client uses, so tests and demo mode can supply their own socket. */
 export interface SocketLike {
@@ -44,9 +47,17 @@ export interface ClientOptions {
   /** Injectable timers for tests. */
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  /** Where the device key lives. Absent = no handshake (demo mode, plain test sockets): the socket is open on connect. */
+  credentials?: Credentials;
+  deviceName?: () => string;
+  /** A one-time key from a `#login=` link; used when this browser has no key or its key is refused. */
+  pendingLogin?: string;
+  /** How long to wait for an answer to `auth` before trying again on a new socket, ms. */
+  authTimeout?: number;
 }
 
 const OPEN = 1;
+const AUTH_TIMEOUT = 8000;
 const DEFAULT_BACKOFF: Backoff = { initial: 500, max: 8000, factor: 2 };
 
 /** An RPC that failed on the server ("busy", "unknown session" …) or because the socket went away. */
@@ -97,6 +108,15 @@ export class TcodeClient {
   private timer: unknown = null;
   private stopped = false;
   private _status: ConnectionStatus = "idle";
+  private readonly credentials: Credentials | undefined;
+  private readonly deviceName: () => string;
+  private readonly authTimeout: number;
+  private authTimer: unknown = null;
+  /** Past the handshake (or none needed): rpc/admin may go out. */
+  private authed = false;
+  /** A one-time key or code waiting for a socket that has no device key. */
+  private loginValue: string | undefined;
+  private loginWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
 
   constructor(options: ClientOptions = {}) {
     this.url = options.url;
@@ -104,6 +124,10 @@ export class TcodeClient {
     this.backoff = { ...DEFAULT_BACKOFF, ...options.backoff };
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    this.credentials = options.credentials;
+    this.deviceName = options.deviceName ?? (() => deviceNameFromUserAgent(typeof navigator === "undefined" ? "" : navigator.userAgent));
+    this.authTimeout = options.authTimeout ?? AUTH_TIMEOUT;
+    this.loginValue = options.pendingLogin;
   }
 
   get status(): ConnectionStatus {
@@ -133,6 +157,7 @@ export class TcodeClient {
     this.stopped = true;
     if (this.timer !== null) this.clearTimer(this.timer);
     this.timer = null;
+    this.stopAuthTimer();
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -146,7 +171,7 @@ export class TcodeClient {
   /** Calls a server method. Rejects with RpcError when the server says no or the connection drops before it answers. */
   rpc<M extends RpcMethod>(method: M, ...args: RpcArgs<M>): Promise<RpcResult<M>> {
     const socket = this.socket;
-    if (!socket || socket.readyState !== OPEN) {
+    if (!socket || socket.readyState !== OPEN || !this.authed) {
       return Promise.reject(new RpcError(method, "not connected"));
     }
     const id = this.nextId++;
@@ -165,7 +190,7 @@ export class TcodeClient {
   /** Calls a host-level admin method (src/web/admin/api.ts). Rejects with RpcError like rpc(). */
   admin<M extends AdminMethod>(method: M, ...args: AdminArgs<M>): Promise<AdminResult<M>> {
     const socket = this.socket;
-    if (!socket || socket.readyState !== OPEN) return Promise.reject(new RpcError(method, "not connected"));
+    if (!socket || socket.readyState !== OPEN || !this.authed) return Promise.reject(new RpcError(method, "not connected"));
     const id = this.nextId++;
     const params = args[0];
     const message: ClientMessage = params === undefined ? { t: "admin", id, method } : { t: "admin", id, method, params };
@@ -176,6 +201,28 @@ export class TcodeClient {
       } catch (error) {
         this.pending.delete(id);
         reject(new RpcError(method, error instanceof Error ? error.message : "send failed"));
+      }
+    });
+  }
+
+  /** Logs this browser in with a 6-digit code or a one-time key. Rejects with RpcError("login", "invalid" | "locked"). */
+  login(value: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const socket = this.socket;
+      if (socket && !(socket.readyState === OPEN && this._status === "login")) {
+        reject(new RpcError("login", "not connected"));
+        return;
+      }
+      this.loginWaiter = { resolve, reject };
+      if (socket) {
+        this.sendLogin(socket, value);
+        return;
+      }
+      // The socket is gone (logged out elsewhere): one fresh connection, which sends this on open.
+      this.loginValue = value;
+      if (!socket) {
+        this.stopped = false;
+        this.open();
       }
     });
   }
@@ -199,18 +246,45 @@ export class TcodeClient {
       return;
     }
     this.socket = socket;
+    this.authed = false;
     socket.onopen = () => {
-      this.attempt = 0;
-      this.setStatus("open");
+      const credentials = this.credentials;
+      if (!credentials) {
+        this.attempt = 0;
+        this.authed = true;
+        this.setStatus("open");
+        return;
+      }
+      const key = credentials.load();
+      if (key) {
+        this.send(socket, { t: "auth", key });
+        // No answer (the server's device store failed): try again, but never throw the key away for silence.
+        this.authTimer = this.setTimer(() => {
+          this.authTimer = null;
+          if (this.socket !== socket || this.authed) return;
+          this.socket = null;
+          socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+          socket.close();
+          if (!this.stopped) this.scheduleReconnect();
+        }, this.authTimeout);
+      } else this.sendPendingOrAskForLogin(socket);
     };
     socket.onmessage = (event) => this.receive(event.data);
     socket.onerror = () => {
       // onclose follows and handles reconnection.
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (this.socket !== socket) return;
       this.socket = null;
+      this.authed = false;
+      this.stopAuthTimer();
       this.failPending("connection lost");
+      if ((event as { code?: number } | null)?.code === AUTH_CLOSE_CODE && this.credentials) {
+        // Logged out from another device: forget the key and show the login screen; login() reconnects on demand.
+        this.credentials.clear();
+        this.setStatus("login");
+        return;
+      }
       if (this.stopped) {
         this.setStatus("closed");
         return;
@@ -238,6 +312,7 @@ export class TcodeClient {
       return;
     }
     if (!isServerMessage(parsed)) return;
+    if (this.receiveAuth(parsed)) return;
     if (parsed.t === "rpc_result" || parsed.t === "admin_result") {
       const pending = this.pending.get(parsed.id);
       if (!pending) return;
@@ -249,10 +324,78 @@ export class TcodeClient {
     this.emit({ type: "message", message: parsed });
   }
 
+  private send(socket: SocketLike, message: ClientMessage): void {
+    try {
+      socket.send(JSON.stringify(message));
+    } catch {
+      // onclose follows and handles reconnection.
+    }
+  }
+
+  private sendLogin(socket: SocketLike, value: string): void {
+    this.send(socket, { t: "login", value, name: this.deviceName() });
+  }
+
+  private sendPendingOrAskForLogin(socket: SocketLike): void {
+    const value = this.loginValue;
+    this.loginValue = undefined;
+    if (value !== undefined) this.sendLogin(socket, value);
+    else this.waitForLogin();
+  }
+
+  private waitForLogin(): void {
+    this.attempt = 0;
+    this.setStatus("login");
+  }
+
+  private stopAuthTimer(): void {
+    if (this.authTimer !== null) this.clearTimer(this.authTimer);
+    this.authTimer = null;
+  }
+
+  private becomeOpen(): void {
+    this.stopAuthTimer();
+    this.authed = true;
+    this.attempt = 0;
+    this.setStatus("open");
+  }
+
+  /** The handshake messages; true when the message was one of them. */
+  private receiveAuth(message: ServerMessage): boolean {
+    const socket = this.socket;
+    switch (message.t) {
+      case "auth_ok":
+        this.becomeOpen();
+        return true;
+      case "auth_failed":
+        this.stopAuthTimer();
+        this.credentials?.clear();
+        if (socket) this.sendPendingOrAskForLogin(socket);
+        return true;
+      case "login_ok":
+        this.credentials?.save(message.key);
+        this.becomeOpen();
+        this.loginWaiter?.resolve();
+        this.loginWaiter = null;
+        return true;
+      case "login_failed": {
+        const waiter = this.loginWaiter;
+        this.loginWaiter = null;
+        this.waitForLogin();
+        waiter?.reject(new RpcError("login", message.reason));
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
   private failPending(reason: string): void {
     const pending = [...this.pending.values()];
     this.pending.clear();
     for (const p of pending) p.reject(new RpcError(p.method, reason));
+    this.loginWaiter?.reject(new RpcError("login", reason));
+    this.loginWaiter = null;
   }
 
   private setStatus(status: ConnectionStatus): void {

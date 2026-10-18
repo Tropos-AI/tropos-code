@@ -28,7 +28,8 @@ import { pageInfo, useRoute, type PageId } from "@/app/routes";
 import { Drawer } from "@/components/interior/drawer";
 import { FirstRunRedirect } from "@/components/setup/FirstRunRedirect";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { useHello } from "@/lib/store";
+import { LoginScreen } from "@/app/LoginScreen";
+import { useConnection, useHello } from "@/lib/store";
 
 const PAGE_COMPONENTS: Record<PageId, ComponentType> = {
   chat: ChatPage,
@@ -57,7 +58,11 @@ export function App() {
   const wide = useMediaQuery(WIDE_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const hello = useHello();
+  const { status } = useConnection();
   const Page = PAGE_COMPONENTS[page];
+
+  // Not logged in: the login screen alone, so nothing is fetched or shown.
+  if (status === "login") return <LoginScreen />;
 
   return (
     <div className="flex h-dvh overflow-hidden bg-paper text-ink">

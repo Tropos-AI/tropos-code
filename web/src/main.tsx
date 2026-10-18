@@ -6,10 +6,15 @@ import { domMax, LazyMotion, MotionConfig } from "motion/react";
 import "@/styles/globals.css";
 
 import { App } from "@/app/App";
+import { localCredentials } from "@/lib/credentials";
 import { isDemoMode } from "@/lib/demo";
+import { takeLoginFragment } from "@/lib/login-link";
 import { createAppStore, StoreProvider } from "@/lib/store";
 
-const store = createAppStore({ demo: isDemoMode() });
+const demo = isDemoMode();
+// Read and strip the one-time key from the address bar before anything else can see it.
+const pendingLogin = demo ? null : takeLoginFragment(window.location, window.history);
+const store = createAppStore({ demo, ...(demo ? {} : { credentials: localCredentials() }), ...(pendingLogin ? { pendingLogin } : {}) });
 store.start();
 
 const root = document.getElementById("root");

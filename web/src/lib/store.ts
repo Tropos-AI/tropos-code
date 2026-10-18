@@ -11,6 +11,7 @@ import { parseCommand } from "@core/ui/commands";
 
 import { appReducer, initialAppState, isBusy, nextQueued, type AppAction, type AppState, type ConnectionState, type PendingAsk, type QueuedMessage, type Toast, type ToastTone } from "@/lib/app-state";
 import { RpcError, TcodeClient, type AdminArgs, type RpcArgs, type RpcResult } from "@/lib/client";
+import type { Credentials } from "@/lib/credentials";
 import { createDemoSocket, DEMO_QUEUED } from "@/lib/demo";
 
 export type { AppState, ConnectionState, PendingAsk, QueuedMessage, Toast, ToastTone } from "@/lib/app-state";
@@ -52,6 +53,10 @@ export interface AppStore {
   answerPermission(id: number, answer: PermissionAnswer): void;
   toast(input: ToastInput): void;
   dismissToast(id: number): void;
+  /** Logs this browser in with a 6-digit code (or a one-time key); rejects with RpcError("login", "invalid" | "locked"). */
+  login(value: string): Promise<void>;
+  /** False when the browser cannot keep the device key (blocked storage): the login ends with the tab. */
+  readonly loginRemembered: boolean;
   /** Opens the connection (idempotent). */
   start(): void;
   stop(): void;
@@ -61,6 +66,10 @@ export interface CreateAppStoreOptions {
   client?: TcodeClient;
   /** Replay the scripted demo session instead of talking to tcode (`?demo=1`). */
   demo?: boolean;
+  /** Where the device key lives; absent in demo mode and in tests that do not model the handshake. */
+  credentials?: Credentials;
+  /** A one-time key taken from the `#login=` fragment. */
+  pendingLogin?: string;
   now?: () => number;
 }
 
@@ -70,7 +79,7 @@ export function errorMessage(error: unknown): string {
 
 export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
   const now = options.now ?? (() => Date.now());
-  const client = options.client ?? new TcodeClient(options.demo ? { url: "demo://tcode", socket: createDemoSocket } : {});
+  const client = options.client ?? new TcodeClient(options.demo ? { url: "demo://tcode", socket: createDemoSocket } : { ...(options.credentials ? { credentials: options.credentials } : {}), ...(options.pendingLogin ? { pendingLogin: options.pendingLogin } : {}) });
   let state = initialAppState;
   const listeners = new Set<() => void>();
 
@@ -201,6 +210,10 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
     },
     toast,
     dismissToast: (id) => dispatch({ type: "toast_dismiss", id }),
+    login: (value) => client.login(value),
+    get loginRemembered() {
+      return options.credentials?.persistent ?? true;
+    },
     start: () => client.connect(),
     stop: () => client.close(),
   };
