@@ -19,6 +19,11 @@ import { parseModelId, type ProviderInfo } from "../providers/registry";
 import { allProviders } from "../providers/router";
 import { programArguments, serviceEnv, serviceManager, type ServiceManager } from "../service";
 import type { OnboardState, OnboardStep, OnboardStepId } from "../web/admin/api";
+import type { Confinement } from "../exec/backend";
+import { confinementAvailable } from "../exec/confined";
+import { dashboardLoginLink, dashboardPort } from "../web/links";
+import { loginCodesFor } from "../web/login-codes";
+import { tailscaleStatus, type TailscaleStatus } from "../remote/tailscale";
 import { readOnboardingFlags, writeOnboardingFlags } from "./flags";
 
 export const DEFAULT_SANDBOX_IMAGE = "alpine:3.22";
@@ -55,6 +60,14 @@ export interface OnboardDeps {
   alive(pid: number): boolean;
   /** Telegram's API address; only tests set it. */
   telegramBaseUrl?: string;
+  /** Which OS confinement chat commands can use here (null: none). */
+  confinement(): Promise<Confinement | null>;
+  /** Where a program is on PATH, or null. */
+  which(cmd: string): string | null;
+  /** Tailscale as seen from this computer (it runs through `runner`, so tests fake the runner). */
+  tailscale: { status(): Promise<TailscaleStatus> };
+  /** What the owner uses to log in to the dashboard: a one-time link for this computer, a code for a phone. */
+  login: { oneTimeUrl(): Promise<string>; code(): Promise<string> };
 }
 
 export interface OnboardDepsInput extends Partial<Omit<OnboardDeps, "home" | "env" | "runner">> {
@@ -81,6 +94,13 @@ export function makeOnboardDeps(input: OnboardDepsInput): OnboardDeps {
     doctor: input.doctor,
     alive: input.alive ?? pidAlive,
     telegramBaseUrl: input.telegramBaseUrl,
+    confinement: input.confinement ?? confinementAvailable,
+    which: input.which ?? ((cmd) => Bun.which(cmd)),
+    tailscale: input.tailscale ?? { status: () => tailscaleStatus(runner) },
+    login: input.login ?? {
+      oneTimeUrl: async () => dashboardLoginLink(input.home, dashboardPort(await loadGatewayConfig(input.home))),
+      code: () => loginCodesFor(input.home).issueCode(),
+    },
   };
 }
 
@@ -425,12 +445,14 @@ export async function finish(deps: OnboardDeps, opts: { skipped?: OnboardStepId[
   const prior = await readOnboardingFlags(deps.home);
   const requested: string[] = opts.skipped ?? prior.skipped ?? [];
   const skipped = [...new Set(requested)].filter((id) => !(REQUIRED_STEPS as readonly string[]).includes(id));
-  await writeOnboardingFlags(deps.home, { dismissedAt: new Date(deps.now()).toISOString(), ...(skipped.length ? { skipped } : {}) });
+  await writeOnboardingFlags(deps.home, { dismissedAt: new Date(deps.now()).toISOString(), ...(skipped.length ? { skipped } : {}), ...(prior.autonomyChosen ? { autonomyChosen: true } : {}) });
   return computeOnboardState(deps);
 }
 
 /** Forgets that the wizard was finished or skipped, so every step is offered again. */
 export async function reopen(deps: OnboardDeps): Promise<OnboardState> {
-  await writeOnboardingFlags(deps.home, {});
+  // What the owner already chose stays chosen; only "finished" and "skipped" are forgotten.
+  const prior = await readOnboardingFlags(deps.home);
+  await writeOnboardingFlags(deps.home, prior.autonomyChosen ? { autonomyChosen: true } : {});
   return computeOnboardState(deps);
 }

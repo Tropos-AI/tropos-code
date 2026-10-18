@@ -76,12 +76,41 @@ export function fakeDocker(opts: { daemon?: boolean; image?: boolean } = {}): { 
   return Object.assign(state, { exec });
 }
 
+export interface FakeTailscale {
+  exec: Runner["exec"];
+  /** Local ports `tailscale serve` was asked to publish. */
+  served: number[];
+}
+
+/** A `tailscale` CLI: not installed by default; `running` needs a `dnsName`. Any other program is "not found". */
+export function fakeTailscale(opts: { installed?: boolean; running?: boolean; dnsName?: string } = {}): FakeTailscale {
+  const served: number[] = [];
+  const exec: Runner["exec"] = async (cmd, args) => {
+    const installed = opts.installed ?? opts.running !== undefined;
+    if (cmd !== "tailscale" || !installed) return { code: null, stdout: "", stderr: "", error: `${cmd}: not found` };
+    if (args[0] === "status") {
+      return opts.running
+        ? { code: 0, stdout: JSON.stringify({ BackendState: "Running", Self: { DNSName: `${opts.dnsName}.` } }), stderr: "" }
+        : { code: 1, stdout: "", stderr: "Logged out." };
+    }
+    if (args[0] === "serve" && args[1] === "status") return { code: 0, stdout: "{}", stderr: "" };
+    if (args[0] === "serve") {
+      served.push(Number(args.at(-1)?.split(":").pop()));
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return { code: 1, stdout: "", stderr: "" };
+  };
+  return { exec, served };
+}
+
 export function testDeps(home: string, over: Partial<OnboardDepsInput> = {}): OnboardDeps {
   // A fake Telegram server (telegramBaseUrl) is a real local HTTP server, so calls to it go through the real fetch.
   const net = fakeNet().fetch;
   const base = over.telegramBaseUrl;
   const baseFetch = base ? (((input: RequestInfo | URL, init?: RequestInit) => (String(input).startsWith(base) ? fetch(input, init) : net(input, init))) as typeof fetch) : net;
   const docker = fakeDocker({ daemon: false });
+  const tailscale = fakeTailscale();
+  const exec: Runner["exec"] = (cmd, args, timeout) => (cmd === "tailscale" ? tailscale.exec(cmd, args, timeout) : docker.exec(cmd, args, timeout));
   return makeOnboardDeps({
     home,
     userHome: `${home}/..`,
@@ -92,7 +121,10 @@ export function testDeps(home: string, over: Partial<OnboardDepsInput> = {}): On
     now: () => Date.UTC(2026, 9, 15, 12),
     doctor: { checks: [] },
     alive: () => false,
+    confinement: async () => "sandbox-exec",
+    which: () => null,
+    login: { oneTimeUrl: async () => "http://localhost:4317/#login=ONE-TIME-KEY", code: async () => "123456" },
     ...over,
-    runner: { ...fakeRunner({ exec: docker.exec }), ...over.runner },
+    runner: { ...fakeRunner({ exec }), ...over.runner },
   });
 }

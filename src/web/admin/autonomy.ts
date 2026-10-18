@@ -6,6 +6,7 @@ import { AUTONOMY_LEVELS, AutonomyError, pinTestCommands, pinnedTestCommands, se
 import { loadGatewayConfig, type GatewayConfig } from "../../gateway/config";
 import { DEFAULT_PROJECT_ID, listProjects } from "../../gateway/projects";
 import { detectTestCommands } from "../../gateway/tests-detect";
+import { updateOnboardingFlags } from "../../onboard/flags";
 import type { AutonomyLevel, AutonomyView } from "./api";
 import { AdminError, type AdminContext, type AdminHandlers } from "./context";
 
@@ -65,6 +66,8 @@ export function autonomyHandlers(ctx: AdminContext): AdminHandlers {
         if (p?.level !== null && !isLevel(p?.level)) throw new AdminError("Choose ask, balanced or autonomous.");
         if (p.projectId !== undefined && typeof p.projectId !== "string") throw new AdminError("Say which project.");
         await setAutonomy(ctx.home, { level: p.level, projectId: p.projectId, acceptUnconfined: p.acceptUnconfined === true, confinement: await probe() });
+        // Setup shows "chosen" for the global level only once the owner has set it here or in the wizard.
+        if (p.projectId === undefined) await updateOnboardingFlags(ctx.home, { autonomyChosen: true });
         return done();
       }),
     "autonomy.setBackend": (p) =>

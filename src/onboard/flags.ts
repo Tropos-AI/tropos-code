@@ -8,6 +8,8 @@ export interface OnboardingFlags {
   dismissedAt?: string;
   /** Steps the owner chose to skip (shown as "skipped", not as todo). */
   skipped?: string[];
+  /** The owner picked the autonomy level in setup or in Settings (the stored `chat` key can't tell: it is written at start-up). */
+  autonomyChosen?: boolean;
 }
 
 export const onboardingFlagsPath = (home: string) => join(home, "onboarding.json");
@@ -20,6 +22,7 @@ export async function readOnboardingFlags(home: string): Promise<OnboardingFlags
     return {
       dismissedAt: typeof o.dismissedAt === "string" ? o.dismissedAt : undefined,
       skipped: Array.isArray(o.skipped) ? o.skipped.filter((x): x is string => typeof x === "string") : undefined,
+      ...(o.autonomyChosen === true ? { autonomyChosen: true } : {}),
     };
   } catch {
     return {};
@@ -32,4 +35,9 @@ export async function writeOnboardingFlags(home: string, flags: OnboardingFlags)
   const tmp = `${path}.${process.pid}.tmp`;
   await writeFile(tmp, `${JSON.stringify(flags, null, 2)}\n`, { mode: 0o600 });
   await rename(tmp, path);
+}
+
+/** Merges `patch` into the stored flags. */
+export async function updateOnboardingFlags(home: string, patch: OnboardingFlags): Promise<void> {
+  await writeOnboardingFlags(home, { ...(await readOnboardingFlags(home)), ...patch });
 }

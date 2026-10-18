@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadGatewayConfig, saveGatewayConfig } from "../../gateway/config";
 import { ADMIN_METHODS } from "./api";
+import { readOnboardingFlags } from "../../onboard/flags";
 import { autonomyHandlers } from "./autonomy";
 import { adminWith, failure, makeKit, type Kit } from "./host-testkit";
 
@@ -98,4 +99,12 @@ test("the four methods are listed in ADMIN_METHODS and have handlers", () => {
   const names = ["autonomy.get", "autonomy.set", "autonomy.setBackend", "autonomy.confirmTests"];
   for (const n of names) expect(ADMIN_METHODS).toContain(n as any);
   expect(Object.keys(autonomyHandlers(kit.ctx)).sort()).toEqual([...names].sort());
+});
+
+test("setting the global level records that the owner chose it; a project level does not", async () => {
+  const a = admin();
+  await a.handle("autonomy.set", { projectId: "app", level: "balanced" });
+  expect((await readOnboardingFlags(kit.home)).autonomyChosen).toBeUndefined();
+  await a.handle("autonomy.set", { level: "balanced" });
+  expect((await readOnboardingFlags(kit.home)).autonomyChosen).toBe(true);
 });

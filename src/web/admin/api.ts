@@ -363,6 +363,25 @@ export interface RepoCandidateView {
   registered: boolean;
 }
 
+export interface ChatSettingsView {
+  autonomy: AutonomyLevel;
+  backend: "host" | "docker";
+  /** The owner chose the level in setup or Settings (an existing install's stored value doesn't count). */
+  explicit: boolean;
+  confinement: "sandbox-exec" | "bwrap" | null;
+  allowUnconfined: boolean;
+  /** How to get a sandbox on this machine; only when there is none. */
+  installHint?: string;
+}
+
+export interface PhoneStatusView {
+  installed: boolean;
+  running: boolean;
+  dnsName?: string;
+  enabled: boolean;
+  url?: string;
+}
+
 export interface OnboardAdmin {
   "onboard.state": { params: undefined; result: OnboardState };
   /** Checks a key before it is saved: a real call to the provider. The key is not stored by this method. */
