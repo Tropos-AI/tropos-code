@@ -80,6 +80,10 @@ const run: LifecycleRun = async (argv, ctx) => {
         const isSet = command === "set";
         if (args.length !== (isSet ? 2 : 1)) return usage(isSet ? "set needs a dot.path and a value" : "unset needs one dot.path");
         const path = args[0]!;
+        // Phone access is a switch with side effects (tailscale serve, logins); a bare edit would desync them.
+        if (file.label === "gateway" && /^remoteAccess(\.|$)/.test(path)) {
+          return usage("phone access isn't set here. Use Settings → Phone access in the dashboard (tcode dashboard), or the setup wizard (tcode onboard).");
+        }
         const next = isSet ? parseValue(args[1]!) : undefined;
         const result = await updateConfigFile(file, (draft) => (isSet ? setAt(draft, path, next) : unsetAt(draft, path)));
         const before = redactAt(path, getAt(result.before, path));

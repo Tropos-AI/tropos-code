@@ -5,7 +5,7 @@ Usage: tcode [options] [prompt | command]
 Start:
   tcode [prompt]                   start an interactive session, optionally with a first prompt
   tcode -p "prompt"                answer once and exit (stdin is appended when piped)
-  tcode dashboard [--code]         open the dashboard at http://localhost:4317, logged in
+  tcode dashboard [--code]         open the dashboard at http://127.0.0.1:4317, logged in
                                    (--code: a 6-digit code for another browser or your phone)
 
 Everyday:

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
+import { USAGE } from "../usage";
 import { resolveLayout, versionPath } from "../../install/layout";
 import { emptyState, writeState } from "../../install/state";
 import { fakeRunner, makeFixture, noDocker, type Fixture } from "../../doctor/testing";
@@ -155,6 +156,9 @@ test("every link the CLI prints is http://127.0.0.1 (the bound address), never l
     expect(text).toContain("http://127.0.0.1:4399/");
     expect(text).not.toContain("localhost");
   }
+  // The help text too: it is the first place anyone copies an address from.
+  expect(USAGE).not.toContain("localhost");
+  expect(USAGE).toContain("http://127.0.0.1:4317");
 });
 
 test("the doctor summary counts errors and warnings read-only", async () => {

@@ -72,8 +72,11 @@ const schema = z.object({
       tailscale: z.boolean().default(false),
       /** The HTTPS port `tailscale serve` uses on the tailnet name (443, 8443 or 10000). */
       httpsPort: z.number().int().min(1).max(65535).optional(),
-      /** The tailnet name, e.g. mac.tail1234.ts.net. */
-      hostname: z.string().min(1).optional(),
+      /** The tailnet name, e.g. mac.tail1234.ts.net. It becomes an accepted Host, so only a *.ts.net name is allowed. */
+      hostname: z
+        .string()
+        .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ts\.net$/i, "must be a *.ts.net name")
+        .optional(),
       /** Turning it off couldn't reach Tailscale, so the serve config may still exist: retried at gateway start and by doctor. */
       pendingDisable: z.boolean().optional(),
     })

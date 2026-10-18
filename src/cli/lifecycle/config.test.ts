@@ -27,6 +27,27 @@ describe("tcode config", () => {
     expect(JSON.parse(await readFile(settings(), "utf8")).model).toBe("some-model");
   });
 
+  test("remoteAccess.* can't be set or unset from here: it points at Settings → Phone access", async () => {
+    const gateway = join(f.ctx.home, "gateway.json");
+    await writeFile(gateway, JSON.stringify({ idleMinutes: 30 }));
+    for (const argv of [["set", "remoteAccess.tailscale", "true"], ["set", "remoteAccess", '{"tailscale":true,"hostname":"x.ts.net"}'], ["unset", "remoteAccess.hostname"]]) {
+      expect(await run([...argv, "--file", "gateway"], f.ctx)).toBe(64);
+      expect(f.stderr()).toMatch(/Phone access/);
+    }
+    expect(JSON.parse(await readFile(gateway, "utf8"))).toEqual({ idleMinutes: 30 });
+    // Other gateway keys still work.
+    expect(await run(["set", "idleMinutes", "45", "--file", "gateway"], f.ctx)).toBe(0);
+  });
+
+  test("a remoteAccess.hostname outside *.ts.net is invalid in gateway.json", async () => {
+    const gateway = join(f.ctx.home, "gateway.json");
+    await writeFile(gateway, JSON.stringify({ remoteAccess: { tailscale: true, hostname: "evil.example.com" } }));
+    expect(await run(["validate", "--file", "gateway"], f.ctx)).toBe(1);
+    expect(f.stderr()).toContain("hostname");
+    await writeFile(gateway, JSON.stringify({ remoteAccess: { tailscale: true, hostname: "mac.tail1234.ts.net" } }));
+    expect(await run(["validate", "--file", "gateway"], f.ctx)).toBe(0);
+  });
+
   test("set with an invalid value fails and changes nothing", async () => {
     await writeFile(settings(), JSON.stringify({ theme: "light" }));
     expect(await run(["set", "theme", "purple"], f.ctx)).toBe(1);
