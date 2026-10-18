@@ -141,3 +141,10 @@ describe("ProviderRouter", () => {
     await expect(router.models("nope", signal())).rejects.toThrow("Unknown provider");
   });
 });
+
+describe("registry key pages", () => {
+  test("every provider that needs a key, and Anthropic, has an https key page; Anthropic is first", () => {
+    expect(PROVIDERS[0]!.id).toBe("anthropic");
+    for (const p of PROVIDERS.filter((x) => x.keyRequired || x.id === "anthropic")) expect(p.keyURL).toStartWith("https://");
+  });
+});

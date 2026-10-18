@@ -236,7 +236,7 @@ export function healthReport(deps: OnboardDeps): Promise<Report> {
 
 // ---------- the state ----------
 
-const TITLES: Record<OnboardStepId, string> = {
+export const STEP_TITLES: Record<OnboardStepId, string> = {
   welcome: "Welcome",
   provider: "Connect a model",
   model: "Choose a model",
@@ -253,7 +253,7 @@ export const REQUIRED_STEPS: readonly OnboardStepId[] = ["provider", "model"];
 
 const step = (id: OnboardStepId, status: OnboardStep["status"], detail?: string): OnboardStep => ({
   id,
-  title: TITLES[id],
+  title: STEP_TITLES[id],
   status,
   optional: !REQUIRED_STEPS.includes(id),
   ...(detail ? { detail } : {}),
@@ -374,6 +374,17 @@ export interface ValidateResult {
   ok: boolean;
   models: string[];
   error?: string;
+  /** Why it failed: the provider turned the key down, it could not be reached, or the input was unusable. */
+  reason?: "rejected" | "unreachable" | "invalid";
+}
+
+const REJECTED = /\b40[13]\b|unauthori[sz]ed|invalid.*(key|token)|incorrect api key|authentication/i;
+
+/** The sentence setup shows when a key did not validate. Plain words; the key itself is never part of it. */
+export function explainKeyError(providerName: string, r: Pick<ValidateResult, "error" | "reason">): string {
+  if (r.reason === "rejected") return `That key was rejected by ${providerName}. Check you copied all of it.`;
+  if (r.reason === "unreachable") return `Couldn't reach ${providerName} (${r.error ?? "no answer"}). Check your internet connection and try again.`;
+  return r.error ?? "That did not work.";
 }
 
 /** Removes the key (raw or URL-encoded) and any bearer token from text that may be shown. */
@@ -420,23 +431,23 @@ async function providerById(deps: OnboardDeps, id: string): Promise<{ info: Prov
  */
 export async function validateKey(deps: OnboardDeps, input: { provider: string; key: string }): Promise<ValidateResult> {
   const found = await providerById(deps, input.provider);
-  if (!found) return { ok: false, models: [], error: `Unknown provider "${input.provider}".` };
+  if (!found) return { ok: false, models: [], error: `Unknown provider "${input.provider}".`, reason: "invalid" };
   const key = input.key.trim();
-  if (found.info.keyRequired && !key) return { ok: false, models: [], error: "The API key is empty." };
-  if (/\s/.test(key)) return { ok: false, models: [], error: "The API key contains spaces or line breaks; paste just the key." };
+  if (found.info.keyRequired && !key) return { ok: false, models: [], error: "The API key is empty.", reason: "invalid" };
+  if (/\s/.test(key)) return { ok: false, models: [], error: "The API key contains spaces or line breaks; paste just the key.", reason: "invalid" };
   try {
     const models = await listWithKey(deps, found.info, found.baseURL, key, AbortSignal.timeout(VALIDATE_TIMEOUT_MS));
     return { ok: true, models };
   } catch (err) {
     const text = err instanceof Error && err.message ? err.message : "The provider did not answer.";
-    return { ok: false, models: [], error: redactKey(text, key).split("\n")[0]!.slice(0, 300) };
+    return { ok: false, models: [], error: redactKey(text, key).split("\n")[0]!.slice(0, 300), reason: REJECTED.test(text) ? "rejected" : "unreachable" };
   }
 }
 
 /** The models a provider offers with the key it already has (environment or saved). */
 export async function listModels(deps: OnboardDeps, provider: string): Promise<ValidateResult> {
   const found = await providerById(deps, provider);
-  if (!found) return { ok: false, models: [], error: `Unknown provider "${provider}".` };
+  if (!found) return { ok: false, models: [], error: `Unknown provider "${provider}".`, reason: "invalid" };
   let saved = {};
   try {
     saved = await readCredentials(deps.home);
@@ -474,6 +485,13 @@ export function pickDefaultModel(provider: string, models: string[]): string | u
   return pool[0];
 }
 
+/** What the model step lists: the best model first, then the other chat models in the provider's order. */
+export function shortModelList(provider: string, models: string[], n = 5): string[] {
+  const best = pickDefaultModel(provider, models);
+  const chat = models.filter((m) => !NOT_CHAT.test(m) && m !== best);
+  return [...(best ? [best] : []), ...chat].slice(0, n);
+}
+
 export async function saveModel(deps: OnboardDeps, modelId: string): Promise<void> {
   await updateUserSettings(deps.home, { model: modelId });
 }
@@ -481,7 +499,7 @@ export async function saveModel(deps: OnboardDeps, modelId: string): Promise<voi
 // ---------- telegram, sandbox, service ----------
 
 export async function verifyTelegram(deps: OnboardDeps, token: string): Promise<{ ok: true; username: string } | { ok: false; error: string }> {
-  const api = new TelegramApi({ token, fetch: deps.fetch });
+  const api = new TelegramApi({ token, fetch: deps.fetch, baseUrl: deps.telegramBaseUrl });
   try {
     return { ok: true, username: (await api.getMe(AbortSignal.timeout(VALIDATE_TIMEOUT_MS))).username };
   } catch (err) {

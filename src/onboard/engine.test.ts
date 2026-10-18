@@ -5,7 +5,7 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FilePairing } from "../gateway/pairing";
 import { saveIdentity } from "../context/identity";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
-import { checkSandbox, computeOnboardState, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
+import { checkSandbox, computeOnboardState, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
 import { STEP_WHY } from "./copy";
 import { GOOD_KEY, fakeDocker, fakeNet, fakeService, testDeps } from "./testing";
 
@@ -252,5 +252,36 @@ describe("telegram, sandbox, service", () => {
     expect(service.installed[0]).toMatchObject({ programArguments: ["/fake/bin/tcode", "gateway"], workingDirectory: home });
     expect(service.installed[0]!.logPath).toBe(join(home, "gateway", "gateway.log"));
     expect((await stat(join(home, "workspace"))).isDirectory()).toBe(true);
+  });
+});
+
+describe("why a key did not validate", () => {
+  test("rejected, unreachable and invalid are told apart and explained in plain words", async () => {
+    const rejected = await validateKey(testDeps(home), { provider: "deepseek", key: "sk-wrong-wrong-wrong" });
+    expect(rejected).toMatchObject({ ok: false, reason: "rejected" });
+    expect(explainKeyError("DeepSeek", rejected)).toBe("That key was rejected by DeepSeek. Check you copied all of it.");
+    const unreachable = await validateKey(testDeps(home), { provider: "openai", key: "sk-whatever" });
+    expect(unreachable).toMatchObject({ ok: false, reason: "unreachable" });
+    expect(explainKeyError("OpenAI", unreachable)).toStartWith("Couldn't reach OpenAI (");
+    expect(explainKeyError("OpenAI", unreachable)).toEndWith("). Check your internet connection and try again.");
+    const empty = await validateKey(testDeps(home), { provider: "deepseek", key: " " });
+    expect(empty.reason).toBe("invalid");
+    expect(explainKeyError("DeepSeek", empty)).toBe("The API key is empty.");
+    expect((await validateKey(testDeps(home), { provider: "deepseek", key: "a b" })).reason).toBe("invalid");
+    expect((await validateKey(testDeps(home), { provider: "nope", key: "k" })).reason).toBe("invalid");
+  });
+
+  test("a 401 or 403 from Anthropic counts as rejected", async () => {
+    const deps = testDeps(home, { anthropicModels: async () => { throw new Error("403 forbidden"); } });
+    expect((await validateKey(deps, { provider: "anthropic", key: "sk-ant-x" })).reason).toBe("rejected");
+  });
+});
+
+describe("shortModelList", () => {
+  test("the best model first, then the other chat models in listing order; embeddings are left out", () => {
+    const models = ["a-embed-1", "zeta", "deepseek-chat", "beta", "gamma", "delta", "epsilon"];
+    expect(shortModelList("deepseek", models, 4)).toEqual(["zeta", "deepseek-chat", "beta", "gamma"]);
+    expect(shortModelList("anthropic", ["claude-sonnet-5", "claude-opus-5-5"], 5)).toEqual(["claude-opus-5-5", "claude-sonnet-5"]);
+    expect(shortModelList("deepseek", [])).toEqual([]);
   });
 });

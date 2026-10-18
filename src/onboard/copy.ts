@@ -36,3 +36,16 @@ export const STEP_WHY: Record<OnboardStepId, string> = {
   service: "Keep Tropos running in the background, so chats and schedules work when this terminal is closed.",
   done: "A quick health check, then a summary of what is ready.",
 };
+
+export const WELCOME_LINES: readonly string[] = [
+  "Welcome to Tropos. I'll set everything up with you, one short step at a time.",
+  STEP_WHY.welcome,
+  "Enter accepts what I suggest, s skips a step, b goes back. You can stop any time and run `tcode onboard` again to continue.",
+];
+
+export const RISK_NOTICE: readonly string[] = [
+  "Tropos reads and edits files and runs commands in the folders you point it at; it asks before anything risky.",
+  "Your provider key is stored only on this machine, in ~/.tropos/credentials.json (mode 0600), and sent only to that provider.",
+  "Chats from Telegram run commands on this computer inside its own sandbox, only in the project you picked; the autonomy level you choose decides what they may do without asking.",
+  "You can review or undo all of this later with `tcode status`, `tcode doctor` and `tcode uninstall`.",
+];
