@@ -22,9 +22,21 @@ export class BotBusyError extends OnboardError {
   }
 }
 
+/** A display name is the sender's own text: it must not read as a handle, an id or a second line. */
+const plain = (text: string) => text.replace(/[()@·]/g, "").replace(/\s+/g, " ").trim();
+
+/** "Panagiotis K (@pk) · id 12345". The numeric id is the one thing the sender cannot choose, so it is always shown last. */
 export function describeCandidate(c: OwnerCandidateView): string {
-  if (!c.name) return `Telegram user ${c.senderId}`;
-  return c.username ? `${c.name} (@${c.username})` : c.name;
+  const name = plain(c.name) || "Telegram user";
+  const handle = c.username ? ` (@${plain(c.username)})` : "";
+  return `${name}${handle} · id ${c.senderId}`;
+}
+
+/** One candidate, or - when several people wrote - a list that says so, so the owner picks on purpose. */
+export function describeCandidates(list: OwnerCandidateView[]): string {
+  const distinct = [...new Map(list.map((c) => [c.senderId, c])).values()];
+  if (distinct.length === 1) return describeCandidate(distinct[0]!);
+  return `${distinct.length} different people wrote to the bot during setup. Pick yourself carefully:\n${distinct.map((c) => `- ${describeCandidate(c)}`).join("\n")}`;
 }
 
 /**
@@ -70,7 +82,18 @@ export async function nextOwnerCandidate(deps: OnboardDeps, token: string, opts:
   }
 
   const tg = api(deps, token);
+  const windowStart = (await claim.windowStart()) ?? Date.now();
   let offset = 0;
+  try {
+    // What was said before we started listening is not the owner's "first message": read it and move past it.
+    const backlog = await tg.getUpdates(-1, 0, opts.signal);
+    for (const u of backlog) offset = Math.max(offset, u.update_id + 1);
+    if (offset > 0) await tg.getUpdates(offset, 0, opts.signal);
+  } catch (e) {
+    if (opts.signal.aborted) return null;
+    if (e instanceof TelegramError && e.status === 409) throw new BotBusyError();
+    throw e;
+  }
   while (!opts.signal.aborted) {
     let updates;
     try {
@@ -83,8 +106,8 @@ export async function nextOwnerCandidate(deps: OnboardDeps, token: string, opts:
     for (const u of updates) {
       offset = Math.max(offset, u.update_id + 1);
       const c = u.message ? candidateFrom(u.message, Date.now()) : null;
-      if (!c || exclude.has(c.senderId)) continue;
-      await claim.add(c);
+      if (!c || exclude.has(c.senderId) || c.at < windowStart) continue;
+      if (!(await claim.add(c))) continue;
       // Acknowledge, so the gateway never replays this message as a stranger's.
       await tg.getUpdates(offset, 0, opts.signal).catch(() => {});
       return c;

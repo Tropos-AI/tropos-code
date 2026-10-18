@@ -8,6 +8,8 @@ const MessageSchema = z.object({
   chat: ChatSchema,
   from: UserSchema.optional(),
   text: z.string().optional(),
+  /** Unix seconds when the message was sent. */
+  date: z.number().optional(),
 });
 const CallbackQuerySchema = z.object({
   id: z.string(),

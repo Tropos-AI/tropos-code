@@ -45,8 +45,8 @@ export class FakeTelegramServer {
     this.server.stop(true);
   }
 
-  pushMessage(chatId: number, fromId: number, text: string, opts: { chatType?: string; from?: { first_name?: string; last_name?: string; username?: string } } = {}): void {
-    this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: opts.chatType ?? "private" }, from: { id: fromId, first_name: "T", ...opts.from }, text, date: 1 } });
+  pushMessage(chatId: number, fromId: number, text: string, opts: { chatType?: string; from?: { first_name?: string; last_name?: string; username?: string }; date?: number } = {}): void {
+    this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: opts.chatType ?? "private" }, from: { id: fromId, first_name: "T", ...opts.from }, text, date: opts.date ?? Math.floor(Date.now() / 1000) } });
   }
 
   /** A message without text (a photo, a voice note or a file), as Telegram sends it. */

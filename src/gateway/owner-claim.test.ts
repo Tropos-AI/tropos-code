@@ -10,7 +10,7 @@ beforeEach(async () => {
 });
 afterEach(() => removeDir(home));
 
-const cand = (senderId: string, chatId = 1): OwnerCandidateView => ({ senderId, chatId, name: `n${senderId}`, at: 1 });
+const cand = (senderId: string, chatId = 1, at = 1): OwnerCandidateView => ({ senderId, chatId, name: `n${senderId}`, at });
 
 describe("OwnerClaimStore", () => {
   test("open → add → candidates, one per sender, at most five, closed after 10 minutes, file 0600", async () => {
@@ -27,10 +27,29 @@ describe("OwnerClaimStore", () => {
     expect(await store.candidates()).toEqual([]);
     await store.add(cand("9")); // expired: ignored
     await store.open();
-    expect((await store.candidates()).map((c) => c.senderId)).toContain("2"); // reopening keeps candidates
+    expect(await store.candidates()).toEqual([]); // a new window starts empty: nothing from the old one carries over
     await writeFile(ownerClaimPath(home), "{oops");
     expect(await store.candidates()).toEqual([]);
     expect(await store.isOpen()).toBe(false);
+  });
+
+  test("extending an open window keeps its candidates and its start", async () => {
+    let t = 5_000;
+    const store = new OwnerClaimStore(home, () => t);
+    await store.open();
+    await store.add(cand("1", 1, 5_000));
+    t += 60_000;
+    await store.open();
+    expect((await store.candidates()).map((c) => c.senderId)).toEqual(["1"]);
+    expect(await store.windowStart()).toBe(5_000);
+  });
+
+  test("a message from before the window started is not recorded", async () => {
+    const store = new OwnerClaimStore(home, () => 10_000);
+    await store.open();
+    expect(await store.add(cand("old", 1, 8_999))).toBe(false); // a second earlier than the window
+    expect(await store.add(cand("new", 1, 10_000))).toBe(true);
+    expect((await store.candidates()).map((c) => c.senderId)).toEqual(["new"]);
   });
 
   test("close deletes the file; a later add is ignored", async () => {
@@ -48,6 +67,9 @@ describe("candidateFrom", () => {
   const msg = (over: Partial<TgMessage>): TgMessage => ({ message_id: 1, chat: { id: 42, type: "private" }, from: { id: 7, first_name: "Pan", last_name: "K", username: "pk" }, text: "hi", ...over });
   test("joins names and keeps the username", () => {
     expect(candidateFrom(msg({}), 5)).toEqual({ senderId: "7", chatId: 42, name: "Pan K", username: "pk", at: 5 });
+  });
+  test("takes the time from the message's own date", () => {
+    expect(candidateFrom(msg({ date: 1_700_000_000 }), 5)?.at).toBe(1_700_000_000_000);
   });
   test("skips bots, groups and messages without a sender", () => {
     expect(candidateFrom(msg({ from: { id: 7, is_bot: true } }), 5)).toBeNull();

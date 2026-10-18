@@ -59,10 +59,10 @@ function fakeProjects() {
 
 function fakeClaim(open: boolean) {
   const added: OwnerCandidateView[] = [];
-  return { isOpen: async () => open, add: async (c: OwnerCandidateView) => void added.push(c), added };
+  return { isOpen: async () => open, add: async (c: OwnerCandidateView) => (added.push(c), true), added };
 }
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView): Promise<void> } } = {}) {
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView): Promise<boolean> } } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -124,6 +124,15 @@ describe("TelegramAdapter owner claim", () => {
     await server.waitFor(() => claim.added.length >= 1);
     expect(claim.added.map((c) => c.senderId)).toEqual([String(CHAT)]);
     expect(server.textsTo(-100).some((t) => t === CLAIM_REPLY)).toBe(false);
+  });
+
+  test("a message the store refuses (sent before the window) is a normal stranger: pairing code, no claim reply", async () => {
+    const claim = { isOpen: async () => true, add: async () => false };
+    const { server, pairing } = await setup({ approved: false, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "old news", { date: Math.floor(Date.now() / 1000) - 3600 });
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toContain("pairing code");
+    expect(pairing.challenges).toHaveLength(1);
   });
 
   test("with the claim closed, strangers get today's pairing code", async () => {

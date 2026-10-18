@@ -16,11 +16,15 @@ export const ownerClaimPath = (home: string) => join(home, "gateway", "owner-cla
 export function candidateFrom(msg: TgMessage, now: number): OwnerCandidateView | null {
   if (!msg.from || msg.from.is_bot || msg.chat.type !== "private") return null;
   const name = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ");
-  return { senderId: String(msg.from.id), chatId: msg.chat.id, name, ...(msg.from.username ? { username: msg.from.username } : {}), at: now };
+  // The message's own date, so a delayed or replayed message cannot pass for one written inside the window.
+  const at = msg.date !== undefined ? msg.date * 1000 : now;
+  return { senderId: String(msg.from.id), chatId: msg.chat.id, name, ...(msg.from.username ? { username: msg.from.username } : {}), at };
 }
 
 interface ClaimFile {
   openUntil: number;
+  /** When this window began (whole seconds, like Telegram's dates). Candidates older than this don't count. */
+  windowStart: number;
   candidates: OwnerCandidateView[];
 }
 
@@ -39,11 +43,20 @@ export class OwnerClaimStore {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Starts the window, or extends it to ten minutes from now; recorded candidates stay. */
+  /**
+   * Starts a fresh window, or extends the one that is open (keeping its start and candidates). A window that has
+   * expired is never revived: whatever it recorded is dropped.
+   */
   open(): Promise<void> {
     return this.serial(async () => {
-      const file = (await this.read()) ?? { openUntil: 0, candidates: [] };
-      await this.write({ openUntil: this.now() + OWNER_CLAIM_MINUTES * 60_000, candidates: file.candidates });
+      const now = this.now();
+      const file = await this.read();
+      const live = file !== null && file.openUntil > now;
+      await this.write({
+        openUntil: now + OWNER_CLAIM_MINUTES * 60_000,
+        windowStart: live ? file.windowStart : Math.floor(now / 1000) * 1000,
+        candidates: live ? file.candidates : [],
+      });
     });
   }
 
@@ -52,14 +65,21 @@ export class OwnerClaimStore {
     return file !== null && file.openUntil > this.now();
   }
 
-  /** Only while the window is open. One entry per sender (the latest wins); the five newest are kept. */
-  add(c: OwnerCandidateView): Promise<void> {
+  /** Start of the open window, or null when closed. */
+  async windowStart(): Promise<number | null> {
+    const file = await this.read();
+    return file !== null && file.openUntil > this.now() ? file.windowStart : null;
+  }
+
+  /** Only while the window is open and only for a message sent inside it. One entry per sender (the latest wins); the five newest are kept. */
+  add(c: OwnerCandidateView): Promise<boolean> {
     return this.serial(async () => {
       const file = await this.read();
-      if (!file || file.openUntil <= this.now()) return;
+      if (!file || file.openUntil <= this.now() || c.at < file.windowStart) return false;
       const kept = file.candidates.filter((x) => x.senderId !== c.senderId);
       kept.push(c);
-      await this.write({ openUntil: file.openUntil, candidates: kept.slice(-MAX_CANDIDATES) });
+      await this.write({ ...file, candidates: kept.slice(-MAX_CANDIDATES) });
+      return true;
     });
   }
 
@@ -67,7 +87,7 @@ export class OwnerClaimStore {
   async candidates(): Promise<OwnerCandidateView[]> {
     const file = await this.read();
     if (!file || file.openUntil <= this.now()) return [];
-    return [...file.candidates].reverse();
+    return file.candidates.filter((c) => c.at >= file.windowStart).reverse();
   }
 
   close(): Promise<void> {
@@ -85,8 +105,8 @@ export class OwnerClaimStore {
       const raw = JSON.parse(await readFile(ownerClaimPath(this.home), "utf8")) as unknown;
       if (typeof raw !== "object" || raw === null) return null;
       const r = raw as Record<string, unknown>;
-      if (typeof r.openUntil !== "number" || !Array.isArray(r.candidates)) return null;
-      return { openUntil: r.openUntil, candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null) };
+      if (typeof r.openUntil !== "number" || typeof r.windowStart !== "number" || !Array.isArray(r.candidates)) return null;
+      return { openUntil: r.openUntil, windowStart: r.windowStart, candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null) };
     } catch {
       return null;
     }

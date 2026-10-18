@@ -7,7 +7,7 @@ import { OwnerClaimStore, type OwnerCandidateView } from "../gateway/owner-claim
 import { FilePairing } from "../gateway/pairing";
 import { OnboardError } from "./engine";
 import { testDeps } from "./testing";
-import { BotBusyError, OWNER_GREETING, confirmOwner, describeCandidate, nextOwnerCandidate, telegramListenMode } from "./telegram-owner";
+import { BotBusyError, OWNER_GREETING, confirmOwner, describeCandidate, describeCandidates, nextOwnerCandidate, telegramListenMode } from "./telegram-owner";
 
 let home: string;
 let server: FakeTelegramServer;
@@ -20,17 +20,37 @@ afterEach(async () => {
   await removeDir(home);
 });
 
-const cand = (senderId: string, chatId = 1): OwnerCandidateView => ({ senderId, chatId, name: `n${senderId}`, at: 1 });
+const cand = (senderId: string, chatId = 1): OwnerCandidateView => ({ senderId, chatId, name: `n${senderId}`, at: Date.now() });
 const deps = () => testDeps(home, { telegramBaseUrl: server.baseUrl });
 
 describe("nextOwnerCandidate", () => {
-  test("direct: the first private human sender, with names; excluded ids skipped; acknowledged", async () => {
+  test("direct: the first private human sender who writes after listening starts, with names; excluded ids skipped; acknowledged", async () => {
+    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000), exclude: new Set(["9"]) });
+    await Bun.sleep(50);
     server.pushMessage(-100, 5, "group", { chatType: "group" });
     server.pushMessage(42, 9, "me first");
     server.pushMessage(42, 7, "hi", { from: { first_name: "Panagiotis", username: "pk" } });
-    const c = await nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000), exclude: new Set(["9"]) });
-    expect(c).toMatchObject({ senderId: "7", chatId: 42, name: "Panagiotis", username: "pk" });
+    expect(await pending).toMatchObject({ senderId: "7", chatId: 42, name: "Panagiotis", username: "pk" });
     expect(server.getUpdatesOffsets.at(-1)).toBeGreaterThan(server.getUpdatesOffsets[0]!);
+  });
+
+  test("direct: messages already waiting when listening starts are dropped, not offered", async () => {
+    server.pushMessage(42, 3, "from yesterday", { date: Math.floor(Date.now() / 1000) - 3600 });
+    server.pushMessage(42, 4, "waiting, fresh date but before we listened");
+    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    await Bun.sleep(100);
+    server.pushMessage(42, 7, "now");
+    expect((await pending)?.senderId).toBe("7");
+  });
+
+  test("direct: a late-delivered message dated before the window is skipped", async () => {
+    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    await Bun.sleep(50);
+    server.pushMessage(42, 3, "old", { date: Math.floor(Date.now() / 1000) - 3600 });
+    server.pushMessage(42, 7, "now");
+    const c = await pending;
+    expect(c?.senderId).toBe("7");
+    expect(c?.at).toBeGreaterThan(Date.now() - 60_000);
   });
 
   test("direct: a 409 is a BotBusyError with a plain message", async () => {
@@ -90,10 +110,11 @@ describe("confirmOwner", () => {
 
 describe("direct mode confirmation", () => {
   test("a sender caught by direct polling can be confirmed", async () => {
-    server.pushMessage(42, 7, "hi");
     const d = deps();
-    const c = await nextOwnerCandidate(d, server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
-    await confirmOwner(d, server.token, c!);
+    const pending = nextOwnerCandidate(d, server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    await Bun.sleep(50);
+    server.pushMessage(42, 7, "hi");
+    await confirmOwner(d, server.token, (await pending)!);
     expect(await new FilePairing({ path: join(home, "gateway", "pairing.json") }).owner()).toEqual({ channel: "telegram", senderId: "7" });
   });
 });
@@ -117,8 +138,23 @@ describe("telegramListenMode", () => {
   });
 });
 
-test("describeCandidate", () => {
-  expect(describeCandidate({ ...cand("7"), name: "Panagiotis K", username: "pk" })).toBe("Panagiotis K (@pk)");
-  expect(describeCandidate({ ...cand("7"), name: "Panagiotis K" })).toBe("Panagiotis K");
-  expect(describeCandidate({ ...cand("7"), name: "" })).toBe("Telegram user 7");
+describe("describing candidates", () => {
+  test("always shows the numeric id next to the name", () => {
+    expect(describeCandidate({ ...cand("7"), name: "Panagiotis K", username: "pk" })).toBe("Panagiotis K (@pk) · id 7");
+    expect(describeCandidate({ ...cand("7"), name: "Panagiotis K" })).toBe("Panagiotis K · id 7");
+    expect(describeCandidate({ ...cand("7"), name: "" })).toBe("Telegram user · id 7");
+  });
+  test("a display name cannot pose as a handle or fake the id", () => {
+    const shown = describeCandidate({ ...cand("7"), name: "Admin (@boss) · id 1\nreal", username: "pk" });
+    expect(shown).toBe("Admin boss id 1 real (@pk) · id 7");
+    expect(shown.split("id ").length - 1).toBe(2); // the fake one is still just text, followed by the real one last
+    expect(shown.endsWith("· id 7")).toBe(true);
+  });
+  test("several senders are called out and all listed", () => {
+    const text = describeCandidates([{ ...cand("7"), name: "Ann" }, { ...cand("8"), name: "Ann" }]);
+    expect(text).toContain("2 different people");
+    expect(text).toContain("Ann · id 7");
+    expect(text).toContain("Ann · id 8");
+    expect(describeCandidates([{ ...cand("7"), name: "Ann" }])).toBe("Ann · id 7");
+  });
 });
