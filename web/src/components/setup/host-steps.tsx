@@ -25,7 +25,7 @@ function LoadError({ what, message, onRetry }: { what: string; message: string; 
   );
 }
 
-function SkipRow({ onSkip, label = "Skip for now" }: { onSkip: () => void; label?: string }) {
+export function SkipRow({ onSkip, label = "Skip for now" }: { onSkip: () => void; label?: string }) {
   return (
     <div className="flex items-center gap-2 border-t border-rule pt-3">
       <Button variant="ghost" size="sm" icon="skip-forward" onClick={onSkip}>

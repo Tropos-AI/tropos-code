@@ -12,6 +12,7 @@ import { PageActions } from "@/components/pages/page-actions";
 import { ResourceView } from "@/components/pages/resource-view";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
 import { LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
+import { AutonomyStep, IdentityStep, ProjectsStep, WelcomeStep } from "@/components/setup/guided-steps";
 import { HealthStep, ServiceStep, TelegramStep } from "@/components/setup/host-steps";
 import { ModelStep, ProviderStep } from "@/components/setup/provider-steps";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
@@ -30,21 +31,32 @@ const STATUS: Record<OnboardStep["status"], { tone: BadgeTone; label: string; ic
   error: { tone: "error", label: "problem", icon: "circle-alert" },
 };
 
-/** The first step still to do, required ones first; what the wizard opens on. */
-export function firstOpenStep(steps: OnboardStep[], skipped: ReadonlySet<OnboardStepId>): OnboardStepId | null {
+/** The first step still to do: Welcome while it is untouched, then required ones, then the rest. Skips are the server's (status "skipped"). */
+export function firstOpenStep(steps: OnboardStep[], skipped: ReadonlySet<OnboardStepId> = new Set()): OnboardStepId | null {
   const open = (s: OnboardStep) => (s.status === "todo" || s.status === "error" || s.status === "warn") && !skipped.has(s.id);
-  return (steps.find((s) => !s.optional && open(s)) ?? steps.find(open))?.id ?? null;
+  const welcome = steps.find((s) => s.id === "welcome" && open(s));
+  return (welcome ?? steps.find((s) => !s.optional && open(s)) ?? steps.find(open))?.id ?? null;
 }
 
 interface StepBodyProps {
   step: OnboardStep;
   steps: OnboardStep[];
   changed: () => void;
+  /** Like `changed`, and the wizard moves on to the next step to do. */
+  advance: () => void;
   skip: (id: OnboardStepId) => void;
 }
 
-function StepBody({ step, changed, skip }: StepBodyProps) {
+function StepBody({ step, steps, changed, advance, skip }: StepBodyProps) {
   switch (step.id) {
+    case "welcome":
+      return <WelcomeStep onChanged={advance} titles={steps.filter((s) => s.id !== "welcome").map((s) => s.title)} />;
+    case "identity":
+      return <IdentityStep onChanged={advance} onSkip={() => skip("identity")} />;
+    case "projects":
+      return <ProjectsStep onChanged={advance} onSkip={() => skip("projects")} />;
+    case "autonomy":
+      return <AutonomyStep onChanged={advance} />;
     case "provider":
       return <ProviderStep onChanged={changed} />;
     case "model":
@@ -56,7 +68,7 @@ function StepBody({ step, changed, skip }: StepBodyProps) {
     case "done":
       return <HealthStep onChanged={changed} />;
     default:
-      // Until the guided panels land, these steps are set up in the terminal.
+      // Until the remaining panels land, these steps are set up in the terminal.
       return (
         <p className="text-[13px] leading-relaxed text-ink-2">
           {STEP_WHY[step.id]} For now, set this up in the terminal with <code className="font-mono">tcode onboard</code>.
@@ -65,55 +77,67 @@ function StepBody({ step, changed, skip }: StepBodyProps) {
   }
 }
 
-function StepItem({ step, index, steps, open, skipped, onToggle, changed, skip }: StepBodyProps & { index: number; open: boolean; skipped: boolean; onToggle: () => void }) {
+/** The terminal wizard's markers: ◆ the step in front of you, ◇ done, ○ still to do, – skipped. */
+function marker(step: OnboardStep, open: boolean): { glyph: string; tone: string } {
+  if (step.status === "done") return { glyph: "◇", tone: "text-ok" };
+  if (open) return { glyph: "◆", tone: "text-accent" };
+  if (step.status === "skipped") return { glyph: "–", tone: "text-ink-3" };
+  if (step.status === "error") return { glyph: "◆", tone: "text-error" };
+  if (step.status === "warn") return { glyph: "◆", tone: "text-warn" };
+  return { glyph: "○", tone: "text-ink-4" };
+}
+
+function StepItem({ step, index, steps, open, last, onToggle, changed, advance, skip }: StepBodyProps & { index: number; open: boolean; last: boolean; onToggle: () => void }) {
   const reduced = usePrefersReducedMotion();
-  const status = skipped && step.status === "todo" ? STATUS.skipped : STATUS[step.status];
+  const status = STATUS[step.status];
   const panelId = `setup-step-${step.id}`;
+  const mark = marker(step, open);
   return (
-    <li className="overflow-hidden rounded-[14px] border border-rule bg-surface shadow-card">
-      <h2>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-controls={panelId}
-          className="flex w-full items-center gap-3.5 px-5 py-4 text-left outline-none transition-colors duration-150 hover:bg-paper focus-visible:bg-accent-wash/50 focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]"
-        >
-          <span
-            aria-hidden
-            className={cn(
-              "grid size-8 shrink-0 place-items-center rounded-full border text-[12.5px] font-medium tabular-nums",
-              step.status === "done" ? "border-ok/20 bg-ok-wash text-ok" : "border-rule bg-paper-2 text-ink-2",
-            )}
+    <li className="relative grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2.5 sm:gap-x-3.5">
+      {/* The left rail: a line joining the markers, like the terminal flow. */}
+      <div aria-hidden className="relative flex justify-center">
+        {last ? null : <span className="absolute -bottom-3 top-[1.65rem] w-px bg-rule-strong" />}
+        <span className={cn("relative mt-[0.95rem] bg-paper text-[15px] leading-none", mark.tone)}>{mark.glyph}</span>
+      </div>
+      <div className={cn("overflow-hidden rounded-[14px] border bg-surface shadow-card transition-[border-color] duration-150 motion-reduce:transition-none", open ? "border-accent/40" : "border-rule")}>
+        <h2>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={panelId}
+            className="flex w-full items-center gap-3 px-4 py-3.5 text-left outline-none transition-colors duration-150 hover:bg-paper focus-visible:bg-accent-wash/50 focus-visible:shadow-[inset_0_0_0_1px_var(--accent)] active:bg-paper-2 motion-reduce:transition-none sm:px-5 sm:py-4"
           >
-            {step.status === "done" ? <Icon name="check" size="sm" /> : index + 1}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[14.5px] font-medium text-ink">{step.title}</span>
-              {step.optional ? <span className="text-[11.5px] text-ink-3">optional</span> : null}
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[14.5px] font-medium text-ink">
+                  <span className="sr-only">{index + 1}. </span>
+                  {step.title}
+                </span>
+                {step.optional ? <span className="text-[11.5px] text-ink-3">optional</span> : null}
+              </span>
+              <span className="mt-0.5 block text-[12.5px] leading-snug text-ink-3">{step.detail ?? STEP_WHY[step.id]}</span>
             </span>
-            <span className="mt-0.5 block text-[12.5px] leading-snug text-ink-3">{step.detail ?? STEP_WHY[step.id]}</span>
-          </span>
-          <Badge tone={status.tone}>{status.label}</Badge>
-          <span aria-hidden className={cn("text-ink-3 transition-transform duration-150 motion-reduce:transition-none", open && "rotate-90")}>
-            <Icon name="chevron-right" size="sm" />
-          </span>
-        </button>
-      </h2>
-      {open ? (
-        <m.div
-          id={panelId}
-          role="region"
-          aria-label={`${step.title} setup`}
-          initial={reduced ? false : { opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={reduced ? INSTANT : CROSSFADE}
-          className="border-t border-rule px-5 pb-5 pt-4"
-        >
-          <StepBody step={step} steps={steps} changed={changed} skip={skip} />
-        </m.div>
-      ) : null}
+            <Badge tone={status.tone}>{status.label}</Badge>
+            <span aria-hidden className={cn("text-ink-3 transition-transform duration-150 motion-reduce:transition-none", open && "rotate-90")}>
+              <Icon name="chevron-right" size="sm" />
+            </span>
+          </button>
+        </h2>
+        {open ? (
+          <m.div
+            id={panelId}
+            role="region"
+            aria-label={`${step.title} setup`}
+            initial={reduced ? false : { opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={reduced ? INSTANT : CROSSFADE}
+            className="border-t border-rule px-4 pb-5 pt-4 sm:px-5"
+          >
+            <StepBody step={step} steps={steps} changed={changed} advance={advance} skip={skip} />
+          </m.div>
+        ) : null}
+      </div>
     </li>
   );
 }
@@ -121,20 +145,25 @@ function StepItem({ step, index, steps, open, skipped, onToggle, changed, skip }
 function Wizard({ state, refresh }: { state: OnboardState; refresh: () => void }) {
   const admin = useAdmin();
   const store = useAppStore();
-  const [skipped, setSkipped] = useState<ReadonlySet<OnboardStepId>>(new Set());
   const [choice, setChoice] = useState<{ id: OnboardStepId | null } | null>(null);
   const finish = useAction();
   const reopen = useAction();
 
-  const openId = choice ? choice.id : firstOpenStep(state.steps, skipped);
+  const openId = choice ? choice.id : firstOpenStep(state.steps);
   const required = state.steps.filter((s) => !s.optional);
   const requiredDone = required.filter((s) => s.status === "done").length;
 
-  const skip = (id: OnboardStepId) => {
-    const next = new Set(skipped);
-    next.add(id);
-    setSkipped(next);
-    setChoice({ id: firstOpenStep(state.steps, next) });
+  const skipping = useAction();
+  const skip = async (id: OnboardStepId) => {
+    const next = await skipping.run(() => admin("onboard.skip", { id }));
+    if (next) {
+      setChoice({ id: firstOpenStep(next.steps) });
+      refresh();
+    }
+  };
+  const advance = () => {
+    setChoice(null);
+    refresh();
   };
 
   const doFinish = async () => {
@@ -148,7 +177,6 @@ function Wizard({ state, refresh }: { state: OnboardState; refresh: () => void }
   const doReopen = async () => {
     const next = await reopen.run(() => admin("onboard.reopen"));
     if (next) {
-      setSkipped(new Set());
       setChoice(null);
       refresh();
     }
@@ -189,6 +217,7 @@ function Wizard({ state, refresh }: { state: OnboardState; refresh: () => void }
         <LiveRegion>
           {finish.error ? <Notice tone="error" className="mt-3">Couldn't save that: {finish.error}</Notice> : null}
           {reopen.error ? <Notice tone="error" className="mt-3">Couldn't reopen setup: {reopen.error}</Notice> : null}
+          {skipping.error ? <Notice tone="error" className="mt-3">Couldn't skip that step: {skipping.error}</Notice> : null}
         </LiveRegion>
       </section>
 
@@ -200,10 +229,11 @@ function Wizard({ state, refresh }: { state: OnboardState; refresh: () => void }
             index={index}
             steps={state.steps}
             open={openId === step.id}
-            skipped={skipped.has(step.id)}
+            last={index === state.steps.length - 1}
             onToggle={() => setChoice({ id: openId === step.id ? null : step.id })}
             changed={refresh}
-            skip={skip}
+            advance={advance}
+            skip={(id) => void skip(id)}
           />
         ))}
       </ol>

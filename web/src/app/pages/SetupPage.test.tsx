@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { OnboardState, OnboardStep } from "@core/web/admin/api";
+import type { ChatSettingsView, OnboardState, OnboardStep } from "@core/web/admin/api";
 import type { ProviderInfoView } from "@core/web/protocol";
 
 import { stubMatchMedia } from "@/components/pages/page-test-kit";
@@ -32,8 +32,9 @@ const PROVIDERS = (saved: boolean): ProviderInfoView[] => [
   { id: "ollama", name: "Ollama", keyRequired: false, keyURL: null, keyEnv: [], noKeyNote: "Runs on this machine.", key: null },
 ];
 
-function server(over: Record<string, (p: never) => unknown> = {}) {
-  let steps = STEPS;
+function server(over: Record<string, (p: never) => unknown> = {}, opts: { fresh?: boolean; confinement?: "sandbox-exec" | null; backend?: "host" | "docker" } = {}) {
+  let steps = opts.fresh ? STEPS : STEPS.map((s) => (s.id === "welcome" ? { ...s, status: "done" as const } : s));
+  let chat: ChatSettingsView = { autonomy: "balanced", backend: opts.backend ?? "host", explicit: false, confinement: opts.confinement === undefined ? "sandbox-exec" : opts.confinement, allowUnconfined: false, installHint: "brew install bubblewrap" };
   let dismissed = false;
   let saved = false;
   let telegram = false;
@@ -41,6 +42,36 @@ function server(over: Record<string, (p: never) => unknown> = {}) {
   const mark = (id: string, status: OnboardStep["status"]) => (steps = steps.map((s) => (s.id === id ? { ...s, status } : s)));
   const admin = {
     "onboard.state": state,
+    "onboard.start": () => {
+      mark("welcome", "done");
+      return state();
+    },
+    "onboard.skip": (p: { id: string }) => {
+      mark(p.id, "skipped");
+      return state();
+    },
+    "onboard.identity.save": () => {
+      mark("identity", "done");
+      return state();
+    },
+    "onboard.projects.scan": () => ({
+      repos: [
+        { path: "/w/alpha", name: "alpha", touchedAt: 2, recent: true, registered: false },
+        { path: "/w/old", name: "old", touchedAt: 1, recent: false, registered: false },
+        { path: "/w/have", name: "have", touchedAt: 3, recent: true, registered: true },
+      ],
+      truncated: true,
+    }),
+    "onboard.projects.add": (p: { paths: string[] }) => {
+      mark("projects", "done");
+      return { added: p.paths, failed: [] };
+    },
+    "onboard.autonomy.get": () => chat,
+    "onboard.autonomy.set": (p: { autonomy: "ask" | "balanced" | "autonomous" }) => {
+      chat = { ...chat, autonomy: p.autonomy, explicit: true };
+      mark("autonomy", "done");
+      return chat;
+    },
     "onboard.validateKey": (p: { key: string }) => (p.key === SECRET ? { ok: true, models: ["gpt-a", "gpt-b", "gpt-c", "gpt-d", "gpt-e"] } : { ok: false, models: [], error: `bad key ${p.key}` }),
     "onboard.finish": () => {
       dismissed = true;
@@ -89,7 +120,8 @@ afterEach(() => cleanup());
 
 describe("firstOpenStep", () => {
   test("is the first required step still to do, else an optional one", () => {
-    expect(firstOpenStep(STEPS, new Set())).toBe("provider");
+    expect(firstOpenStep(STEPS, new Set())).toBe("welcome");
+    expect(firstOpenStep(STEPS.map((x) => (x.id === "welcome" ? { ...x, status: "done" as const } : x)), new Set())).toBe("provider");
     const required = STEPS.map((s) => (s.optional ? s : { ...s, status: "done" as const }));
     expect(firstOpenStep(required, new Set())).toBe("welcome");
     expect(firstOpenStep(required, new Set(STEPS.filter((s) => s.optional).map((s) => s.id)))).toBeNull();
@@ -107,9 +139,100 @@ describe("SetupPage", () => {
     expect(provider.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: /Telegram/ }).textContent).toContain("optional");
     expect(screen.getByRole("button", { name: /Autonomy/ }).textContent).toContain("Default: Balanced.");
-    // A step with no setup panel yet says what it is for and points to the terminal.
-    fireEvent.click(screen.getByRole("button", { name: /Projects/ }));
-    expect(screen.getByText(/set this up in the terminal with/)).toBeTruthy();
+  });
+
+  test("a fresh setup opens on Welcome; Start calls onboard.start and the provider step opens", async () => {
+    const s = server({}, { fresh: true });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    const welcome = await screen.findByRole("button", { name: /Welcome/ });
+    expect(welcome.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(socket.adminOf("onboard.start")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Connect a model/ }).getAttribute("aria-expanded")).toBe("true"));
+  });
+
+  test("identity: picking Atlas and saving sends its fields", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Name and personality/ }));
+    fireEvent.click(await screen.findByRole("radio", { name: /Atlas/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(socket.adminOf("onboard.identity.save")[0]?.params).toEqual({ name: "Atlas", emoji: "🗺️", vibe: "patient, thorough, explains as it goes" }));
+  });
+
+  test("identity: a server problem shows in a notice", async () => {
+    const s = server({ "onboard.identity.save": () => Promise.reject(new Error("Name is too long.")) });
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Name and personality/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Name is too long.");
+  });
+
+  test("projects: recent repos are ticked, registered ones locked; Add sends the ticked paths", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Projects/ }));
+    const alpha = (await screen.findByRole("checkbox", { name: /alpha/ })) as HTMLInputElement;
+    expect(alpha.checked).toBe(true);
+    expect((screen.getByRole("checkbox", { name: /old/ }) as HTMLInputElement).checked).toBe(false);
+    const have = screen.getByRole("checkbox", { name: /have/ }) as HTMLInputElement;
+    expect(have.checked && have.disabled).toBe(true);
+    expect(document.body.textContent).toContain("already added");
+    expect(document.body.textContent).toContain("only the most recent");
+    fireEvent.click(screen.getByRole("checkbox", { name: /old/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add 2 projects" }));
+    await waitFor(() => expect(socket.adminOf("onboard.projects.add")[0]?.params).toEqual({ paths: ["/w/alpha", "/w/old"] }));
+  });
+
+  test("projects: failures are listed", async () => {
+    const s = server({ "onboard.projects.add": () => ({ added: [], failed: [{ path: "/w/alpha", error: "not a git repository" }] }) });
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Projects/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add 1 project" }));
+    expect(await screen.findByText(/not a git repository/)).toBeTruthy();
+  });
+
+  test("autonomy: Balanced is preselected and Save sends it", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Autonomy/ }));
+    const balanced = await screen.findByRole("radio", { name: /Balanced/ });
+    expect(balanced.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(socket.adminOf("onboard.autonomy.set")[0]?.params).toEqual({ autonomy: "balanced" }));
+  });
+
+  test("autonomy: without a sandbox Save needs the unconfined checkbox", async () => {
+    const s = server({}, { confinement: null });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Autonomy/ }));
+    expect((await screen.findByText("brew install bubblewrap")).tagName).toBe("CODE");
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Run without a sandbox/ }));
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(socket.adminOf("onboard.autonomy.set")[0]?.params).toEqual({ autonomy: "balanced", acceptUnconfined: true }));
+  });
+
+  test("autonomy: with Docker, running chat commands on this computer is offered and ticked", async () => {
+    const s = server({}, { backend: "docker", confinement: null });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Autonomy/ }));
+    const host = (await screen.findByRole("checkbox", { name: /Run chat commands on this computer instead of Docker/ })) as HTMLInputElement;
+    expect(host.checked).toBe(true);
+    fireEvent.click(await screen.findByRole("radio", { name: /^Ask/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(socket.adminOf("onboard.autonomy.set")[0]?.params).toEqual({ autonomy: "ask", backend: "host" }));
+  });
+
+  test("Skip calls onboard.skip and the step reads skipped", async () => {
+    const s = server();
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Name and personality/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Skip: I'll name it in our first chat/ }));
+    await waitFor(() => expect(socket.adminOf("onboard.skip")[0]?.params).toEqual({ id: "identity" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Name and personality/ }).textContent).toContain("skipped"));
   });
 
   test("calm error with retry when the admin API is unavailable", async () => {
@@ -220,7 +343,7 @@ describe("SetupPage", () => {
     const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss setup" }));
     await waitFor(() => expect(socket.adminOf("onboard.finish")).toHaveLength(1));
-    expect(socket.adminOf("onboard.finish")[0]?.params).toEqual({ skipped: ["welcome", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"] });
+    expect(socket.adminOf("onboard.finish")[0]?.params).toEqual({ skipped: ["identity", "projects", "autonomy", "telegram", "phone", "service", "done"] });
     fireEvent.click(await screen.findByRole("button", { name: "Reopen setup" }));
     await waitFor(() => expect(socket.adminOf("onboard.reopen")).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Dismiss setup" })).toBeTruthy();
