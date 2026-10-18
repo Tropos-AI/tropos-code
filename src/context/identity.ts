@@ -255,6 +255,36 @@ function fail(content: string): ToolOutput {
   return { content, isError: true, summary: "not saved" };
 }
 
+export type IdentityFields = Pick<Identity, Field>;
+
+/**
+ * Validates and writes IDENTITY.md and ends the first-run ritual. The Identity tool and the setup wizard both come
+ * through here, so they refuse the same values with the same words. Nothing is written when anything is refused.
+ */
+export async function saveIdentity(
+  home: string,
+  input: IdentityFields,
+): Promise<{ ok: true; path: string; before: string | null; after: string } | { ok: false; problem: string }> {
+  const patch: IdentityFields = {};
+  for (const field of FIELDS) {
+    const raw = input[field];
+    if (raw === undefined) continue;
+    const value = raw.trim();
+    const problem = fieldProblem(field, value);
+    if (problem) return { ok: false, problem };
+    patch[field] = value;
+  }
+  if (Object.keys(patch).length === 0) return { ok: false, problem: "set needs at least one of name, emoji or vibe." };
+  const scan = scanText(Object.values(patch).join("\n"));
+  if (!scan.ok) return { ok: false, problem: `Not saved: ${scan.reason}.` };
+  const path = homeFile(home, IDENTITY_FILE);
+  const before = await readSmall(path);
+  const after = updateIdentityFile(before, patch);
+  await writeHomeFile(path, after);
+  await markBootstrapped(home);
+  return { ok: true, path, before, after };
+}
+
 /** Why a set value can't be saved, or undefined when it is fine. */
 function fieldProblem(field: Field, value: string): string | undefined {
   if (/[\r\n]/.test(value)) return `${field} must be a single line.`;
@@ -290,23 +320,9 @@ export function createIdentityTool(opts: IdentityToolOptions): AnyTool {
   }
 
   async function set(input: Input, actor: Actor): Promise<ToolOutput> {
-    const patch: Pick<Identity, Field> = {};
-    for (const field of FIELDS) {
-      const raw = input[field];
-      if (raw === undefined) continue;
-      const value = raw.trim();
-      const problem = fieldProblem(field, value);
-      if (problem) return fail(problem);
-      patch[field] = value;
-    }
-    if (Object.keys(patch).length === 0) return fail("set needs at least one of name, emoji or vibe.");
-    const scan = scanText(Object.values(patch).join("\n"));
-    if (!scan.ok) return fail(`Not saved: ${scan.reason}.`);
-    const path = homeFile(home, IDENTITY_FILE);
-    const before = await readSmall(path);
-    const after = updateIdentityFile(before, patch);
-    await writeHomeFile(path, after);
-    await markBootstrapped(home);
+    const saving = await saveIdentity(home, { name: input.name, emoji: input.emoji, vibe: input.vibe });
+    if (!saving.ok) return fail(saving.problem);
+    const { path, before, after } = saving;
     const saved = parseIdentityFile(after);
     const line = `Identity saved: ${FIELDS.filter((f) => saved[f]).map((f) => `${LABELS[f]}: ${saved[f]}`).join(", ")}`;
     const note = await record({ path, before, after, actor, summary: line });
