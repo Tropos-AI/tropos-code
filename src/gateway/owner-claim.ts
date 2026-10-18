@@ -1,7 +1,9 @@
 // src/gateway/owner-claim.ts — the short window in which setup listens for the owner's first Telegram message. The
 // gateway records who wrote (it never approves anyone); the owner confirms one of them on the computer.
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { withFileLock } from "../web/file-lock";
 import type { OwnerCandidateView } from "../web/admin/api";
 import type { TgMessage } from "./telegram/api";
 
@@ -11,6 +13,16 @@ export const OWNER_CLAIM_MINUTES = 10;
 const MAX_CANDIDATES = 5;
 
 export const ownerClaimPath = (home: string) => join(home, "gateway", "owner-claim.json");
+
+/** The deep link the owner opens (or scans) on their phone: Telegram sends the bot `/start <nonce>`. */
+export const ownerClaimLink = (botUsername: string, nonce: string) => `https://t.me/${botUsername}?start=${nonce}`;
+
+/** Exactly `/start <nonce>` (what the link sends) or the bare nonce. Anything else proves nothing. */
+export function claimProof(text: string | undefined, nonce: string): boolean {
+  if (text === undefined) return false;
+  const given = Buffer.from(text.trim());
+  return [`/start ${nonce}`, nonce].some((ok) => given.length === Buffer.byteLength(ok) && timingSafeEqual(given, Buffer.from(ok)));
+}
 
 /** Null for bots, groups and messages without a sender: only a person writing privately can be the owner. */
 export function candidateFrom(msg: TgMessage, now: number): OwnerCandidateView | null {
@@ -25,6 +37,10 @@ interface ClaimFile {
   openUntil: number;
   /** When this window began (whole seconds, like Telegram's dates). Candidates older than this don't count. */
   windowStart: number;
+  /** Which window this is; a new window never inherits the old one's candidates or secret. */
+  generation: string;
+  /** The secret in the link. Only a sender who sends it is recorded. */
+  nonce: string;
   candidates: OwnerCandidateView[];
 }
 
@@ -48,13 +64,15 @@ export class OwnerClaimStore {
    * expired is never revived: whatever it recorded is dropped.
    */
   open(): Promise<void> {
-    return this.serial(async () => {
+    return this.locked(async () => {
       const now = this.now();
       const file = await this.read();
       const live = file !== null && file.openUntil > now;
       await this.write({
         openUntil: now + OWNER_CLAIM_MINUTES * 60_000,
         windowStart: live ? file.windowStart : Math.floor(now / 1000) * 1000,
+        generation: live ? file.generation : randomBytes(8).toString("hex"),
+        nonce: live ? file.nonce : randomBytes(9).toString("base64url"),
         candidates: live ? file.candidates : [],
       });
     });
@@ -71,11 +89,21 @@ export class OwnerClaimStore {
     return file !== null && file.openUntil > this.now() ? file.windowStart : null;
   }
 
-  /** Only while the window is open and only for a message sent inside it. One entry per sender (the latest wins); the five newest are kept. */
-  add(c: OwnerCandidateView): Promise<boolean> {
-    return this.serial(async () => {
+  /** The open window's secret, or null when closed. */
+  async nonce(): Promise<string | null> {
+    const file = await this.read();
+    return file !== null && file.openUntil > this.now() ? file.nonce : null;
+  }
+
+  /**
+   * Records a sender, only while the window is open, only for a message sent inside it, and only if the message text
+   * proves the sender has the link (`proof`). One entry per sender (the latest wins); the five newest are kept.
+   * Read and write happen under one lock, so a window closed meanwhile is never written to.
+   */
+  add(c: OwnerCandidateView, proof: string | undefined): Promise<boolean> {
+    return this.locked(async () => {
       const file = await this.read();
-      if (!file || file.openUntil <= this.now() || c.at < file.windowStart) return false;
+      if (!file || file.openUntil <= this.now() || c.at < file.windowStart || !claimProof(proof, file.nonce)) return false;
       const kept = file.candidates.filter((x) => x.senderId !== c.senderId);
       kept.push(c);
       await this.write({ ...file, candidates: kept.slice(-MAX_CANDIDATES) });
@@ -91,11 +119,12 @@ export class OwnerClaimStore {
   }
 
   close(): Promise<void> {
-    return this.serial(() => rm(ownerClaimPath(this.home), { force: true }));
+    return this.locked(() => rm(ownerClaimPath(this.home), { force: true }));
   }
 
-  private serial<T>(op: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(op);
+  /** In this process in order, and across processes (the gateway writes this file too) under the file lock. */
+  private locked<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(() => withFileLock(ownerClaimPath(this.home), op));
     this.queue = next.catch(() => {});
     return next;
   }
@@ -105,8 +134,8 @@ export class OwnerClaimStore {
       const raw = JSON.parse(await readFile(ownerClaimPath(this.home), "utf8")) as unknown;
       if (typeof raw !== "object" || raw === null) return null;
       const r = raw as Record<string, unknown>;
-      if (typeof r.openUntil !== "number" || typeof r.windowStart !== "number" || !Array.isArray(r.candidates)) return null;
-      return { openUntil: r.openUntil, windowStart: r.windowStart, candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null) };
+      if (typeof r.openUntil !== "number" || typeof r.windowStart !== "number" || typeof r.generation !== "string" || typeof r.nonce !== "string" || !Array.isArray(r.candidates)) return null;
+      return { openUntil: r.openUntil, windowStart: r.windowStart, generation: r.generation, nonce: r.nonce, candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null) };
     } catch {
       return null;
     }

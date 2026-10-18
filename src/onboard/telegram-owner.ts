@@ -22,21 +22,24 @@ export class BotBusyError extends OnboardError {
   }
 }
 
-/** A display name is the sender's own text: it must not read as a handle, an id or a second line. */
-const plain = (text: string) => text.replace(/[()@·]/g, "").replace(/\s+/g, " ").trim();
+/**
+ * A display name is the sender's own text: it must not read as a handle or an id, run onto a second line, or reorder
+ * what follows it (bidi overrides, zero-width characters).
+ */
+const plain = (text: string) => text.normalize("NFKC").replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/[()@·]/g, "").replace(/\s+/g, " ").trim();
 
-/** "Panagiotis K (@pk) · id 12345". The numeric id is the one thing the sender cannot choose, so it is always shown last. */
+/** "Panagiotis K (@pk)" and, on its own line, "id 12345": the id is the one thing the sender cannot choose. */
 export function describeCandidate(c: OwnerCandidateView): string {
   const name = plain(c.name) || "Telegram user";
   const handle = c.username ? ` (@${plain(c.username)})` : "";
-  return `${name}${handle} · id ${c.senderId}`;
+  return `${name}${handle}\nid ${c.senderId}`;
 }
 
 /** One candidate, or - when several people wrote - a list that says so, so the owner picks on purpose. */
 export function describeCandidates(list: OwnerCandidateView[]): string {
   const distinct = [...new Map(list.map((c) => [c.senderId, c])).values()];
   if (distinct.length === 1) return describeCandidate(distinct[0]!);
-  return `${distinct.length} different people wrote to the bot during setup. Pick yourself carefully:\n${distinct.map((c) => `- ${describeCandidate(c)}`).join("\n")}`;
+  return `${distinct.length} different people wrote to the bot during setup. Pick yourself carefully:\n${distinct.map((c) => `- ${describeCandidate(c).replace("\n", " · ")}`).join("\n")}`;
 }
 
 /**
@@ -55,6 +58,8 @@ export interface NextOwnerOptions {
   signal: AbortSignal;
   exclude?: ReadonlySet<string>;
   pollMs?: number;
+  /** Called once the window is open, with the secret for the link (see ownerClaimLink). */
+  onWindow?: (w: { nonce: string }) => void;
 }
 
 /** The next person who writes to the bot, or null when the signal fires first. */
@@ -63,6 +68,8 @@ export async function nextOwnerCandidate(deps: OnboardDeps, token: string, opts:
   const exclude = opts.exclude ?? new Set<string>();
   // The window runs on the wall clock, like the gateway that reads it. Both modes open the window: confirmOwner only accepts senders recorded inside it.
   await claim.open();
+  const nonce = await claim.nonce();
+  if (nonce) opts.onWindow?.({ nonce });
   if (opts.mode === "gateway") {
     const pollMs = opts.pollMs ?? 1000;
     while (!opts.signal.aborted) {
@@ -107,7 +114,8 @@ export async function nextOwnerCandidate(deps: OnboardDeps, token: string, opts:
       offset = Math.max(offset, u.update_id + 1);
       const c = u.message ? candidateFrom(u.message, Date.now()) : null;
       if (!c || exclude.has(c.senderId) || c.at < windowStart) continue;
-      if (!(await claim.add(c))) continue;
+      // Only someone who sends the secret from the link counts; anyone else who writes is simply not the owner.
+      if (!(await claim.add(c, u.message?.text))) continue;
       // Acknowledge, so the gateway never replays this message as a stranger's.
       await tg.getUpdates(offset, 0, opts.signal).catch(() => {});
       return c;

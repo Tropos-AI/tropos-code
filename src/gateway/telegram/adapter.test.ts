@@ -59,10 +59,13 @@ function fakeProjects() {
 
 function fakeClaim(open: boolean) {
   const added: OwnerCandidateView[] = [];
-  return { isOpen: async () => open, add: async (c: OwnerCandidateView) => (added.push(c), true), added };
+  // Like the real store: only the secret from the link counts.
+  return { isOpen: async () => open, add: async (c: OwnerCandidateView, proof?: string) => (proof === `/start ${NONCE}` ? (added.push(c), true) : false), added };
 }
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView): Promise<boolean> } } = {}) {
+const NONCE = "n0nce-secret";
+
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView, proof?: string): Promise<boolean> } } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -98,7 +101,7 @@ describe("TelegramAdapter owner claim", () => {
   test("while setup listens, a stranger is recorded with their names and told to confirm, never given a code", async () => {
     const claim = fakeClaim(true);
     const { server, sessions, pairing } = await setup({ approved: false, ownerClaim: claim });
-    server.pushMessage(CHAT, CHAT, "hello", { from: { first_name: "Pan", username: "pk" } });
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`, { from: { first_name: "Pan", username: "pk" } });
     await server.waitFor(() => server.sent.length >= 1);
     expect(server.sent[0]!.text).toBe(CLAIM_REPLY);
     expect(claim.added[0]).toMatchObject({ senderId: String(CHAT), name: "Pan", username: "pk" });
@@ -109,8 +112,8 @@ describe("TelegramAdapter owner claim", () => {
   test("the claim reply goes once per sender; every message is still recorded", async () => {
     const claim = fakeClaim(true);
     const { server } = await setup({ approved: false, ownerClaim: claim });
-    server.pushMessage(CHAT, CHAT, "one");
-    server.pushMessage(CHAT, CHAT, "two");
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`);
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`);
     await server.waitFor(() => claim.added.length >= 2);
     expect(server.sent).toHaveLength(1);
   });
@@ -120,14 +123,24 @@ describe("TelegramAdapter owner claim", () => {
     const { server } = await setup({ approved: false, ownerClaim: claim, allowGroups: true });
     server.pushMessage(-100, 5, "hi all", { chatType: "group" });
     server.pushNonText(CHAT, CHAT, "photo");
-    server.pushMessage(CHAT, CHAT, "later"); // a sentinel: once this is answered the earlier updates are done
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`); // a sentinel: once this is answered the earlier updates are done
     await server.waitFor(() => claim.added.length >= 1);
     expect(claim.added.map((c) => c.senderId)).toEqual([String(CHAT)]);
     expect(server.textsTo(-100).some((t) => t === CLAIM_REPLY)).toBe(false);
   });
 
+  test("while setup listens, a stranger without the secret gets the normal pairing code and is not recorded", async () => {
+    const claim = fakeClaim(true);
+    const { server, pairing } = await setup({ approved: false, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "/start wrong");
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toContain("pairing code");
+    expect(claim.added).toEqual([]);
+    expect(pairing.challenges).toHaveLength(1);
+  });
+
   test("a message the store refuses (sent before the window) is a normal stranger: pairing code, no claim reply", async () => {
-    const claim = { isOpen: async () => true, add: async () => false };
+    const claim = { isOpen: async () => true, add: async (_c: OwnerCandidateView, _proof?: string) => false };
     const { server, pairing } = await setup({ approved: false, ownerClaim: claim });
     server.pushMessage(CHAT, CHAT, "old news", { date: Math.floor(Date.now() / 1000) - 3600 });
     await server.waitFor(() => server.sent.length >= 1);

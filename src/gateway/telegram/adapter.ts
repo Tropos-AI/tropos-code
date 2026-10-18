@@ -338,7 +338,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const candidate = candidateFrom(msg, Date.now());
     if (!candidate) return false;
     // The store refuses a message dated before the window began: that sender is just a stranger.
-    const recorded = await this.ownerClaim.add(candidate).catch((e) => (this.log("recording the owner candidate failed", e), false));
+    const recorded = await this.ownerClaim.add(candidate, msg.text).catch((e) => (this.log("recording the owner candidate failed", e), false));
     if (!recorded) return false;
     if (!this.claimReplied.has(candidate.senderId)) {
       if (this.claimReplied.size >= MAX_UNPAIRED_MEMORY) this.claimReplied.clear();
