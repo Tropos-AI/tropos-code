@@ -401,6 +401,26 @@ export interface OnboardAdmin {
   /** Marks the wizard finished (or dismissed) so it stops opening by itself. */
   "onboard.finish": { params: { skipped?: OnboardStepId[] } | undefined; result: OnboardState };
   "onboard.reopen": { params: undefined; result: OnboardState };
+  /** Setup was opened: the welcome step is done from now on. */
+  "onboard.start": { params: undefined; result: OnboardState };
+  /** The required steps can't be skipped. */
+  "onboard.skip": { params: { id: OnboardStepId }; result: OnboardState };
+  "onboard.identity.save": { params: { name: string; emoji?: string; vibe?: string }; result: OnboardState };
+  /** Git repositories in the usual folders (bounded; never follows symlinks). */
+  "onboard.projects.scan": { params: undefined; result: { repos: RepoCandidateView[]; truncated: boolean } };
+  "onboard.projects.add": { params: { paths: string[] }; result: { added: string[]; failed: { path: string; error: string }[] } };
+  "onboard.autonomy.get": { params: undefined; result: ChatSettingsView };
+  "onboard.autonomy.set": { params: { autonomy: AutonomyLevel; backend?: "host" | "docker"; acceptUnconfined?: boolean }; result: ChatSettingsView };
+  /**
+   * Opens (or extends) the owner-claim window and lists who has written to the bot in it. Needs the running gateway.
+   * `link` is the deep link to open or scan on the phone (the secret in it is what proves the sender is the owner).
+   */
+  "onboard.telegram.listen": { params: undefined; result: { bot: string; link?: string; candidates: OwnerCandidateView[] } };
+  /** Makes a sender who is waiting (among the candidates) the owner. */
+  "onboard.telegram.confirm": { params: { senderId: string }; result: OnboardState };
+  "onboard.phone.status": { params: undefined; result: PhoneStatusView };
+  "onboard.phone.enable": { params: undefined; result: { url: string; code: string } };
+  "onboard.summary": { params: undefined; result: SetupSummaryView };
 }
 
 // ---------- autonomy (how freely chats act) ----------
@@ -555,6 +575,18 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "onboard.validateKey",
   "onboard.finish",
   "onboard.reopen",
+  "onboard.start",
+  "onboard.skip",
+  "onboard.identity.save",
+  "onboard.projects.scan",
+  "onboard.projects.add",
+  "onboard.autonomy.get",
+  "onboard.autonomy.set",
+  "onboard.telegram.listen",
+  "onboard.telegram.confirm",
+  "onboard.phone.status",
+  "onboard.phone.enable",
+  "onboard.summary",
   "autonomy.get",
   "autonomy.set",
   "autonomy.setBackend",
