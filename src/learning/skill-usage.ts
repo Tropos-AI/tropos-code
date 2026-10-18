@@ -1,6 +1,7 @@
 // src/learning/skill-usage.ts
 import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { resolveLayoutPath } from "../home/layout";
 import { atomicWrite } from "../memory/notes";
 
 export interface SkillUse {
@@ -12,7 +13,7 @@ export type SkillUsage = Record<string, SkillUse>;
 
 /** Dot-named, so the skill loader skips it. */
 export function usagePath(home: string): string {
-  return join(home, "skills", ".usage.json");
+  return join(resolveLayoutPath(home, "skills"), ".usage.json"); // LEGACY_LAYOUT via resolveLayoutPath
 }
 
 function isUse(value: unknown): value is SkillUse {
@@ -47,8 +48,9 @@ export function recordSkillUse(home: string, name: string, now: Date = new Date(
   const run = queue.then(async () => {
     const usage = await readSkillUsage(home);
     usage[name] = { uses: (usage[name]?.uses ?? 0) + 1, lastUsed: now.toISOString() };
-    await mkdir(join(home, "skills"), { recursive: true, mode: 0o700 });
-    await atomicWrite(usagePath(home), `${JSON.stringify(usage, null, 2)}\n`);
+    const path = usagePath(home);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    await atomicWrite(path, `${JSON.stringify(usage, null, 2)}\n`);
   });
   queue = run.catch(() => {});
   return run;

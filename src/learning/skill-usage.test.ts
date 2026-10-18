@@ -26,7 +26,7 @@ test("recordSkillUse counts uses and keeps the last time, owner-only", async () 
     deploy: { uses: 2, lastUsed: "2026-10-02T00:00:00.000Z" },
     review: { uses: 1, lastUsed: "2026-10-03T00:00:00.000Z" },
   });
-  expect(usagePath(home)).toBe(join(home, "skills", ".usage.json"));
+  expect(usagePath(home)).toBe(join(home, "workspace", "skills", ".usage.json"));
   expect((await stat(usagePath(home))).mode & 0o777).toBe(0o600);
 });
 
@@ -36,7 +36,7 @@ test("parallel uses are all counted", async () => {
 });
 
 test("corrupt files and bad records are tolerated", async () => {
-  await mkdir(join(home, "skills"), { recursive: true });
+  await mkdir(join(home, "workspace", "skills"), { recursive: true });
   await writeFile(usagePath(home), "{not json");
   expect({ ...(await readSkillUsage(home)) }).toEqual({});
   await writeFile(usagePath(home), "[1,2]");
@@ -55,4 +55,11 @@ test("a failed write rejects but later writes still work", async () => {
   await rm(usagePath(home), { recursive: true });
   await recordSkillUse(home, "x");
   expect((await readSkillUsage(home)).x?.uses).toBe(1);
+});
+
+test("an un-migrated home keeps counting in ~/.tropos/skills until the migration moves it", async () => {
+  await mkdir(join(home, "skills"), { recursive: true });
+  await recordSkillUse(home, "deploy", new Date("2026-10-01T00:00:00Z"));
+  expect(usagePath(home)).toBe(join(home, "skills", ".usage.json"));
+  expect((await readSkillUsage(home)).deploy?.uses).toBe(1);
 });

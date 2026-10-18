@@ -10,7 +10,7 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
-import { LEARNED_SKILLS_DIR } from "../extensions/sources";
+import { resolveLayoutPath } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
 import { loadCounters, saveCounters, type LearningCounters } from "../learning/counters";
@@ -230,8 +230,8 @@ export function makeAgent(
     postWrite: afterWrite,
   };
   // The background review (Hermes' learning loop): interactive sessions only, never print mode.
-  // The review writes skills to its own folder (~/.tropos/skills-learned), never over the user's.
-  const learnedSkills = createSkillManageTool({ home: ctx.home, folder: LEARNED_SKILLS_DIR, ledger: ctx.ext.ledger, tracker: ctx.ext.reviewTracker });
+  // The review writes skills to its own folder (workspace/skills-learned), never over the user's.
+  const learnedSkills = createSkillManageTool({ home: ctx.home, dir: resolveLayoutPath(ctx.home, "skills-learned"), ledger: ctx.ext.ledger, tracker: ctx.ext.reviewTracker });
   const learning = (opts.learn ?? opts.interactive)
     ? new LearningLoop({
         settings: () => ctx.settings.learning,
@@ -746,10 +746,10 @@ export async function createRuntime(
       pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
       // Archive learned skills nobody used for a month (at most once a week; never deletes).
       if (ctx.settings.learning.curator && (init.interactive ?? true)) {
-        void runCurator(ctx.home, { ledger: ctx.ext.ledger, skillsDir: join(ctx.home, LEARNED_SKILLS_DIR) })
+        void runCurator(ctx.home, { ledger: ctx.ext.ledger })
           .then(({ archived }) => {
             if (archived.length > 0) {
-              notice("info", `Archived ${archived.length} learned skill${archived.length === 1 ? "" : "s"} unused for 30 days: ${archived.join(", ")} (in ${join(ctx.home, LEARNED_SKILLS_DIR, ".archive")})`);
+              notice("info", `Archived ${archived.length} learned skill${archived.length === 1 ? "" : "s"} unused for 30 days: ${archived.join(", ")} (in ${join(resolveLayoutPath(ctx.home, "skills-learned"), ".archive")})`);
             }
           })
           .catch(() => {});

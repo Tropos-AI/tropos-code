@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import { z } from "zod";
 import { errorText } from "../error-text";
 import { fmString, parseFrontmatter } from "../extensions/frontmatter";
+import { resolveLayoutPath } from "../home/layout";
 import type { Ledger } from "../learning/ledger";
 import type { SkillTracker } from "../learning/skill-tracker";
 import { scanText } from "../learning/threats";
@@ -40,13 +41,13 @@ export interface SkillManageOptions {
   ledger?: Ledger;
   /** When given, patch and write_file need the skill loaded (or created) in this session first. */
   tracker?: SkillTracker;
-  /** The folder under home the skills live in: "skills" (default), or the learning review's own "skills-learned". */
-  folder?: string;
+  /** The absolute folder the skills live in: the user's skills (default), or the learning review's own skills-learned. */
+  dir?: string;
 }
 
 /** The skills folder this tool writes to. */
 function skillsBase(opts: SkillManageOptions): string {
-  return join(opts.home, opts.folder ?? "skills");
+  return opts.dir ?? resolveLayoutPath(opts.home, "skills");
 }
 
 /** What each action needs besides its input: where to record, and who is acting. */

@@ -177,7 +177,7 @@ describe("extensions in the runtime", () => {
 
   test("allowed commands run without asking; skills expand; unknown names fail", async () => {
     await writeFileAt(join(dir, ".tropos", "commands", "date.md"), "Today: !`echo 2026`");
-    await writeFileAt(join(ctx.home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nDeploy from ${TROPOS_SKILL_DIR}");
+    await writeFileAt(join(ctx.home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nDeploy from ${TROPOS_SKILL_DIR}");
     await withExt();
     ctx.rules = compileRules({ allow: ["Bash(echo:*)"], ask: [], deny: [] }).rules;
     const { runtime: rt } = await runtime();
@@ -185,15 +185,15 @@ describe("extensions in the runtime", () => {
     expect(await rt.expandCommand("date", "", ui("deny", asked), signal())).toMatchObject({ ok: true });
     expect(asked).toEqual([]);
     const skill = await rt.expandCommand("deploy", "prod", ui("allow"), signal());
-    expect(skill.ok && skill.prompt).toContain(`Deploy from ${join(ctx.home, "skills", "deploy")}`);
+    expect(skill.ok && skill.prompt).toContain(`Deploy from ${join(ctx.home, "workspace", "skills", "deploy")}`);
     expect(skill.ok && skill.prompt).toContain("Arguments: prod");
     expect(await rt.expandCommand("nope", "", ui("allow"), signal())).toEqual({ ok: false, reason: "Unknown command /nope." });
     expect(rt.extraCommands.map((c) => c.name)).toEqual(["date", "deploy"]);
   });
 
   test("panels", async () => {
-    await writeFileAt(join(ctx.home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\ndisable-model-invocation: true\n---\nx");
-    await writeFileAt(join(ctx.home, "skills-learned", "bun-release", "SKILL.md"), "---\ndescription: Release a bun CLI\n---\nx");
+    await writeFileAt(join(ctx.home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\ndisable-model-invocation: true\n---\nx");
+    await writeFileAt(join(ctx.home, "workspace", "skills-learned", "bun-release", "SKILL.md"), "---\ndescription: Release a bun CLI\n---\nx");
     await writeFileAt(join(ctx.home, "plugins", "kit", "plugin.json"), JSON.stringify({ name: "kit", version: "1.2.0", description: "Tools" }));
     await withExt({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }] }, disabledPlugins: [] });
     const { runtime: rt } = await runtime();
@@ -211,8 +211,8 @@ describe("extensions in the runtime", () => {
     const memory = await rt.panel("memory");
     expect(memory.sections[0]!.items[0]!.label).toBe("Uses bun");
     expect(memory.sections[1]!.items).toEqual([]);
-    await rm(join(ctx.home, "skills"), { recursive: true });
-    await rm(join(ctx.home, "skills-learned"), { recursive: true });
+    await rm(join(ctx.home, "workspace", "skills"), { recursive: true });
+    await rm(join(ctx.home, "workspace", "skills-learned"), { recursive: true });
     await withExt({ memory: false });
     const { runtime: rt2 } = await runtime();
     expect((await rt2.panel("memory")).empty).toBe("Memory is off. Turn it on in the dashboard's settings (tcode dashboard).");
@@ -368,10 +368,10 @@ describe("learning and identity", () => {
     // The review continues a copy of the conversation and doesn't add to the main agent's.
     expect(model.requests[2]!.messages.length).toBe(5);
     expect(agent.messages).toHaveLength(4);
-    expect(await readFile(join(ctx.home, "memories", "MEMORY.md"), "utf8")).toContain("The user ships with bun");
+    expect(await readFile(join(ctx.home, "workspace", "MEMORY.md"), "utf8")).toContain("The user ships with bun");
     expect(notices(events).filter((t) => t.startsWith("💡 Learned: "))).toEqual([expect.stringContaining("Memory")]);
     const [entry] = await ctx.ext.ledger.list();
-    expect(entry).toMatchObject({ actor: "review", kind: "memory", path: join(ctx.home, "memories", "MEMORY.md") });
+    expect(entry).toMatchObject({ actor: "review", kind: "memory", path: join(ctx.home, "workspace", "MEMORY.md") });
     // Two main replies plus two review replies, all priced the same.
     expect(agent.totalCostUsd!).toBeCloseTo(perReply * 4, 10);
   });
@@ -389,13 +389,13 @@ describe("learning and identity", () => {
     await agent.run("two", signal());
     await loop()!.whenIdle();
     expect(model.requests).toHaveLength(4);
-    expect(await readFile(join(ctx.home, "skills-learned", "bun-release", "SKILL.md"), "utf8")).toBe(content);
-    expect(await lstat(join(ctx.home, "skills", "bun-release")).catch(() => null)).toBeNull();
+    expect(await readFile(join(ctx.home, "workspace", "skills-learned", "bun-release", "SKILL.md"), "utf8")).toBe(content);
+    expect(await lstat(join(ctx.home, "workspace", "skills", "bun-release")).catch(() => null)).toBeNull();
     const [entry] = await ctx.ext.ledger.list();
-    expect(entry).toMatchObject({ actor: "review", kind: "skill", path: join(ctx.home, "skills-learned", "bun-release", "SKILL.md") });
+    expect(entry).toMatchObject({ actor: "review", kind: "skill", path: join(ctx.home, "workspace", "skills-learned", "bun-release", "SKILL.md") });
     // The review asks for no approval, and the main agent's SkillManage still writes to the user's folder.
     const main = ctx.tools.find((t) => t.name === "SkillManage")!;
-    expect(main.subject({ action: "create", name: "x", content }, dir)).toEqual({ paths: [join(ctx.home, "skills", "x", "SKILL.md")] });
+    expect(main.subject({ action: "create", name: "x", content }, dir)).toEqual({ paths: [join(ctx.home, "workspace", "skills", "x", "SKILL.md")] });
   });
 
   test("undo of a learned change waits while the review is saving", async () => {
@@ -643,7 +643,7 @@ describe("learning and identity", () => {
   });
 
   async function staleSkill() {
-    const path = join(ctx.home, "skills-learned", "old-trick", "SKILL.md");
+    const path = join(ctx.home, "workspace", "skills-learned", "old-trick", "SKILL.md");
     await mkdir(join(path, ".."), { recursive: true });
     const body = "---\nname: old-trick\ndescription: Use when x\n---\nSteps";
     await writeFile(path, body);
@@ -659,7 +659,7 @@ describe("learning and identity", () => {
     const seen: string[] = [];
     await rt.start((_level, t) => seen.push(t));
     await waitFor(() => expect(seen).toEqual([expect.stringContaining("Archived 1 learned skill unused for 30 days: old-trick")]));
-    expect(seen[0]).toContain(join(ctx.home, "skills-learned", ".archive"));
+    expect(seen[0]).toContain(join(ctx.home, "workspace", "skills-learned", ".archive"));
     expect(await lstat(path).catch(() => null)).toBeNull();
   });
 

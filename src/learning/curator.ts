@@ -1,6 +1,7 @@
 // src/learning/curator.ts
 import { lstat, mkdir, readFile, realpath, rename } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { resolveLayoutPath } from "../home/layout";
 import { fmBool, parseFrontmatter } from "../extensions/frontmatter";
 import { atomicWrite } from "../memory/notes";
 import { type Ledger, sha256 } from "./ledger";
@@ -99,9 +100,8 @@ async function freeName(archive: string, base: string): Promise<string> {
 
 /**
  * Skill hygiene, at most weekly: moves agent-created skills that went unused for 30 days to
- * `<skillsDir>/.archive/<name>-<date>/`. `skillsDir` is where the agent's skills live (the caller
- * passes `<home>/skills-learned`; default `<home>/skills`); usage is always read from
- * `<home>/skills/.usage.json`, keyed by skill name. It never deletes anything and never touches a
+ * `<skillsDir>/.archive/<name>-<date>/`. `skillsDir` is where the agent's skills live (default: the workspace's
+ * skills-learned folder); usage is always read from the user's skills folder, `.usage.json`, keyed by skill name. It never deletes anything and never touches a
  * skill the user wrote, edited (through a tool or by hand), or pinned (`pinned: true` in its
  * frontmatter).
  */
@@ -110,7 +110,7 @@ export async function runCurator(home: string, opts: { ledger: Ledger; now?: Dat
   const last = await lastRun(home);
   if (last !== undefined && now.getTime() - last < CURATOR_INTERVAL_MS && now.getTime() >= last) return { archived: [], ran: false };
 
-  const skillsDir = opts.skillsDir ?? join(home, "skills");
+  const skillsDir = opts.skillsDir ?? resolveLayoutPath(home, "skills-learned");
   const roots = [...new Set([skillsDir, await realpath(skillsDir).catch(() => skillsDir)])];
   const archived: string[] = [];
   try {

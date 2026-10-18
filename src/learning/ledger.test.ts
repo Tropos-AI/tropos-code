@@ -251,6 +251,16 @@ test("default undo skips stuck entries and takes the newest one that still match
   });
 });
 
+test("workspace skill files are learned paths; .archive is not", () => {
+  const skill = (...parts: string[]) => isLearnedPath(home, "skill", join(home, ...parts));
+  expect(skill("workspace", "skills-learned", "x", "SKILL.md")).toBe(true);
+  expect(skill("workspace", "skills", "x", "ref", "a.md")).toBe(true);
+  expect(skill("workspace", "skills-learned", ".archive", "x", "SKILL.md")).toBe(false);
+  expect(skill("workspace", "skills", "SKILL.md")).toBe(false);
+  expect(skill("workspace", "other", "x", "SKILL.md")).toBe(false);
+  expect(skill("skills-learned", "x", "SKILL.md")).toBe(true); // LEGACY_LAYOUT
+});
+
 test("workspace memory and identity files are learned paths", () => {
   expect(isLearnedPath(home, "user", join(home, "workspace", "USER.md"))).toBe(true);
   expect(isLearnedPath(home, "memory", join(home, "workspace", "MEMORY.md"))).toBe(true);

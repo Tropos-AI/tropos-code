@@ -47,7 +47,8 @@ export function sha256(text: string): string {
 
 const HASH = /^[0-9a-f]{64}$/;
 const DAY_NOTE = /^\d{4}-\d{2}-\d{2}\.md$/;
-const SKILL_ROOTS = ["skills", LEARNED_SKILLS_DIR];
+// LEGACY_LAYOUT: the first two are the pre-workspace roots.
+const SKILL_ROOTS = [["skills"], [LEARNED_SKILLS_DIR], ["workspace", "skills"], ["workspace", LEARNED_SKILLS_DIR]];
 
 /**
  * Whether `path` is a file the learning loop writes for an entry of `kind`, under the Tropos home:
@@ -65,7 +66,7 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
       return parts.length === 2 && (parts[0] === "memories" || parts[0] === "workspace") && (parts[1] === "MEMORY.md" || parts[1] === "USER.md");
     case "skill":
       // <root>/<skill>/<file…>; dot-folders (.archive) are not skills.
-      return parts.length >= 3 && SKILL_ROOTS.includes(parts[0]!) && !parts[1]!.startsWith(".");
+      return SKILL_ROOTS.some((root) => parts.length >= root.length + 2 && root.every((part, i) => parts[i] === part) && !parts[root.length]!.startsWith("."));
     case "identity":
       // LEGACY_LAYOUT: the home root until the migration moves them into the workspace.
       return (
@@ -292,7 +293,7 @@ export class Ledger {
   /** A skill folder directly inside a skills root (not the root itself). */
   private async isSkillFolder(dir: string): Promise<boolean> {
     const homes = [this.home, await realpath(this.home).catch(() => this.home)];
-    return homes.some((home) => SKILL_ROOTS.some((root) => dirname(dir) === resolve(home, root)));
+    return homes.some((home) => SKILL_ROOTS.some((root) => dirname(dir) === resolve(home, ...root)));
   }
 
   /** Why undo may not touch the entry's file, or undefined: it must be a learned file of its kind, inside the home. */

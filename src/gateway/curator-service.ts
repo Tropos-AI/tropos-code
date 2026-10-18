@@ -1,6 +1,4 @@
 // src/gateway/curator-service.ts — skill hygiene as a gateway service: the curator only runs when something asks it to.
-import { join } from "node:path";
-import { LEARNED_SKILLS_DIR } from "../extensions/sources";
 import { runCurator } from "../learning/curator";
 import { Ledger } from "../learning/ledger";
 import type { GatewayService, GatewayServiceDeps } from "./types";
@@ -17,7 +15,7 @@ export function createCuratorService(opts: { everyMs?: number; now?: () => Date;
     if (running) return;
     running = true;
     try {
-      const { archived } = await runCurator(home, { ledger: new Ledger(home), skillsDir: join(home, LEARNED_SKILLS_DIR), now: opts.now?.() });
+      const { archived } = await runCurator(home, { ledger: new Ledger(home), now: opts.now?.() });
       if (archived.length > 0) log(`archived ${archived.length} learned skill(s): ${archived.join(", ")}`);
     } catch (e) {
       log(`failed: ${e instanceof Error ? e.message : String(e)}`);

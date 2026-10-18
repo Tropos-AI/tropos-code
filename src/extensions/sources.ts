@@ -2,17 +2,19 @@
 import { realpath } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { gitRoot } from "../context/memory";
+import { resolveLayoutPath } from "../home/layout";
+import { agentsDir } from "../paths";
 
 export type ExtensionKind = "commands" | "skills" | "agents";
 
 /**
  * Where an extension came from. Project files arrive with the code and grant nothing. "learned" skills were
- * written by the background learning review without asking (~/.tropos/skills-learned): the agent's own
+ * written by the background learning review without asking (workspace/skills-learned): the agent's own
  * notes, not the user's instructions.
  */
 export type ExtensionSource = "user" | "learned" | "project" | "plugin";
 
-/** The folder under the Tropos home where the learning review keeps the skills it writes. */
+/** The folder's name, inside the workspace (and at the home root before the layout change), where the learning review keeps the skills it writes. */
 export const LEARNED_SKILLS_DIR = "skills-learned";
 
 export interface ExtensionDir {
@@ -57,8 +59,12 @@ export function projectChain(cwd: string): string[] {
  * cloned repo can't replace a command or skill the user wrote.
  */
 export function extensionDirs(kind: ExtensionKind, opts: { cwd: string; home: string; plugins?: PluginRoot[] }): ExtensionDir[] {
-  const dirs: ExtensionDir[] = [{ dir: join(opts.home, kind), source: "user" }];
-  if (kind === "skills") dirs.push({ dir: join(opts.home, LEARNED_SKILLS_DIR), source: "learned" });
+  const dirs: ExtensionDir[] = [];
+  if (kind === "skills") {
+    // LEGACY_LAYOUT: resolveLayoutPath keeps loading ~/.tropos/skills until the migration moves it.
+    dirs.push({ dir: resolveLayoutPath(opts.home, "skills"), source: "user" });
+    dirs.push({ dir: resolveLayoutPath(opts.home, "skills-learned"), source: "learned" });
+  } else dirs.push({ dir: kind === "agents" ? agentsDir(opts.home) : join(opts.home, kind), source: "user" });
   const chain = projectChain(opts.cwd);
   const root = chain.at(-1)!;
   for (const base of chain) {

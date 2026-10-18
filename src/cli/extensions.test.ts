@@ -31,7 +31,7 @@ const load = (settings: Partial<Settings> = {}) => loadExtensions({ cwd, home, s
 describe("loadExtensions", () => {
   test("loads project and user commands, skills and agents, plus plugin ones", async () => {
     await put(join(cwd, ".tropos", "commands", "review.md"), "---\ndescription: Review it\n---\nReview $ARGUMENTS");
-    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy the app\n---\nSteps");
+    await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy the app\n---\nSteps");
     await put(join(cwd, ".claude", "skills", "help", "SKILL.md"), "---\ndescription: Clashes with /help\n---\nx");
     await put(join(home, "agents", "tester.md"), "---\nname: tester\ndescription: Runs tests\ntools: Read, Bash\n---\nTest things.");
     await put(join(home, "plugins", "kit", "plugin.json"), JSON.stringify({ name: "kit", version: "1.0.0" }));
@@ -90,7 +90,7 @@ describe("reload", () => {
   test("picks up a skill, a command and an agent written after loading, in the same arrays", async () => {
     const ext = await load();
     const { skills, commands, agents } = ext;
-    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+    await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
     await put(join(home, "commands", "ship.md"), "Ship it");
     await put(join(home, "agents", "reviewer.md"), "---\nname: reviewer\ndescription: Reviews\n---\nReview.");
     await ext.reload();
@@ -105,7 +105,7 @@ describe("reload", () => {
   test("a skill named like a command still can't be typed after a reload", async () => {
     const ext = await load();
     await put(join(home, "commands", "ship.md"), "Ship it");
-    await put(join(home, "skills", "ship", "SKILL.md"), "---\ndescription: Ship\n---\nx");
+    await put(join(home, "workspace", "skills", "ship", "SKILL.md"), "---\ndescription: Ship\n---\nx");
     await ext.reload();
     expect(ext.skills.find((s) => s.name === "ship")!.userInvocable).toBe(false);
   });
@@ -115,7 +115,7 @@ describe("reload", () => {
     const base = createTools({ rgPath: null });
     const tools = sessionTools(base, ext, { home, cwd, holder: {}, sessionId: () => "s" });
     const skill = tools.find((t) => t.name === "Skill")!;
-    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+    await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
     await ext.reload();
     const out = await skill.run({ skill: "deploy" }, makeToolContext({ root: cwd }));
     expect(out.isError).toBeUndefined();
@@ -128,7 +128,7 @@ describe("sessionTools", () => {
     const base = createTools({ rgPath: null });
     const names = (ext: Extensions) => sessionTools(base, ext, { home, cwd, holder, sessionId: () => "s" }).map((t) => t.name).slice(base.length);
     expect(names(await load())).toEqual(["WebFetch", "Skill", "Agent", "Memory", "DailyNote", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
-    await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+    await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
     expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
   });
 
@@ -150,12 +150,12 @@ describe("sessionTools", () => {
       ["daily", "agent"],
       ["identity", "agent"],
     ]);
-    expect(entries[0]!.path).toBe(join(home, "memories", "MEMORY.md"));
+    expect(entries[0]!.path).toBe(join(home, "workspace", "MEMORY.md"));
     expect(entries[2]).toMatchObject({ action: "append", summary: "daily note", before: null });
-    expect(entries[3]).toMatchObject({ path: join(home, "IDENTITY.md"), action: "write", summary: expect.stringContaining("Name: Nova") });
+    expect(entries[3]).toMatchObject({ path: join(home, "workspace", "IDENTITY.md"), action: "write", summary: expect.stringContaining("Name: Nova") });
     // Undo goes through the same ledger: the identity file is gone again.
     expect(await ext.ledger.undo()).toMatchObject({ ok: true, entry: { kind: "identity" } });
-    expect(await readFile(join(home, "IDENTITY.md"), "utf8").catch(() => null)).toBeNull();
+    expect(await readFile(join(home, "workspace", "IDENTITY.md"), "utf8").catch(() => null)).toBeNull();
   });
 
   test("the Agent tool needs a running session", async () => {
@@ -168,7 +168,7 @@ describe("sessionTools", () => {
 });
 
 test("context extras: identity, bootstrap, skills listing, notes and daily notes for the main session", async () => {
-  await put(join(home, "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
+  await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy\n---\nSteps");
   const ext = await load();
   await ext.notes!.add("user", "Prefers bun");
   await ext.notes!.add("memory", "Tests are colocated");

@@ -6,7 +6,7 @@ import { isEmojiLike } from "../context/identity";
 import { errorText } from "../error-text";
 import type { Ledger } from "../learning/ledger";
 import { scanText } from "../learning/threats";
-import { isInside } from "../paths";
+import { agentsDir, isInside } from "../paths";
 import { makeDiff } from "../tools/diff";
 import { writeFileNoFollow } from "../tools/file-guard";
 import { resolveToolPath } from "../tools/paths";
@@ -111,7 +111,7 @@ export interface AgentManageOptions {
  * text plus a tool list and a model: it can narrow what a subagent may do, never widen the permissions.
  */
 export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
-  const root = () => join(opts.home, "agents");
+  const root = () => agentsDir(opts.home);
   const pathOf = (name: string) => join(root(), `${name}.md`);
 
   async function record(path: string, action: string, summary: string, before: string | null, after: string | null, actor: Parameters<Ledger["record"]>[0]["actor"]): Promise<void> {

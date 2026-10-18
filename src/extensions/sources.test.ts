@@ -20,11 +20,18 @@ test("inside git the chain climbs to the root, nearest first", async () => {
   expect(projectChain(join(dir, "repo", "a", "b"))).toEqual([join(dir, "repo", "a", "b"), join(dir, "repo", "a"), join(dir, "repo")]);
 });
 
+test("an un-migrated home keeps loading ~/.tropos/skills; agents come from agentsDir", async () => {
+  await mkdir(join(dir, "skills"), { recursive: true });
+  expect(extensionDirs("skills", { cwd: dir, home: dir })[0]).toEqual({ dir: join(dir, "skills"), source: "user" });
+  expect(extensionDirs("skills", { cwd: dir, home: dir })[1]).toEqual({ dir: join(dir, "workspace", "skills-learned"), source: "learned" });
+  expect(extensionDirs("agents", { cwd: dir, home: "/h" })[0]).toEqual({ dir: "/h/agents", source: "user" });
+});
+
 test("user, then learned (skills only), then project, then plugin directories", () => {
   const dirs = extensionDirs("skills", { cwd: dir, home: "/h", plugins: [{ name: "p", root: "/plugins/p" }] });
   expect(dirs).toEqual([
-    { dir: "/h/skills", source: "user" },
-    { dir: "/h/skills-learned", source: "learned" },
+    { dir: "/h/workspace/skills", source: "user" },
+    { dir: "/h/workspace/skills-learned", source: "learned" },
     { dir: join(dir, ".tropos", "skills"), source: "project", root: dir },
     { dir: join(dir, ".claude", "skills"), source: "project", root: dir },
     { dir: join(dir, ".agents", "skills"), source: "project", root: dir },

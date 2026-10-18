@@ -23,11 +23,11 @@ afterEach(async () => {
   await removeDir(outside);
 });
 
-const skillFile = (name: string) => join(home, "skills", name, "SKILL.md");
+const skillFile = (name: string) => join(home, "workspace", "skills-learned", name, "SKILL.md");
 
 async function makeSkill(name: string, opts: { actor?: Actor; at?: Date; pinned?: boolean; record?: boolean } = {}) {
   const text = `---\ndescription: ${name}\n${opts.pinned ? "pinned: true\n" : ""}---\nbody\n`;
-  await mkdir(join(home, "skills", name), { recursive: true });
+  await mkdir(join(home, "workspace", "skills-learned", name), { recursive: true });
   await writeFile(skillFile(name), text);
   if (opts.record === false) return;
   const ledger = new Ledger(home, { now: () => opts.at ?? daysAgo(60) });
@@ -57,8 +57,8 @@ test("archives stale agent-made skills and leaves the rest", async () => {
   const ledger = new Ledger(home);
   const result = await runCurator(home, { ledger, now: NOW });
   expect(result).toEqual({ archived: ["reviewed", "stale"], ran: true });
-  expect((await readdir(join(home, "skills", ".archive"))).sort()).toEqual(["reviewed-2026-10-14", "stale-2026-10-14"]);
-  expect(await readFile(join(home, "skills", ".archive", "stale-2026-10-14", "SKILL.md"), "utf8")).toContain("description: stale");
+  expect((await readdir(join(home, "workspace", "skills-learned", ".archive"))).sort()).toEqual(["reviewed-2026-10-14", "stale-2026-10-14"]);
+  expect(await readFile(join(home, "workspace", "skills-learned", ".archive", "stale-2026-10-14", "SKILL.md"), "utf8")).toContain("description: stale");
   for (const kept of ["fresh", "used", "pinned", "by-user", "hand-written", "adopted"]) expect(existsSync(skillFile(kept))).toBe(true);
   expect(JSON.parse(await readFile(join(home, "learning", "curator.json"), "utf8"))).toEqual({ lastRun: NOW.toISOString() });
 });
@@ -88,7 +88,7 @@ test("an undone creation no longer counts as the agent's", async () => {
   const ledger = new Ledger(home);
   expect((await ledger.undo()).ok).toBe(true);
   // The user recreates it by hand.
-  await mkdir(join(home, "skills", "temp"), { recursive: true });
+  await mkdir(join(home, "workspace", "skills-learned", "temp"), { recursive: true });
   await writeFile(skillFile("temp"), "---\ndescription: mine\n---\n");
   expect((await runCurator(home, { ledger, now: NOW })).archived).toEqual([]);
   expect(existsSync(skillFile("temp"))).toBe(true);
@@ -96,24 +96,24 @@ test("an undone creation no longer counts as the agent's", async () => {
 
 test("symlinked, unreadable and missing skills are left alone; names don't collide in the archive", async () => {
   await writeFile(join(outside, "SKILL.md"), "---\ndescription: x\n---\n");
-  await mkdir(join(home, "skills"), { recursive: true });
-  await symlink(outside, join(home, "skills", "linked"));
+  await mkdir(join(home, "workspace", "skills-learned"), { recursive: true });
+  await symlink(outside, join(home, "workspace", "skills-learned", "linked"));
   const ledger = new Ledger(home, { now: () => daysAgo(60) });
-  await ledger.record({ actor: "agent", kind: "skill", path: join(home, "skills", "linked", "SKILL.md"), action: "create", summary: "c", before: null, after: "x" });
+  await ledger.record({ actor: "agent", kind: "skill", path: join(home, "workspace", "skills-learned", "linked", "SKILL.md"), action: "create", summary: "c", before: null, after: "x" });
   await ledger.record({ actor: "agent", kind: "skill", path: skillFile("missing"), action: "create", summary: "c", before: null, after: "x" });
-  await ledger.record({ actor: "agent", kind: "skill", path: join(home, "skills", ".archive", "x", "SKILL.md"), action: "create", summary: "c", before: null, after: "x" });
+  await ledger.record({ actor: "agent", kind: "skill", path: join(home, "workspace", "skills-learned", ".archive", "x", "SKILL.md"), action: "create", summary: "c", before: null, after: "x" });
   await ledger.record({ actor: "agent", kind: "skill", path: join(home, "elsewhere", "SKILL.md"), action: "create", summary: "c", before: null, after: "x" });
   await ledger.record({ actor: "agent", kind: "memory", path: skillFile("mem"), action: "create", summary: "c", before: null, after: "x" });
-  await mkdir(join(home, "skills", "nofile"), { recursive: true });
+  await mkdir(join(home, "workspace", "skills-learned", "nofile"), { recursive: true });
   await ledger.record({ actor: "agent", kind: "skill", path: skillFile("nofile"), action: "create", summary: "c", before: null, after: "x" });
   await makeSkill("twice");
-  await mkdir(join(home, "skills", ".archive", "twice-2026-10-14"), { recursive: true });
+  await mkdir(join(home, "workspace", "skills-learned", ".archive", "twice-2026-10-14"), { recursive: true });
 
   const result = await runCurator(home, { ledger: new Ledger(home), now: NOW });
   expect(result.archived).toEqual(["twice"]);
-  expect(existsSync(join(home, "skills", ".archive", "twice-2026-10-14-2", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(home, "workspace", "skills-learned", ".archive", "twice-2026-10-14-2", "SKILL.md"))).toBe(true);
   expect(existsSync(join(outside, "SKILL.md"))).toBe(true);
-  expect(existsSync(join(home, "skills", "nofile"))).toBe(true);
+  expect(existsSync(join(home, "workspace", "skills-learned", "nofile"))).toBe(true);
 });
 
 test("a custom skills folder and a corrupt state file", async () => {
@@ -131,14 +131,14 @@ test("a custom skills folder and a corrupt state file", async () => {
 
 test("a failed move leaves the skill and the run still completes", async () => {
   await makeSkill("stuck");
-  await mkdir(join(home, "skills"), { recursive: true });
-  await writeFile(join(home, "skills", ".archive"), "a file where the archive folder should be");
+  await mkdir(join(home, "workspace", "skills-learned"), { recursive: true });
+  await writeFile(join(home, "workspace", "skills-learned", ".archive"), "a file where the archive folder should be");
   expect(await runCurator(home, { ledger: new Ledger(home), now: NOW })).toEqual({ archived: [], ran: true });
   expect(existsSync(skillFile("stuck"))).toBe(true);
 });
 
-test("the learned-skills folder: archives there, still reads usage from skills/.usage.json", async () => {
-  const learned = join(home, "skills-learned");
+test("the learned-skills folder: archives there, still reads usage from the user's skills/.usage.json", async () => {
+  const learned = join(home, "elsewhere");
   const ledger = new Ledger(home, { now: () => daysAgo(60) });
   for (const name of ["idle", "busy"]) {
     const text = `---\ndescription: ${name}\n---\n`;
@@ -147,13 +147,14 @@ test("the learned-skills folder: archives there, still reads usage from skills/.
     await ledger.record({ actor: "review", kind: "skill", path: join(learned, name, "SKILL.md"), action: "create", summary: "c", before: null, after: text });
   }
   // A same-named skill in the user's own folder is not the curator's business.
-  await makeSkill("idle", { record: false });
+  await mkdir(join(home, "workspace", "skills", "idle"), { recursive: true });
+  await writeFile(join(home, "workspace", "skills", "idle", "SKILL.md"), "---\ndescription: mine\n---\n");
   await recordSkillUse(home, "busy", daysAgo(2));
   expect(await runCurator(home, { ledger, now: NOW, skillsDir: learned })).toEqual({ archived: ["idle"], ran: true });
   expect(existsSync(join(learned, ".archive", "idle-2026-10-14", "SKILL.md"))).toBe(true);
   expect(existsSync(join(learned, "busy", "SKILL.md"))).toBe(true);
-  expect(existsSync(skillFile("idle"))).toBe(true);
-  expect(existsSync(join(home, "skills", ".archive"))).toBe(false);
+  expect(existsSync(join(home, "workspace", "skills", "idle", "SKILL.md"))).toBe(true);
+  expect(existsSync(join(home, "workspace", "skills-learned", ".archive"))).toBe(false);
 });
 
 test("a skill edited by hand since the ledger last saw it is never archived", async () => {
@@ -173,12 +174,27 @@ test("a skill edited by hand since the ledger last saw it is never archived", as
   expect((await undoLedger.undo()).ok).toBe(true);
   expect(await readFile(skillFile("reverted"), "utf8")).toBe(original);
   // Only a supporting file was ever recorded: nothing to compare SKILL.md with, so it stays.
-  await mkdir(join(home, "skills", "unknown"), { recursive: true });
+  await mkdir(join(home, "workspace", "skills-learned", "unknown"), { recursive: true });
   await writeFile(skillFile("unknown"), "---\ndescription: unknown\n---\n");
-  await new Ledger(home, { now: () => daysAgo(60) }).record({ actor: "agent", kind: "skill", path: join(home, "skills", "unknown", "notes.md"), action: "create", summary: "c", before: null, after: "n" });
+  await new Ledger(home, { now: () => daysAgo(60) }).record({ actor: "agent", kind: "skill", path: join(home, "workspace", "skills-learned", "unknown", "notes.md"), action: "create", summary: "c", before: null, after: "n" });
 
   const result = await runCurator(home, { ledger: new Ledger(home), now: NOW });
   expect(result.archived).toEqual(["patched", "reverted"]);
   expect(existsSync(skillFile("edited"))).toBe(true);
   expect(existsSync(skillFile("unknown"))).toBe(true);
+});
+
+test("archives into workspace/skills-learned/.archive by default", async () => {
+  await makeSkill("stale");
+  expect(await runCurator(home, { ledger: new Ledger(home), now: NOW })).toEqual({ archived: ["stale"], ran: true });
+  expect(existsSync(join(home, "workspace", "skills-learned", ".archive", "stale-2026-10-14", "SKILL.md"))).toBe(true);
+});
+
+test("an un-migrated home is curated where its learned skills still are", async () => {
+  const text = "---\ndescription: old\n---\n";
+  await mkdir(join(home, "skills-learned", "old"), { recursive: true });
+  await writeFile(join(home, "skills-learned", "old", "SKILL.md"), text);
+  await new Ledger(home, { now: () => daysAgo(60) }).record({ actor: "review", kind: "skill", path: join(home, "skills-learned", "old", "SKILL.md"), action: "create", summary: "c", before: null, after: text });
+  expect(await runCurator(home, { ledger: new Ledger(home), now: NOW })).toEqual({ archived: ["old"], ran: true });
+  expect(existsSync(join(home, "skills-learned", ".archive", "old-2026-10-14", "SKILL.md"))).toBe(true);
 });
