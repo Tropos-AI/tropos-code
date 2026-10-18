@@ -1,6 +1,7 @@
 // src/web/server.ts — the local HTTP + WebSocket server behind `tcode web`.
 import { timingSafeEqual } from "node:crypto";
 import { contentType, type AssetMap } from "./assets";
+import { PortInUseError } from "./port";
 import type { ChatHost } from "./project-hosts";
 import { SESSION_COOKIE, WS_PATH, type ClientMessage, type ServerMessage } from "./protocol";
 
@@ -204,9 +205,9 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
   try {
     server = serve(port);
   } catch (err) {
-    // The default port is taken (another tcode web, say): any free port will do.
-    if ((err as NodeJS.ErrnoException).code !== "EADDRINUSE") throw err;
-    server = serve(0);
+    // The dashboard's address never moves by itself: the caller says who holds the port.
+    if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") throw new PortInUseError(port);
+    throw err;
   }
   port = server.port!;
   return {

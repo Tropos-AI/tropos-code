@@ -54,7 +54,7 @@ describe("persistentToken", () => {
 });
 
 describe("tcode gateway", () => {
-  const start = (extra: string[] = [], over: { cwd?: string } = {}) => {
+  const start = (extra: string[] = [], over: { cwd?: string; seams?: NonNullable<GatewayRun["seams"]> } = {}) => {
     const out: string[] = [];
     const err: string[] = [];
     let stop!: () => void;
@@ -70,7 +70,7 @@ describe("tcode gateway", () => {
         webUrl = info.webUrl;
         await stopped;
       },
-      gatewaySeams: { sweep: false, assets: new Map() },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0, ...over.seams },
     });
     return { done, stop, out, err, url: () => webUrl };
   };
@@ -95,6 +95,25 @@ describe("tcode gateway", () => {
     await second.done;
   });
 
+  test("a taken port is reported with its holder and chats keep running", async () => {
+    await mkdir(join(dir, "project"));
+    const blocker = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("busy") });
+    try {
+      const runner = { exec: async (cmd: string) => (cmd === "lsof" ? { code: 0, stdout: "p999\ncnode\n", stderr: "" } : { code: null, stdout: "", stderr: "", error: "none" }) };
+      const g = start([], { seams: { webPort: blocker.port!, runner } });
+      await Bun.sleep(400);
+      expect(g.err.join("")).toContain("is in use by node (pid 999)");
+      const state = await readGatewayState(join(dir, "home"));
+      expect(state?.webProblem).toContain("is in use by node (pid 999)");
+      expect(state?.webPort).toBeUndefined();
+      expect(g.url()).toBeUndefined();
+      g.stop();
+      expect(await g.done).toBe(0);
+    } finally {
+      blocker.stop(true);
+    }
+  });
+
   test("the dashboard's session has the owner's Cron tool: it sees every chat's jobs", async () => {
     await mkdir(join(dir, "project"));
     const job = new CronStore(join(dir, "home")).add({ name: "elsewhere", schedule: { kind: "every", ms: 120_000 }, prompt: "p", project: "default", deliver: "telegram:555", createdBy: "agent" });
@@ -112,7 +131,7 @@ describe("tcode gateway", () => {
         webUrl = info.webUrl;
         await stopped;
       },
-      gatewaySeams: { sweep: false, assets: new Map() },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
     });
     while (!webUrl) await Bun.sleep(20);
     const base = `http://127.0.0.1:${new URL(webUrl).port}`;
@@ -201,7 +220,7 @@ describe("the dashboard's chat across a reload", () => {
         info = i;
         await stopped;
       },
-      gatewaySeams: { sweep: false, assets: new Map() },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
     });
     while (!info) await Bun.sleep(20);
     const url = new URL(info.webUrl!);
@@ -384,7 +403,7 @@ describe("the web link in the gateway's output", () => {
       env: { TROPOS_HOME: join(dir, "home"), SHELL: "/bin/bash" },
       cwd: join(dir, "project"),
       gatewayUntil: async () => void (await stopped),
-      gatewaySeams: { sweep: false, assets: new Map() },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
     });
     await Bun.sleep(400);
     stop();

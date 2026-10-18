@@ -64,7 +64,7 @@ const schema = z.object({
     .default({ autonomy: "balanced", backend: "host" }),
   /** Minutes without a message before a chat's session (and its container) is closed. */
   idleMinutes: z.number().int().min(1).max(24 * 60).default(30),
-  /** Port of the local web UI; unset picks the default and falls back to a free one. */
+  /** Port of the dashboard; unset is 4317. Never changes by itself. */
   webPort: z.number().int().min(1).max(65535).optional(),
 });
 

@@ -7,6 +7,8 @@ import type { Model } from "../api/model";
 import { loadProjectContext, type ProjectContext } from "../cli/context";
 import { createRuntime } from "../cli/runtime";
 import type { Runtime } from "../ui/runtime";
+import { defaultRunner } from "../doctor/runner";
+import type { Runner } from "../doctor/types";
 import { SettingsError, settingsPaths } from "../config/settings";
 import { VERSION } from "../version";
 import { sweepLeftoverContainers } from "../exec/docker";
@@ -19,6 +21,7 @@ import { loadAssets, type AssetMap } from "../web/assets";
 import { WebHost } from "../web/host";
 import { ProjectHosts } from "../web/project-hosts";
 import { DEFAULT_PORT } from "../web/protocol";
+import { PortInUseError, portHolder, portInUseMessage } from "../web/port";
 import { startWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
@@ -87,6 +90,10 @@ export interface GatewayRun {
     /** Overrides for the Telegram adapter (pacing, timeouts). */
     telegramOptions?: Partial<TelegramAdapterOptions>;
     assets?: AssetMap;
+    /** The dashboard's port (tests pass 0 so they never take the real one). */
+    webPort?: number;
+    /** Looks up who holds a taken port (default: the real lsof/ss). */
+    runner?: Pick<Runner, "exec">;
     sweep?: boolean;
     /** Replaces `git init` for the managed default project. */
     git?: (dir: string) => Promise<void>;
@@ -135,6 +142,8 @@ export interface GatewayState {
   pid: number;
   startedAt: string;
   webPort?: number;
+  /** Why the dashboard is off, when it could not start (a port in use, say). */
+  webProblem?: string;
   telegram: boolean;
 }
 
@@ -432,6 +441,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let chatHosts: ProjectHosts | undefined;
   let webUrl: string | undefined;
   let webPort: number | undefined;
+  let webProblem: string | undefined;
   if (run.web !== false) {
     try {
       /**
@@ -534,14 +544,19 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           reload,
         },
       });
-      const server = await startWebServer({ host: chatHosts, admin, assets, token: await persistentToken(dir), port: live.webPort ?? DEFAULT_PORT });
+      const server = await startWebServer({ host: chatHosts, admin, assets, token: await persistentToken(dir), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT });
       webStop = () => server.stop();
       webUrl = server.url;
       webPort = server.port;
     } catch (e) {
       // Chats don't depend on the web UI, and a broken default project shouldn't take them down.
-      if (!(e instanceof UserFacingError)) throw e;
-      run.err(`tcode: gateway: the local web UI is off: ${e.message}\n`);
+      if (e instanceof PortInUseError) {
+        const message = portInUseMessage(e.port, await portHolder(e.port, run.seams?.runner ?? defaultRunner()), (await readGatewayState(home))?.pid);
+        webProblem = message;
+        run.err(`tcode: gateway: the dashboard is off: ${message}\n`);
+      } else if (e instanceof UserFacingError) {
+        run.err(`tcode: gateway: the local web UI is off: ${e.message}\n`);
+      } else throw e;
     }
   }
 
@@ -564,7 +579,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     ownerChat: () => ownerChatKey(run.pairing),
   };
 
-  state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, telegram: adapters.length > 0 };
+  state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, ...(webProblem ? { webProblem } : {}), telegram: adapters.length > 0 };
   await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
   const startedServices: GatewayService[] = [];

@@ -74,6 +74,7 @@ function startGateway(steps: Step[], opts: { sandboxProblem?: string; backend?: 
     gatewayUntil: () => stopped,
     gatewaySeams: {
       sweep: false,
+      webPort: 0,
       ...(opts.realDocker || opts.realHost
         ? {}
         : {
@@ -268,7 +269,7 @@ describe("tcode gateway", () => {
       env: { TROPOS_HOME: home, SHELL: "/bin/bash" },
       cwd: project,
       gatewayUntil: () => stopped,
-      gatewaySeams: { sweep: false, assets: new Map() },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
     });
     await server.waitFor(() => out.join("").includes("channels: none"));
     expect((await stat(join(home, "gateway", "state.json"))).isFile()).toBe(true);

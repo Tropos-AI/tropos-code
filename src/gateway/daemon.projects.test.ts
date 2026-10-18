@@ -61,6 +61,7 @@ function startGateway(steps: Step[], services: GatewayService[] = [], opts: { bo
     gatewayServices: services,
     gatewaySeams: {
       sweep: false,
+      webPort: 0,
       git: async () => {},
       sandboxCheck: async () => undefined,
       backend: (workspace) => {

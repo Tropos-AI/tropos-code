@@ -17,6 +17,7 @@ import { securityWorkspaceCheck } from "./security-workspace";
 import { sessionsDefaultCheck } from "./sessions";
 import { settingsCheck } from "./settings";
 import { toolsCheck } from "./tools";
+import { webAccessCheck } from "./web-access";
 import { workspaceCheck } from "./workspace";
 
 export const ALL_CHECKS: Check[] = [
@@ -29,6 +30,7 @@ export const ALL_CHECKS: Check[] = [
   containersCheck,
   gatewayCheck,
   gatewayStateCheck,
+  webAccessCheck,
   workspaceCheck,
   sessionsDefaultCheck,
   driftCheck,

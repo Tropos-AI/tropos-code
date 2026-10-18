@@ -86,6 +86,7 @@ export interface GatewayStateFile {
   pid: number;
   startedAt?: string;
   webPort?: number;
+  webProblem?: string;
   telegram?: boolean;
 }
 

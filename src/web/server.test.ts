@@ -8,6 +8,7 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { assetsFromDir, type AssetMap } from "./assets";
 import { WebHost } from "./host";
 import type { ServerMessage } from "./protocol";
+import { PortInUseError } from "./port";
 import { parseClientMessage, startWebServer, type RunningWebServer } from "./server";
 
 const TOKEN = "secret-token-1234567890";
@@ -216,13 +217,13 @@ test("parseClientMessage accepts only well-formed messages", () => {
   expect(parseClientMessage(Buffer.from("x".repeat(1024 * 1024 + 1)))).toBeNull();
 });
 
-test("a taken port falls back to a free one", async () => {
+test("a taken port throws PortInUseError instead of moving", async () => {
   const blocker = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("busy") });
   try {
     const host = new WebHost(fakeRuntime([]));
-    server = await startWebServer({ host, assets, token: TOKEN, port: blocker.port! });
-    expect(server.port).not.toBe(blocker.port);
-    expect(server.url).toBe(`http://127.0.0.1:${server.port}/?token=${TOKEN}`);
+    const err = await startWebServer({ host, assets, token: TOKEN, port: blocker.port! }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PortInUseError);
+    expect((err as PortInUseError).port).toBe(blocker.port!);
   } finally {
     blocker.stop(true);
   }
