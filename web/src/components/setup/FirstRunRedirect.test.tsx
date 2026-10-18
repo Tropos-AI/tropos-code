@@ -6,18 +6,47 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor, act } = await import("@testing-library/react");
-const { FirstRunRedirect, FIRST_RUN_DISMISSED_KEY } = await import("@/components/setup/FirstRunRedirect");
+const { FirstRunRedirect, FIRST_RUN_DISMISSED_KEY, FIRST_RUN_OPENED_KEY } = await import("@/components/setup/FirstRunRedirect");
 
 const status = (needsOnboarding: boolean) => () => ({ needsOnboarding });
 
 beforeEach(() => {
   stubMatchMedia();
   window.sessionStorage.clear();
+  // Most tests are about the card, so setup counts as already opened this session; the first two clear that.
+  window.sessionStorage.setItem(FIRST_RUN_OPENED_KEY, "1");
   window.location.hash = "#/chat";
 });
 afterEach(() => cleanup());
 
 describe("FirstRunRedirect", () => {
+  test("opens #/setup once per browser session while setup is needed", async () => {
+    window.sessionStorage.removeItem(FIRST_RUN_OPENED_KEY);
+    await mountAdminPage(FirstRunRedirect, { "status.get": status(true) });
+    await waitFor(() => expect(window.location.hash).toBe("#/setup"));
+    expect(window.sessionStorage.getItem(FIRST_RUN_OPENED_KEY)).toBe("1");
+    cleanup();
+    window.location.hash = "#/chat";
+    const second = await mountAdminPage(FirstRunRedirect, { "status.get": status(true) });
+    await waitFor(() => expect(second.socket.adminOf("status.get")).toHaveLength(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(window.location.hash).toBe("#/chat");
+  });
+
+  test("a browser without storage still opens setup", async () => {
+    window.sessionStorage.removeItem(FIRST_RUN_OPENED_KEY);
+    const original = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+    Object.defineProperty(window, "sessionStorage", { configurable: true, get: () => { throw new Error("blocked"); } });
+    try {
+      await mountAdminPage(FirstRunRedirect, { "status.get": status(true) });
+      await waitFor(() => expect(window.location.hash).toBe("#/setup"));
+    } finally {
+      if (original) Object.defineProperty(window, "sessionStorage", original);
+    }
+  });
+
   test("shows a card linking to #/setup when onboarding is needed, without navigating", async () => {
     const { socket } = await mountAdminPage(FirstRunRedirect, { "status.get": status(true) });
     const card = await screen.findByLabelText("Finish setting up");

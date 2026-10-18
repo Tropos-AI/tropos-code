@@ -1,7 +1,8 @@
 // web/src/components/setup/FirstRunRedirect.tsx — asks status.get once after the connection opens and, when the owner
-// still has to finish setting up, shows a dismissible card that links to #/setup. It never navigates by itself.
-// "Dismissed" lasts for the browser session (sessionStorage), so a reload does not nag but a new visit does.
-import { useState } from "react";
+// still has to finish setting up, opens #/setup once per browser session and keeps a dismissible card for later
+// navigation. "Opened" and "dismissed" last for the browser session (sessionStorage), so a reload does not nag but a
+// new visit does.
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, m } from "motion/react";
 
 import { hrefFor, useRoute } from "@/app/routes";
@@ -12,12 +13,29 @@ import { CROSSFADE, INSTANT } from "@/lib/springs";
 import { useNeedsOnboarding } from "@/components/setup/use-needs-onboarding";
 
 export const FIRST_RUN_DISMISSED_KEY = "tropos.firstRun.dismissed";
+export const FIRST_RUN_OPENED_KEY = "tropos.firstRun.opened";
 
 function wasDismissed(): boolean {
   try {
     return window.sessionStorage.getItem(FIRST_RUN_DISMISSED_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+function wasOpened(): boolean {
+  try {
+    return window.sessionStorage.getItem(FIRST_RUN_OPENED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberOpened(): void {
+  try {
+    window.sessionStorage.setItem(FIRST_RUN_OPENED_KEY, "1");
+  } catch {
+    // Storage blocked: setup opens once for this page load instead of once per session.
   }
 }
 
@@ -34,6 +52,15 @@ export function FirstRunRedirect() {
   const [route] = useRoute();
   const [dismissed, setDismissed] = useState(wasDismissed);
   const needs = useNeedsOnboarding(!dismissed);
+
+  // Once per page load even where storage is blocked.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!needs || opened.current || wasOpened()) return;
+    opened.current = true;
+    rememberOpened();
+    if (route !== "setup") window.location.hash = hrefFor("setup");
+  }, [needs, route]);
 
   const visible = needs && !dismissed && route !== "setup";
 

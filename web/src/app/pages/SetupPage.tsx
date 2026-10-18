@@ -13,8 +13,9 @@ import { ResourceView } from "@/components/pages/resource-view";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
 import { LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
 import { AutonomyStep, IdentityStep, ProjectsStep, WelcomeStep } from "@/components/setup/guided-steps";
-import { HealthStep, ServiceStep, TelegramStep } from "@/components/setup/host-steps";
+import { ServiceStep } from "@/components/setup/host-steps";
 import { ModelStep, ProviderStep } from "@/components/setup/provider-steps";
+import { DoneStep, PhoneStep, TelegramOwnerStep } from "@/components/setup/remote-steps";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon, type IconName } from "@/components/ui/icon";
@@ -62,18 +63,15 @@ function StepBody({ step, steps, changed, advance, skip }: StepBodyProps) {
     case "model":
       return <ModelStep onChanged={changed} />;
     case "telegram":
-      return <TelegramStep onChanged={changed} onSkip={() => skip("telegram")} />;
+      return <TelegramOwnerStep done={step.status === "done"} onChanged={advance} onSkip={() => skip("telegram")} />;
+    case "phone":
+      return <PhoneStep onChanged={changed} onNext={advance} onSkip={() => skip("phone")} />;
     case "service":
       return <ServiceStep onChanged={changed} />;
     case "done":
-      return <HealthStep onChanged={changed} />;
+      return <DoneStep onChanged={changed} />;
     default:
-      // Until the remaining panels land, these steps are set up in the terminal.
-      return (
-        <p className="text-[13px] leading-relaxed text-ink-2">
-          {STEP_WHY[step.id]} For now, set this up in the terminal with <code className="font-mono">tcode onboard</code>.
-        </p>
-      );
+      return null;
   }
 }
 

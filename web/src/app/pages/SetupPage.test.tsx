@@ -10,6 +10,7 @@ import { withDom } from "@/test-setup";
 withDom();
 const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
 const { SetupPage, firstOpenStep } = await import("@/app/pages/SetupPage");
+const { TELEGRAM_POLL_MS } = await import("@/components/setup/remote-steps");
 
 const has = (selector: string): boolean => document.querySelector(selector) !== null;
 const SECRET = "sk-test-VERY-SECRET-987654";
@@ -224,6 +225,100 @@ describe("SetupPage", () => {
     fireEvent.click(await screen.findByRole("radio", { name: /^Ask/ }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(socket.adminOf("onboard.autonomy.set")[0]?.params).toEqual({ autonomy: "ask", backend: "host" }));
+  });
+
+  test("telegram: BotFather steps and token form, then the owner link and the waiting sender; Yes confirms them", async () => {
+    const s = server({
+      "onboard.telegram.listen": () => ({ bot: "tropos_bot", link: "https://t.me/tropos_bot?start=abc123", candidates: [{ senderId: "7", chatId: 7, name: "Panagiotis", username: "pk", at: 1 }] }),
+      "onboard.telegram.confirm": () => {
+        return { steps: STEPS, complete: false, dismissed: false };
+      },
+    });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram/ }));
+    const steps = await screen.findByRole("list", { name: "BotFather steps" });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.getByRole("link", { name: /Open BotFather/ }).getAttribute("href")).toBe("https://t.me/BotFather");
+    fireEvent.change(screen.getByLabelText("Bot token"), { target: { value: "123:abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Verify and save" }));
+    const link = await screen.findByRole("link", { name: /t\.me\/tropos_bot\?start=abc123/ });
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(screen.getByRole("img", { name: /QR code/ })).toBeTruthy();
+    expect(await screen.findByText("Panagiotis (@pk): is this you?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, that's me" }));
+    await waitFor(() => expect(socket.adminOf("onboard.telegram.confirm")[0]?.params).toEqual({ senderId: "7" }));
+  });
+
+  test("telegram: Not me hides that sender", async () => {
+    const s = server({
+      "channels.get": () => ({ telegram: { configured: true, source: "file", bot: { username: "tropos_bot", name: "Tropos" } } }),
+      "onboard.telegram.listen": () => ({ bot: "tropos_bot", candidates: [{ senderId: "9", chatId: 9, name: "Stranger", at: 1 }] }),
+    });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram/ }));
+    expect(await screen.findByText("Stranger: is this you?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Not me" }));
+    await waitFor(() => expect(screen.queryByText("Stranger: is this you?")).toBeNull());
+    expect(socket.adminOf("onboard.telegram.confirm")).toHaveLength(0);
+  });
+
+  test("telegram: polling stops when the step closes", async () => {
+    const s = server({
+      "channels.get": () => ({ telegram: { configured: true, source: "file", bot: { username: "tropos_bot", name: "Tropos" } } }),
+      "onboard.telegram.listen": () => ({ bot: "tropos_bot", candidates: [] }),
+    });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    const header = await screen.findByRole("button", { name: /Telegram/ });
+    fireEvent.click(header);
+    await waitFor(() => expect(socket.adminOf("onboard.telegram.listen").length).toBeGreaterThan(0));
+    fireEvent.click(header);
+    const seen = socket.adminOf("onboard.telegram.listen").length;
+    await new Promise((r) => setTimeout(r, TELEGRAM_POLL_MS + 300));
+    expect(socket.adminOf("onboard.telegram.listen")).toHaveLength(seen);
+  });
+
+  test("phone: not installed shows the download link; signed in, Turn on shows the QR, link and code", async () => {
+    let status: { installed: boolean; running: boolean; enabled: boolean } = { installed: false, running: false, enabled: false };
+    const s = server({
+      "onboard.phone.status": () => status,
+      "onboard.phone.enable": () => ({ url: "https://mac.tail1234.ts.net/", code: "123456" }),
+    });
+    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /Phone access/ }));
+    expect(await screen.findByRole("link", { name: /Download Tailscale/ })).toBeTruthy();
+    status = { installed: true, running: false, enabled: false };
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText(/Open Tailscale and sign in/)).toBeTruthy();
+    status = { installed: true, running: true, enabled: false };
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on phone access" }));
+    await waitFor(() => expect(socket.adminOf("onboard.phone.enable")).toHaveLength(1));
+    expect(await screen.findByRole("img", { name: "QR code for the dashboard on your phone" })).toBeTruthy();
+    expect(screen.getByText("123456")).toBeTruthy();
+    expect(screen.getByText("https://mac.tail1234.ts.net/")).toBeTruthy();
+    expect(document.body.textContent).toContain("10 minutes");
+  });
+
+  test("done: summary, bot link, examples and the health check", async () => {
+    const s = server({
+      "onboard.summary": () => ({
+        steps: [
+          { id: "provider", title: "Connect a model", status: "done" },
+          { id: "telegram", title: "Telegram", status: "skipped" },
+        ],
+        dashboardUrl: "http://localhost:4317/",
+        botUrl: "https://t.me/tropos_bot",
+        examples: ["What changed in my project this week?"],
+        health: { ok: 3, warn: 0, error: 0, problems: [] },
+      }),
+    });
+    await mountAdminPage(SetupPage, s.admin, s.rpc);
+    fireEvent.click(await screen.findByRole("button", { name: /All set/ }));
+    expect(await screen.findByRole("link", { name: /t\.me\/tropos_bot/ })).toBeTruthy();
+    expect(screen.getByText("What changed in my project this week?")).toBeTruthy();
+    const list = screen.getByRole("list", { name: "What is ready" });
+    expect(list.textContent).toContain("Connect a model");
+    expect(await screen.findByRole("list", { name: "Findings" })).toBeTruthy();
   });
 
   test("Skip calls onboard.skip and the step reads skipped", async () => {
