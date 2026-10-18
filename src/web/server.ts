@@ -33,7 +33,7 @@ export interface WebServerOptions {
 }
 
 export interface RunningWebServer {
-  /** `http://localhost:<port>/`: one name everywhere, so a browser keeps one login. */
+  /** `http://127.0.0.1:<port>/` (localDashboardUrl): the bound address, one name everywhere. */
   url: string;
   port: number;
   /** Closes (with AUTH_CLOSE_CODE) every socket whose device is no longer in the store. */

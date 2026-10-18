@@ -116,7 +116,8 @@ the `Host` and `Origin` headers and sends a strict CSP. `--no-open` only prints 
 A browser logs in once: `tcode dashboard` opens it with a one-time link; other browsers and your phone
 use a 6-digit code (`tcode dashboard --code`, or `/login` to your bot). The key lives in that browser's
 storage and is sent only over the dashboard's own connection; log devices out in Settings → Channels &
-devices. Every link Tropos prints is `http://localhost:<port>/`, so one browser needs one login.
+devices. Every link Tropos prints is `http://127.0.0.1:<port>/`, the address it listens on (never
+`localhost`, which can resolve to another program on `::1`), so one browser needs one login.
 
 In a session:
 - Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.

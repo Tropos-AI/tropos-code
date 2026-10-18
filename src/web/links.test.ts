@@ -11,9 +11,9 @@ afterEach(async () => {
   dir = undefined;
 });
 
-test("the dashboard's address is always localhost, never 127.0.0.1 (one origin, one login)", () => {
-  expect(localDashboardUrl(4317)).toBe("http://localhost:4317/");
-  expect(localDashboardUrl(4318)).toBe("http://localhost:4318/");
+test("the dashboard's address is always 127.0.0.1, the address the server binds (never localhost, which may be ::1)", () => {
+  expect(localDashboardUrl(4317)).toBe("http://127.0.0.1:4317/");
+  expect(localDashboardUrl(4318)).toBe("http://127.0.0.1:4318/");
 });
 
 test("dashboardPort is webPort from gateway.json, else 4317", () => {
@@ -24,7 +24,7 @@ test("dashboardPort is webPort from gateway.json, else 4317", () => {
 test("dashboardLoginLink carries a one-time key that the gateway's store redeems once", async () => {
   dir = await makeTmpDir("links-");
   const link = await dashboardLoginLink(dir, 4317);
-  expect(link).toMatch(/^http:\/\/localhost:4317\/#login=[A-Za-z0-9_-]{43}$/);
+  expect(link).toMatch(/^http:\/\/127\.0\.0\.1:4317\/#login=[A-Za-z0-9_-]{43}$/);
   const key = link.split("#login=")[1]!;
   // Another process (the gateway) reads the same file.
   expect(await loginCodesFor(dir).redeem(key)).toBe(true);

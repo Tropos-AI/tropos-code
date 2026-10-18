@@ -120,9 +120,9 @@ describe("HTTP", () => {
     expect(await res.text()).toContain("bun run build:web");
   });
 
-  test("the address it reports is http://localhost:<port>/, with nothing secret in it", async () => {
+  test("the address it reports is http://127.0.0.1:<port>/, with nothing secret in it", async () => {
     const { server } = await start();
-    expect(server.url).toBe(`http://localhost:${server.port}/`);
+    expect(server.url).toBe(`http://127.0.0.1:${server.port}/`);
   });
 });
 

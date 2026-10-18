@@ -16,14 +16,14 @@ async function running(webPort = 4317) {
 }
 const alive = (pid: number) => pid === 4242;
 
-test("opens localhost with a one-time #login key and prints the link without it", async () => {
+test("opens 127.0.0.1 with a one-time #login key and prints the link without it", async () => {
   fx = await makeFixture();
   await running();
   const opened: string[] = [];
   expect(await runDashboard([], fx.ctx, { alive, openBrowser: (u) => void opened.push(u) })).toBe(0);
   expect(opened).toHaveLength(1);
-  expect(opened[0]).toMatch(/^http:\/\/localhost:4317\/#login=[A-Za-z0-9_-]{43}$/);
-  expect(fx.stdout()).toContain("Opening the dashboard at http://localhost:4317/");
+  expect(opened[0]).toMatch(/^http:\/\/127\.0\.0\.1:4317\/#login=[A-Za-z0-9_-]{43}$/);
+  expect(fx.stdout()).toContain("Opening the dashboard at http://127.0.0.1:4317/");
   expect(fx.stdout() + fx.stderr()).not.toContain("#login");
   // The gateway redeems it from the same file, once.
   const key = opened[0]!.split("#login=")[1]!;
@@ -39,7 +39,7 @@ test("--code prints a 6-digit code valid 10 minutes and opens nothing", async ()
   const m = fx.stdout().match(/Code: (\d{3}) (\d{3})/);
   expect(m).not.toBeNull();
   expect(fx.stdout()).toContain("works once, for 10 minutes");
-  expect(fx.stdout()).toContain("http://localhost:4317/");
+  expect(fx.stdout()).toContain("http://127.0.0.1:4317/");
   expect(opened).toEqual([]);
   expect(await loginCodesFor(fx.ctx.home).redeem(`${m![1]}${m![2]}`)).toBe(true);
 });
@@ -49,7 +49,7 @@ test("--print-url prints the one-time link and warns on stderr that it works onc
   await running();
   const opened: string[] = [];
   expect(await runDashboard(["--print-url"], fx.ctx, { alive, openBrowser: (u) => void opened.push(u) })).toBe(0);
-  expect(fx.stdout()).toMatch(/^http:\/\/localhost:4317\/#login=[A-Za-z0-9_-]{43}\n$/);
+  expect(fx.stdout()).toMatch(/^http:\/\/127\.0\.0\.1:4317\/#login=[A-Za-z0-9_-]{43}\n$/);
   expect(fx.stderr()).toContain("works once");
   expect(fx.stderr()).toContain("2 minutes");
   expect(opened).toEqual([]);
@@ -62,7 +62,7 @@ test("--no-open prints the plain URL and how to log in elsewhere; no key is issu
   const opened: string[] = [];
   expect(await runDashboard(["--no-open"], fx.ctx, { alive, openBrowser: (u) => void opened.push(u) })).toBe(0);
   expect(opened).toEqual([]);
-  expect(fx.stdout()).toContain("http://localhost:4317/");
+  expect(fx.stdout()).toContain("http://127.0.0.1:4317/");
   expect(fx.stdout()).toContain("tcode dashboard --code");
   expect(fx.stdout()).not.toContain("#login");
   expect(existsSync(join(fx.ctx.home, "gateway", "login-codes.json"))).toBe(false);
@@ -111,7 +111,7 @@ test("service installed but stopped: starts it, waits for the port, then opens",
   expect(await runDashboard([], fx.ctx, deps(service, opened))).toBe(0);
   expect(calls.starts).toBe(1);
   expect(opened).toHaveLength(1);
-  expect(opened[0]).toStartWith("http://localhost:4317/#login=");
+  expect(opened[0]).toStartWith("http://127.0.0.1:4317/#login=");
 });
 
 test("service not installed: asks (default yes), installs, opens", async () => {

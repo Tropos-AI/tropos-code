@@ -22,7 +22,7 @@ Options:
 `;
 
 export interface DashboardTarget {
-  /** http://localhost:<port>/ */
+  /** http://127.0.0.1:<port>/ */
   url: string;
   port: number;
 }

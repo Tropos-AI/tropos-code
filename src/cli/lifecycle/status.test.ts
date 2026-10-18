@@ -62,7 +62,7 @@ test("--json gathers everything, hides the token and never prints keys", async (
     version: "9.9.9",
     install: { current: "9.9.9", previous: "9.9.8", updateReady: "9.9.10" },
     gateway: { running: true, pid: 321 },
-    dashboard: { url: "http://localhost:4399/" },
+    dashboard: { url: "http://127.0.0.1:4399/" },
     providers: ["OpenAI"],
     docker: { ok: true },
     projects: { count: 2, default: "main" },
@@ -85,7 +85,7 @@ test("status rows: dashboard, autonomy, telegram owner; no token anywhere; --all
   const out = plain.stdout;
   const rows = out.split("\n").map((l) => l.trim().split(/\s{2,}/)[0]);
   expect(rows.slice(rows.indexOf("gateway"), rows.indexOf("gateway") + 4)).toEqual(["gateway", "dashboard", "telegram", "autonomy"]);
-  expect(out).toMatch(/dashboard\s+http:\/\/localhost:4399\//);
+  expect(out).toMatch(/dashboard\s+http:\/\/127\.0\.0\.1:4399\//);
   expect(out).toMatch(/autonomy\s+balanced \(commands run on this (Mac|computer)\)/);
   expect(out).toMatch(/telegram\s+bot set, no owner yet \(pick one in Settings → Channels & devices\)/);
   expect(out).toContain("3 jobs");
@@ -136,7 +136,7 @@ test("a gateway.json that does not parse: status still answers, with the default
   expect(s.dashboard).toBeNull();
 });
 
-test("every link the CLI prints is http://localhost", async () => {
+test("every link the CLI prints is http://127.0.0.1 (the bound address), never localhost", async () => {
   fx = await makeFixture();
   const runner = await populated();
   const outputs: string[] = [];
@@ -152,8 +152,8 @@ test("every link the CLI prints is http://localhost", async () => {
   expect(await runDashboard(["--code"], code, { alive: (p) => p === 321 })).toBe(0);
   outputs.push(code.stdout + code.stderr);
   for (const text of outputs) {
-    expect(text).toContain("http://localhost:4399/");
-    expect(text).not.toContain("127.0.0.1");
+    expect(text).toContain("http://127.0.0.1:4399/");
+    expect(text).not.toContain("localhost");
   }
 });
 

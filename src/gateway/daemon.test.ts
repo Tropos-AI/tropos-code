@@ -63,7 +63,7 @@ describe("tcode gateway", () => {
     return { done, stop, out, err, url: () => webUrl };
   };
 
-  test("serves the shell at http://localhost:<port>/ with no key in any output; the old token file is ignored", async () => {
+  test("serves the shell at http://127.0.0.1:<port>/ with no key in any output; the old token file is ignored", async () => {
     await mkdir(join(dir, "project"));
     const oldToken = "o".repeat(43);
     await mkdir(join(dir, "home", "gateway"), { recursive: true });
@@ -73,7 +73,7 @@ describe("tcode gateway", () => {
     const g = start([], { seams: { assets: assetsFromDir(join(dir, "web")) } });
     while (!g.url()) await Bun.sleep(20);
     const url = g.url()!;
-    expect(url).toMatch(/^http:\/\/localhost:\d+\/$/);
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     const page = await fetch(url);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("<title>shell</title>");
@@ -387,7 +387,7 @@ describe("the dashboard's chat across a reload", () => {
 });
 
 describe("the web link in the gateway's output", () => {
-  test("is the plain localhost address, terminal or not: there is no key to leave out", async () => {
+  test("is the plain 127.0.0.1 address, terminal or not: there is no key to leave out", async () => {
     const out: string[] = [];
     let stop!: () => void;
     const stopped = new Promise<void>((r) => (stop = r));
@@ -405,8 +405,8 @@ describe("the web link in the gateway's output", () => {
     stop();
     await done;
     const text = out.join("");
-    expect(text).toMatch(/web: http:\/\/localhost:\d+\/ \(open it with: tcode dashboard\)/);
-    expect(text).not.toContain("127.0.0.1");
+    expect(text).toMatch(/web: http:\/\/127\.0\.0\.1:\d+\/ \(open it with: tcode dashboard\)/);
+    expect(text).not.toContain("localhost");
     expect(text).not.toContain("token=");
   });
 });

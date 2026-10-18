@@ -1,11 +1,12 @@
-// src/web/links.ts — the dashboard's address as Tropos prints and opens it. Always `localhost`: `127.0.0.1` is another
-// origin with its own localStorage, so a link with that name would mean logging the same browser in twice.
+// src/web/links.ts — the dashboard's address as Tropos prints and opens it. Always `127.0.0.1`, the address the server
+// binds: `localhost` may resolve to ::1 first, where another local program could listen on the same port and catch a
+// `#login=` key. One name everywhere also means one origin, so one localStorage and one login per browser.
 import type { GatewayConfig } from "../gateway/config";
 import { loginCodesFor, type LoginCodes } from "./login-codes";
 import { DEFAULT_PORT } from "./protocol";
 
 export function localDashboardUrl(port: number): string {
-  return `http://localhost:${port}/`;
+  return `http://127.0.0.1:${port}/`;
 }
 
 export function dashboardPort(config: GatewayConfig): number {
