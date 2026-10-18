@@ -1,5 +1,6 @@
 // src/cli/lifecycle/onboard-test-kit.ts — test-only: a WizardIO over a throwaway home, with scripted answers.
 // Not imported by production code. Every answer is one line; "" takes the question's default, like Enter.
+import { mkdir } from "node:fs/promises";
 import { createFlow, flowStyle, type Flow } from "../../ui/flow";
 import { fakeNet, fakeService, testDeps } from "../../onboard/testing";
 import { makeFixture, type Fixture } from "./lifecycle-fixture";
@@ -87,6 +88,7 @@ export async function wizardIO(
 ): Promise<TestWizardIO> {
   const fixture = await makeFixture({ interactive: true, ...fixtureOver });
   open.push(fixture);
+  await mkdir(fixture.ctx.home, { recursive: true });
   const script = scriptAnswers(fixture.ctx, answers);
   const opened: string[] = [];
   const deps = testDeps(fixture.ctx.home, { env: { PATH: "" }, ...engine });

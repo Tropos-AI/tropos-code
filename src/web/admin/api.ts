@@ -336,6 +336,18 @@ export interface OnboardStep {
   detail?: string;
 }
 
+/** What is ready when setup ends: the checklist, where to go next, and what the health check found. */
+export interface SetupSummaryView {
+  /** Every step except the welcome and the closing one. */
+  steps: { id: OnboardStepId; title: string; status: OnboardStep["status"]; detail?: string }[];
+  dashboardUrl: string;
+  /** https://t.me/<bot> once a bot token is saved and Telegram answers. */
+  botUrl?: string;
+  /** Three things to try asking. */
+  examples: string[];
+  health: { ok: number; warn: number; error: number; problems: string[] };
+}
+
 /** Someone who wrote to the bot while setup listened: shown on the computer so the owner can say "that's me". */
 export interface OwnerCandidateView {
   senderId: string;

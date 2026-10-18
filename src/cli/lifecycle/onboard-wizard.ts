@@ -9,8 +9,6 @@ import {
   effectiveModel,
   explainKeyError,
   finish,
-  healthReport,
-  installService,
   listModels,
   markStarted,
   modelIdFor,
@@ -18,19 +16,16 @@ import {
   reopen,
   saveKey,
   saveModel,
-  saveTelegram,
   shortModelList,
   skipStep,
   validateKey,
-  verifyTelegram,
   type OnboardDeps,
 } from "../../onboard/engine";
 import { RISK_NOTICE, STEP_WHY, WELCOME_LINES } from "../../onboard/copy";
 import { CredentialsError } from "../../providers/credentials";
 import { FlowCancelled } from "../../ui/flow";
 import type { OnboardState, OnboardStepId } from "../../web/admin/api";
-import { dashboardLoginLink } from "../../web/links";
-import { runningDashboard } from "./dashboard";
+import { doneStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
 import { autonomyStep, identityStep, projectsStep } from "./onboard-steps";
 import { MAX_KEY_TRIES, NEEDED, ask, askYesNo, choose, openUrl, wrapAll, wrapText, type StepHandler, type StepOutcome, type WizardIO } from "./onboard-ask";
 
@@ -182,76 +177,7 @@ export const modelStep: StepHandler = async (io) => {
   return "next";
 };
 
-// ---------- telegram, service, done (carried over; Task 10 replaces them) ----------
-
-const telegramStep: StepHandler = async (io) => {
-  const { flow, deps } = io;
-  const want = await askYesNo(io, "Connect a Telegram bot so you can chat from your phone?", false);
-  if (want === "back") return "back";
-  if (want !== true) return "skip";
-  flow.info("Create a bot with @BotFather in Telegram and copy its token.");
-  for (let attempt = 1; attempt <= MAX_KEY_TRIES; attempt++) {
-    const a = await ask(io, "Bot token (hidden; leave empty to skip)", { secret: true, always: true });
-    if (a.kind !== "value" || !a.value) return "skip";
-    const me = await verifyTelegram(deps, a.value);
-    if (me.ok) {
-      await saveTelegram(deps, a.value);
-      flow.success(`Connected to @${me.username || "your bot"}.`);
-      return "next";
-    }
-    flow.error(`Telegram did not accept it: ${me.error}`);
-  }
-  return "skip";
-};
-
-const serviceStep: StepHandler = async (io) => {
-  const { flow, deps } = io;
-  const want = await askYesNo(io, "Keep the gateway running in the background (starts at login)?", true);
-  if (want === "back") return "back";
-  if (want !== true) return "skip";
-  try {
-    const { unitPath, hint } = await installService(deps);
-    flow.success([`Background service installed (${unitPath}).`, ...(hint ? [hint] : [])]);
-    return "next";
-  } catch (err) {
-    flow.error([`Could not install the service: ${err instanceof Error ? err.message : "failed"}`, "You can run `tcode gateway` yourself instead."]);
-    return "skip";
-  }
-};
-
-const doneStep: StepHandler = async (io) => {
-  const { flow, deps, cli, ctx, opt } = io;
-  const report = await healthReport(deps).catch(() => null);
-  if (!report) flow.warn("The health check could not run; try `tcode doctor`.");
-  else {
-    const { ok, warn, error } = report.summary;
-    const problems = report.findings.filter((x) => x.level === "warn" || x.level === "error").slice(0, 8);
-    flow.info([`Health: ${ok} ok, ${warn} warning${warn === 1 ? "" : "s"}, ${error} error${error === 1 ? "" : "s"}`, ...problems.map((f) => `- ${f.message}`), ...(warn + error ? ["Run `tcode doctor` for details and fixes."] : [])]);
-  }
-  const sleep = cli.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  let target = await runningDashboard(ctx.home, cli.alive);
-  // A service that was just started needs a moment to write its state file.
-  for (let i = 0; !target && i < 10 && (await deps.service.status().catch(() => null))?.running; i++) {
-    await sleep(300);
-    target = await runningDashboard(ctx.home, cli.alive);
-  }
-  if (!target) {
-    flow.info("The gateway is not running. Start it with `tcode gateway` (or `tcode gateway install`), then open the dashboard with `tcode dashboard`.");
-    return "next";
-  }
-  const open = opt.noOpen ? false : await askYesNo(io, "Open the web dashboard now?", true);
-  if (open !== true) {
-    flow.info(`Open the dashboard any time with: tcode dashboard  (${target.url})`);
-    return "next";
-  }
-  // The one-time link logs this browser in; it is issued only when it is about to be opened.
-  await openUrl(io, await dashboardLoginLink(ctx.home, target.port));
-  flow.success(`Opened ${target.url}`);
-  return "next";
-};
-
-/** Filled in by the step files of Tasks 9 and 10. */
-export const TERMINAL_STEPS: Partial<Record<OnboardStepId, StepHandler>> = { provider: providerStep, model: modelStep, identity: identityStep, projects: projectsStep, autonomy: autonomyStep, telegram: telegramStep, service: serviceStep, done: doneStep };
+export const TERMINAL_STEPS: Partial<Record<OnboardStepId, StepHandler>> = { provider: providerStep, model: modelStep, identity: identityStep, projects: projectsStep, autonomy: autonomyStep, telegram: telegramStep, phone: phoneStep, service: serviceStep, done: doneStep };
 
 // ---------- the whole wizard ----------
 

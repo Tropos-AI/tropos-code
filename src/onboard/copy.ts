@@ -23,6 +23,22 @@ export const AUTONOMY_CHOICES: readonly { level: AutonomyLevel; label: string; r
 
 export const TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download";
 
+export const BOTFATHER_URL = "https://t.me/BotFather";
+export const BOTFATHER_STEPS: readonly string[] = [
+  "In Telegram, open @BotFather and send /newbot.",
+  "Pick a name, then a username that ends in “bot”.",
+  "BotFather answers with a token like 123456:ABC-DEF…; copy it and paste it here.",
+];
+
+/** Three things worth asking first; the first names the user's own project when there is one. */
+export function exampleAsks(project?: string): string[] {
+  return [
+    project ? `What changed in ${project} this week?` : "What changed in my project this week?",
+    "Every weekday at 9, summarise my open pull requests.",
+    "Remember that I deploy on Fridays.",
+  ];
+}
+
 /** One sentence on what each step is for; the terminal and the web page show it under the step's title. */
 export const STEP_WHY: Record<OnboardStepId, string> = {
   welcome: "This takes about 3 minutes; every step after the model can be skipped and done later.",

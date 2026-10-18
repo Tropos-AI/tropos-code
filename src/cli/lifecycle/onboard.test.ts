@@ -151,20 +151,15 @@ describe("--non-interactive", () => {
 });
 
 describe("interactive", () => {
-  async function gatewayUp() {
-    await mkdir(join(fx.ctx.home, "gateway"), { recursive: true });
-    await writeFile(join(fx.ctx.home, "gateway", "state.json"), JSON.stringify({ pid: 4242, webPort: 4321 }));
-  }
   const eng = () => engine({ anthropicModels: async () => ["claude-opus-5-5"] });
 
   test("shows the welcome and the notice before the question, walks the steps, installs the service, opens the dashboard", async () => {
     fx = await makeFixture({ interactive: true });
-    await gatewayUp();
     const opened: string[] = [];
     const service = fakeService();
-    //                 risk, provider, open key page, key, model, name (skip), autonomy, telegram, service, dashboard
-    const { ctx, questions, flow } = terminal(["y", providerNumber("deepseek"), "", GOOD_KEY, "", "s", "", "n", "y", "y"]);
-    const code = await runOnboard([], ctx, { engine: engine({ service }), flow, alive: (p) => p === 4242, sleep: async () => {}, openBrowser: (u) => void opened.push(u) });
+    //  risk, provider, open key page, key, model, name (skip), [projects: none found], autonomy, telegram (skip), phone (skip), service, dashboard
+    const { ctx, questions, flow } = terminal(["y", providerNumber("deepseek"), "", GOOD_KEY, "", "s", "", "s", "s", "y", "y"]);
+    const code = await runOnboard([], ctx, { engine: engine({ service }), flow, sleep: async () => {}, openBrowser: (u) => void opened.push(u) });
     expect(code).toBe(0);
     const out = fx.stdout();
     expect(out).toContain("Set up Tropos Code");
@@ -178,9 +173,12 @@ describe("interactive", () => {
     expect(JSON.parse(await read("settings.json")).model).toBe("deepseek/deepseek-chat");
     expect(service.installed).toHaveLength(1);
     expect(opened[0]).toBe("https://platform.deepseek.com/api_keys");
-    expect(opened.at(-1)).toMatch(/^http:\/\/127\.0\.0\.1:4321\/#login=[A-Za-z0-9_-]{43}$/);
+    expect(opened.at(-1)).toMatch(/^http:\/\/127\.0\.0\.1:4317\/#login=[A-Za-z0-9_-]{43}$/);
     const flags = JSON.parse(await read("onboarding.json"));
-    expect(flags.skipped).toEqual(["identity", "telegram"]);
+    expect(flags.skipped).toEqual(["identity", "telegram", "phone"]);
+    expect(flags.dismissedAt).toBeTruthy();
+    expect(JSON.parse(await read("gateway.json")).chat).toMatchObject({ autonomy: "balanced", backend: "host" });
+    expect(out).toContain("Setup is complete.");
     expect(flags.startedAt).toBeTruthy();
     expect(questions[0]).toContain("understand");
   });
@@ -205,55 +203,54 @@ describe("interactive", () => {
 
   test("on --reset a key already in the environment is offered first and is not copied to credentials.json", async () => {
     fx = await makeFixture({ interactive: true, env: { DEEPSEEK_API_KEY: GOOD_KEY } });
-    const { ctx, flow } = terminal(["y" /*risk*/, "" /*provider*/, "" /*model*/, "s" /*name*/, "" /*autonomy*/, "n" /*telegram*/, "n" /*service*/]);
-    expect(await runOnboard(["--reset", "--no-open"], ctx, { engine: engine(), flow, alive: () => false })).toBe(0);
+    const { ctx, flow } = terminal(["y" /*risk*/, "" /*provider*/, "" /*model*/, "s" /*name*/, "" /*autonomy*/, "n" /*telegram*/, "n" /*phone*/, "n" /*service*/]);
+    expect(await runOnboard(["--reset", "--no-open"], ctx, { engine: engine(), flow, sleep: async () => {} })).toBe(0);
     expect(fx.stdout()).toContain("found: $DEEPSEEK_API_KEY");
     expect(await exists(join(fx.ctx.home, "credentials.json"))).toBe(false);
     expect(JSON.parse(await read("settings.json")).model).toBe("deepseek/deepseek-chat");
-    expect(fx.stdout()).toContain("tcode gateway");
+    expect(fx.stdout()).toContain("Open the dashboard any time with `tcode dashboard`.");
   });
 
   test("--quick asks nothing but the key, skips Telegram, installs the service and opens the dashboard", async () => {
     fx = await makeFixture({ interactive: true });
-    await gatewayUp();
     const { ctx, questions, flow } = terminal([providerNumber("deepseek"), GOOD_KEY]);
     const opened: string[] = [];
     const service = fakeService();
-    expect(await runOnboard(["--quick", "--accept-risk"], ctx, { engine: engine({ service }), flow, alive: () => true, sleep: async () => {}, openBrowser: (u) => void opened.push(u) })).toBe(0);
+    expect(await runOnboard(["--quick", "--accept-risk"], ctx, { engine: engine({ service }), flow, sleep: async () => {}, openBrowser: (u) => void opened.push(u) })).toBe(0);
     expect(questions).toHaveLength(2); // which provider, the key
     expect(service.installed).toHaveLength(1);
     expect(opened.at(-1)).toContain("#login=");
-    expect(JSON.parse(await read("onboarding.json")).skipped).toContain("telegram");
+    expect(JSON.parse(await read("onboarding.json")).skipped).toEqual(["identity", "telegram", "phone"]);
   });
 
   test("--no-open never opens the browser", async () => {
     fx = await makeFixture({ interactive: true, env: { ANTHROPIC_API_KEY: "x" } });
-    await gatewayUp();
-    const { ctx, flow } = terminal(["s" /*name*/, "" /*autonomy*/, "n" /*telegram*/, "n" /*service*/]);
+    const { ctx, flow } = terminal(["s" /*name*/, "" /*autonomy*/, "n" /*telegram*/, "n" /*phone*/, "y" /*service*/]);
     const opened: string[] = [];
-    expect(await runOnboard(["--accept-risk", "--no-open"], ctx, { engine: eng(), flow, alive: () => true, openBrowser: (u) => void opened.push(u) })).toBe(0);
+    expect(await runOnboard(["--accept-risk", "--no-open"], ctx, { engine: eng(), flow, openBrowser: (u) => void opened.push(u) })).toBe(0);
     expect(opened).toEqual([]);
     expect(fx.stdout()).toContain("tcode dashboard");
   });
 
-  test("telegram: a token is verified with getMe and saved; bad tokens are not echoed", async () => {
+  test("telegram: a wrong token is explained and never echoed; three wrong ones skip the step", async () => {
     fx = await makeFixture({ interactive: true, env: { ANTHROPIC_API_KEY: "x" } });
-    const { ctx, flow } = terminal(["s" /*name*/, "" /*autonomy*/, "y" /*telegram*/, "9:bad", "123:good", "n" /*service*/]);
-    expect(await runOnboard(["--accept-risk", "--no-open"], ctx, { engine: eng(), flow, alive: () => false })).toBe(0);
-    expect(JSON.parse(await read("gateway.json")).telegram.botToken).toBe("123:good");
-    expect(fx.stdout()).toContain("@tropos_bot");
-    expect(fx.stdout() + fx.stderr()).not.toContain("9:bad");
+    const { ctx, flow } = terminal(["s" /*name*/, "" /*autonomy*/, "y" /*telegram*/, "n" /*BotFather*/, "9:bad", "8:bad", "7:bad", "n" /*phone*/, "n" /*service*/]);
+    expect(await runOnboard(["--accept-risk", "--no-open"], ctx, { engine: eng(), flow, sleep: async () => {} })).toBe(0);
+    expect(fx.stdout()).toContain("Telegram didn't accept that token");
+    expect(fx.stdout() + fx.stderr()).not.toMatch(/[789]:bad/);
+    expect(await exists(join(fx.ctx.home, "gateway", "pairing.json"))).toBe(false);
+    expect(JSON.parse(await read("onboarding.json")).skipped).toContain("telegram");
   });
 
   test("a finished setup is not asked again, but --reset asks every step", async () => {
     fx = await makeFixture({ interactive: true, env: { ANTHROPIC_API_KEY: "x" } });
-    const first = terminal(["s", "", "n", "n"]);
-    expect(await runOnboard(["--accept-risk", "--no-open"], first.ctx, { engine: eng(), flow: first.flow, alive: () => false })).toBe(0);
+    const first = terminal(["s", "", "n", "n", "n"]);
+    expect(await runOnboard(["--accept-risk", "--no-open"], first.ctx, { engine: eng(), flow: first.flow, sleep: async () => {} })).toBe(0);
     const again = terminal([]);
-    expect(await runOnboard(["--accept-risk", "--no-open"], again.ctx, { engine: eng(), flow: again.flow, alive: () => false })).toBe(0);
+    expect(await runOnboard(["--accept-risk", "--no-open"], again.ctx, { engine: eng(), flow: again.flow, sleep: async () => {} })).toBe(0);
     expect(again.questions).toEqual([]);
-    const reset = terminal(["", "", "s", "", "n", "n"]);
-    expect(await runOnboard(["--accept-risk", "--no-open", "--reset"], reset.ctx, { engine: eng(), flow: reset.flow, alive: () => false })).toBe(0);
+    const reset = terminal(["", "", "s", "", "n", "n", "n"]);
+    expect(await runOnboard(["--accept-risk", "--no-open", "--reset"], reset.ctx, { engine: eng(), flow: reset.flow, sleep: async () => {} })).toBe(0);
     expect(reset.questions.some((q) => q.startsWith("Which model"))).toBe(true);
   });
 });

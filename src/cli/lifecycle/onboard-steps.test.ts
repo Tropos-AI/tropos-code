@@ -134,7 +134,6 @@ describe("autonomyStep", () => {
 
   test("an existing Docker install is asked first; n keeps docker and the level picked", async () => {
     const io = await wizardIO(["n", "1"]);
-    await mkdir(io.home, { recursive: true });
     await writeFile(join(io.home, "gateway.json"), JSON.stringify({ chat: { autonomy: "ask", backend: "docker" } }));
     expect(await autonomyStep(io)).toBe("next");
     expect(io.out()).toContain("instead of Docker?");
@@ -143,7 +142,6 @@ describe("autonomyStep", () => {
 
   test("an existing Docker install moves to this computer on y", async () => {
     const io = await wizardIO(["y", "2"]);
-    await mkdir(io.home, { recursive: true });
     await writeFile(join(io.home, "gateway.json"), JSON.stringify({ chat: { autonomy: "ask", backend: "docker" } }));
     expect(await autonomyStep(io)).toBe("next");
     expect(await gatewayChat(io)).toMatchObject({ autonomy: "balanced", backend: "host" });
