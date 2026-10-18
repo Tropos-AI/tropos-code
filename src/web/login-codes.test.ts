@@ -109,6 +109,24 @@ describe("LoginCodes", () => {
     expect(await codes.redeem(d)).toBe(true);
   });
 
+  test("a correct one-time key works while the global limit is in force", async () => {
+    const k = await codes.issueOneTime();
+    for (let i = 0; i < GLOBAL_MAX_FAILURES; i++) await codes.redeem(`9${String(i).padStart(5, "0")}`);
+    expect(await codes.locked()).toBe(true);
+    expect(await codes.redeem(k)).toBe(true);
+  });
+
+  test("wrong one-time keys and malformed input do not count toward the limits", async () => {
+    const c = await codes.issueCode();
+    for (let i = 0; i < GLOBAL_MAX_FAILURES + CODE_MAX_TRIES; i++) {
+      expect(await codes.redeem("A".repeat(43))).toBe(false);
+      expect(await codes.redeem(`junk ${i}`)).toBe(false);
+      expect(await codes.redeem("12345")).toBe(false);
+    }
+    expect(await codes.locked()).toBe(false);
+    expect(await codes.redeem(c)).toBe(true);
+  });
+
   test("not locked after fewer failures than the global limit", async () => {
     for (let i = 0; i < GLOBAL_MAX_FAILURES - 1; i++) await codes.redeem(`9${String(i).padStart(5, "0")}`);
     expect(await codes.locked()).toBe(false);
@@ -135,6 +153,18 @@ describe("LoginCodes", () => {
     expect(raw).not.toContain(k);
     expect(JSON.parse(raw).entries).toHaveLength(2);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  test("a code redeemed in one instance cannot be redeemed in another racing with it", async () => {
+    const a = new LoginCodes({ path, now, random });
+    const b = new LoginCodes({ path, now, random });
+    for (let i = 0; i < 5; i++) {
+      // 3 misses per round stay under the global limit of 20
+      const c = await a.issueCode();
+      const results = await Promise.all([a.redeem(c), b.redeem(c), b.redeem(c), a.redeem(c)]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await a.redeem(c)).toBe(false);
+    }
   });
 
   test("a damaged file reads as no codes", async () => {

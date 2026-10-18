@@ -104,6 +104,18 @@ describe("DeviceStore", () => {
     expect(await other.verify(key)).not.toBeNull();
   });
 
+  test("a revoke in one instance is not undone by a verify racing in another", async () => {
+    const a = new DeviceStore({ path, now: () => t, random });
+    const b = new DeviceStore({ path, now: () => t, random });
+    for (let i = 0; i < 20; i++) {
+      const { id, key } = await a.create(`d${i}`);
+      t += 1000;
+      await Promise.all([b.verify(key), a.revoke(id), b.verify(key), a.list()]);
+      expect(await b.verify(key)).toBeNull();
+      expect((await a.list()).some((d) => d.id === id)).toBe(false);
+    }
+  });
+
   test("a damaged file reads as no devices and is rewritten on the next create", async () => {
     await store.create("old");
     await writeFile(path, "nope");

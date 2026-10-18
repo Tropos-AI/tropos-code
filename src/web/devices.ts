@@ -2,6 +2,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { withFileLock } from "./file-lock";
 
 export const DEVICE_TTL_MS = 365 * 24 * 3_600_000;
 const NAME_MAX = 60;
@@ -93,7 +94,7 @@ export class DeviceStore {
 
   /** Serialises operations; re-reads the file first, drops expired devices, writes back when anything changed. */
   private run<T>(op: (devices: Stored[]) => T): Promise<T> {
-    const next = this.queue.then(async () => {
+    const next = this.queue.then(() => withFileLock(this.path, async () => {
       const devices = await this.load();
       const cutoff = this.now() - DEVICE_TTL_MS;
       const live = devices.filter((d) => d.lastSeen >= cutoff);
@@ -101,7 +102,7 @@ export class DeviceStore {
       const result = op(live);
       if (live.length !== devices.length || JSON.stringify(live) !== before) await this.save(live);
       return result;
-    });
+    }));
     this.queue = next.catch(() => {});
     return next;
   }

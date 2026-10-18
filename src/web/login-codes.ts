@@ -3,6 +3,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { withFileLock } from "./file-lock";
 
 export const ONE_TIME_TTL_MS = 120_000;
 export const CODE_TTL_MS = 600_000;
@@ -78,9 +79,14 @@ export class LoginCodes {
   redeem(value: string): Promise<boolean> {
     return this.run((s) => {
       const now = this.now();
-      if (this.failuresIn(s) >= GLOBAL_MAX_FAILURES) return false;
       // Only a 6-digit code is normalised: a one-time key is base64url and may itself contain '-'.
       const isCode = /^\d{3}[- ]?\d{3}$/.test(value);
+      const isKey = /^[A-Za-z0-9_-]{43}$/.test(value);
+      // Malformed input can be neither: refuse it without counting, so strangers cannot burn the limits.
+      if (!isCode && !isKey) return false;
+      // The global cap guards the guessable codes only. A one-time key is 256 bits from `tcode dashboard`, so a
+      // correct one always works and a wrong one costs nothing: otherwise anyone could lock the owner out.
+      if (isCode && this.failuresIn(s) >= GLOBAL_MAX_FAILURES) return false;
       const given = Buffer.from(this.hash(s, isCode ? value.replace(/[- ]/g, "") : value), "hex");
       const kind = isCode ? "code" : "once";
       // Every live entry of the kind is compared, without stopping at the first match.
@@ -93,8 +99,8 @@ export class LoginCodes {
         s.entries = s.entries.filter((e) => e !== match);
         return true;
       }
-      s.failures.push(now);
       if (isCode) {
+        s.failures.push(now);
         for (const e of s.entries) if (e.kind === "code") e.tries++;
         s.entries = s.entries.filter((e) => e.kind !== "code" || e.tries < CODE_MAX_TRIES);
       }
@@ -115,7 +121,7 @@ export class LoginCodes {
 
   /** Serialises operations; re-reads the file first, drops what has expired, writes back when anything changed. */
   private run<T>(op: (s: State) => T): Promise<T> {
-    const next = this.queue.then(async () => {
+    const next = this.queue.then(() => withFileLock(this.path, async () => {
       const s = await this.load();
       const now = this.now();
       s.entries = s.entries.filter((e) => e.expiresAt > now);
@@ -124,7 +130,7 @@ export class LoginCodes {
       const result = op(s);
       if (JSON.stringify(s) !== before) await this.save(s);
       return result;
-    });
+    }));
     this.queue = next.catch(() => {});
     return next;
   }
