@@ -48,7 +48,7 @@ function ModelChip({ inDashboard }: { inDashboard: boolean }) {
       className={cn(
         "group inline-flex h-8 min-w-0 items-center sm:max-w-[15rem] gap-1.5 rounded-[9px] border border-rule bg-paper-2 pl-2 pr-2.5 text-[12.5px] text-ink shadow-well outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:bg-paper-3 focus-visible:border-accent focus-visible:shadow-focus",
         // Next to the project picker the chip gives way on phones; plain `tcode web` keeps its room.
-        inDashboard ? "max-w-[5rem] min-[360px]:max-w-[6rem] min-[400px]:max-w-[9.5rem]" : "max-w-[9.5rem]",
+        inDashboard ? "max-w-[5rem] min-[360px]:max-w-[6rem] min-[400px]:max-w-[9.5rem]" : "max-w-[5.5rem] min-[360px]:max-w-[7rem] min-[400px]:max-w-[9.5rem]",
       )}
     >
       <span className="text-accent-ink">
@@ -144,7 +144,9 @@ export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
       ) : null}
 
       <div className="flex min-w-0 flex-1 items-baseline gap-2">
-        <p className="shrink-0 text-[14px] font-medium tracking-[-0.005em] text-ink">{page.title}</p>
+        <p className="min-w-0 shrink-0 truncate text-[14px] font-medium tracking-[-0.005em] text-ink max-sm:shrink" title={page.title}>
+          {page.title}
+        </p>
         <span aria-hidden className="hidden text-ink-4 sm:inline">
           /
         </span>

@@ -9,3 +9,8 @@ coverage/
 eval/tb-jobs/
 __pycache__/
 web/dist
+
+# Playwright (bun run test:screens)
+web/e2e/out/
+test-results/
+playwright-report/

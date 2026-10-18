@@ -33,7 +33,10 @@ function useDrawer({
   side = "right",
   width = 320,
   dismissRatio = 0.38,
+  mounted,
 }: {
+  /** The panel is in the DOM (it is portalled after the first frame); effects that touch it wait for that. */
+  mounted: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   side?: DrawerSide;
@@ -83,7 +86,7 @@ function useDrawer({
     return () => {
       panel.inert = false;
     };
-  }, [open]);
+  }, [open, mounted, panelRef]);
 
   useEffect(() => {
     if (open) {
@@ -228,13 +231,14 @@ export function Drawer({
 }: DrawerProps) {
   const titleId = useId();
   const hintId = useId();
+  const [host, setHost] = useState<HTMLElement | null>(null);
   const { dragging, x, veil, close, rootRef, panelRef, panelProps, startDrag } = useDrawer({
+    mounted: host !== null,
     open,
     onOpenChange,
     side,
     width,
   });
-  const [host, setHost] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setHost(document.body));

@@ -207,14 +207,14 @@ function PermissionBody({ id, prompt, waiting, onAnswer }: BodyProps) {
       ) : null}
 
       <div role="group" aria-label="Do you want to proceed?" className="flex flex-col gap-2">
-        <Button variant="primary" block onClick={allow} aria-keyshortcuts="1">
+        <Button variant="primary" block onClick={allow} aria-keyshortcuts="1" className="max-sm:min-h-11">
           <span className="flex w-full items-center justify-between gap-3">
             Yes
             <Kbd className="border-white/25 bg-white/15 text-white shadow-none">1</Kbd>
           </span>
         </Button>
         {rule ? (
-          <Button variant="secondary" block onClick={always} aria-keyshortcuts="2" className="h-auto min-h-10 justify-between py-2 text-left whitespace-normal">
+          <Button variant="secondary" block onClick={always} aria-keyshortcuts="2" className="h-auto min-h-10 justify-between py-2 text-left whitespace-normal max-sm:min-h-11">
             <span className="min-w-0">
               Yes, and don't ask again for <code className="rounded-[5px] bg-paper-2 px-1.5 py-0.5 font-mono text-[12px] text-ink">{rule}</code>
             </span>
@@ -222,7 +222,7 @@ function PermissionBody({ id, prompt, waiting, onAnswer }: BodyProps) {
           </Button>
         ) : null}
         {feedback === null ? (
-          <Button variant="ghost" block onClick={decline} aria-keyshortcuts={String(options.length)} className="h-auto min-h-10 justify-between gap-3 py-2 text-left whitespace-normal">
+          <Button variant="ghost" block onClick={decline} aria-keyshortcuts={String(options.length)} className="h-auto min-h-10 justify-between gap-3 py-2 text-left whitespace-normal max-sm:min-h-11">
             No, and tell Tropos what to do differently
             <Kbd>{options.length}</Kbd>
           </Button>
