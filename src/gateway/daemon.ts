@@ -23,6 +23,7 @@ import { DEFAULT_PORT } from "../web/protocol";
 import { PortInUseError, portHolder, portInUseMessage } from "../web/port";
 import { DeviceStore, devicesPath } from "../web/devices";
 import { loginCodesFor } from "../web/login-codes";
+import { localDashboardUrl } from "../web/links";
 import { startWebServer, type RunningWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
@@ -364,10 +365,17 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       return { ...out, project: { id: project.id, name: project.name } };
     },
   };
+  // /login: a six-digit code from the same file-backed store the dashboard redeems against. Read lazily: the web server
+  // (and so its port) starts after the channels.
+  const loginMessage = async (): Promise<string> => {
+    if (webPort === undefined) return "The dashboard isn't running, so there is nothing to log in to. Start it with: tcode gateway";
+    const code = await loginCodesFor(home).issueCode();
+    return `Login code: ${code.slice(0, 3)} ${code.slice(3)} (works once, for 10 minutes).\nOn the Mac: ${localDashboardUrl(webPort)}`;
+  };
   const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
+    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, loginMessage, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
   let adapterToken = telegramToken(live, run.env);
   let adapters = buildAdapters(adapterToken);

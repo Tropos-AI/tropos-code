@@ -83,9 +83,11 @@ describe("learnedText", () => {
 describe("help", () => {
   test("lists /learned and the skill and command shortcut, and the menu has /learned", () => {
     expect(HELP_TEXT).toContain("/learned  what I saved; /learned undo takes back the newest");
+    expect(HELP_TEXT).toContain("/login  a code to log a browser in to the dashboard (owner, private chat)");
     expect(HELP_TEXT).toContain("/<name>  run one of your skills or commands");
     expect(BOT_COMMANDS).toContainEqual({ command: "learned", description: "What I learned, with undo" });
     expect(HELP_TEXT).toContain("/autonomy  show the autonomy level, or lower it");
+    expect(BOT_COMMANDS).toContainEqual({ command: "login", description: "log a browser in to the dashboard" });
     expect(BOT_COMMANDS).toContainEqual({ command: "autonomy", description: "Show or lower the autonomy level" });
   });
 });

@@ -14,6 +14,7 @@ import { localBackend } from "../exec/local";
 import type { ExecBackend } from "../exec/backend";
 import { CronStore } from "./cron/store";
 import { FilePairing } from "./pairing";
+import { loginCodesFor } from "../web/login-codes";
 import { gatewayConfigSchema, saveGatewayConfig } from "./config";
 import { readGatewayState, type GatewayRun } from "./daemon";
 import { addProject } from "./projects";
@@ -40,7 +41,7 @@ afterEach(async () => {
 
 type UntilInfo = Parameters<NonNullable<GatewayRun["until"]>>[0];
 
-function startGateway(steps: Step[], services: GatewayService[] = [], opts: { botTokenInEnv?: boolean; seams?: Partial<NonNullable<GatewayRun["seams"]>> } = {}) {
+function startGateway(steps: Step[], services: GatewayService[] = [], opts: { botTokenInEnv?: boolean; web?: boolean; seams?: Partial<NonNullable<GatewayRun["seams"]>> } = {}) {
   const err: string[] = [];
   const workspaces: string[] = [];
   const backendsClosed: string[] = [];
@@ -48,7 +49,7 @@ function startGateway(steps: Step[], services: GatewayService[] = [], opts: { bo
   let stop!: () => void;
   const stopped = new Promise<void>((r) => (stop = r));
   let info: UntilInfo | undefined;
-  const done = main(["gateway", "--no-web"], {
+  const done = main(["gateway", ...(opts.web ? [] : ["--no-web"])], {
     model,
     out: () => {},
     err: (s) => err.push(s),
@@ -117,6 +118,36 @@ describe("learning in the owner's chat", () => {
     expect(texts.indexOf("Noted.")).toBeGreaterThan(-1);
     expect(texts.indexOf("💡 Remembered: prefers bun")).toBeGreaterThan(texts.indexOf("Noted."));
 
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+});
+
+describe("/login in the owner's chat", () => {
+  test("hands out a code that redeems once through the shared login codes, with the dashboard address", async () => {
+    const gw = startGateway([], [], { web: true });
+    await server.waitFor(() => server.commands.length > 0);
+    const info = await gw.running();
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => lastText().startsWith("Login code: "));
+    const text = lastText();
+    const code = /Login code: (\d{3}) (\d{3}) \(works once, for 10 minutes\)/.exec(text);
+    expect(code).not.toBeNull();
+    expect(text).toContain(`On the Mac: ${info.webUrl}`);
+    const logins = loginCodesFor(home);
+    expect(await logins.redeem(`${code![1]}${code![2]}`)).toBe(true);
+    expect(await logins.redeem(`${code![1]}${code![2]}`)).toBe(false);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("without a dashboard it says so instead of handing out a useless code", async () => {
+    const gw = startGateway([]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => lastText().includes("dashboard isn't running"));
     gw.stop();
     expect(await gw.done).toBe(0);
   });

@@ -56,7 +56,7 @@ function fakeProjects() {
   return { projects, chosen };
 }
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy } = {}) {
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string> } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -70,6 +70,7 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
     allowGroups: opts.allowGroups,
     projects: opts.projects,
     autonomy: opts.autonomy,
+    loginMessage: opts.loginMessage,
     askTimeoutMs: opts.askTimeoutMs,
     minIntervalMs: 0,
     backoffBaseMs: 5,
@@ -641,6 +642,55 @@ describe("TelegramAdapter", () => {
     await server.waitFor(() => server.textsTo(CHAT).filter((t) => t === "Only the owner can see what I've learned, in their private chat with me.").length === 2);
     // Refused before any session was opened.
     expect(sessions.opens).toBe(0);
+  });
+
+  test("/login from the owner's private chat sends the code message, without opening a session", async () => {
+    const { server, sessions, pairing } = await setup({ loginMessage: async () => "Login code: 123 456" });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("123 456")));
+    expect(sessions.opens).toBe(0);
+  });
+
+  test("/login from another approved sender is refused and issues nothing", async () => {
+    let issued = 0;
+    const { server, pairing } = await setup({ loginMessage: async () => (issued++, "Login code: 1") });
+    pairing.owners.add("telegram:1");
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Only the owner can log in a browser from here."));
+    expect(issued).toBe(0);
+  });
+
+  test("/login from the owner in a group is refused there: the code never reaches the group", async () => {
+    let issued = 0;
+    const { server, pairing } = await setup({ allowGroups: true, loginMessage: async () => (issued++, "Login code: 1") });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(-100, CHAT, "/login", { chatType: "supergroup" });
+    await server.waitFor(() => server.textsTo(-100).includes("Only the owner can log in a browser from here."));
+    expect(issued).toBe(0);
+  });
+
+  test("/login with no owner set says where to pick one and issues nothing", async () => {
+    let issued = 0;
+    const { server } = await setup({ loginMessage: async () => (issued++, "Login code: 1") });
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Pick the owner first: Settings → Channels & devices on the dashboard."));
+    expect(issued).toBe(0);
+  });
+
+  test("/login when the adapter has no loginMessage says it isn't available", async () => {
+    const { server, pairing } = await setup();
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Logging in a browser isn't available here."));
+  });
+
+  test("/login: a failing loginMessage tells the owner and nothing else", async () => {
+    const { server, pairing } = await setup({ loginMessage: async () => Promise.reject(new Error("disk full /secret/path")) });
+    pairing.owners.add(`telegram:${CHAT}`);
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => server.textsTo(CHAT).includes("Could not make a login code. Try again."));
+    expect(server.textsTo(CHAT).join("\n")).not.toContain("/secret/path");
   });
 
   test("/autonomy shows the level to the owner without opening a session", async () => {

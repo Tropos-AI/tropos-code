@@ -190,6 +190,7 @@ export const HELP_TEXT = [
   "/project  show the project, or /project <id> to switch",
   "/autonomy  show the autonomy level, or lower it",
   "/learned  what I saved; /learned undo takes back the newest",
+  "/login  a code to log a browser in to the dashboard (owner, private chat)",
   "/<name>  run one of your skills or commands",
 ].join("\n");
 
@@ -210,6 +211,7 @@ export const BOT_COMMANDS = [
   { command: "status", description: "Project, model, mode and cost" },
   { command: "project", description: "Show or switch the project" },
   { command: "autonomy", description: "Show or lower the autonomy level" },
+  { command: "login", description: "log a browser in to the dashboard" },
   { command: "learned", description: "What I learned, with undo" },
   { command: "start", description: "Show help" },
 ];

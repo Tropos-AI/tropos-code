@@ -36,6 +36,8 @@ const COMMANDS_WAIT_MS = 10_000;
 const LEARNED_REFUSAL = "Only the owner can see what I've learned, in their private chat with me.";
 const AUTONOMY_REFUSAL = "Only the owner can see or change the autonomy level.";
 const AUTONOMY_USAGE = "Use /autonomy, /autonomy ask or /autonomy balanced.";
+const LOGIN_REFUSAL = "Only the owner can log in a browser from here.";
+const LOGIN_NO_OWNER = "Pick the owner first: Settings → Channels & devices on the dashboard.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
 export interface TelegramAdapterOptions {
@@ -46,6 +48,8 @@ export interface TelegramAdapterOptions {
   projects?: ChatProjects;
   /** Lets the owner see and lower the autonomy level (/autonomy). Without it the command says it isn't available. */
   autonomy?: ChatAutonomy;
+  /** The text for /login: a fresh code and where to type it. Without it the command says it isn't available. */
+  loginMessage?: () => Promise<string>;
   allowGroups?: boolean;
   /** Unanswered permission requests are denied after this long. Default 5 minutes. */
   askTimeoutMs?: number;
@@ -139,6 +143,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly pairing: Pairing;
   private readonly projects: ChatProjects | undefined;
   private readonly autonomy: ChatAutonomy | undefined;
+  private readonly loginMessage: (() => Promise<string>) | undefined;
   private readonly allowGroups: boolean;
   private readonly askTimeoutMs: number;
   private readonly minIntervalMs: number;
@@ -164,6 +169,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.pairing = opts.pairing;
     this.projects = opts.projects;
     this.autonomy = opts.autonomy;
+    this.loginMessage = opts.loginMessage;
     this.allowGroups = opts.allowGroups ?? false;
     this.askTimeoutMs = opts.askTimeoutMs ?? 300_000;
     this.minIntervalMs = opts.minIntervalMs ?? 1000;
@@ -292,6 +298,11 @@ export class TelegramAdapter implements ChannelAdapter {
     // Before the session is opened, and only for the owner in their private chat (a group would show it to everyone).
     if (text.startsWith("/") && commandWord(text) === "autonomy") {
       await this.handleAutonomyCommand(msg.chat.id, msg.chat.type, senderId, text);
+      return;
+    }
+    // Before the session is opened, and only for the owner in their private chat: the code would reach a whole group.
+    if (text.startsWith("/") && commandWord(text) === "login") {
+      await this.handleLoginCommand(msg.chat.id, msg.chat.type, senderId);
       return;
     }
     // Before the session is opened: a guest's /learned, or the owner's in a group, is refused without starting one.
@@ -647,6 +658,31 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** `/autonomy`, `/autonomy ask`, `/autonomy balanced`: owner only, private chat only, and only downwards. */
+  private async handleLoginCommand(chatId: number, chatType: string, senderId: string): Promise<void> {
+    if (chatType !== "private") {
+      await this.reply(chatId, LOGIN_REFUSAL);
+      return;
+    }
+    if (!(await this.pairing.owner())) {
+      await this.reply(chatId, LOGIN_NO_OWNER);
+      return;
+    }
+    if (!(await this.pairing.isOwner(CHANNEL, senderId))) {
+      await this.reply(chatId, LOGIN_REFUSAL);
+      return;
+    }
+    if (!this.loginMessage) {
+      await this.reply(chatId, "Logging in a browser isn't available here.");
+      return;
+    }
+    try {
+      await this.reply(chatId, await this.loginMessage());
+    } catch (e) {
+      this.log("login code failed", e);
+      await this.reply(chatId, "Could not make a login code. Try again.");
+    }
+  }
+
   private async handleAutonomyCommand(chatId: number, chatType: string, senderId: string, text: string): Promise<void> {
     if (chatType !== "private" || !(await this.pairing.isOwner(CHANNEL, senderId))) {
       await this.reply(chatId, AUTONOMY_REFUSAL);
