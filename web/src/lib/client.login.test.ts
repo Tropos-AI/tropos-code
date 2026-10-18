@@ -113,6 +113,24 @@ describe("client login handshake", () => {
     expect(client.status).toBe("login");
   });
 
+  test("login() gives up when the server never answers, and the login screen stays usable", async () => {
+    const { client, sockets, timers } = harness(null);
+    sockets[0]!.open();
+    const pending = client.login("123456");
+    const timer = timers.find((t) => t.ms === 8000)!;
+    expect(timer).toBeDefined();
+    timer.fn();
+    const error = await pending.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RpcError);
+    expect((error as RpcError).message).toBe("timeout");
+    expect(client.status).toBe("login");
+    // The next try works as usual.
+    const again = client.login("654321");
+    sockets[0]!.deliver({ t: "login_ok", key: "K2", device: { id: "d", name: "n" } });
+    await again;
+    expect(client.status).toBe("open");
+  });
+
   test("a stored key wins over a pending #login value; the value is used only if auth fails", () => {
     const { client, creds, sockets } = harness("K", { pendingLogin: "ONE" });
     sockets[0]!.open();

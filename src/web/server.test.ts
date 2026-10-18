@@ -310,6 +310,33 @@ describe("Host and Origin", () => {
   });
 });
 
+describe("phone access switched off", () => {
+  const remote = "mac.tail1.ts.net";
+  test("open tailscale sockets are closed with 4401 even when the device's stored via is local", async () => {
+    let name: string | null = remote;
+    const { base, server } = await start([], { remoteHost: () => name });
+    // `key` belongs to a device first seen locally; this tab comes in over the tailnet.
+    const tab = await openAuthed(base, key, `https://${remote}`);
+    const local = await openAuthed(base, key);
+    name = null;
+    await server.recheckDevices();
+    expect(await tab.closed).toBe(4401);
+    // A tab on 127.0.0.1 is untouched.
+    expect(local.ws.readyState).toBe(WebSocket.OPEN);
+    local.ws.close();
+  });
+
+  test("a failure after the code was redeemed is reported as login_failed, not swallowed", async () => {
+    const broken = Object.create(devices) as DeviceStore;
+    broken.create = async () => {
+      throw new Error("disk full");
+    };
+    const { base } = await start([], { devices: broken });
+    const answer = await rawLogin(base, await logins.issueCode(), "Phone");
+    expect(answer).toEqual({ t: "login_failed", reason: "invalid" });
+  });
+});
+
 describe("WebSocket", () => {
   test("refused from another origin or without an upgrade", async () => {
     const { base } = await start();

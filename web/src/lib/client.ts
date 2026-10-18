@@ -213,7 +213,17 @@ export class TcodeClient {
         reject(new RpcError("login", "not connected"));
         return;
       }
-      this.loginWaiter = { resolve, reject };
+      // A server that never answers must not leave the login screen waiting for good.
+      const timer = this.setTimer(() => {
+        if (this.loginWaiter?.reject !== settle.reject) return;
+        this.loginWaiter = null;
+        reject(new RpcError("login", "timeout"));
+      }, this.authTimeout);
+      const settle = {
+        resolve: () => (this.clearTimer(timer), resolve()),
+        reject: (error: Error) => (this.clearTimer(timer), reject(error)),
+      };
+      this.loginWaiter = settle;
       if (socket) {
         this.sendLogin(socket, value);
         return;

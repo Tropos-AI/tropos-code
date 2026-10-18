@@ -158,11 +158,18 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
       if (!ws.data.closed) send({ t: "login_failed", reason });
       return;
     }
+    // The code is spent: whatever fails from here must still answer, or the browser waits for nothing.
+    let created: Awaited<ReturnType<DeviceStore["create"]>>;
     const name = cleanDeviceName(message.name);
-    const created = await opts.devices.create(name, ws.data.via);
+    try {
+      created = await opts.devices.create(name, ws.data.via);
+    } catch {
+      if (!ws.data.closed) send({ t: "login_failed", reason: "invalid" });
+      return;
+    }
     // Nobody received the key: the device could never be used.
     if (ws.data.closed) {
-      await opts.devices.revoke(created.id);
+      await opts.devices.revoke(created.id).catch(() => {});
       return;
     }
     send({ t: "login_ok", key: created.key, device: { id: created.id, name } });
@@ -266,8 +273,10 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
     recheckDevices: async () => {
       if (authed.size === 0) return;
       const live = new Set((await opts.devices.list()).map((d) => d.id));
+      // Phone access off: a tab that came in over the tailnet goes too, whatever its device was last seen on.
+      const tailnetOff = !remote();
       for (const ws of [...authed]) {
-        if (live.has(ws.data.deviceId!)) continue;
+        if (live.has(ws.data.deviceId!) && !(tailnetOff && ws.data.via === "tailscale")) continue;
         logOut(ws);
         ws.close(AUTH_CLOSE_CODE, "Logged out");
       }
