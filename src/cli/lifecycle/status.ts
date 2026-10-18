@@ -1,5 +1,5 @@
 // src/cli/lifecycle/status.ts — `tcode status`: one screen about this Tropos install and its gateway.
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { readSettingsFile } from "../../config/settings";
 import { runDoctor } from "../../doctor/engine";
@@ -10,19 +10,22 @@ import { countJobs, updateReadyVersion } from "../../doctor/status-data";
 import { isRecord, readJsonFile, readStateFile } from "../../doctor/util";
 import { resolveLayout } from "../../install/layout";
 import { readState } from "../../install/state";
+import { gatewayConfigSchema, loadGatewayConfig, telegramToken, type GatewayConfig } from "../../gateway/config";
+import type { Autonomy } from "../../gateway/autonomy";
+import { FilePairing } from "../../gateway/pairing";
 import { ProviderRouter } from "../../providers/router";
+import { localDashboardUrl } from "../../web/links";
 import type { ServiceStatus } from "../../service/types";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
 const HELP = `Usage: tcode status [options]
 
-Shows the version, update state, background service, gateway, providers, Docker,
-projects, paired senders, last session, scheduled jobs and a doctor summary.
-Makes no network calls unless --deep is given.
+Shows the version, update state, background service, gateway, dashboard, Telegram,
+autonomy, providers, Docker, projects, paired senders, last session, scheduled jobs
+and a doctor summary. Makes no network calls unless --deep is given.
 
 Options:
   --deep    let the doctor make its network checks (provider listings, Telegram)
-  --all     include secrets that are normally hidden (the web link's token)
   --json    print the status as JSON
   --help    show this text
 `;
@@ -34,7 +37,11 @@ export interface Status {
   install: { current: string | null; previous: string | null; pending: string | null; lastCheck: string | null; lastUpdated: string | null; updateReady: string | null };
   service: ServiceStatus | { error: string };
   gateway: { running: boolean; pid?: number; startedAt?: string };
-  web: { url: string; token?: string } | null;
+  /** The dashboard's address, why it is off, or null when the gateway isn't running. */
+  dashboard: { url: string } | { problem: string } | null;
+  autonomy: { level: Autonomy; backend: "host" | "docker" };
+  /** Whether a bot token is set and whether an owner is chosen; never the token. */
+  telegram: { token: boolean; owner: boolean };
   providers: string[];
   docker: { ok: boolean; detail: string };
   projects: { count: number; default: string };
@@ -56,7 +63,7 @@ async function newestSession(home: string): Promise<number | null> {
   return newest;
 }
 
-export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean; all: boolean; runner?: Partial<Runner> } & Pick<DoctorOptions, "checks">): Promise<Status> {
+export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean; runner?: Partial<Runner> } & Pick<DoctorOptions, "checks">): Promise<Status> {
   const runner = { ...defaultRunner(), ...opts.runner };
   const layout = resolveLayout(ctx.env, ctx.userHome);
   const settings = await readSettingsFile(join(ctx.home, "settings.json")).catch(() => null);
@@ -68,12 +75,10 @@ export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean;
   const service = await runner.serviceStatus().catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
   const gw = await readStateFile(ctx.home);
   const running = gw ? runner.pidAlive(gw.pid) : false;
-  let web: Status["web"] = null;
-  if (running && gw?.webPort) {
-    const url = `http://127.0.0.1:${gw.webPort}/`;
-    const token = opts.all ? (await readFile(join(ctx.home, "gateway", "token"), "utf8").catch(() => "")).trim() : "";
-    web = token ? { url: `${url}?token=${token}`, token } : { url };
-  }
+  const dashboard: Status["dashboard"] = !running || !gw ? null : gw.webPort ? { url: localDashboardUrl(gw.webPort) } : { problem: gw.webProblem ?? "the gateway runs without it (--no-web)" };
+  // A broken gateway.json is the doctor's to report; here it reads as the defaults.
+  const config: GatewayConfig = await loadGatewayConfig(ctx.home).catch(() => gatewayConfigSchema.parse({}));
+  const owner = await new FilePairing({ path: join(ctx.home, "gateway", "pairing.json"), now: ctx.now }).owner().catch(() => null);
 
   const router = new ProviderRouter({ home: ctx.home, env: ctx.env, settings: settings?.providers ?? {} });
   const providers = (await router.status().catch(() => [])).filter((p) => p.key !== null).map((p) => p.info.name);
@@ -98,7 +103,9 @@ export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean;
     },
     service,
     gateway: running && gw ? { running: true, pid: gw.pid, startedAt: gw.startedAt } : { running: false },
-    web,
+    dashboard,
+    autonomy: { level: config.chat.autonomy, backend: config.chat.backend },
+    telegram: { token: Boolean(telegramToken(config, ctx.env)), owner: owner !== null },
     providers,
     docker: docker.code === 0 ? { ok: true, detail: `server ${docker.stdout.trim()}` } : { ok: false, detail: docker.error?.includes("not found") ? "not installed" : "daemon not reachable" },
     projects: { count: projects.length, default: isRecord(gwConfig) && typeof gwConfig.defaultProject === "string" ? gwConfig.defaultProject : "default" },
@@ -120,13 +127,30 @@ function serviceLine(s: Status["service"]): string {
   return `${s.manager}: installed, ${s.running ? `running${s.pid ? ` (pid ${s.pid})` : ""}` : "stopped"}`;
 }
 
-export function renderStatus(s: Status, all: boolean): string {
+function dashboardLine(d: Status["dashboard"]): string {
+  if (!d) return "off while the gateway isn't running (tcode dashboard starts it)";
+  return "url" in d ? d.url : `off: ${d.problem}`;
+}
+
+function telegramLine(t: Status["telegram"]): string {
+  if (!t.token) return "no bot yet (connect one in Settings → Channels & devices)";
+  return t.owner ? "bot set, owner chosen" : "bot set, no owner yet (pick one in Settings → Channels & devices)";
+}
+
+function autonomyLine(a: Status["autonomy"]): string {
+  const where = a.backend === "docker" ? "in Docker" : `on this ${process.platform === "darwin" ? "Mac" : "computer"}`;
+  return `${a.level} (commands run ${where})`;
+}
+
+export function renderStatus(s: Status): string {
   const rows: Array<[string, string]> = [
     ["install", `${s.install.current ? `current ${s.install.current}` : "not managed by the installer"}${s.install.previous ? `, previous ${s.install.previous}` : ""}${s.install.pending ? `, switching to ${s.install.pending}` : ""}`],
     ["updates", `${s.autoUpdates ? "automatic" : "manual"}${s.install.updateReady ? `; ${s.install.updateReady} is installed, restart to use it` : ""}${s.install.lastCheck ? `; last checked ${s.install.lastCheck}` : ""}`],
     ["service", serviceLine(s.service)],
     ["gateway", s.gateway.running ? `running (pid ${s.gateway.pid}${s.gateway.startedAt ? `, since ${s.gateway.startedAt}` : ""})` : "not running"],
-    ...(s.web ? ([["web", s.web.url + (all ? "" : "  (token hidden; --all shows it)")]] as Array<[string, string]>) : []),
+    ["dashboard", dashboardLine(s.dashboard)],
+    ["telegram", telegramLine(s.telegram)],
+    ["autonomy", autonomyLine(s.autonomy)],
     ["providers", s.providers.length ? s.providers.join(", ") : "none connected"],
     ["docker", `${s.docker.ok ? "ok" : "unavailable"} (${s.docker.detail})`],
     ["projects", `${s.projects.count} (default: ${s.projects.default})`],
@@ -144,14 +168,14 @@ export async function runStatusCommand(argv: string[], ctx: LifecycleContext, de
     ctx.out(HELP);
     return 0;
   }
+  // --all only ever showed the old web token; it is still accepted so scripts that pass it keep working.
   const parsed = parseFlags(argv, { bool: ["json", "deep", "all"], value: [] });
   if (!parsed.ok || parsed.rest.length) {
     ctx.err(`tcode status: ${parsed.ok ? `unexpected argument ${parsed.rest[0]}` : parsed.error}\nRun \`tcode status --help\` for usage.\n`);
     return 64;
   }
-  const all = parsed.bool.has("all");
-  const status = await gatherStatus(ctx, { deep: parsed.bool.has("deep"), all, ...deps });
-  ctx.out(parsed.bool.has("json") ? `${JSON.stringify(status, null, 2)}\n` : renderStatus(status, all));
+  const status = await gatherStatus(ctx, { deep: parsed.bool.has("deep"), ...deps });
+  ctx.out(parsed.bool.has("json") ? `${JSON.stringify(status, null, 2)}\n` : renderStatus(status));
   return 0;
 }
 

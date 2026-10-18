@@ -27,6 +27,7 @@ import { allProviders } from "../../providers/router";
 import { readSettingsFile } from "../../config/settings";
 import { join } from "node:path";
 import type { OnboardState, OnboardStepId } from "../../web/admin/api";
+import { dashboardLoginLink } from "../../web/links";
 import { runningDashboard } from "./dashboard";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
@@ -415,11 +416,13 @@ class Wizard {
       ctx.out("\nThe gateway is not running. Start it with `tcode gateway` (or `tcode gateway install`), then open the dashboard with `tcode dashboard`.\n");
       return;
     }
-    if (this.opt.noOpen || !target.secretUrl || !(await this.ask("Open the web dashboard now?", true))) {
+    if (this.opt.noOpen || !(await this.ask("Open the web dashboard now?", true))) {
       ctx.out(`\nOpen the dashboard any time with: tcode dashboard  (${target.url})\n`);
       return;
     }
-    await (this.cli.openBrowser ?? (async (u: string) => (await import("../../web/serve")).openInBrowser(u)))(target.secretUrl);
+    // The one-time link logs this browser in; it is issued only when it is about to be opened.
+    const link = await dashboardLoginLink(ctx.home, target.port);
+    await (this.cli.openBrowser ?? (async (u: string) => (await import("../../web/serve")).openInBrowser(u)))(link);
     ctx.out(`Opened ${target.url}\n`);
   }
 }

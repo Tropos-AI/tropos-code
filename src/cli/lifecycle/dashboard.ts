@@ -1,9 +1,9 @@
-// src/cli/lifecycle/dashboard.ts — `tcode dashboard`: open the web UI of the running gateway.
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+// src/cli/lifecycle/dashboard.ts — `tcode dashboard`: open the web UI of the running gateway, logged in.
 import { parseFlags } from "../../doctor/flags";
 import { pidAlive, readStateFile, type GatewayStateFile } from "../../doctor/util";
 import type { ServiceManager } from "../../service/types";
+import { dashboardLoginLink, localDashboardUrl } from "../../web/links";
+import { CODE_TTL_MS, ONE_TIME_TTL_MS, loginCodesFor } from "../../web/login-codes";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
 const HELP = `Usage: tcode dashboard [options]
@@ -11,26 +11,27 @@ const HELP = `Usage: tcode dashboard [options]
 Opens the web dashboard of the gateway in your browser. If the background service is stopped,
 starts it; if it is not installed, offers to install it.
 
+The link it opens logs this browser in once; after that the browser stays logged in and never
+needs a link again. Other browsers and your phone log in with a 6-digit code (--code).
+
 Options:
-  --no-open     do not open a browser
-  --print-url   print the link (it contains a secret key: do not share it)
+  --code        print a 6-digit code to log in another browser or your phone (works once, for 10 minutes)
+  --print-url   print the one-time login link instead of opening it (works once, for 2 minutes)
+  --no-open     only print where the dashboard is
   --help        show this text
 `;
 
 export interface DashboardTarget {
-  /** The link without the key. */
+  /** http://localhost:<port>/ */
   url: string;
-  /** The link with the persistent key, or null when the gateway has no token file yet. */
-  secretUrl: string | null;
+  port: number;
 }
 
 /** The running gateway's web UI (state.json names a live pid and a web port), or null. */
 export async function runningDashboard(home: string, alive: (pid: number) => boolean = pidAlive): Promise<DashboardTarget | null> {
   const state = await readStateFile(home);
   if (!state || !alive(state.pid) || !state.webPort) return null;
-  const url = `http://127.0.0.1:${state.webPort}/`;
-  const token = (await readFile(join(home, "gateway", "token"), "utf8").catch(() => "")).trim();
-  return { url, secretUrl: token ? `${url}?token=${token}` : null };
+  return { url: localDashboardUrl(state.webPort), port: state.webPort };
 }
 
 export interface DashboardDeps {
@@ -107,32 +108,29 @@ export async function runDashboard(argv: string[], ctx: LifecycleContext, deps: 
     ctx.out(HELP);
     return 0;
   }
-  const parsed = parseFlags(argv, { bool: ["no-open", "print-url"], value: [] });
+  const parsed = parseFlags(argv, { bool: ["no-open", "print-url", "code"], value: [] });
   if (!parsed.ok || parsed.rest.length) {
     ctx.err(`tcode dashboard: ${parsed.ok ? `unexpected argument ${parsed.rest[0]}` : parsed.error}\nRun \`tcode dashboard --help\` for usage.\n`);
     return 64;
   }
   const target = (await runningDashboard(ctx.home, deps.alive)) ?? (await startDashboard(ctx, deps));
   if (!target) return 1;
+  if (parsed.bool.has("code")) {
+    const code = await loginCodesFor(ctx.home).issueCode();
+    ctx.out(`Code: ${code.slice(0, 3)} ${code.slice(3)} (works once, for ${CODE_TTL_MS / 60_000} minutes)\nType it on the login screen at ${target.url}\n`);
+    return 0;
+  }
   if (parsed.bool.has("print-url")) {
-    if (!target.secretUrl) {
-      ctx.err("The gateway has no web key yet; restart it (tcode gateway restart) and try again.\n");
-      return 1;
-    }
-    ctx.out(`${target.secretUrl}\n`);
-    ctx.err("This link contains a secret key that gives full access to your Tropos; do not share it.\n");
+    ctx.out(`${await dashboardLoginLink(ctx.home, target.port)}\n`);
+    ctx.err(`This link logs in whoever opens it first. It works once, for ${ONE_TIME_TTL_MS / 60_000} minutes; do not share it.\n`);
     return 0;
   }
   if (parsed.bool.has("no-open")) {
-    ctx.out(`The dashboard is at ${target.url}\nUse --print-url for the link with the key.\n`);
+    ctx.out(`The dashboard is at ${target.url}\nTo log in from another browser or your phone, run: tcode dashboard --code\n`);
     return 0;
   }
-  if (!target.secretUrl) {
-    ctx.err(`The gateway has no web key yet, so the link would not sign you in. Restart it (tcode gateway restart); the page is ${target.url}\n`);
-    return 1;
-  }
   ctx.out(`Opening the dashboard at ${target.url}\n`);
-  await (deps.openBrowser ?? defaultOpen)(target.secretUrl);
+  await (deps.openBrowser ?? defaultOpen)(await dashboardLoginLink(ctx.home, target.port));
   return 0;
 }
 

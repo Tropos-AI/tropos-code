@@ -158,7 +158,6 @@ describe("interactive", () => {
   async function gatewayUp() {
     await mkdir(join(fx.ctx.home, "gateway"), { recursive: true });
     await writeFile(join(fx.ctx.home, "gateway", "state.json"), JSON.stringify({ pid: 4242, webPort: 4321 }));
-    await writeFile(join(fx.ctx.home, "gateway", "token"), `${"t".repeat(40)}\n`);
   }
 
   test("shows the notice, walks the steps, installs the service, opens the dashboard", async () => {
@@ -177,7 +176,8 @@ describe("interactive", () => {
     expect(JSON.parse(await read("credentials.json")).deepseek.apiKey).toBe(GOOD_KEY);
     expect(JSON.parse(await read("settings.json")).model).toBe("deepseek/deepseek-chat");
     expect(service.installed).toHaveLength(1);
-    expect(opened).toEqual([`http://127.0.0.1:4321/?token=${"t".repeat(40)}`]);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/^http:\/\/localhost:4321\/#login=[A-Za-z0-9_-]{43}$/);
     expect(JSON.parse(await read("onboarding.json")).skipped).toEqual(["telegram", "sandbox"]);
     expect(fx.asked[0]).toContain("understand");
   });

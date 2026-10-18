@@ -16,27 +16,25 @@ test("audit checks only run when asked for by area", async () => {
   expect(selectChecks([securityGatewayCheck], "security")).toHaveLength(1);
 });
 
-test("gateway: strong token, no network, digest pinning", async () => {
+test("gateway: no network, digest pinning; the web token is not its business any more", async () => {
   fx = await makeFixture();
-  await fx.write("gateway/token", "a".repeat(8) + "B7xQ-9zLm2".repeat(4) + "\n");
+  await fx.write("gateway/token", "short\n");
   await fx.write("gateway.json", JSON.stringify({ sandbox: { network: "none", image: "alpine@sha256:abc" } }));
   const r = await runOne(fx, securityGatewayCheck);
-  expect(byId(r, "security.gateway.token")!.level).toBe("ok");
+  expect(byId(r, "security.gateway.token")).toBeUndefined();
+  expect(r.findings.some((f) => /web token/i.test(f.message))).toBe(false);
   expect(byId(r, "security.gateway.network")!.level).toBe("ok");
   expect(byId(r, "security.gateway.image")!.level).toBe("ok");
 });
 
-test("gateway: weak token, bridge network, token in the file, unpinned image", async () => {
+test("gateway: bridge network, bot token in the file, unpinned image", async () => {
   fx = await makeFixture();
-  await fx.write("gateway/token", "short\n");
   await fx.write("gateway.json", JSON.stringify({ sandbox: { network: "bridge" }, telegram: { botToken: "9:very-secret" } }));
   const r = await runOne(fx, securityGatewayCheck);
-  expect(byId(r, "security.gateway.token")!.level).toBe("warn");
   expect(byId(r, "security.gateway.network")!.level).toBe("warn");
   expect(byId(r, "security.gateway.telegram")!.level).toBe("info");
   expect(byId(r, "security.gateway.image")).toMatchObject({ level: "info", message: expect.stringContaining("alpine:3.22") });
   expect(JSON.stringify(r)).not.toContain("very-secret");
-  expect(JSON.stringify(r)).not.toContain("short\\n");
 });
 
 test("pairing: counts senders and flags those older than 90 days", async () => {

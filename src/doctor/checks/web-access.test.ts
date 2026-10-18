@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { fakeRunner, makeFixture, runOne, type Fixture } from "../testing";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { byId, fakeRunner, makeFixture, runOne, type Fixture } from "../testing";
 import { webAccessCheck } from "./web-access";
 
 let fx: Fixture;
@@ -35,4 +37,24 @@ test("not running and the port is free: ok", async () => {
   fx = await makeFixture();
   const r = await runOne(fx, webAccessCheck);
   expect(r.findings[0]).toMatchObject({ level: "ok" });
+});
+
+test("an old gateway/token file: warn, safe fix deletes it", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway/token", "a".repeat(43));
+  await fx.write("gateway/devices.json", "{}");
+  const seen = await runOne(fx, webAccessCheck);
+  expect(byId(seen, "gateway.web.oldToken")).toMatchObject({ level: "warn", fixable: true, safe: true });
+  expect(JSON.stringify(seen)).not.toContain("a".repeat(43));
+  const r = await runOne(fx, webAccessCheck, { fix: "safe" });
+  expect(byId(r, "gateway.web.oldToken")).toMatchObject({ fixed: true });
+  expect(existsSync(join(fx.home, "gateway", "token"))).toBe(false);
+  // Only that file.
+  expect(existsSync(join(fx.home, "gateway", "devices.json"))).toBe(true);
+});
+
+test("no old token file: no finding about it", async () => {
+  fx = await makeFixture();
+  const r = await runOne(fx, webAccessCheck);
+  expect(byId(r, "gateway.web.oldToken")).toBeUndefined();
 });

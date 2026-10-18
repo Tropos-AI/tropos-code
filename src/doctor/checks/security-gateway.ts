@@ -1,11 +1,7 @@
-// src/doctor/checks/security-gateway.ts — the gateway's own exposure: web token, sandbox network and image, where the bot token lives.
-import { readFile } from "node:fs/promises";
+// src/doctor/checks/security-gateway.ts — the gateway's own exposure: sandbox network and image, where the bot token lives.
 import { join } from "node:path";
 import type { Check, Finding } from "../types";
 import { finding, isRecord, readJsonFile } from "../util";
-
-/** persistentToken() makes 32 random bytes (43 base64url characters) and regenerates anything under 32. */
-export const MIN_TOKEN_LENGTH = 32;
 
 export const securityGatewayCheck: Check = {
   id: "security.gateway",
@@ -14,12 +10,6 @@ export const securityGatewayCheck: Check = {
   title: "Gateway exposure",
   async run(env) {
     const out: Finding[] = [];
-    const token = (await readFile(join(env.home, "gateway", "token"), "utf8").catch(() => "")).trim();
-    if (!token) out.push(finding("security.gateway.token", "info", "No web token yet (created when the gateway first starts)"));
-    else if (token.length < MIN_TOKEN_LENGTH || new Set(token).size < 8) {
-      out.push(finding("security.gateway.token", "warn", "The gateway web token is weak", { detail: `It is ${token.length} characters. Delete ${join(env.home, "gateway", "token")}; the gateway makes a strong one on its next start.` }));
-    } else out.push(finding("security.gateway.token", "ok", "The gateway web token is long and random-looking"));
-
     const config = await readJsonFile(join(env.home, "gateway.json"));
     if (!isRecord(config)) return out;
     const sandbox = isRecord(config.sandbox) ? config.sandbox : {};

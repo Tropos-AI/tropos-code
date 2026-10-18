@@ -1,0 +1,39 @@
+import { afterEach, expect, test } from "bun:test";
+import { join } from "node:path";
+import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { gatewayConfigSchema } from "../gateway/config";
+import { dashboardLoginLink, dashboardPort, localDashboardUrl } from "./links";
+import { LoginCodes, loginCodesFor } from "./login-codes";
+
+let dir: string | undefined;
+afterEach(async () => {
+  if (dir) await removeDir(dir);
+  dir = undefined;
+});
+
+test("the dashboard's address is always localhost, never 127.0.0.1 (one origin, one login)", () => {
+  expect(localDashboardUrl(4317)).toBe("http://localhost:4317/");
+  expect(localDashboardUrl(4318)).toBe("http://localhost:4318/");
+});
+
+test("dashboardPort is webPort from gateway.json, else 4317", () => {
+  expect(dashboardPort(gatewayConfigSchema.parse({}))).toBe(4317);
+  expect(dashboardPort(gatewayConfigSchema.parse({ webPort: 4555 }))).toBe(4555);
+});
+
+test("dashboardLoginLink carries a one-time key that the gateway's store redeems once", async () => {
+  dir = await makeTmpDir("links-");
+  const link = await dashboardLoginLink(dir, 4317);
+  expect(link).toMatch(/^http:\/\/localhost:4317\/#login=[A-Za-z0-9_-]{43}$/);
+  const key = link.split("#login=")[1]!;
+  // Another process (the gateway) reads the same file.
+  expect(await loginCodesFor(dir).redeem(key)).toBe(true);
+  expect(await loginCodesFor(dir).redeem(key)).toBe(false);
+});
+
+test("dashboardLoginLink uses the store it is given", async () => {
+  dir = await makeTmpDir("links-");
+  const logins = new LoginCodes({ path: join(dir, "elsewhere.json") });
+  const link = await dashboardLoginLink(join(dir, "unused"), 4400, logins);
+  expect(await logins.redeem(link.split("#login=")[1]!)).toBe(true);
+});

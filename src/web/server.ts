@@ -3,6 +3,7 @@
 import type { ServerWebSocket } from "bun";
 import { contentType, type AssetMap } from "./assets";
 import { cleanDeviceName, type Device, type DeviceStore } from "./devices";
+import { localDashboardUrl } from "./links";
 import type { LoginCodes } from "./login-codes";
 import { PortInUseError } from "./port";
 import type { ChatHost } from "./project-hosts";
@@ -261,7 +262,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
   port = server.port!;
   return {
     port,
-    url: `http://localhost:${port}/`,
+    url: localDashboardUrl(port),
     recheckDevices: async () => {
       if (authed.size === 0) return;
       const live = new Set((await opts.devices.list()).map((d) => d.id));

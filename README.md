@@ -113,6 +113,11 @@ with `tcode config set webPort <port> --file gateway`. Other sites can't reach i
 the `Host` and `Origin` headers and sends a strict CSP. `--no-open` only prints where it is.
 (`tcode web` still works as another name for `tcode dashboard`.)
 
+A browser logs in once: `tcode dashboard` opens it with a one-time link; other browsers and your phone
+use a 6-digit code (`tcode dashboard --code`, or `/login` to your bot). The key lives in that browser's
+storage and is sent only over the dashboard's own connection; log devices out in Settings → Channels &
+devices. Every link Tropos prints is `http://localhost:<port>/`, so one browser needs one login.
+
 In a session:
 - Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.
 - The input stays open while Tropos works. What you send then is queued and runs next. `↑` takes
@@ -436,6 +441,11 @@ tools with `mcp__github__get_*`.
   with `ps eww -p <pid>`. Reading another process's environment goes through the normal Bash
   permission prompt, so avoid broad rules such as `Bash(ps:*)`, and avoid bypass mode in
   untrusted repositories. Prefer `ant auth login` over exporting the key.
+- The dashboard's page and its scripts are public and hold nothing; data starts only after the browser
+  proves its device key on the WebSocket. Anything that can run scripts on the dashboard page could
+  read the key, which is why the page allows no outside scripts (strict CSP). Device keys are stored
+  hashed (`gateway/devices.json`, 0600) and expire a year after their last use; the old
+  `gateway/token` link no longer works, and `tcode doctor --fix` deletes the file.
 - `tcode -p` reads piped stdin until EOF. In scripts and CI that have no input, pass
   `</dev/null` so it doesn't wait.
 
