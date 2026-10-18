@@ -388,6 +388,25 @@ export interface AutonomyAdmin {
   "autonomy.confirmTests": { params: { projectId: string; commands: string[] }; result: AutonomyView };
 }
 
+export interface DeviceView {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastSeen: number;
+  via: "local" | "tailscale";
+  /** The device that made this call. */
+  current: boolean;
+}
+
+export interface DevicesAdmin {
+  "devices.list": { params: undefined; result: DeviceView[] };
+  "devices.revoke": { params: { id: string }; result: { removed: boolean } };
+  /** Logs out every device, this one included. */
+  "devices.revokeAll": { params: undefined; result: { removed: number } };
+  /** A 6-digit code for another browser or a phone. */
+  "login.issueCode": { params: undefined; result: { code: string; expiresAt: number } };
+}
+
 // ---------- the whole API ----------
 
 export type AdminMap = StatusAdmin &
@@ -404,7 +423,8 @@ export type AdminMap = StatusAdmin &
   CronAdmin &
   ExtensionsAdmin &
   OnboardAdmin &
-  AutonomyAdmin;
+  AutonomyAdmin &
+  DevicesAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -473,4 +493,8 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "autonomy.set",
   "autonomy.setBackend",
   "autonomy.confirmTests",
+  "devices.list",
+  "devices.revoke",
+  "devices.revokeAll",
+  "login.issueCode",
 ];

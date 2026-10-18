@@ -6,6 +6,7 @@ import { backupHandlers } from "./backup";
 import { channelsHandlers } from "./channels";
 import { configHandlers } from "./config";
 import { cronHandlers } from "./cron";
+import { devicesHandlers } from "./devices";
 import { doctorHandlers } from "./doctor";
 import { extensionsHandlers } from "./extensions";
 import { logsHandlers } from "./logs";
@@ -42,6 +43,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...extensionsHandlers(ctx),
     ...onboardHandlers(ctx),
     ...autonomyHandlers(ctx),
+    ...devicesHandlers(ctx),
     ...extra,
   };
   return {
