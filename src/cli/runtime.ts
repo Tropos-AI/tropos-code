@@ -40,6 +40,8 @@ import type { AnyTool, ToolContext } from "../tools/types";
 import type { ListTopic } from "../ui/commands";
 import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSection, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
+import { makeOnboardDeps } from "../onboard/engine";
+import { takeSetupReminder } from "../onboard/reminders";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
 
 const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
@@ -178,9 +180,18 @@ export function makeAgent(
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
   const nonce = () => harnessNonce(opts.session().id);
+  // Resolved once per agent, so the reminder rides one context build and is marked as shown exactly once.
+  let reminder: Promise<string> | undefined;
+  const setupReminder = () =>
+    (reminder ??= takeSetupReminder(makeOnboardDeps({ home: ctx.home, env: ctx.env }), { role: ctx.role, interactive: Boolean(opts.interactive) }).catch(() => ""));
   const contextFor = (scope: "main" | "subagent") => async () =>
     buildContextText(await loadMemory(ctx.cwd, ctx.home), await environmentBlock(ctx.cwd, { shell: ctx.shell }), [
-      ...(await contextExtras(ctx.ext, (skills) => skillListing(skills), { home: ctx.home, scope, bootstrap: opts.interactive })),
+      ...(await contextExtras(ctx.ext, (skills) => skillListing(skills), {
+        home: ctx.home,
+        scope,
+        bootstrap: opts.interactive,
+        ...(scope === "main" ? { reminder: await setupReminder() } : {}),
+      })),
       nonceBlock(nonce()),
     ]);
   const contextText = contextFor("main");

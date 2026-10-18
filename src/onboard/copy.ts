@@ -65,3 +65,11 @@ export const RISK_NOTICE: readonly string[] = [
   "Chats from Telegram run commands on this computer inside its own sandbox, only in the project you picked; the autonomy level you choose decides what they may do without asking.",
   "You can review or undo all of this later with `tcode status`, `tcode doctor` and `tcode uninstall`.",
 ];
+
+/** What a skipped step was for, as the agent should say it when it brings the step up once. */
+export const REMINDER_TOPICS: Partial<Record<OnboardStepId, string>> = {
+  telegram: "Telegram, so they can talk to you from their phone",
+  phone: "phone access, so they can open the dashboard from their phone",
+  service: "running in the background, so chats and schedules work when the terminal is closed",
+  projects: "adding their projects, so you can work in them from a chat",
+};

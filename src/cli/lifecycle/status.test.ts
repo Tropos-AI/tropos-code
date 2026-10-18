@@ -181,3 +181,14 @@ test("phone row: the tailnet address while phone access is on, else how to turn 
   await runStatusCommand([], on, { runner, checks: [] });
   expect(on.stdout).toMatch(/phone\s+https:\/\/mac\.tail1234\.ts\.net:8443\//);
 });
+
+test("status lists skipped setup steps and how to finish them", async () => {
+  fx = await makeFixture();
+  await fx.write("onboarding.json", JSON.stringify({ dismissedAt: "2026-10-15T00:00:00Z", skipped: ["telegram", "phone"] }));
+  const ctx = ctxFor();
+  expect(await runStatusCommand([], ctx, { runner: fakeRunner({ exec: async () => noDocker }), checks: [] })).toBe(0);
+  expect(ctx.stdout).toContain("skipped: Telegram, Phone access (finish with `tcode onboard`)");
+  const json = fakeContext({ env: { ...fx.env }, home: fx.home, userHome: fx.userHome, cwd: fx.root });
+  await runStatusCommand(["--json"], json, { runner: fakeRunner({ exec: async () => noDocker }), checks: [] });
+  expect((JSON.parse(json.stdout) as Status).setup).toEqual({ skipped: ["telegram", "phone"] });
+});

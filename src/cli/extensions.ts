@@ -235,7 +235,7 @@ export function sessionTools(
 export async function contextExtras(
   ext: Extensions,
   listing: (skills: Skill[]) => string,
-  opts: { home: string; scope: "main" | "subagent"; bootstrap?: boolean },
+  opts: { home: string; scope: "main" | "subagent"; bootstrap?: boolean; reminder?: string },
 ): Promise<string[]> {
   const skills = listing(ext.skills);
   if (opts.scope === "subagent") {
@@ -249,6 +249,7 @@ export async function contextExtras(
     skills,
     ext.notes ? await notesContext(ext.notes).catch(() => "") : "",
     ext.daily ? await dailyNotesContext(ext.daily).catch(() => "") : "",
+    ...(opts.reminder ? [opts.reminder] : []),
   ];
 }
 

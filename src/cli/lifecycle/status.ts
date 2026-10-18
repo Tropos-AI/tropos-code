@@ -15,6 +15,9 @@ import type { Autonomy } from "../../gateway/autonomy";
 import { FilePairing } from "../../gateway/pairing";
 import { ProviderRouter } from "../../providers/router";
 import { localDashboardUrl, remoteUrl } from "../../web/links";
+import { makeOnboardDeps, STEP_TITLES } from "../../onboard/engine";
+import { openSkippedSteps } from "../../onboard/reminders";
+import type { OnboardStepId } from "../../web/admin/api";
 import type { ServiceStatus } from "../../service/types";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
@@ -51,6 +54,8 @@ export interface Status {
   lastSession: string | null;
   cronJobs: number | null;
   doctor: { errors: number; warnings: number; fixable: number };
+  /** Setup steps the owner skipped and has not done since. */
+  setup: { skipped: OnboardStepId[] };
 }
 
 async function newestSession(home: string): Promise<number | null> {
@@ -91,6 +96,8 @@ export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean;
   const last = await newestSession(ctx.home);
   const report = await runDoctor({ home: ctx.home, userHome: ctx.userHome, env: ctx.env, cwd: ctx.cwd, now: ctx.now, deep: opts.deep, runner, checks: opts.checks });
 
+  const skipped = await openSkippedSteps(makeOnboardDeps({ home: ctx.home, userHome: ctx.userHome, env: ctx.env }), "error" in service ? {} : { serviceInstalled: service.installed || service.manager === "none" }).catch(() => []);
+
   return {
     version: ctx.version,
     channel: settings?.autoUpdatesChannel ?? "latest",
@@ -120,6 +127,7 @@ export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean;
       warnings: report.summary.warn,
       fixable: report.findings.filter((f) => f.fixable && f.level !== "ok").length,
     },
+    setup: { skipped },
   };
 }
 
@@ -162,6 +170,7 @@ export function renderStatus(s: Status): string {
     ["last session", s.lastSession ?? "none yet"],
     ...(s.cronJobs !== null ? ([["scheduled", `${s.cronJobs} job${s.cronJobs === 1 ? "" : "s"}`]] as Array<[string, string]>) : []),
     ["doctor", `${s.doctor.errors} error${s.doctor.errors === 1 ? "" : "s"}, ${s.doctor.warnings} warning${s.doctor.warnings === 1 ? "" : "s"}${s.doctor.fixable ? `, ${s.doctor.fixable} fixable` : ""}${s.doctor.errors + s.doctor.warnings ? " (run `tcode doctor`)" : ""}`],
+    ...(s.setup.skipped.length ? ([["setup", `skipped: ${s.setup.skipped.map((id) => STEP_TITLES[id]).join(", ")} (finish with \`tcode onboard\`)`]] as Array<[string, string]>) : []),
   ];
   const width = Math.max(...rows.map(([k]) => k.length));
   return [`Tropos Code ${s.version} (channel ${s.channel})`, ...rows.map(([k, v]) => `  ${k.padEnd(width)}  ${v}`)].join("\n") + "\n";
