@@ -1,5 +1,5 @@
 // web/src/app/pages/SettingsPage.tsx — Interior Tabs: Models & keys, Channels & devices, Service & updates, Backups and
-// Advanced (Autonomy and Phone access join between them). The open tab rides in the hash (#/settings/channels) so a
+// Advanced, with Autonomy and Phone access between them. The open tab rides in the hash (#/settings/channels) so a
 // reload or a shared link lands on it; the old Providers/Model/About/System/Config addresses redirect here (routes.ts).
 import { splitModelId } from "@core/ui/model-list";
 
@@ -16,6 +16,7 @@ import { AboutPanel } from "@/components/pages/settings/about-panel";
 import { AutonomyPanel } from "@/components/pages/settings/autonomy-panel";
 import { ChatBackend } from "@/components/pages/settings/chat-backend";
 import { ModelPanel, type ModelPrefs } from "@/components/pages/settings/model-panel";
+import { PhonePanel } from "@/components/pages/settings/phone-panel";
 import { ProvidersPanel } from "@/components/pages/settings/providers-panel";
 import { RunSetupAgain } from "@/components/pages/settings/run-setup-again";
 import { PanelStack } from "@/components/pages/panel-head";
@@ -34,8 +35,8 @@ const ITEMS: Record<SettingsTab, string> = {
   advanced: "Advanced",
 };
 
-/** Tabs that exist in this build, in SETTINGS_TABS order. */
-const RENDERED: readonly SettingsTab[] = SETTINGS_TABS.filter((id) => id !== "phone");
+/** Every tab, in SETTINGS_TABS order (P7 adds "suggestions" there). */
+const RENDERED: readonly SettingsTab[] = SETTINGS_TABS;
 const TAB_ITEMS: TabItem[] = RENDERED.map((value) => ({ value, label: ITEMS[value] }));
 
 export function SettingsPage() {
@@ -60,6 +61,8 @@ export function SettingsPage() {
           switch (value as SettingsTab) {
             case "autonomy":
               return <AutonomyPanel />;
+            case "phone":
+              return <PhonePanel />;
             case "channels":
               return <ChannelsPanel />;
             case "service":
