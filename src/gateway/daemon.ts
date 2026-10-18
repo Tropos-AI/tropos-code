@@ -23,7 +23,7 @@ import { DEFAULT_PORT } from "../web/protocol";
 import { PortInUseError, portHolder, portInUseMessage } from "../web/port";
 import { DeviceStore, devicesPath } from "../web/devices";
 import { loginCodesFor } from "../web/login-codes";
-import { localDashboardUrl } from "../web/links";
+import { localDashboardUrl, remoteHostHeader, remoteUrl } from "../web/links";
 import { startWebServer, type RunningWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
@@ -370,7 +370,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const loginMessage = async (): Promise<string> => {
     if (webPort === undefined) return "The dashboard isn't running, so there is nothing to log in to. Start it with: tcode gateway";
     const code = await loginCodesFor(home).issueCode();
-    return `Login code: ${code.slice(0, 3)} ${code.slice(3)} (works once, for 10 minutes).\nOn the Mac: ${localDashboardUrl(webPort)}`;
+    const phone = remoteUrl(live.remoteAccess);
+    return `Login code: ${code.slice(0, 3)} ${code.slice(3)} (works once, for 10 minutes).\nOn the Mac: ${localDashboardUrl(webPort)}${phone ? `\nOn your phone: ${phone}` : ""}`;
   };
   const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
@@ -540,7 +541,9 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       });
       // Browsers log in on the socket: device keys (hashed on disk) and the codes `tcode dashboard` issues.
       const devices = new DeviceStore({ path: devicesPath(home) });
-      const server = await startWebServer({ host: chatHosts, admin, assets, devices, logins: loginCodesFor(home), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev });
+      const server = await startWebServer({ host: chatHosts, admin, assets, devices, logins: loginCodesFor(home), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev,
+        // `live` is re-read by every reload, so turning phone access on or off in the dashboard applies at once.
+        remoteHost: () => remoteHostHeader(live.remoteAccess) });
       webServer = server;
       webUrl = server.url;
       webPort = server.port;

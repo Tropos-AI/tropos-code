@@ -142,6 +142,36 @@ describe("/login in the owner's chat", () => {
     expect(await gw.done).toBe(0);
   });
 
+  test("with phone access on, the message also carries the tailnet address", async () => {
+    await saveGatewayConfig(home, gatewayConfigSchema.parse({ remoteAccess: { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" } }));
+    const gw = startGateway([], [], { web: true });
+    await server.waitFor(() => server.commands.length > 0);
+    await gw.running();
+    await pairChat();
+    server.pushMessage(CHAT, CHAT, "/login");
+    await server.waitFor(() => lastText().startsWith("Login code: "));
+    expect(lastText()).toContain("On your phone: https://mac.tail1234.ts.net:8443/");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
+  test("the tailnet Host is accepted only while phone access is on, and a reload applies a change at once", async () => {
+    const gw = startGateway([], [], { web: true });
+    await server.waitFor(() => server.commands.length > 0);
+    const info = await gw.running();
+    const askAs = async (host: string) => (await fetch(info.webUrl!, { headers: { Host: host } })).status;
+    expect(await askAs("mac.tail1234.ts.net")).toBe(421);
+    await saveGatewayConfig(home, gatewayConfigSchema.parse({ remoteAccess: { tailscale: true, httpsPort: 443, hostname: "mac.tail1234.ts.net" } }));
+    await info.reload();
+    // Past the Host check (the test gateway has no built assets to serve, so 503 is the page itself).
+    expect(await askAs("mac.tail1234.ts.net")).not.toBe(421);
+    await saveGatewayConfig(home, gatewayConfigSchema.parse({}));
+    await info.reload();
+    expect(await askAs("mac.tail1234.ts.net")).toBe(421);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("without a dashboard it says so instead of handing out a useless code", async () => {
     const gw = startGateway([]);
     await server.waitFor(() => server.commands.length > 0);

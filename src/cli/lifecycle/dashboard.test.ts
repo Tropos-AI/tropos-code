@@ -175,3 +175,23 @@ test("usage errors are 64", async () => {
   expect(await runDashboard(["x"], fx.ctx)).toBe(64);
   expect(await runDashboard(["--help"], fx.ctx)).toBe(0);
 });
+
+test("--code with phone access on also prints the phone address and a QR block before the code", async () => {
+  fx = await makeFixture();
+  await running();
+  await writeFile(join(fx.ctx.home, "gateway.json"), JSON.stringify({ remoteAccess: { tailscale: true, httpsPort: 443, hostname: "mac.tail1234.ts.net" } }));
+  expect(await runDashboard(["--code"], fx.ctx, { alive })).toBe(0);
+  const out = fx.stdout();
+  expect(out).toContain("On your phone, open: https://mac.tail1234.ts.net/");
+  const qr = out.split("\n").filter((l) => /^[█▀▄ ]{20,}$/.test(l));
+  expect(qr.length).toBeGreaterThan(10);
+  expect(out.indexOf("On your phone")).toBeLessThan(out.indexOf("Code:"));
+  expect(out).toMatch(/Code: \d{3} \d{3}/);
+});
+
+test("--code with phone access off prints no phone lines", async () => {
+  fx = await makeFixture();
+  await running();
+  expect(await runDashboard(["--code"], fx.ctx, { alive })).toBe(0);
+  expect(fx.stdout()).not.toContain("On your phone");
+});

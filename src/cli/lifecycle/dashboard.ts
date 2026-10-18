@@ -2,7 +2,9 @@
 import { parseFlags } from "../../doctor/flags";
 import { pidAlive, readStateFile, type GatewayStateFile } from "../../doctor/util";
 import type { ServiceManager } from "../../service/types";
-import { dashboardLoginLink, localDashboardUrl } from "../../web/links";
+import { renderQr } from "../../ui/qr";
+import { loadGatewayConfig } from "../../gateway/config";
+import { dashboardLoginLink, localDashboardUrl, remoteUrl } from "../../web/links";
 import { CODE_TTL_MS, ONE_TIME_TTL_MS, loginCodesFor } from "../../web/login-codes";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
@@ -117,6 +119,9 @@ export async function runDashboard(argv: string[], ctx: LifecycleContext, deps: 
   if (!target) return 1;
   if (parsed.bool.has("code")) {
     const code = await loginCodesFor(ctx.home).issueCode();
+    // With phone access on, the phone's address and a QR of it come first: scan, then type the code.
+    const phone = remoteUrl((await loadGatewayConfig(ctx.home).catch(() => null))?.remoteAccess ?? { tailscale: false });
+    if (phone) ctx.out(`On your phone, open: ${phone}\n${renderQr(phone)}\n`);
     ctx.out(`Code: ${code.slice(0, 3)} ${code.slice(3)} (works once, for ${CODE_TTL_MS / 60_000} minutes)\nType it on the login screen at ${target.url}\n`);
     return 0;
   }

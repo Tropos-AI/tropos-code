@@ -14,7 +14,7 @@ import { gatewayConfigSchema, loadGatewayConfig, telegramToken, type GatewayConf
 import type { Autonomy } from "../../gateway/autonomy";
 import { FilePairing } from "../../gateway/pairing";
 import { ProviderRouter } from "../../providers/router";
-import { localDashboardUrl } from "../../web/links";
+import { localDashboardUrl, remoteUrl } from "../../web/links";
 import type { ServiceStatus } from "../../service/types";
 import type { LifecycleContext, LifecycleRun } from "./types";
 
@@ -39,6 +39,8 @@ export interface Status {
   gateway: { running: boolean; pid?: number; startedAt?: string };
   /** The dashboard's address, why it is off, or null when the gateway isn't running. */
   dashboard: { url: string } | { problem: string } | null;
+  /** The tailnet address while phone access is on, else null. */
+  phone: string | null;
   autonomy: { level: Autonomy; backend: "host" | "docker" };
   /** Whether a bot token is set and whether an owner is chosen; never the token. */
   telegram: { token: boolean; owner: boolean };
@@ -104,6 +106,7 @@ export async function gatherStatus(ctx: LifecycleContext, opts: { deep: boolean;
     service,
     gateway: running && gw ? { running: true, pid: gw.pid, startedAt: gw.startedAt } : { running: false },
     dashboard,
+    phone: remoteUrl(config.remoteAccess),
     autonomy: { level: config.chat.autonomy, backend: config.chat.backend },
     telegram: { token: Boolean(telegramToken(config, ctx.env)), owner: owner !== null },
     providers,
@@ -149,6 +152,7 @@ export function renderStatus(s: Status): string {
     ["service", serviceLine(s.service)],
     ["gateway", s.gateway.running ? `running (pid ${s.gateway.pid}${s.gateway.startedAt ? `, since ${s.gateway.startedAt}` : ""})` : "not running"],
     ["dashboard", dashboardLine(s.dashboard)],
+    ["phone", s.phone ?? "off (Settings → Phone access)"],
     ["telegram", telegramLine(s.telegram)],
     ["autonomy", autonomyLine(s.autonomy)],
     ["providers", s.providers.length ? s.providers.join(", ") : "none connected"],

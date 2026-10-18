@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { gatewayConfigSchema } from "../gateway/config";
-import { dashboardLoginLink, dashboardPort, localDashboardUrl } from "./links";
+import { dashboardLoginLink, dashboardPort, localDashboardUrl, remoteHostHeader, remoteUrl } from "./links";
 import { LoginCodes, loginCodesFor } from "./login-codes";
 
 let dir: string | undefined;
@@ -36,4 +36,19 @@ test("dashboardLoginLink uses the store it is given", async () => {
   const logins = new LoginCodes({ path: join(dir, "elsewhere.json") });
   const link = await dashboardLoginLink(join(dir, "unused"), 4400, logins);
   expect(await logins.redeem(link.split("#login=")[1]!)).toBe(true);
+});
+
+test("remoteUrl and remoteHostHeader: only while phone access is on; the port shows unless it is 443", () => {
+  const off = gatewayConfigSchema.parse({}).remoteAccess;
+  expect(remoteUrl(off)).toBeNull();
+  expect(remoteHostHeader(off)).toBeNull();
+  const noName = { tailscale: true };
+  expect(remoteUrl(noName)).toBeNull();
+  const on443 = { tailscale: true, httpsPort: 443, hostname: "mac.tail1234.ts.net" };
+  expect(remoteUrl(on443)).toBe("https://mac.tail1234.ts.net/");
+  expect(remoteHostHeader(on443)).toBe("mac.tail1234.ts.net");
+  const on8443 = { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" };
+  expect(remoteUrl(on8443)).toBe("https://mac.tail1234.ts.net:8443/");
+  expect(remoteHostHeader(on8443)).toBe("mac.tail1234.ts.net:8443");
+  expect(remoteHostHeader({ tailscale: false, httpsPort: 8443, hostname: "mac.tail1234.ts.net" })).toBeNull();
 });

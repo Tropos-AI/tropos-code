@@ -66,6 +66,16 @@ const schema = z.object({
   idleMinutes: z.number().int().min(1).max(24 * 60).default(30),
   /** Port of the dashboard; unset is 4317. Never changes by itself. */
   webPort: z.number().int().min(1).max(65535).optional(),
+  /** Phone access: the dashboard published to the owner's own tailnet by `tailscale serve` (never Funnel). */
+  remoteAccess: z
+    .object({
+      tailscale: z.boolean().default(false),
+      /** The HTTPS port `tailscale serve` uses on the tailnet name (443, 8443 or 10000). */
+      httpsPort: z.number().int().min(1).max(65535).optional(),
+      /** The tailnet name, e.g. mac.tail1234.ts.net. */
+      hostname: z.string().min(1).optional(),
+    })
+    .default({ tailscale: false }),
 });
 
 /** The file's schema, for the config store and the web editor. */

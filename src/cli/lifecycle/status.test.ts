@@ -84,7 +84,7 @@ test("status rows: dashboard, autonomy, telegram owner; no token anywhere; --all
   await runStatusCommand([], plain, { runner, checks: [] });
   const out = plain.stdout;
   const rows = out.split("\n").map((l) => l.trim().split(/\s{2,}/)[0]);
-  expect(rows.slice(rows.indexOf("gateway"), rows.indexOf("gateway") + 4)).toEqual(["gateway", "dashboard", "telegram", "autonomy"]);
+  expect(rows.slice(rows.indexOf("gateway"), rows.indexOf("gateway") + 5)).toEqual(["gateway", "dashboard", "phone", "telegram", "autonomy"]);
   expect(out).toMatch(/dashboard\s+http:\/\/127\.0\.0\.1:4399\//);
   expect(out).toMatch(/autonomy\s+balanced \(commands run on this (Mac|computer)\)/);
   expect(out).toMatch(/telegram\s+bot set, no owner yet \(pick one in Settings → Channels & devices\)/);
@@ -163,4 +163,17 @@ test("the doctor summary counts errors and warnings read-only", async () => {
   const ctx = ctxFor();
   await runStatusCommand(["--json"], ctx, { runner: fakeRunner(), checks });
   expect(JSON.parse(ctx.stdout).doctor).toEqual({ errors: 1, warnings: 1, fixable: 1 });
+});
+
+test("phone row: the tailnet address while phone access is on, else how to turn it on", async () => {
+  fx = await makeFixture();
+  const runner = await populated();
+  const off = ctxFor();
+  await runStatusCommand([], off, { runner, checks: [] });
+  expect(off.stdout).toMatch(/phone\s+off \(Settings → Phone access\)/);
+  expect((JSON.parse((await (async () => { const c = ctxFor(); await runStatusCommand(["--json"], c, { runner, checks: [] }); return c.stdout; })())) as Status).phone).toBeNull();
+  await fx.write("gateway.json", JSON.stringify({ defaultProject: "main", remoteAccess: { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" } }));
+  const on = ctxFor();
+  await runStatusCommand([], on, { runner, checks: [] });
+  expect(on.stdout).toMatch(/phone\s+https:\/\/mac\.tail1234\.ts\.net:8443\//);
 });

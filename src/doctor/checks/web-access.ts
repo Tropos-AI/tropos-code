@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { loadGatewayConfig } from "../../gateway/config";
+import { tailscaleStatus } from "../../remote/tailscale";
+import { remoteUrl } from "../../web/links";
 import { portHolder, portInUseMessage } from "../../web/port";
 import { DEFAULT_PORT } from "../../web/protocol";
 import type { Check, DoctorEnv, Finding } from "../types";
@@ -24,12 +26,23 @@ async function portFinding(env: DoctorEnv): Promise<Finding> {
   return finding("gateway.web", "ok", `Port ${port} is free for the dashboard`);
 }
 
+async function remoteFinding(env: DoctorEnv): Promise<Finding | null> {
+  const config = await loadGatewayConfig(env.home).catch(() => undefined);
+  const url = config ? remoteUrl(config.remoteAccess) : null;
+  if (!url) return null;
+  const ts = await tailscaleStatus(env.runner);
+  if (!ts.running) return finding("gateway.web.remote", "warn", "Phone access is on but Tailscale isn't running", { detail: ts.installed ? "Open Tailscale and sign in; the phone address works again then." : "Tailscale isn't installed. Install it from https://tailscale.com/download, or turn phone access off in Settings." });
+  return finding("gateway.web.remote", "ok", `Phone access is on at ${url}`);
+}
+
 export const webAccessCheck: Check = {
   id: "gateway.web",
   area: "gateway",
   title: "Dashboard port",
   async run(env) {
     const out = [await portFinding(env)];
+    const remote = await remoteFinding(env);
+    if (remote) out.push(remote);
     // Browsers log in with device keys now; the old link's key opens nothing, but it is still a secret on disk.
     if (existsSync(oldTokenPath(env.home))) {
       out.push(finding("gateway.web.oldToken", "warn", "The old dashboard token file is still there", { detail: "Nothing accepts it any more. Fix deletes gateway/token.", fixable: true, safe: true }));

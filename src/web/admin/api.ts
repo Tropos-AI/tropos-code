@@ -407,6 +407,21 @@ export interface DevicesAdmin {
   "login.issueCode": { params: undefined; result: { code: string; expiresAt: number } };
 }
 
+export interface RemoteView {
+  enabled: boolean;
+  tailscale: { installed: boolean; running: boolean; dnsName?: string };
+  /** The phone address while phone access is on. */
+  url?: string;
+  /** Guidance or something to know, in plain words. */
+  note?: string;
+}
+
+export interface RemoteAdmin {
+  "remote.status": { params: undefined; result: RemoteView };
+  "remote.enable": { params: undefined; result: RemoteView };
+  "remote.disable": { params: undefined; result: RemoteView };
+}
+
 // ---------- the whole API ----------
 
 export type AdminMap = StatusAdmin &
@@ -424,7 +439,8 @@ export type AdminMap = StatusAdmin &
   ExtensionsAdmin &
   OnboardAdmin &
   AutonomyAdmin &
-  DevicesAdmin;
+  DevicesAdmin &
+  RemoteAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -497,4 +513,7 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "devices.revoke",
   "devices.revokeAll",
   "login.issueCode",
+  "remote.status",
+  "remote.enable",
+  "remote.disable",
 ];

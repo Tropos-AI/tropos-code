@@ -128,3 +128,12 @@ describe("configPermissionWarning", () => {
     expect((await loadGatewayConfig(home)).projects[0]).toEqual({ id: "app", name: "app", path: "/w/app", autonomy: "autonomous", testCommands: ["bun test"] });
   });
 });
+
+describe("remoteAccess", () => {
+  test("defaults to off, and round-trips a saved tailnet address", async () => {
+    expect((await loadGatewayConfig(home)).remoteAccess).toEqual({ tailscale: false });
+    const config = await loadGatewayConfig(home);
+    await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" } });
+    expect((await loadGatewayConfig(home)).remoteAccess).toEqual({ tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" });
+  });
+});

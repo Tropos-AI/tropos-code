@@ -58,3 +58,30 @@ test("no old token file: no finding about it", async () => {
   const r = await runOne(fx, webAccessCheck);
   expect(byId(r, "gateway.web.oldToken")).toBeUndefined();
 });
+
+const phoneOn = JSON.stringify({ remoteAccess: { tailscale: true, httpsPort: 443, hostname: "mac.tail1234.ts.net" } });
+const tsExec = (stdout: string, code = 0) => fakeRunner({ pidAlive: () => false, exec: async (cmd) => (cmd === "tailscale" ? { code, stdout, stderr: "" } : { code: 1, stdout: "", stderr: "" }) });
+
+test("phone access on but Tailscale not running: warn", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", phoneOn);
+  const r = await runOne(fx, webAccessCheck, { runner: tsExec("", 1) });
+  expect(byId(r, "gateway.web.remote")).toMatchObject({ level: "warn", message: expect.stringContaining("Phone access is on but Tailscale isn't running") });
+});
+
+test("phone access on and Tailscale running: ok with the address", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", phoneOn);
+  const running = JSON.stringify({ BackendState: "Running", Self: { DNSName: "mac.tail1234.ts.net." } });
+  const r = await runOne(fx, webAccessCheck, { runner: tsExec(running) });
+  expect(byId(r, "gateway.web.remote")).toMatchObject({ level: "ok", message: expect.stringContaining("https://mac.tail1234.ts.net/") });
+});
+
+test("phone access off: no phone finding, and Tailscale is never asked", async () => {
+  fx = await makeFixture();
+  const asked: string[] = [];
+  const runner = fakeRunner({ exec: async (cmd) => { asked.push(cmd); return { code: 1, stdout: "", stderr: "" }; } });
+  const r = await runOne(fx, webAccessCheck, { runner });
+  expect(byId(r, "gateway.web.remote")).toBeUndefined();
+  expect(asked).not.toContain("tailscale");
+});

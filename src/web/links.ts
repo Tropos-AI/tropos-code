@@ -17,3 +17,15 @@ export function dashboardPort(config: GatewayConfig): number {
 export async function dashboardLoginLink(home: string, port: number, logins: LoginCodes = loginCodesFor(home)): Promise<string> {
   return `${localDashboardUrl(port)}#login=${await logins.issueOneTime()}`;
 }
+
+/** The tailnet address of the dashboard while phone access is on, else null. */
+export function remoteUrl(remote: GatewayConfig["remoteAccess"]): string | null {
+  const host = remoteHostHeader(remote);
+  return host ? `https://${host}/` : null;
+}
+
+/** The Host header a phone's request carries (`name`, plus `:port` unless 443), or null while phone access is off. */
+export function remoteHostHeader(remote: GatewayConfig["remoteAccess"]): string | null {
+  if (!remote.tailscale || !remote.hostname) return null;
+  return remote.httpsPort && remote.httpsPort !== 443 ? `${remote.hostname}:${remote.httpsPort}` : remote.hostname;
+}

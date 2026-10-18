@@ -149,6 +149,19 @@ UI / `tcode cron add`. Each run is a fresh session in its project, at that proje
 delivered to your chat. A run has nobody to ask, so whatever would still ask is denied, unless the job lists a rule
 for it (`allowCommands`).
 
+### Phone access (Tailscale)
+
+To open the dashboard on your phone, install [Tailscale](https://tailscale.com/download) on this computer and the
+phone, sign in to the same tailnet, and turn on Settings → Phone access (or `remote.enable` in the admin API).
+Tropos runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>` (443, else 8443, else 10000, whichever your
+tailnet name isn't already serving; it never changes a serve rule that isn't its own). Only your own tailnet can
+reach the address; Tropos never uses Funnel, which would put it on the internet. The phone still needs a device
+login: `tcode dashboard --code` prints the phone address, a QR code and a 6-digit code, and `/login` to your bot
+sends the same. `tcode status` shows the address in the `phone` row and `tcode doctor` warns if Tailscale isn't running.
+
+Turn it off in the same place: Tropos runs `tailscale serve --https=<port> off`, stops accepting the tailnet name,
+and logs out the devices that only ever connected over it (a device you also used on this Mac stays).
+
 ### Where a chat's commands run
 
 Your chats and your scheduled runs run their commands on this machine, in the project's directory, confined by the
@@ -447,6 +460,9 @@ tools with `mcp__github__get_*`.
   read the key, which is why the page allows no outside scripts (strict CSP). Device keys are stored
   hashed (`gateway/devices.json`, 0600) and expire a year after their last use; the old
   `gateway/token` link no longer works, and `tcode doctor --fix` deletes the file.
+- Phone access publishes the dashboard to your tailnet only, with `tailscale serve` (never Funnel). The dashboard
+  still binds `127.0.0.1`; its `Host` and `Origin` checks accept the `ts.net` name only while phone access is on, and
+  every phone still needs a device login. Turning it off logs out phone-only devices.
 - `tcode -p` reads piped stdin until EOF. In scripts and CI that have no input, pass
   `</dev/null` so it doesn't wait.
 

@@ -13,6 +13,7 @@ import { logsHandlers } from "./logs";
 import { onboardHandlers } from "./onboard";
 import { pairingHandlers } from "./pairing";
 import { projectsHandlers } from "./projects";
+import { remoteHandlers } from "./remote";
 import { serviceHandlers } from "./service";
 import { statusHandlers } from "./status";
 import { updateHandlers } from "./update";
@@ -44,6 +45,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...onboardHandlers(ctx),
     ...autonomyHandlers(ctx),
     ...devicesHandlers(ctx),
+    ...remoteHandlers(ctx),
     ...extra,
   };
   return {
