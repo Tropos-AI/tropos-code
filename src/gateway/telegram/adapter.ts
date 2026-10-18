@@ -5,6 +5,7 @@ import { AUTONOMY_LEVELS, type Autonomy } from "../config";
 import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
 import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
+import { candidateFrom, type OwnerClaimStore } from "../owner-claim";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
   assistantText,
@@ -40,6 +41,8 @@ const LOGIN_REFUSAL = "Only the owner can log in a browser from here.";
 const LOGIN_NO_OWNER = "Pick the owner first: Settings → Channels & devices on the dashboard.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
+export const CLAIM_REPLY = "Got it. Go back to the setup on your computer and confirm it's you.";
+
 export interface TelegramAdapterOptions {
   api: TelegramApi;
   sessions: SessionProvider;
@@ -51,6 +54,11 @@ export interface TelegramAdapterOptions {
   /** The text for /login: a fresh code and where to type it. Without it the command says it isn't available. */
   loginMessage?: () => Promise<string>;
   allowGroups?: boolean;
+  /**
+   * Set while `tcode setup` waits for the owner's first message: a stranger is then recorded, not given a pairing code,
+   * and the owner picks them on the computer. Nobody is approved from here.
+   */
+  ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add">;
   /** Unanswered permission requests are denied after this long. Default 5 minutes. */
   askTimeoutMs?: number;
   log?: (message: string) => void;
@@ -145,6 +153,8 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly autonomy: ChatAutonomy | undefined;
   private readonly loginMessage: (() => Promise<string>) | undefined;
   private readonly allowGroups: boolean;
+  private readonly ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add">;
+  private readonly claimReplied = new Set<string>();
   private readonly askTimeoutMs: number;
   private readonly minIntervalMs: number;
   private readonly backoffBaseMs: number;
@@ -171,6 +181,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.autonomy = opts.autonomy;
     this.loginMessage = opts.loginMessage;
     this.allowGroups = opts.allowGroups ?? false;
+    this.ownerClaim = opts.ownerClaim;
     this.askTimeoutMs = opts.askTimeoutMs ?? 300_000;
     this.minIntervalMs = opts.minIntervalMs ?? 1000;
     this.backoffBaseMs = opts.backoffBaseMs ?? 1000;
@@ -276,7 +287,9 @@ export class TelegramAdapter implements ChannelAdapter {
     const senderId = String(msg.from.id);
     if (!(await this.pairing.isApproved(CHANNEL, senderId))) {
       // A stranger's photo or file is not worth a pairing code.
-      if (msg.text !== undefined) await this.handleStranger(msg.chat.id, senderId);
+      if (msg.text === undefined) return;
+      if (await this.recordClaim(msg)) return;
+      await this.handleStranger(msg.chat.id, senderId);
       return;
     }
     if (msg.text === undefined) {
@@ -317,6 +330,20 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
     this.enqueue(chat, { text });
+  }
+
+  /** True when setup is listening and this private message was recorded as a candidate (and answered once per sender). */
+  private async recordClaim(msg: TgMessage): Promise<boolean> {
+    if (!this.ownerClaim || !(await this.ownerClaim.isOpen().catch(() => false))) return false;
+    const candidate = candidateFrom(msg, Date.now());
+    if (!candidate) return false;
+    await this.ownerClaim.add(candidate).catch((e) => this.log("recording the owner candidate failed", e));
+    if (!this.claimReplied.has(candidate.senderId)) {
+      if (this.claimReplied.size >= MAX_UNPAIRED_MEMORY) this.claimReplied.clear();
+      this.claimReplied.add(candidate.senderId);
+      await this.api.sendMessage(candidate.chatId, CLAIM_REPLY).catch((e) => this.log("claim reply failed", e));
+    }
+    return true;
   }
 
   private async handleStranger(chatId: number, senderId: string): Promise<void> {

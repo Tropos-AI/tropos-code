@@ -53,6 +53,7 @@ import { createCronTool } from "../tools/cron/cron-tool";
 import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
 import { createCuratorService } from "./curator-service";
+import { OwnerClaimStore } from "./owner-claim";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
 import type { ChannelAdapter, ChatAutonomy, ChatProjects, GatewayService, GatewayServiceDeps, Pairing, SessionRole } from "./types";
@@ -379,7 +380,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, loginMessage, pairing: run.pairing, log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
+    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, loginMessage, pairing: run.pairing, ownerClaim: new OwnerClaimStore(run.home), log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
   let adapterToken = telegramToken(live, run.env);
   let adapters = buildAdapters(adapterToken);

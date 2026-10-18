@@ -5,7 +5,8 @@ import { AutonomyError, RAISE_REFUSED } from "../autonomy";
 import type { ChatAutonomy, ChatProjects } from "../types";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
-import { TelegramAdapter } from "./adapter";
+import { CLAIM_REPLY, TelegramAdapter } from "./adapter";
+import type { OwnerCandidateView } from "../owner-claim";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
 import { HELP_TEXT } from "./render";
 import { assistantEvent, FakePairing, FakeSession, FakeSessions } from "../../../test/helpers/telegram-fakes";
@@ -56,7 +57,12 @@ function fakeProjects() {
   return { projects, chosen };
 }
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string> } = {}) {
+function fakeClaim(open: boolean) {
+  const added: OwnerCandidateView[] = [];
+  return { isOpen: async () => open, add: async (c: OwnerCandidateView) => void added.push(c), added };
+}
+
+async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView): Promise<void> } } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -71,6 +77,7 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
     projects: opts.projects,
     autonomy: opts.autonomy,
     loginMessage: opts.loginMessage,
+    ownerClaim: opts.ownerClaim,
     askTimeoutMs: opts.askTimeoutMs,
     minIntervalMs: 0,
     backoffBaseMs: 5,
@@ -86,6 +93,49 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
   const session = () => sessions.sessions.get(`telegram:${CHAT}`) as FakeSession;
   return { server, api, sessions, pairing, adapter, logs, session };
 }
+
+describe("TelegramAdapter owner claim", () => {
+  test("while setup listens, a stranger is recorded with their names and told to confirm, never given a code", async () => {
+    const claim = fakeClaim(true);
+    const { server, sessions, pairing } = await setup({ approved: false, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "hello", { from: { first_name: "Pan", username: "pk" } });
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toBe(CLAIM_REPLY);
+    expect(claim.added[0]).toMatchObject({ senderId: String(CHAT), name: "Pan", username: "pk" });
+    expect(pairing.challenges).toEqual([]);
+    expect(sessions.sessions.size).toBe(0);
+  });
+
+  test("the claim reply goes once per sender; every message is still recorded", async () => {
+    const claim = fakeClaim(true);
+    const { server } = await setup({ approved: false, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "one");
+    server.pushMessage(CHAT, CHAT, "two");
+    await server.waitFor(() => claim.added.length >= 2);
+    expect(server.sent).toHaveLength(1);
+  });
+
+  test("a stranger's group message or file during the window is neither recorded nor answered with the claim reply", async () => {
+    const claim = fakeClaim(true);
+    const { server } = await setup({ approved: false, ownerClaim: claim, allowGroups: true });
+    server.pushMessage(-100, 5, "hi all", { chatType: "group" });
+    server.pushNonText(CHAT, CHAT, "photo");
+    server.pushMessage(CHAT, CHAT, "later"); // a sentinel: once this is answered the earlier updates are done
+    await server.waitFor(() => claim.added.length >= 1);
+    expect(claim.added.map((c) => c.senderId)).toEqual([String(CHAT)]);
+    expect(server.textsTo(-100).some((t) => t === CLAIM_REPLY)).toBe(false);
+  });
+
+  test("with the claim closed, strangers get today's pairing code", async () => {
+    const claim = fakeClaim(false);
+    const { server, pairing } = await setup({ approved: false, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toContain("pairing code");
+    expect(claim.added).toEqual([]);
+    expect(pairing.challenges).toHaveLength(1);
+  });
+});
 
 describe("TelegramAdapter", () => {
   test("registers the bot commands on start", async () => {
