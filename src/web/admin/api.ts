@@ -353,6 +353,16 @@ export interface OnboardState {
   dismissed: boolean;
 }
 
+export interface RepoCandidateView {
+  path: string;
+  name: string;
+  /** ms since epoch of the newest git activity. */
+  touchedAt: number;
+  /** Touched in the last 30 days. */
+  recent: boolean;
+  registered: boolean;
+}
+
 export interface OnboardAdmin {
   "onboard.state": { params: undefined; result: OnboardState };
   /** Checks a key before it is saved: a real call to the provider. The key is not stored by this method. */
