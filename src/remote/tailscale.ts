@@ -40,9 +40,38 @@ export async function tailscaleStatus(runner: TailscaleRunner): Promise<Tailscal
 interface ServeConfig {
   TCP?: Record<string, unknown>;
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>;
+  /** `<dns>:<port>` → true while Funnel publishes that port to the whole internet. */
+  AllowFunnel?: Record<string, unknown>;
 }
 
 const isOurs = (proxy: string | undefined, port: number): boolean => proxy === `http://127.0.0.1:${port}` || proxy === `http://localhost:${port}`;
+
+/** The current serve config. Unreadable output throws: guessing "empty" could reuse or overwrite a port we can't see. */
+async function readServeConfig(runner: TailscaleRunner): Promise<ServeConfig> {
+  const current = await runner.exec(CLI, ["serve", "status", "--json"], 8_000);
+  const unreadable = new TailscaleError("Tailscale: couldn't read the current serve config, so nothing was changed. Check that Tailscale is running and try again.");
+  if (current.code !== 0) throw unreadable;
+  try {
+    const parsed = JSON.parse(current.stdout.trim() || "{}") as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as ServeConfig;
+  } catch {
+    // falls through
+  }
+  throw unreadable;
+}
+
+const funnelled = (config: ServeConfig, dns: string, port: number): boolean => config.AllowFunnel?.[`${dns}:${port}`] === true;
+
+/** Whether `httpsPort` on this machine's tailnet name is open to the internet. Unreadable state reads as "no" (callers only warn). */
+export async function serveFunnelled(runner: TailscaleRunner, httpsPort: number): Promise<boolean> {
+  const status = await tailscaleStatus(runner);
+  if (!status.running || !status.dnsName) return false;
+  try {
+    return funnelled(await readServeConfig(runner), status.dnsName, httpsPort);
+  } catch {
+    return false;
+  }
+}
 
 export async function enableServe(runner: TailscaleRunner, port: number): Promise<{ url: string; httpsPort: number }> {
   const status = await tailscaleStatus(runner);
@@ -50,19 +79,17 @@ export async function enableServe(runner: TailscaleRunner, port: number): Promis
   if (!status.running || !status.dnsName) throw new TailscaleError("Tailscale isn't running or isn't signed in. Open Tailscale, sign in, and try again.");
   const dns = status.dnsName;
 
-  let config: ServeConfig = {};
-  const current = await runner.exec(CLI, ["serve", "status", "--json"], 8_000);
-  if (current.code === 0) {
-    try {
-      config = (JSON.parse(current.stdout.trim() || "{}") as ServeConfig) ?? {};
-    } catch {
-      config = {};
-    }
-  }
+  const config = await readServeConfig(runner);
   const urlFor = (p: number) => `https://${dns}${p === 443 ? "" : `:${p}`}/`;
   const ours = SERVE_PORTS.find((p) => isOurs(config.Web?.[`${dns}:${p}`]?.Handlers?.["/"]?.Proxy, port));
-  if (ours !== undefined) return { url: urlFor(ours), httpsPort: ours };
-  const free = SERVE_PORTS.find((p) => !config.TCP?.[String(p)] && !config.Web?.[`${dns}:${p}`]);
+  if (ours !== undefined) {
+    // Funnel would make the dashboard reachable from anywhere; only the owner can turn it off.
+    if (funnelled(config, dns, ours)) {
+      throw new TailscaleError(`Port ${ours} on your tailnet name is open to the whole internet (Tailscale Funnel). Turn Funnel off for that port (\`tailscale funnel --https=${ours} off\`) and try again.`);
+    }
+    return { url: urlFor(ours), httpsPort: ours };
+  }
+  const free = SERVE_PORTS.find((p) => !config.TCP?.[String(p)] && !config.Web?.[`${dns}:${p}`] && !funnelled(config, dns, p));
   if (free === undefined) {
     throw new TailscaleError("Ports 443, 8443 and 10000 on your tailnet name are already served by something else. Free one in `tailscale serve status`.");
   }

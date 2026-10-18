@@ -7,6 +7,8 @@ import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { openAuthed, rawSocket, testAccess } from "../../test/helpers/web-client";
 import { assetsFromDir } from "../web/assets";
+import { DEVICE_TTL_MS, DeviceStore, devicesPath } from "../web/devices";
+import { saveGatewayConfig } from "./config";
 import { main } from "../cli/main";
 import { CronStore } from "./cron/store";
 import { loadGatewayConfig } from "./config";
@@ -408,5 +410,86 @@ describe("the web link in the gateway's output", () => {
     expect(text).toMatch(/web: http:\/\/127\.0\.0\.1:\d+\/ \(open it with: tcode dashboard\)/);
     expect(text).not.toContain("localhost");
     expect(text).not.toContain("token=");
+  });
+});
+
+describe("the dashboard's open tabs follow their device", () => {
+  /** A gateway on a temp home; resolves once the dashboard listens. */
+  async function boot(prepare?: () => Promise<void>) {
+    await mkdir(join(dir, "project"));
+    await prepare?.();
+    let webUrl: string | undefined;
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    const done = main(["gateway"], {
+      model: new FakeModel([]),
+      out: () => {},
+      err: () => {},
+      env: { TROPOS_HOME: join(dir, "home"), SHELL: "/bin/bash" },
+      cwd: join(dir, "project"),
+      gatewayUntil: async (info) => {
+        webUrl = info.webUrl;
+        await stopped;
+      },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
+    });
+    while (!webUrl) await Bun.sleep(20);
+    return { base: `http://127.0.0.1:${new URL(webUrl).port}`, stop: async () => (stop(), done) };
+  }
+
+  test("a device revoked by another process (a second DeviceStore) closes its tab with 4401 within ~5 s", async () => {
+    const g = await boot();
+    const home = join(dir, "home");
+    const other = await testAccess(home);
+    const id = (await other.devices.list())[0]!.id;
+    const tab = await openAuthed(g.base, other.key);
+    await other.devices.revoke(id);
+    const code = await Promise.race([tab.closed, Bun.sleep(7000).then(() => -1)]);
+    expect(code).toBe(4401);
+    expect(await g.stop()).toBe(0);
+  }, 15_000);
+
+  test("a device that expired closes its tab with 4401 within ~5 s", async () => {
+    const g = await boot();
+    const home = join(dir, "home");
+    const other = await testAccess(home);
+    const tab = await openAuthed(g.base, other.key);
+    // Another process reads the store long after the device was last seen: expired devices are dropped from the file.
+    await new DeviceStore({ path: devicesPath(home), now: () => Date.now() + DEVICE_TTL_MS + 60_000 }).list();
+    const code = await Promise.race([tab.closed, Bun.sleep(7000).then(() => -1)]);
+    expect(code).toBe(4401);
+    expect(await g.stop()).toBe(0);
+  }, 15_000);
+
+  test("a pending phone-access disable is retried when the gateway starts", async () => {
+    const home = join(dir, "home");
+    const calls: string[][] = [];
+    const exec = async (_c: string, args: string[]) => {
+      calls.push(args);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    await mkdir(join(dir, "project"));
+    const config = await loadGatewayConfig(home);
+    await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net", pendingDisable: true } });
+    let stop!: () => void;
+    const stopped = new Promise<void>((r) => (stop = r));
+    let started = false;
+    const done = main(["gateway", "--no-web"], {
+      model: new FakeModel([]),
+      out: () => {},
+      err: () => {},
+      env: { TROPOS_HOME: home, SHELL: "/bin/bash" },
+      cwd: join(dir, "project"),
+      gatewayUntil: async () => {
+        started = true;
+        await stopped;
+      },
+      gatewaySeams: { sweep: false, assets: new Map(), webPort: 0, runner: { exec } },
+    });
+    while (!started) await Bun.sleep(20);
+    expect(calls).toContainEqual(["serve", "--https=8443", "off"]);
+    expect((await loadGatewayConfig(home)).remoteAccess).toEqual({ tailscale: false });
+    stop();
+    expect(await done).toBe(0);
   });
 });

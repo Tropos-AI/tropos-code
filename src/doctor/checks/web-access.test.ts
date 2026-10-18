@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { byId, fakeRunner, makeFixture, runOne, type Fixture } from "../testing";
+import { loadGatewayConfig } from "../../gateway/config";
 import { webAccessCheck } from "./web-access";
 
 let fx: Fixture;
@@ -84,4 +85,39 @@ test("phone access off: no phone finding, and Tailscale is never asked", async (
   const r = await runOne(fx, webAccessCheck, { runner });
   expect(byId(r, "gateway.web.remote")).toBeUndefined();
   expect(asked).not.toContain("tailscale");
+});
+
+const NAME = "mac.tail1234.ts.net";
+const tsStatus = JSON.stringify({ BackendState: "Running", Self: { DNSName: `${NAME}.` } });
+const tsRunner = (answers: Record<string, { code: number; stdout: string; stderr: string }>) =>
+  fakeRunner({ exec: async (_c, args) => answers[args.join(" ")] ?? { code: 1, stdout: "", stderr: "unexpected" } });
+const remoteCfg = (extra: object = {}) => JSON.stringify({ remoteAccess: { tailscale: true, httpsPort: 443, hostname: NAME, ...extra } });
+
+test("phone access on and the port is open to the internet (Funnel): warn", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", remoteCfg());
+  const runner = tsRunner({
+    "status --json": { code: 0, stdout: tsStatus, stderr: "" },
+    "serve status --json": { code: 0, stdout: JSON.stringify({ AllowFunnel: { [`${NAME}:443`]: true } }), stderr: "" },
+  });
+  const r = await runOne(fx, webAccessCheck, { runner });
+  expect(byId(r, "gateway.web.remote")).toMatchObject({ level: "warn", message: expect.stringContaining("Funnel") });
+});
+
+test("a pending disable is a fixable warning; the fix retries `serve off` and clears it", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", remoteCfg({ pendingDisable: true }));
+  const calls: string[] = [];
+  const runner = tsRunner({});
+  const exec = runner.exec;
+  runner.exec = async (c, a, t) => {
+    calls.push(a.join(" "));
+    return a.join(" ") === "serve --https=443 off" ? { code: 0, stdout: "", stderr: "" } : exec(c, a, t);
+  };
+  const seen = await runOne(fx, webAccessCheck, { runner });
+  expect(byId(seen, "gateway.web.remote.pending")).toMatchObject({ level: "warn", fixable: true });
+  const fixed = await runOne(fx, webAccessCheck, { runner, fix: true });
+  expect(byId(fixed, "gateway.web.remote.pending")).toMatchObject({ fixed: true });
+  expect(calls).toContain("serve --https=443 off");
+  expect((await loadGatewayConfig(fx.home)).remoteAccess).toEqual({ tailscale: false });
 });

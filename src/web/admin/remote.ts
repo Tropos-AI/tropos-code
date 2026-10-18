@@ -19,7 +19,8 @@ export function remoteHandlers(ctx: AdminContext, deps: Partial<{ runner: Tailsc
       : !tailscale.running
         ? "Tailscale is installed but isn't running or isn't signed in. Open it and sign in, then try again."
         : undefined;
-    return { enabled: config.remoteAccess.tailscale, tailscale, ...(url ? { url } : {}), ...((note ?? guidance) ? { note: note ?? guidance } : {}) };
+    const pending = config.remoteAccess.pendingDisable ? "Phone access is off here, but Tailscale couldn't be reached to remove the address. It is removed when Tailscale is running again (restart the gateway or run tcode doctor --fix)." : undefined;
+    return { enabled: config.remoteAccess.tailscale && !pending, tailscale, ...(url ? { url } : {}), ...((note ?? pending ?? guidance) ? { note: note ?? pending ?? guidance } : {}) };
   }
   // A Tailscale failure is worded for the owner already.
   const wrap = async <T>(f: () => Promise<T>): Promise<T> => {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RunResult } from "../doctor/types";
-import { SERVE_PORTS, TailscaleError, disableServe, enableServe, tailscaleStatus, type TailscaleRunner } from "./tailscale";
+import { SERVE_PORTS, TailscaleError, disableServe, enableServe, serveFunnelled, tailscaleStatus, type TailscaleRunner } from "./tailscale";
 
 const ok = (stdout = ""): RunResult => ({ code: 0, stdout, stderr: "" });
 const fail = (stderr: string, code = 1): RunResult => ({ code, stdout: "", stderr });
@@ -119,4 +119,37 @@ test("disable: `serve --https=8443 off`", async () => {
 
 test("disable: a failure is a TailscaleError", async () => {
   await expect(disableServe(fake({ "serve --https=443 off": fail("boom\n") }).runner, 443)).rejects.toThrow("boom");
+});
+
+test("enable: a port that is open to the internet (Funnel) is neither ours nor free", async () => {
+  const funnelled = { ...proxy(443, "http://127.0.0.1:4317"), AllowFunnel: { [`${NAME}:443`]: true } };
+  const { runner, calls } = fake({ "status --json": running, "serve status --json": ok(JSON.stringify(funnelled)) });
+  const err = await enableServe(runner, 4317).catch((e) => e);
+  expect(err).toBeInstanceOf(TailscaleError);
+  expect(err.message).toMatch(/Funnel/);
+  expect(err.message).toMatch(/443/);
+  expect(calls.some(([, a]) => a.includes("--bg"))).toBe(false);
+});
+
+test("enable: a funnelled port that holds something else is skipped like any taken port", async () => {
+  const cfg = { ...proxy(443, "http://127.0.0.1:3000"), AllowFunnel: { [`${NAME}:443`]: true } };
+  const { runner } = fake({ "status --json": running, "serve status --json": ok(JSON.stringify(cfg)), "serve --bg --https=8443 http://127.0.0.1:4317": ok() });
+  expect((await enableServe(runner, 4317)).httpsPort).toBe(8443);
+});
+
+test("enable: serve status that can't be read or parsed fails closed", async () => {
+  for (const status of [fail("daemon busy"), ok("not json{")]) {
+    const { runner, calls } = fake({ "status --json": running, "serve status --json": status });
+    const err = await enableServe(runner, 4317).catch((e) => e);
+    expect(err).toBeInstanceOf(TailscaleError);
+    expect(err.message).toMatch(/couldn't read the current serve config/);
+    expect(calls.some(([, a]) => a.includes("--bg"))).toBe(false);
+  }
+});
+
+test("serveFunnelled: reports whether a port is open to the internet", async () => {
+  const cfg = { AllowFunnel: { [`${NAME}:8443`]: true } };
+  const { runner } = fake({ "status --json": running, "serve status --json": ok(JSON.stringify(cfg)) });
+  expect(await serveFunnelled(runner, 8443)).toBe(true);
+  expect(await serveFunnelled(runner, 443)).toBe(false);
 });

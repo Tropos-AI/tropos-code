@@ -26,6 +26,7 @@ export function remoteUrl(remote: GatewayConfig["remoteAccess"]): string | null 
 
 /** The Host header a phone's request carries (`name`, plus `:port` unless 443), or null while phone access is off. */
 export function remoteHostHeader(remote: GatewayConfig["remoteAccess"]): string | null {
-  if (!remote.tailscale || !remote.hostname) return null;
+  // A pending disable keeps the setting but already refuses the name.
+  if (!remote.tailscale || remote.pendingDisable || !remote.hostname) return null;
   return remote.httpsPort && remote.httpsPort !== 443 ? `${remote.hostname}:${remote.httpsPort}` : remote.hostname;
 }

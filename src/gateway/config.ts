@@ -74,6 +74,8 @@ const schema = z.object({
       httpsPort: z.number().int().min(1).max(65535).optional(),
       /** The tailnet name, e.g. mac.tail1234.ts.net. */
       hostname: z.string().min(1).optional(),
+      /** Turning it off couldn't reach Tailscale, so the serve config may still exist: retried at gateway start and by doctor. */
+      pendingDisable: z.boolean().optional(),
     })
     .default({ tailscale: false }),
 });

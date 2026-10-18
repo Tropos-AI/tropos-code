@@ -13,22 +13,44 @@ export async function enableRemoteAccess(home: string, runner: TailscaleRunner):
   return { url, httpsPort, ...(httpsPort !== 443 ? { note: `443 was already in use on your tailnet name, so the dashboard is on ${httpsPort}.` } : {}) };
 }
 
-/** Whether `tailscale serve ... off` failed only because there was nothing to turn off. */
-const alreadyOff = (e: TailscaleError): boolean => /not found|not serving|no serve|nothing|no config/i.test(e.message);
+/** Tailscale's own wording when there is no such serve handler to remove (not a loose match: a real failure must not read as "off"). */
+const alreadyOff = (e: TailscaleError): boolean => /handler does not exist|no serve config|serve config does not exist|is not serving/i.test(e.message);
+
+/** True when the serve entry is gone (removed, or never there); false when Tailscale couldn't be reached; throws on a real failure. */
+async function serveGone(runner: TailscaleRunner, port: number): Promise<boolean> {
+  try {
+    await disableServe(runner, port);
+    return true;
+  } catch (e) {
+    if (!(e instanceof TailscaleError)) throw e;
+    if (alreadyOff(e)) return true;
+    if (!(await tailscaleStatus(runner)).running) return false;
+    throw e;
+  }
+}
 
 export async function disableRemoteAccess(home: string, runner: TailscaleRunner, now: () => number = Date.now): Promise<void> {
   const config = await loadGatewayConfig(home);
   const port = config.remoteAccess.httpsPort;
-  if (config.remoteAccess.tailscale && port !== undefined) {
-    try {
-      await disableServe(runner, port);
-    } catch (e) {
-      // Serve already gone, or Tailscale itself not running (so nothing is being served): the setting still goes off.
-      if (!(e instanceof TailscaleError) || !(alreadyOff(e) || !(await tailscaleStatus(runner)).running)) throw e;
-    }
-  }
-  await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: false } });
+  const gone = config.remoteAccess.tailscale && port !== undefined ? await serveGone(runner, port) : true;
+  // Tailscale wasn't reachable, so the serve entry may still publish the dashboard: record that, keep refusing its
+  // name meanwhile, and let the next gateway start (or doctor --fix) finish the job.
+  await saveGatewayConfig(home, { ...config, remoteAccess: gone ? { tailscale: false } : { ...config.remoteAccess, pendingDisable: true } });
   // Phones that only ever came in over the tailnet lose their login with it; a device also seen locally stays.
   const devices = new DeviceStore({ path: devicesPath(home), now });
   for (const d of await devices.list()) if (d.via === "tailscale") await devices.revoke(d.id);
+}
+
+/** Finishes a disable that couldn't reach Tailscale. True once the setting is fully off; never throws. */
+export async function retryPendingDisable(home: string, runner: TailscaleRunner): Promise<boolean> {
+  try {
+    const config = await loadGatewayConfig(home);
+    const { pendingDisable, httpsPort } = config.remoteAccess;
+    if (!pendingDisable) return false;
+    if (httpsPort !== undefined && !(await serveGone(runner, httpsPort))) return false;
+    await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: false } });
+    return true;
+  } catch {
+    return false;
+  }
 }

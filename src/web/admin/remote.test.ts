@@ -96,8 +96,22 @@ test("status when installed but signed out says to sign in; when on, it shows th
 });
 
 test("disable when serve is already gone still turns the setting off", async () => {
-  const t = await setup({ "status --json": running, "serve --https=443 off": { code: 1, stdout: "", stderr: "error: serve config not found\n" } });
+  const t = await setup({ "status --json": running, "serve --https=443 off": { code: 1, stdout: "", stderr: "error: failed to remove web serve: handler does not exist\n" } });
   await saveGatewayConfig(t.home, { ...(await loadGatewayConfig(t.home)), remoteAccess: { tailscale: true, httpsPort: 443, hostname: NAME } });
   await t.admin.handle("remote.disable", undefined);
   expect((await loadGatewayConfig(t.home)).remoteAccess).toEqual({ tailscale: false });
+});
+
+test("disable while Tailscale is down: off here, with a note that the address is removed later", async () => {
+  const t = await setup({ "status --json": running, "serve status --json": ok("{}"), "serve --bg --https=443 http://127.0.0.1:4317": ok() });
+  await t.admin.handle("remote.enable", undefined);
+  // Tailscale goes away: both `serve off` and `status` now fail.
+  const down: TailscaleRunner = { exec: async () => ({ code: 1, stdout: "", stderr: "failed to connect to local tailscaled" }) };
+  const ctx = { ...kit!.ctx, gateway: { runCronNow: async () => {}, reload: async () => {}, devicesChanged: async () => {} } };
+  const admin = createAdmin(ctx, remoteHandlers(ctx, { runner: down }));
+  const off = (await admin.handle("remote.disable", undefined)) as RemoteView;
+  expect(off.enabled).toBe(false);
+  expect(off.url).toBeUndefined();
+  expect(off.note).toMatch(/removed when Tailscale is running again/);
+  expect((await loadGatewayConfig(t.home)).remoteAccess.pendingDisable).toBe(true);
 });

@@ -7,6 +7,7 @@ import { loadProjectContext, type ProjectContext } from "../cli/context";
 import { createRuntime } from "../cli/runtime";
 import type { Runtime } from "../ui/runtime";
 import { defaultRunner } from "../doctor/runner";
+import { retryPendingDisable } from "../remote/access";
 import type { Runner } from "../doctor/types";
 import { SettingsError, settingsPaths } from "../config/settings";
 import { VERSION } from "../version";
@@ -164,6 +165,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     }
     return live;
   };
+  // A phone-access disable that couldn't reach Tailscale last time: finish it before the dashboard starts listening.
+  if (live.remoteAccess.pendingDisable && (await retryPendingDisable(home, run.seams?.runner ?? defaultRunner()))) await refreshConfig();
   const version = run.version ?? VERSION;
   const dir = gatewayDir(home);
   await mkdir(dir, { recursive: true, mode: 0o700 });
