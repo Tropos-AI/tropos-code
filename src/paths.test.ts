@@ -2,7 +2,10 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { absolutePathEnv, expandHome, isInside, projectKey, safeWhich, troposHome } from "./paths";
+import {
+  absolutePathEnv, agentsDir, expandHome, isInside, journalDir, learnedSkillsDir, projectKey, safeWhich, troposHome, userSkillsDir,
+  workspaceDir, workspaceFile,
+} from "./paths";
 
 describe("projectKey", () => {
   test("starts with a readable, sanitized form of the path", () => {
@@ -89,5 +92,16 @@ describe("safeWhich", () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe("C6 layout paths", () => {
+  test("the workspace holds the chief's files; agents stay at the root", () => {
+    expect(workspaceDir("/h")).toBe("/h/workspace");
+    expect(workspaceFile("/h", "USER.md")).toBe("/h/workspace/USER.md");
+    expect(journalDir("/h")).toBe("/h/workspace/memory");
+    expect(userSkillsDir("/h")).toBe("/h/workspace/skills");
+    expect(learnedSkillsDir("/h")).toBe("/h/workspace/skills-learned");
+    expect(agentsDir("/h")).toBe("/h/agents");
   });
 });

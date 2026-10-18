@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { workspaceDir } from "../paths";
 import { resolveToolPath } from "../tools/paths";
 import { loadGatewayConfig, saveGatewayConfig, uniqueSlug } from "./config";
 import { workspaceProblem } from "./policy";
@@ -24,7 +25,7 @@ export const TEMPORARY_PROJECT_ID = "cwd";
 /** A registry change that can't be made; the message is for the owner. */
 export class ProjectError extends UserFacingError {}
 
-export const defaultProjectPath = (home: string): string => join(home, "workspace");
+export const defaultProjectPath = workspaceDir;
 
 const README = `# Tropos workspace
 

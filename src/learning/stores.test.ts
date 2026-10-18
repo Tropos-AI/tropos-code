@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from "../config/settings";
 import { createTools } from "../tools/registry";
 import type { AnyTool } from "../tools/types";
 import type { z } from "zod";
+import { workspaceOwnPaths } from "../home/layout";
 import { STORE_TOOLS, troposStorePaths } from "./stores";
 
 let dir: string;
@@ -28,9 +29,11 @@ test("lists the five tools' stores as canonical paths under the home", async () 
   // The home is reached through a link, as /var is on macOS; what is listed is where the files really go.
   await symlink(real, join(dir, "home"));
   expect(STORE_TOOLS).toEqual(["Memory", "DailyNote", "SkillManage", "AgentManage", "Identity"]);
-  expect(troposStorePaths(join(dir, "home"))).toEqual(
-    ["memories", "skills", "skills-learned", "agents", "IDENTITY.md", "SOUL.md", "identity.json"].map((name) => join(real, name)),
-  );
+  expect(troposStorePaths(join(dir, "home"))).toEqual([
+    ...["memories", "skills", "skills-learned", "IDENTITY.md", "SOUL.md", "identity.json"].map((name) => join(real, name)),
+    ...workspaceOwnPaths(real),
+    join(real, "agents"),
+  ]);
 });
 
 test("a store that is itself a link is left out, wherever it points", async () => {
@@ -39,7 +42,10 @@ test("a store that is itself a link is left out, wherever it points", async () =
   await symlink(join(dir, "elsewhere"), join(dir, "agents"));
   await symlink("/etc/hosts", join(dir, "SOUL.md"));
   const paths = troposStorePaths(dir);
-  expect(paths).toEqual(["memories", "skills-learned", "IDENTITY.md", "identity.json"].map((name) => join(dir, name)));
+  expect(paths).toEqual([
+    ...["memories", "skills-learned", "IDENTITY.md", "identity.json"].map((name) => join(dir, name)),
+    ...workspaceOwnPaths(dir),
+  ]);
 });
 
 /** The values of a tool's `action` enum (optional or not); none for a tool without one. */
@@ -89,4 +95,16 @@ test("every delete-like action of every store tool is destructive (keeps asking)
   // A new delete-like action (or store tool) must be classified here before it ships.
   expect(deleteLike.sort()).toEqual(Object.keys(checks).sort());
   for (const key of deleteLike) await checks[key]!();
+});
+
+test("store paths cover the workspace layout and keep the legacy ones", () => {
+  const paths = troposStorePaths(dir);
+  for (const p of [...workspaceOwnPaths(dir), join(dir, "agents")]) expect(paths).toContain(p);
+  expect(paths).not.toContain(join(dir, "workspace"));
+  for (const name of ["memories", "skills", "skills-learned", "IDENTITY.md", "SOUL.md"]) expect(paths).toContain(join(dir, name));
+});
+
+test("a workspace that is a link contributes no store", async () => {
+  await symlink(outside, join(dir, "workspace"));
+  expect(troposStorePaths(dir).filter((p) => p.includes("/workspace"))).toEqual([]);
 });

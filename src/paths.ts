@@ -71,3 +71,16 @@ function realOr(path: string): string {
     return path;
   }
 }
+
+// The Tropos home layout (contract C6): the chief's own files live in one workspace folder, OpenClaw-style.
+
+export type WorkspaceFileName = "AGENTS.md" | "SOUL.md" | "IDENTITY.md" | "USER.md" | "MEMORY.md" | "BOOTSTRAP.md";
+
+/** The default project and the chief's home: its own files sit here next to whatever the chat creates. */
+export const workspaceDir = (home: string): string => join(home, "workspace");
+export const workspaceFile = (home: string, name: WorkspaceFileName): string => join(workspaceDir(home), name);
+/** The daily journal. */
+export const journalDir = (home: string): string => join(workspaceDir(home), "memory");
+export const userSkillsDir = (home: string): string => join(workspaceDir(home), "skills");
+export const learnedSkillsDir = (home: string): string => join(workspaceDir(home), "skills-learned");
+export const agentsDir = (home: string): string => join(home, "agents");
