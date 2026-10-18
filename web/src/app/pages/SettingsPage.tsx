@@ -13,6 +13,7 @@ import { SandboxSection, ServiceSection } from "@/components/admin/system-servic
 import { UpdateSection } from "@/components/admin/system-update";
 import { Tabs, type TabItem } from "@/components/interior/tabs";
 import { AboutPanel } from "@/components/pages/settings/about-panel";
+import { AutonomyPanel } from "@/components/pages/settings/autonomy-panel";
 import { ChatBackend } from "@/components/pages/settings/chat-backend";
 import { ModelPanel, type ModelPrefs } from "@/components/pages/settings/model-panel";
 import { ProvidersPanel } from "@/components/pages/settings/providers-panel";
@@ -34,7 +35,7 @@ const ITEMS: Record<SettingsTab, string> = {
 };
 
 /** Tabs that exist in this build, in SETTINGS_TABS order. */
-const RENDERED: readonly SettingsTab[] = SETTINGS_TABS.filter((id) => id !== "autonomy" && id !== "phone");
+const RENDERED: readonly SettingsTab[] = SETTINGS_TABS.filter((id) => id !== "phone");
 const TAB_ITEMS: TabItem[] = RENDERED.map((value) => ({ value, label: ITEMS[value] }));
 
 export function SettingsPage() {
@@ -57,6 +58,8 @@ export function SettingsPage() {
         panelClassName="p-4 sm:p-6"
         renderPanel={(value) => {
           switch (value as SettingsTab) {
+            case "autonomy":
+              return <AutonomyPanel />;
             case "channels":
               return <ChannelsPanel />;
             case "service":

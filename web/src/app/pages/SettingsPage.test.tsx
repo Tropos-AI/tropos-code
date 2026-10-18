@@ -445,11 +445,11 @@ describe("Settings › Advanced › uninstall", () => {
 });
 
 describe("Settings › tabs", () => {
-  test("Models & keys, Channels & devices, Service & updates, Backups and Advanced", async () => {
+  test("Models & keys, Autonomy, Channels & devices, Service & updates, Backups and Advanced", async () => {
     stubMatchMedia();
     await mountSettingsTab("models", handlers());
     await screen.findAllByRole("tab");
-    const names = ["Models & keys", "Channels & devices", "Service & updates", "Backups", "Advanced"];
+    const names = ["Models & keys", "Autonomy", "Channels & devices", "Service & updates", "Backups", "Advanced"];
     expect(screen.getAllByRole("tab").map((tab) => names.find((n) => tab.textContent === `${n}${n}`))).toEqual(names);
   });
 
