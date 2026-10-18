@@ -5,11 +5,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { openAuthed, rawSocket, testAccess } from "../../test/helpers/web-client";
+import { assetsFromDir } from "../web/assets";
 import { main } from "../cli/main";
 import { CronStore } from "./cron/store";
 import { loadGatewayConfig } from "./config";
 import type { HelloInfo } from "../web/protocol";
-import { dockerCheck, persistentToken, readGatewayState, type GatewayRun } from "./daemon";
+import { dockerCheck, readGatewayState, type GatewayRun } from "./daemon";
 import { addProject, removeProject, setDefaultProject } from "./projects";
 
 let dir: string;
@@ -39,20 +41,6 @@ describe("dockerCheck", () => {
   });
 });
 
-describe("persistentToken", () => {
-  test("is created once, kept private, and the same after a restart", async () => {
-    const first = await persistentToken(join(dir, "gateway"));
-    expect(first.length).toBeGreaterThanOrEqual(32);
-    expect(await persistentToken(join(dir, "gateway"))).toBe(first);
-    if (process.platform !== "win32") expect((await stat(join(dir, "gateway", "token"))).mode & 0o777).toBe(0o600);
-  });
-  test("a damaged token file is replaced rather than trusted", async () => {
-    await mkdir(join(dir, "gateway"));
-    await Bun.write(join(dir, "gateway", "token"), "short");
-    expect((await persistentToken(join(dir, "gateway"))).length).toBeGreaterThanOrEqual(32);
-  });
-});
-
 describe("tcode gateway", () => {
   const start = (extra: string[] = [], over: { cwd?: string; seams?: NonNullable<GatewayRun["seams"]> } = {}) => {
     const out: string[] = [];
@@ -75,24 +63,33 @@ describe("tcode gateway", () => {
     return { done, stop, out, err, url: () => webUrl };
   };
 
-  test("serves the local web UI on loopback with a link that survives restarts", async () => {
+  test("serves the shell at http://localhost:<port>/ with no key in any output; the old token file is ignored", async () => {
     await mkdir(join(dir, "project"));
-    const first = start();
-    await Bun.sleep(400);
-    const url = first.url()!;
-    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=/);
-    const res = await fetch(url, { redirect: "manual" });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("set-cookie")).toContain("HttpOnly");
+    const oldToken = "o".repeat(43);
+    await mkdir(join(dir, "home", "gateway"), { recursive: true });
+    await writeFile(join(dir, "home", "gateway", "token"), `${oldToken}\n`);
+    await mkdir(join(dir, "web"));
+    await writeFile(join(dir, "web", "index.html"), "<!doctype html><title>shell</title>");
+    const g = start([], { seams: { assets: assetsFromDir(join(dir, "web")) } });
+    while (!g.url()) await Bun.sleep(20);
+    const url = g.url()!;
+    expect(url).toMatch(/^http:\/\/localhost:\d+\/$/);
+    const page = await fetch(url);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("<title>shell</title>");
     expect((await readGatewayState(join(dir, "home")))?.webPort).toBe(Number(new URL(url).port));
-    first.stop();
-    expect(await first.done).toBe(0);
-
-    const second = start();
-    await Bun.sleep(400);
-    expect(new URL(second.url()!).searchParams.get("token")).toBe(new URL(url).searchParams.get("token"));
-    second.stop();
-    await second.done;
+    // The old link's key opens nothing.
+    const base = url.replace(/\/$/, "");
+    const socket = rawSocket(base);
+    socket.send({ t: "auth", key: oldToken });
+    expect(await socket.next((m) => m.t === "auth_failed" || m.t === "auth_ok")).toEqual({ t: "auth_failed" });
+    socket.ws.close();
+    const output = g.out.join("") + g.err.join("");
+    expect(output).toContain(`web: ${url} (open it with: tcode dashboard)`);
+    expect(output).not.toContain(oldToken);
+    expect(output).not.toMatch(/token=|#login/);
+    g.stop();
+    expect(await g.done).toBe(0);
   });
 
   test("a taken port is reported with its holder and chats keep running", async () => {
@@ -135,16 +132,15 @@ describe("tcode gateway", () => {
     });
     while (!webUrl) await Bun.sleep(20);
     const base = `http://127.0.0.1:${new URL(webUrl).port}`;
-    const token = new URL(webUrl).searchParams.get("token")!;
-    const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${token}`, Origin: base } } as unknown as string[]);
+    const { key } = await testAccess(join(dir, "home"));
+    const tab = await openAuthed(base, key);
+    const ws = tab.ws;
     const finished = new Promise<void>((resolve) => {
-      ws.onmessage = (e) => {
-        const m = JSON.parse(String(e.data)) as { t: string; id?: number };
+      tab.onMessage((m) => {
         if (m.t === "ask") ws.send(JSON.stringify({ t: "permission", id: m.id, answer: { kind: "allow" } }));
         if (m.t === "rpc_result") resolve();
-      };
+      });
     });
-    await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
     ws.send(JSON.stringify({ t: "rpc", id: 1, method: "prompt", params: { text: "what is scheduled?" } }));
     await finished;
     expect(JSON.stringify(model.requests[1]!.messages.at(-1))).toContain(job.id);
@@ -225,24 +221,24 @@ describe("the dashboard's chat across a reload", () => {
     while (!info) await Bun.sleep(20);
     const url = new URL(info.webUrl!);
     const base = `http://127.0.0.1:${url.port}`;
+    const { key } = await testAccess(join(dir, "home"));
     const sockets: WebSocket[] = [];
     /** One browser tab. */
     const connect = async () => {
-      const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${url.searchParams.get("token")}`, Origin: base } } as unknown as string[]);
+      const tab = await openAuthed(base, key);
+      const ws = tab.ws;
       sockets.push(ws);
       const asked: string[] = [];
       const hellos: HelloInfo[] = [];
       const pending = new Map<number, (m: RpcResult) => void>();
-      ws.onmessage = (e) => {
-        const m = JSON.parse(String(e.data)) as { t: string; id?: number; prompt?: { toolName: string }; server?: HelloInfo };
-        if (m.t === "hello") hellos.push(m.server!);
+      tab.onMessage((m) => {
+        if (m.t === "hello") hellos.push(m.server);
         if (m.t === "ask") {
-          asked.push(m.prompt!.toolName);
+          asked.push(m.prompt.toolName);
           ws.send(JSON.stringify({ t: "permission", id: m.id, answer: { kind: "allow" } }));
         }
-        if (m.t === "rpc_result") pending.get(m.id!)?.(m as RpcResult);
-      };
-      await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
+        if (m.t === "rpc_result") pending.get(m.id)?.(m as RpcResult);
+      });
       while (hellos.length === 0) await Bun.sleep(5);
       let next = 1;
       const rpc = (method: string, params?: unknown) =>
@@ -391,7 +387,7 @@ describe("the dashboard's chat across a reload", () => {
 });
 
 describe("the web link in the gateway's output", () => {
-  const run = async () => {
+  test("is the plain localhost address, terminal or not: there is no key to leave out", async () => {
     const out: string[] = [];
     let stop!: () => void;
     const stopped = new Promise<void>((r) => (stop = r));
@@ -405,14 +401,12 @@ describe("the web link in the gateway's output", () => {
       gatewayUntil: async () => void (await stopped),
       gatewaySeams: { sweep: false, assets: new Map(), webPort: 0 },
     });
-    await Bun.sleep(400);
+    while (!out.join("").includes("web:")) await Bun.sleep(20);
     stop();
     await done;
-    return out.join("");
-  };
-  test("without a terminal (under a service) the output has the address but not the key", async () => {
-    const text = await run();
-    expect(text).toMatch(/web: http:\/\/127\.0\.0\.1:\d+\/ \(open it with: tcode dashboard\)/);
+    const text = out.join("");
+    expect(text).toMatch(/web: http:\/\/localhost:\d+\/ \(open it with: tcode dashboard\)/);
+    expect(text).not.toContain("127.0.0.1");
     expect(text).not.toContain("token=");
   });
 });

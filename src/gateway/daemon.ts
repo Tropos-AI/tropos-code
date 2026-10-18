@@ -1,7 +1,6 @@
 // src/gateway/daemon.ts — `tcode gateway`: the session pool, the channel adapters and the local web UI, until stopped.
-import { randomBytes } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Model } from "../api/model";
 import { loadProjectContext, type ProjectContext } from "../cli/context";
@@ -22,7 +21,9 @@ import { WebHost } from "../web/host";
 import { ProjectHosts } from "../web/project-hosts";
 import { DEFAULT_PORT } from "../web/protocol";
 import { PortInUseError, portHolder, portInUseMessage } from "../web/port";
-import { startWebServer } from "../web/server";
+import { DeviceStore, devicesPath } from "../web/devices";
+import { loginCodesFor } from "../web/login-codes";
+import { startWebServer, type RunningWebServer } from "../web/server";
 import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
 import { effectiveAutonomy, ensureChatSettings, lowerAutonomy, pinnedTestCommands, sessionAutonomy } from "./autonomy";
@@ -75,8 +76,6 @@ export interface GatewayRun {
   workspace?: string;
   /** Background services (a scheduler, say), started after the channels and stopped before them. */
   services?: GatewayService[];
-  /** Print the web UI link with its key (default: only when stdout is a terminal). */
-  showLink?: boolean;
   /** Tests stop the gateway themselves instead of waiting for a signal; `reload` is what the dashboard calls after a save. */
   until?: (info: { webUrl?: string; reload(): Promise<void> }) => Promise<void>;
   /** Test seams. */
@@ -120,24 +119,6 @@ export function dockerCheck(bin = "docker", now: () => number = Date.now): () =>
     cached = { at: now(), result };
     return result;
   };
-}
-
-/** The web UI's link stays the same across restarts: the token is created once and kept (0600). */
-export async function persistentToken(dir: string): Promise<string> {
-  const path = join(dir, "token");
-  try {
-    const existing = (await readFile(path, "utf8")).trim();
-    if (existing.length >= 32) return existing;
-  } catch {
-    // none yet
-  }
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const token = randomBytes(32).toString("base64url");
-  const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, `${token}\n`, { mode: 0o600 });
-  await chmod(tmp, 0o600);
-  await rename(tmp, path);
-  return token;
 }
 
 export interface GatewayState {
@@ -439,7 +420,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   };
   const reload = (): Promise<void> => (reloading = reloading.catch(() => {}).then(reloadOnce));
 
-  let webStop: (() => Promise<void>) | undefined;
+  let webServer: RunningWebServer | undefined;
   let chatHosts: ProjectHosts | undefined;
   let webUrl: string | undefined;
   let webPort: number | undefined;
@@ -544,10 +525,15 @@ export async function runGateway(run: GatewayRun): Promise<number> {
             });
           },
           reload,
+          devicesChanged: async () => {
+            await webServer?.recheckDevices();
+          },
         },
       });
-      const server = await startWebServer({ host: chatHosts, admin, assets, token: await persistentToken(dir), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev });
-      webStop = () => server.stop();
+      // Browsers log in on the socket: device keys (hashed on disk) and the codes `tcode dashboard` issues.
+      const devices = new DeviceStore({ path: devicesPath(home) });
+      const server = await startWebServer({ host: chatHosts, admin, assets, devices, logins: loginCodesFor(home), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev });
+      webServer = server;
       webUrl = server.url;
       webPort = server.port;
     } catch (e) {
@@ -602,9 +588,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         `Tropos gateway running${oneOff ? ` in ${oneOff.path}` : ""}`,
         adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : "  channels: none (connect Telegram in the dashboard: tcode dashboard, or ask me in the terminal)",
         `  projects: ${projects.map((p) => p.id).join(", ")} (default: ${await source.defaultId()})`,
-        // The link carries the web UI's key. On a terminal it is printed for you; under launchd/systemd stdout goes to a
-        // log file that gets copied into bug reports, so there it stays out (`tcode dashboard` opens the real link).
-        webUrl ? `  web: ${(run.showLink ?? Boolean(process.stdout.isTTY)) ? webUrl : `${webUrl.split("?")[0]} (open it with: tcode dashboard)`}` : "  web: off",
+        // No key in the address any more: a browser logs in on the page (`tcode dashboard` opens it logged in).
+        webUrl ? `  web: ${webUrl} (open it with: tcode dashboard)` : "  web: off",
         "Press ctrl+c to stop.\n",
       ].join("\n"),
     );
@@ -615,6 +600,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           if (r.sessions.length || r.jobs.length) run.err(`gateway: revoked sender: closed ${r.sessions.length} session(s), disabled ${r.jobs.length} job(s)\n`);
         })
         .catch(() => {});
+      // A device revoked by another process (or expired) loses its open tabs too.
+      webServer?.recheckDevices().catch(() => {});
     }, 5000);
     reaper.unref();
     stopReaper = () => clearInterval(reaper);
@@ -626,7 +613,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     await Promise.all(startedServices.map((s) => s.stop().catch(() => {})));
     await Promise.all(adapters.map((a) => a.stop().catch(() => {})));
     await pool.closeAll();
-    await webStop?.().catch(() => {});
+    await webServer?.stop().catch(() => {});
     // Like the chats: the gateway is stopping, so the dashboard's sessions skip their final review.
     await chatHosts?.shutdown({ finalReview: false }).catch(() => {});
     // A rebuild a reload started: the stopped host shuts down whatever it built.

@@ -46,6 +46,7 @@ export async function makeKit(over: Partial<AdminContext> = {}): Promise<Kit> {
         reload: async () => {
           kit.reloads++;
         },
+        devicesChanged: async () => {},
       },
       ...over,
     },

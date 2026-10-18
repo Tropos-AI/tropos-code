@@ -1,4 +1,4 @@
-// src/web/protocol.ts — messages between `tcode web` and the browser app. No Node imports: the client imports this too.
+// src/web/protocol.ts — messages between the dashboard server and the browser app. No Node imports: the client imports this too.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import type { Effort, Mode } from "../config/constants";
 import type { MessageParam } from "../session/store";
@@ -123,12 +123,22 @@ export const RPC_METHODS: RpcMethod[] = [
 ];
 
 export type ClientMessage =
+  /** The first message of a browser that has a device key; nothing else is answered before it succeeds. */
+  | { t: "auth"; key: string }
+  /** A browser without a key logs in with a one-time key (`#login=`) or a 6-digit code; `name` labels the device. */
+  | { t: "login"; value: string; name: string }
   | { t: "rpc"; id: number; method: RpcMethod; params?: unknown }
   /** Host-level admin call (src/web/admin/api.ts): no session needed. */
   | { t: "admin"; id: number; method: string; params?: unknown }
   | { t: "permission"; id: number; answer: PermissionAnswer };
 
 export type ServerMessage =
+  | { t: "auth_ok"; device: { id: string; name: string } }
+  /** The key is unknown or was revoked; the socket stays open so the browser can log in. */
+  | { t: "auth_failed" }
+  /** The new device's key, sent this once: the browser keeps it. */
+  | { t: "login_ok"; key: string; device: { id: string; name: string } }
+  | { t: "login_failed"; reason: "invalid" | "locked" }
   | { t: "hello"; server: HelloInfo }
   /** A prompt another tab sent, shown as the user's message (the sending tab already shows it; the agent stream has none). */
   | { t: "user"; text: string }
@@ -143,6 +153,8 @@ export type ServerMessage =
 
 /** The path the WebSocket lives on. */
 export const WS_PATH = "/ws";
-/** The cookie that carries the launch token after the first visit. */
-export const SESSION_COOKIE = "tcode_session";
+/** The close code of a socket whose device was logged out: the browser forgets its key and shows the login screen. */
+export const AUTH_CLOSE_CODE = 4401;
+/** The localStorage entry that holds this browser's device key. */
+export const DEVICE_KEY_STORAGE = "tropos.deviceKey";
 export const DEFAULT_PORT = 4317;

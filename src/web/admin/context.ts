@@ -24,10 +24,17 @@ export interface AdminContext {
     runCronNow(jobId: string): Promise<void>;
     /** Re-reads gateway.json / projects after the admin API changed them. */
     reload(): Promise<void>;
+    /** Logs out open dashboard tabs whose device was revoked. */
+    devicesChanged(): Promise<void>;
   };
 }
 
-export type AdminHandler<M extends AdminMethod> = (params: AdminParams<M>) => Promise<AdminResult<M>>;
+/** Who made an admin call: the dashboard device its socket logged in as. */
+export interface AdminCaller {
+  deviceId: string;
+}
+
+export type AdminHandler<M extends AdminMethod> = (params: AdminParams<M>, caller?: AdminCaller) => Promise<AdminResult<M>>;
 export type AdminHandlers = { [M in AdminMethod]?: AdminHandler<M> };
 
 /** A failure whose message is shown to the owner as is. */

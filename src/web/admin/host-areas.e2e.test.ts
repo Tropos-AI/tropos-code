@@ -1,8 +1,9 @@
-// End to end: the host-area handlers behind the real web server, reached by a raw WebSocket with the session cookie.
+// End to end: the host-area handlers behind the real web server, reached by a WebSocket logged in with a device key.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fakeRuntime } from "../../../test/helpers/fake-runtime";
+import { openAuthed, testAccess } from "../../../test/helpers/web-client";
 import { dockerCheck } from "../../doctor/checks/docker";
 import { WebHost } from "../host";
 import { startWebServer, type RunningWebServer } from "../server";
@@ -16,7 +17,6 @@ import { projectsHandlers } from "./projects";
 import { serviceHandlers } from "./service";
 import { statusHandlers } from "./status";
 
-const TOKEN = "e2e-token-1234567890";
 let kit: Kit;
 let server: RunningWebServer | null = null;
 let sockets: WebSocket[] = [];
@@ -46,27 +46,17 @@ async function client() {
     ...projectsHandlers(ctx),
     ...serviceHandlers(ctx, { service, runner, git: async () => {} }),
   });
-  server = await startWebServer({ host: new WebHost(fakeRuntime([])), admin, assets: new Map(), token: TOKEN, port: 0 });
-  const base = `http://127.0.0.1:${server.port}`;
-  const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${TOKEN}`, Origin: base } } as unknown as string[]);
-  sockets.push(ws);
-  const pending = new Map<number, (m: any) => void>();
-  ws.onmessage = (e) => {
-    const m = JSON.parse(String(e.data));
-    if (m.t === "admin_result") pending.get(m.id)?.(m);
-  };
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = () => reject(new Error("socket error"));
-  });
+  // The login state lives beside the kit's home, not in it.
+  const { devices, logins, key } = await testAccess(join(kit.root, "access"));
+  server = await startWebServer({ host: new WebHost(fakeRuntime([])), admin, assets: new Map(), devices, logins, port: 0 });
+  const socket = await openAuthed(`http://127.0.0.1:${server.port}`, key);
+  sockets.push(socket.ws);
   let id = 0;
-  return (method: string, params?: unknown) =>
-    new Promise<any>((resolve, reject) => {
-      const n = ++id;
-      const timer = setTimeout(() => reject(new Error(`no answer to ${method}`)), 5000);
-      pending.set(n, (m) => (clearTimeout(timer), resolve(m)));
-      ws.send(JSON.stringify({ t: "admin", id: n, method, params }));
-    });
+  return (method: string, params?: unknown): Promise<any> => {
+    const n = ++id;
+    socket.send({ t: "admin", id: n, method, params });
+    return socket.next((m) => m.t === "admin_result" && m.id === n, 5000);
+  };
 }
 
 test("status and doctor over the socket", async () => {

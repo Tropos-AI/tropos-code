@@ -78,7 +78,7 @@ test("restore puts the files back after a safety backup of the current state", a
   await writeFile(join(kit.home, "settings.json"), '{"model":"changed"}\n');
   kit.clock.now += 60_000; // a different archive name from the first
   let reloaded = 0;
-  const withGateway = backupHandlers({ ...kit.ctx, gateway: { runCronNow: async () => {}, reload: async () => void reloaded++ } });
+  const withGateway = backupHandlers({ ...kit.ctx, gateway: { runCronNow: async () => {}, reload: async () => void reloaded++, devicesChanged: async () => {} } });
   const r = await withGateway["backup.restore"]!({ name: made.name });
   expect(await readFile(join(kit.home, "settings.json"), "utf8")).toContain("claude-sonnet-5-5");
   expect(r.safetyBackup).toBeDefined();

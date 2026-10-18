@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fakeRuntime } from "../../../test/helpers/fake-runtime";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
+import { openAuthed, testAccess } from "../../../test/helpers/web-client";
 import { createAdmin } from "./index";
 import type { AdminContext, AdminHandlers } from "./context";
 import { WebHost } from "../host";
@@ -47,45 +48,31 @@ export async function writeText(path: string, text: string): Promise<void> {
   await writeFile(path, text);
 }
 
-const TOKEN = "ops-testkit-token-1234567890";
-
 export interface WsAdmin {
   /** Sends `{t:"admin"}` and resolves with the `admin_result` message as received. */
   call(method: string, params?: unknown): Promise<{ t: string; id: number; ok: boolean; result?: unknown; error?: string }>;
   close(): Promise<void>;
 }
 
-/** The given handlers behind a real web server and a raw WebSocket client. */
+/** The given handlers behind a real web server and a logged-in WebSocket client. */
 export async function adminOverWs(ctx: AdminContext, handlers: AdminHandlers): Promise<WsAdmin> {
   const host = new WebHost(fakeRuntime([]));
-  const server = await startWebServer({ host, admin: createAdmin(ctx, handlers), assets: new Map(), token: TOKEN, port: 0 });
-  const base = `http://127.0.0.1:${server.port}`;
-  const ws = new WebSocket(`${base.replace("http", "ws")}/ws`, { headers: { Cookie: `tcode_session=${TOKEN}`, Origin: base } } as unknown as string[]);
-  const waiters = new Map<number, (m: never) => void>();
-  ws.onmessage = (e) => {
-    const m = JSON.parse(String(e.data)) as { t: string; id?: number };
-    if (m.t === "admin_result" && m.id !== undefined) waiters.get(m.id)?.(m as never);
-  };
-  await new Promise<void>((resolve, reject) => {
-    ws.onopen = () => resolve();
-    ws.onerror = () => reject(new Error("socket error"));
-  });
+  // The login state lives outside the kit's home, so the handlers under test never see it.
+  const accessDir = await makeTmpDir("admin-ops-access-");
+  const { devices, logins, key } = await testAccess(accessDir);
+  const server = await startWebServer({ host, admin: createAdmin(ctx, handlers), assets: new Map(), devices, logins, port: 0 });
+  const socket = await openAuthed(`http://127.0.0.1:${server.port}`, key);
   let id = 0;
   return {
-    call(method, params) {
+    async call(method, params) {
       const rid = ++id;
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`no admin_result for ${method}`)), 10_000);
-        waiters.set(rid, ((m: never) => {
-          clearTimeout(timer);
-          resolve(m);
-        }) as never);
-        ws.send(JSON.stringify({ t: "admin", id: rid, method, params }));
-      });
+      socket.send({ t: "admin", id: rid, method, params });
+      return (await socket.next((m) => m.t === "admin_result" && m.id === rid, 10_000)) as never;
     },
     async close() {
-      ws.close();
+      socket.ws.close();
       await server.stop();
+      await removeDir(accessDir);
     },
   };
 }

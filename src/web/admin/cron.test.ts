@@ -71,14 +71,14 @@ test("runNow without a gateway explains how to start it", async () => {
 
 test("runNow goes through the gateway; an immediate refusal is reported", async () => {
   const calls: string[] = [];
-  const h = cronHandlers({ ...kit.ctx, gateway: { runCronNow: async (id) => void calls.push(id), reload: async () => {} } });
+  const h = cronHandlers({ ...kit.ctx, gateway: { runCronNow: async (id) => void calls.push(id), reload: async () => {}, devicesChanged: async () => {} } });
   const job = await h["cron.add"]!(base);
   expect(await h["cron.runNow"]!({ id: job.id })).toEqual({ started: true });
   expect(calls).toEqual([job.id]);
-  const busy = cronHandlers({ ...kit.ctx, gateway: { runCronNow: async () => Promise.reject(new Error('"Morning" is already running')), reload: async () => {} } });
+  const busy = cronHandlers({ ...kit.ctx, gateway: { runCronNow: async () => Promise.reject(new Error('"Morning" is already running')), reload: async () => {}, devicesChanged: async () => {} } });
   await expect(busy["cron.runNow"]!({ id: job.id })).rejects.toThrow(/already running/);
   // A long run does not hold the call open.
-  const slow = cronHandlers({ ...kit.ctx, gateway: { runCronNow: () => new Promise(() => {}), reload: async () => {} } });
+  const slow = cronHandlers({ ...kit.ctx, gateway: { runCronNow: () => new Promise(() => {}), reload: async () => {}, devicesChanged: async () => {} } });
   expect(await slow["cron.runNow"]!({ id: job.id })).toEqual({ started: true });
 });
 

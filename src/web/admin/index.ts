@@ -1,6 +1,6 @@
 // src/web/admin/index.ts — the admin dispatcher: one table of handlers, composed from the area modules.
 import { ADMIN_METHODS, type AdminMethod } from "./api";
-import { AdminError, type AdminContext, type AdminHandlers } from "./context";
+import { AdminError, type AdminCaller, type AdminContext, type AdminHandlers } from "./context";
 import { autonomyHandlers } from "./autonomy";
 import { backupHandlers } from "./backup";
 import { channelsHandlers } from "./channels";
@@ -17,10 +17,10 @@ import { statusHandlers } from "./status";
 import { updateHandlers } from "./update";
 import { usageHandlers } from "./usage";
 
-export { AdminError, type AdminContext, type AdminHandlers } from "./context";
+export { AdminError, type AdminCaller, type AdminContext, type AdminHandlers } from "./context";
 
 export interface Admin {
-  handle(method: string, params: unknown): Promise<unknown>;
+  handle(method: string, params: unknown, caller?: AdminCaller): Promise<unknown>;
   /** Method names that have a handler (tests and the status page use it). */
   methods(): AdminMethod[];
 }
@@ -46,12 +46,12 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
   };
   return {
     methods: () => ADMIN_METHODS.filter((m) => handlers[m] !== undefined),
-    async handle(method, params) {
+    async handle(method, params, caller) {
       if (!(ADMIN_METHODS as string[]).includes(method)) throw new AdminError("Unknown request.");
-      const handler = handlers[method as AdminMethod] as ((p: unknown) => Promise<unknown>) | undefined;
+      const handler = handlers[method as AdminMethod] as ((p: unknown, c?: AdminCaller) => Promise<unknown>) | undefined;
       if (!handler) throw new AdminError("That isn't available yet.");
       try {
-        return await handler(params);
+        return await handler(params, caller);
       } catch (error) {
         // Unexpected failures must not leak paths or stacks into the browser: AdminError messages are meant to be seen.
         if (error instanceof AdminError) throw error;
