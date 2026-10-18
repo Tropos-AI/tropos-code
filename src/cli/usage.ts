@@ -1,42 +1,43 @@
 export const USAGE = `Tropos Code — an agentic coding CLI by Tropos Labs
 
-Usage:
+Usage: tcode [options] [prompt | command]
+
+Start:
   tcode [prompt]                   start an interactive session, optionally with a first prompt
   tcode -p "prompt"                answer once and exit (stdin is appended when piped)
+  tcode dashboard [--code]         open the dashboard at http://localhost:4317, logged in
+                                   (--code: a 6-digit code for another browser or your phone)
+
+Everyday:
+  tcode status [--json] [--deep]   everything at a glance: service, channels, phone access, autonomy, health
+  tcode logs [gateway|install|update] [-f]
+                                   show or follow a log
+  tcode projects list|add <path>|remove <id>|default <id>
+                                   the directories chats can work in (a built-in one needs no setup)
+  tcode cron list|add|rm|run|runs  scheduled jobs, delivered to your chat
 
 Setup and care:
   tcode onboard                    guided setup: provider key, model, Telegram, sandbox, run at login
-  tcode status [--json] [--deep]   what is running and whether it is healthy
   tcode doctor [--fix] [--lint]    check the install, settings, keys, Docker and the gateway; repair what is safe
   tcode config get|set|unset|show|validate
                                    read and change settings.json and gateway.json safely
-  tcode logs [gateway|install|update] [-f]
-                                   show or follow a log
+  tcode update [--version <v>] | rollback
+                                   update to the newest release of your channel (or a given one), or go back
   tcode backup create|list|verify|restore
                                    archive or restore your settings, keys, memory and sessions
-  tcode update | rollback          update to the newest release of your channel, or go back
   tcode uninstall [--all] [--dry-run]
                                    remove the service, the binary, and with --data your ~/.tropos
+
+Advanced:
+  tcode gateway [--no-web]         run the background service in this terminal, for debugging
+  tcode gateway install|uninstall|start|stop|restart
+                                   run it at login as a background service (launchd or systemd)
+  tcode pairing approve|list|revoke
+                                   who may talk to your bot; setup does this for you
   tcode reset [--scope config|config+creds+sessions|full]
                                    start over without reinstalling
   tcode security audit             check the setup for risky settings
   tcode migrate openclaw|hermes    bring over identity, memory and skills from those tools
-
-Run it from anywhere:
-  tcode web [--port <n>] [--no-open]
-                                   open the browser UI on 127.0.0.1 (same sessions and settings)
-  tcode dashboard                  open the web UI of the running gateway
-  tcode gateway [--no-web]         run the always-on gateway: chats from your phone (Telegram) work in
-                                   a sandbox, plus the local web UI. See: tcode gateway --help
-  tcode gateway install|uninstall|start|stop|restart|status|logs
-                                   run it at login as a background service (launchd or systemd)
-  tcode projects list|add <path>|remove <id>|default <id>
-                                   the directories chats can work in (a built-in one needs no setup)
-  tcode cron list|add|rm|run|runs  scheduled jobs, delivered to your chat
-  tcode pairing approve <channel> <code> | list | revoke <channel> <sender-id>
-                                   decide who may talk to the gateway
-  tcode install [stable|latest|<version>] [--force]
-                                   install a release and make it the active tcode
   tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- status)
 
 Options:
@@ -55,6 +56,8 @@ Options:
       --add-dir <dir>              let tools work in another directory (repeatable)
   -v, --version                    print the version
   -h, --help                       show this help
+
+\`tropos\` works too, as another name for \`tcode\`.
 
 Credentials: ANTHROPIC_API_KEY, or run \`ant auth login\`. Other providers: their usual
              variable (OPENAI_API_KEY, DEEPSEEK_API_KEY, …) or /providers in a session.
@@ -93,11 +96,10 @@ Options:
   -h, --help     show this help
 `;
 
-export const GATEWAY_HELP = `Usage: tcode gateway [--workspace <dir>] [--no-web]
+export const GATEWAY_HELP = `Usage: tcode gateway [--workspace <dir>] [--no-web] [--dev]
        tcode gateway install [--workspace <dir>]   run the gateway in the background, started at login
        tcode gateway uninstall | start | stop | restart
-       tcode gateway status                        the service, the process, the web link, projects, Telegram
-       tcode gateway logs [-n <lines>]             where the log is, and its last lines
+       (state and logs: tcode status, tcode logs)
 
 Runs Tropos as a long-lived process that owns agent sessions. A message from Telegram opens a session in the
 chat's project (/project in the chat switches it); its commands run in a Docker container that sees only that
@@ -111,6 +113,7 @@ to connect it, and make sure Docker is running.
 Options:
       --workspace <dir>   work in this directory for this run only (install: add it as a project and make it the default)
       --no-web            don't serve the local web UI
+      --dev               also accept the Vite dev server (http://localhost:5173)
   -h, --help              show this help
 
 Background service: launchd on macOS, a systemd user unit on Linux.

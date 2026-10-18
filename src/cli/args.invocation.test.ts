@@ -76,3 +76,27 @@ describe("subcommand shapes", () => {
     expect(() => parseInvocation(["update", "--background", "-p"])).toThrow("For update, see tcode update --help.");
   });
 });
+
+describe("aliases and the web command's retirement", () => {
+  test.each([
+    [["web"], { kind: "lifecycle", name: "dashboard", argv: [], notice: "tcode web is now tcode dashboard." }],
+    [["web", "--no-open"], { kind: "lifecycle", name: "dashboard", argv: ["--no-open"] }],
+    [["gateway", "status"], { kind: "lifecycle", name: "status", argv: [] }],
+    [["gateway", "logs", "-n", "20"], { kind: "lifecycle", name: "logs", argv: ["gateway", "-n", "20"] }],
+    [["gateway", "logs", "--lines=7"], { kind: "lifecycle", name: "logs", argv: ["gateway", "-n", "7"] }],
+    [["gateway", "logs"], { kind: "lifecycle", name: "logs", argv: ["gateway"] }],
+    [["update", "--version", "1.2.3"], { kind: "subcommand", command: { kind: "install", target: "1.2.3", force: false } }],
+    [["update", "--version=1.2.3"], { kind: "subcommand", command: { kind: "install", target: "1.2.3", force: false } }],
+    [["upgrade"], { kind: "subcommand", command: { kind: "update", background: false, alias: "upgrade" } }],
+  ])("%j", (argv, expected) => expect(parseInvocation(argv)).toMatchObject(expected));
+
+  test("gateway --dev", () => expect(parseInvocation(["gateway", "--dev"])).toMatchObject({ options: { gateway: { dev: true, web: true } } }));
+  test("`tcode -- web` is still a prompt", () => expect(parseInvocation(["--", "web"])).toMatchObject({ kind: "session", options: { prompt: "web" } }));
+  test("an update --version that is not a version stays a prompt-like invocation", () => {
+    expect(matchSubcommand(["update", "--version", "banana"])).toBeNull();
+    expect(matchSubcommand(["update", "--version"])).toBeNull();
+  });
+  test("a malformed gateway logs is a usage error", () => {
+    expect(() => parseInvocation(["gateway", "logs", "-n", "x"])).toThrow(/usage/);
+  });
+});

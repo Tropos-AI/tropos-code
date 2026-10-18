@@ -20,8 +20,6 @@ export interface CliOptions {
   addDir: string[];
   help: boolean;
   version: boolean;
-  /** `tcode web`: serve the browser UI instead of the terminal one. */
-  web?: WebOptions;
   /** `tcode gateway`: run as the always-on gateway instead of a session. */
   gateway?: GatewayOptions;
 }
@@ -31,15 +29,18 @@ export interface GatewayOptions {
   workspace?: string;
   /** Serve the local web UI too (default); --no-web turns it off. */
   web: boolean;
+  /** `--dev`: the dashboard also accepts the Vite dev server's origin (http://localhost:5173). */
+  dev: boolean;
 }
 
 /** `tcode gateway [--workspace <dir>] [--no-web]`: the gateway flags, then the usual parser. */
 export function parseGateway(argv: string[]): CliOptions {
   const rest: string[] = [];
-  const gateway: GatewayOptions = { web: true };
+  const gateway: GatewayOptions = { web: true, dev: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--no-web") gateway.web = false;
+    else if (arg === "--dev") gateway.dev = true;
     else if (arg === "--workspace" || arg.startsWith("--workspace=")) {
       const raw = arg === "--workspace" ? argv[++i] : arg.slice("--workspace=".length);
       if (!raw) throw new CliError("--workspace needs a directory");
@@ -58,8 +59,6 @@ export type GatewayCommand =
   | { kind: "gateway-start" }
   | { kind: "gateway-stop" }
   | { kind: "gateway-restart" }
-  | { kind: "gateway-status" }
-  | { kind: "gateway-logs"; lines?: number }
   | { kind: "projects-list" }
   | { kind: "projects-add"; path: string; name?: string }
   | { kind: "projects-remove"; id: string }
@@ -69,10 +68,10 @@ export type GatewayCommand =
   | { kind: "pairing-revoke"; channel: string; senderId: string }
   | { kind: "help"; command: "gateway" | "pairing" | "projects" };
 
-const GATEWAY_USAGE = "usage: tcode gateway [install [--workspace <dir>] | uninstall | start | stop | restart | status | logs [-n <lines>]]";
+const GATEWAY_USAGE = "usage: tcode gateway [install [--workspace <dir>] | uninstall | start | stop | restart]";
 const PROJECTS_USAGE = "usage: tcode projects [list | add <path> [--name <name>] | remove <id> | default <id>]";
 
-/** `tcode gateway install|uninstall|start|stop|restart|status|logs`, `tcode projects …` and `tcode pairing …`; null for anything else. */
+/** `tcode gateway install|uninstall|start|stop|restart`, `tcode projects …` and `tcode pairing …`; null for anything else. */
 export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
   const [word, sub, ...rest] = argv;
   if (word === "gateway") {
@@ -82,18 +81,10 @@ export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
       start: { kind: "gateway-start" },
       stop: { kind: "gateway-stop" },
       restart: { kind: "gateway-restart" },
-      status: { kind: "gateway-status" },
     };
     if (sub !== undefined && Object.hasOwn(bare, sub)) {
       if (rest.length === 0) return bare[sub]!;
       throw new CliError(GATEWAY_USAGE);
-    }
-    if (sub === "logs") {
-      if (rest.length === 0) return { kind: "gateway-logs" };
-      const raw = rest.length === 2 && (rest[0] === "-n" || rest[0] === "--lines") ? rest[1] : rest.length === 1 && rest[0]!.startsWith("--lines=") ? rest[0]!.slice("--lines=".length) : undefined;
-      const lines = Number(raw);
-      if (raw === undefined || !Number.isInteger(lines) || lines < 1) throw new CliError("usage: tcode gateway logs [-n <lines>]");
-      return { kind: "gateway-logs", lines };
     }
     if (sub === "install") {
       if (rest.length === 0) return { kind: "gateway-install" };
@@ -135,36 +126,6 @@ export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
     throw new CliError("usage: tcode pairing approve <channel> <code> | list | revoke <channel> <sender-id>");
   }
   return null;
-}
-
-export interface WebOptions {
-  port?: number;
-  /** Open the browser (default); --no-open only prints the link. */
-  open: boolean;
-  /** Accept the Vite dev server's origin too (`bun run dev:web`). */
-  dev: boolean;
-}
-
-/** `tcode web [--port <n>] [--no-open] [--dev] [session options]`: the web flags, then the usual parser. */
-export function parseWeb(argv: string[]): CliOptions {
-  const rest: string[] = [];
-  const web: WebOptions = { open: true, dev: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "--no-open") web.open = false;
-    else if (arg === "--dev") web.dev = true;
-    else if (arg === "--port" || arg.startsWith("--port=")) {
-      const raw = arg === "--port" ? argv[++i] : arg.slice("--port=".length);
-      const port = Number(raw);
-      // 0 asks the system for any free port.
-      if (raw === undefined || raw === "" || !Number.isInteger(port) || port < 0 || port > 65535) throw new CliError(`--port must be a port number (got "${raw ?? ""}")`);
-      web.port = port;
-    } else rest.push(arg);
-  }
-  const options = parseCli(rest);
-  if (options.print) throw new CliError("tcode web serves the browser UI; -p (print mode) doesn't apply");
-  if (options.prompt) throw new CliError(`tcode web takes no prompt (got "${options.prompt}"); type it in the browser`);
-  return { ...options, web };
 }
 
 export class CliError extends Error {}
@@ -279,7 +240,7 @@ export type InstallCommand =
 export type Invocation =
   | { kind: "subcommand"; command: InstallCommand }
   | { kind: "gateway-command"; command: GatewayCommand }
-  | { kind: "lifecycle"; name: LifecycleName; argv: string[] }
+  | { kind: "lifecycle"; name: LifecycleName; argv: string[]; /** Printed to stderr before the command runs (a retired spelling). */ notice?: string }
   | { kind: "session"; options: CliOptions };
 
 const SUBCOMMAND_WORDS = new Set(["install", "update", "upgrade", "rollback"]);
@@ -292,6 +253,9 @@ export function matchSubcommand(argv: string[]): InstallCommand | null {
   if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) return { kind: "help", command };
   if (command === "rollback") return rest.length === 0 ? { kind: "rollback" } : null;
   if (command === "update" || command === "upgrade") {
+    // `tcode update --version <v>` installs that release (the old `tcode install <v>` without the extra word).
+    const pinned = rest.length === 2 && rest[0] === "--version" ? rest[1] : rest.length === 1 && rest[0]!.startsWith("--version=") ? rest[0]!.slice("--version=".length) : undefined;
+    if (pinned !== undefined) return isVersion(pinned) ? { kind: "install", target: pinned, force: false } : null;
     if (rest.length === 0) return { kind: "update", background: false, alias: command };
     if (rest.length === 1 && rest[0] === "--background") return { kind: "update", background: true, alias: command };
     return null;
@@ -309,12 +273,24 @@ export function matchSubcommand(argv: string[]): InstallCommand | null {
   return { kind: "install", target, force };
 }
 
+/** `tcode gateway logs [-n N | --lines N | --lines=N]` as the arguments of `tcode logs gateway`. */
+function gatewayLogsArgs(rest: string[]): string[] {
+  if (rest.length === 0) return [];
+  const raw = rest.length === 2 && (rest[0] === "-n" || rest[0] === "--lines") ? rest[1] : rest.length === 1 && rest[0]!.startsWith("--lines=") ? rest[0]!.slice("--lines=".length) : undefined;
+  const lines = Number(raw);
+  if (raw === undefined || !Number.isInteger(lines) || lines < 1) throw new CliError("usage: tcode logs gateway [-n <lines>]");
+  return ["-n", String(lines)];
+}
+
 /** Subcommands first (unless argv starts with "--", amendment A2), otherwise exactly the old parser. */
 export function parseInvocation(argv: string[]): Invocation {
   if (argv[0] !== "--") {
     const command = matchSubcommand(argv);
     if (command) return { kind: "subcommand", command };
-    if (argv[0] === "web") return { kind: "session", options: parseWeb(argv.slice(1)) };
+    // `tcode web` is retired: the dashboard is the one way to open the web UI.
+    if (argv[0] === "web") return { kind: "lifecycle", name: "dashboard", argv: argv.slice(1), notice: "tcode web is now tcode dashboard." };
+    if (argv[0] === "gateway" && argv[1] === "status" && argv.length === 2) return { kind: "lifecycle", name: "status", argv: [] };
+    if (argv[0] === "gateway" && argv[1] === "logs") return { kind: "lifecycle", name: "logs", argv: ["gateway", ...gatewayLogsArgs(argv.slice(2))] };
     if (isLifecycleName(argv[0])) return { kind: "lifecycle", name: argv[0], argv: argv.slice(1) };
     const gatewayCommand = matchGatewayCommand(argv);
     if (gatewayCommand) return { kind: "gateway-command", command: gatewayCommand };

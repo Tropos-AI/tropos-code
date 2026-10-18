@@ -35,7 +35,6 @@ import {
 } from "./runtime";
 import { closeRuntime } from "./shutdown";
 import { USAGE } from "./usage";
-import { runWeb, type RunWebOptions } from "../web/serve";
 import { runGatewayCommand } from "../gateway/commands";
 import { createLifecycleContext } from "./lifecycle/context";
 import { loadLifecycle } from "./lifecycle";
@@ -58,9 +57,6 @@ export interface MainDeps {
   /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
   execPath?: string;
   engine?: CommandContext["engine"];
-  /** Tests stop `tcode web` themselves and never open a browser. */
-  webUntil?: RunWebOptions["until"];
-  openBrowser?: (url: string) => void;
   /** Tests override terminal detection for the native-session announcement. */
   tty?: { stdin: boolean; stdout: boolean };
   /** Tests replace parts of the lifecycle commands' context (prompts, terminal detection, clock). */
@@ -129,6 +125,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       });
     }
     if (invocation.kind === "lifecycle") {
+      if (invocation.notice) err(`${invocation.notice}\n`);
       const run = await loadLifecycle(invocation.name);
       const lifecycleDeps = { out, err, env: deps.env ?? process.env, cwd: deps.cwd ?? process.cwd(), execPath: deps.execPath ?? process.execPath, scriptPath: process.argv[1] };
       return await run(invocation.argv, createLifecycleContext(lifecycleDeps, deps.lifecycle));
@@ -212,6 +209,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       out,
       err,
       web: gateway.web,
+      dev: gateway.dev,
       workspace: gateway.workspace ? resolveToolPath(gateway.workspace, deps.cwd ?? process.cwd()) : undefined,
       services: deps.gatewayServices,
       until: deps.gatewayUntil,
@@ -258,12 +256,12 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       err('tcode: print mode needs a prompt, e.g. tcode -p "explain this repo"\n');
       return EXIT_USAGE;
     }
-  } else if (!opts.web && !opts.gateway && (!process.stdin.isTTY || deps.readStdin)) {
+  } else if (!opts.gateway && (!process.stdin.isTTY || deps.readStdin)) {
     err("tcode: interactive mode needs a terminal. Use -p for scripts and pipes.\n");
     return EXIT_USAGE;
   }
 
-  if (!opts.print && !opts.web && !opts.gateway && picked.rejected) {
+  if (!opts.print && !opts.gateway && picked.rejected) {
     err(`tcode: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
@@ -368,21 +366,6 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         process.off("SIGINT", onSigint);
         await sessionEnd(hooks, "exit");
       }
-    }
-
-    if (opts.web) {
-      return await runWeb(ctx, {
-        session,
-        history,
-        mode,
-        modes: MODES.filter((m) => m !== "bypass" || opts.dangerouslySkipPermissions),
-        source: resumed ? "resume" : "startup",
-        web: opts.web,
-        out,
-        err,
-        until: deps.webUntil,
-        openBrowser: deps.openBrowser,
-      });
     }
 
     const runtime = await createRuntime(ctx, {

@@ -6,13 +6,13 @@ describe("tcode gateway", () => {
   test("runs the gateway with the web UI by default", () => {
     const inv = parseInvocation(["gateway"]);
     expect(inv.kind).toBe("session");
-    if (inv.kind === "session") expect(inv.options.gateway).toEqual({ web: true });
+    if (inv.kind === "session") expect(inv.options.gateway).toEqual({ web: true, dev: false });
   });
   test("--workspace and --no-web, in either form", () => {
     for (const argv of [["gateway", "--workspace", "/w", "--no-web"], ["gateway", "--no-web", "--workspace=/w"]]) {
       const inv = parseInvocation(argv);
       if (inv.kind !== "session") throw new Error("expected a session");
-      expect(inv.options.gateway).toEqual({ web: false, workspace: "/w" });
+      expect(inv.options.gateway).toEqual({ web: false, dev: false, workspace: "/w" });
     }
   });
   test("takes no prompt and isn't print mode", () => {
@@ -24,22 +24,17 @@ describe("tcode gateway", () => {
     expect(parseInvocation(["gateway", "install"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-install" } });
     expect(parseInvocation(["gateway", "install", "--workspace", "/w"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-install", workspace: "/w" } });
     expect(parseInvocation(["gateway", "uninstall"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-uninstall" } });
-    expect(parseInvocation(["gateway", "status"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-status" } });
     expect(parseInvocation(["gateway", "--help"])).toEqual({ kind: "gateway-command", command: { kind: "help", command: "gateway" } });
     expect(() => parseInvocation(["gateway", "install", "--bogus"])).toThrow(CliError);
   });
 });
 
 describe("tcode gateway service commands", () => {
-  test("start, stop, restart and logs are commands", () => {
+  test("start, stop and restart are commands", () => {
     for (const word of ["start", "stop", "restart"]) {
       expect(parseInvocation(["gateway", word])).toEqual({ kind: "gateway-command", command: { kind: `gateway-${word}` as "gateway-start" } });
       expect(() => parseInvocation(["gateway", word, "--x"])).toThrow(CliError);
     }
-    expect(parseInvocation(["gateway", "logs"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-logs" } });
-    expect(parseInvocation(["gateway", "logs", "-n", "5"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-logs", lines: 5 } });
-    expect(parseInvocation(["gateway", "logs", "--lines=7"])).toEqual({ kind: "gateway-command", command: { kind: "gateway-logs", lines: 7 } });
-    expect(() => parseInvocation(["gateway", "logs", "-n", "x"])).toThrow(/usage/);
   });
 });
 

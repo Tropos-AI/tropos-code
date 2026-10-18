@@ -1,4 +1,4 @@
-// web/vite.config.ts — the browser app for `tcode web`. Its build output (web/dist) is embedded in the tcode binary.
+// web/vite.config.ts — the browser app of the dashboard. Its build output (web/dist) is embedded in the tcode binary.
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    // `bun run dev:web` with `tcode web --dev --port 4318` running: the dev server proxies the API and the socket.
-    proxy: { "/ws": { target: "ws://127.0.0.1:4318", ws: true }, "/auth": "http://127.0.0.1:4318" },
+    // `bun run dev:web` with `tcode gateway --dev` (webPort 4318) running: the dev server proxies the socket.
+    proxy: { "/ws": { target: "ws://127.0.0.1:4318", ws: true } },
   },
 });

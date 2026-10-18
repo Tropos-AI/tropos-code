@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import type { GatewayCommand } from "../cli/args";
 import { gatewayDir, gatewayLogPath, loadGatewayConfig } from "./config";
-import { runGatewayCommand, type GatewayCommandContext } from "./commands";
+import { installService, runGatewayCommand, type GatewayCommandContext } from "./commands";
 import { plistPath } from "./launchd";
 import { unitPath } from "../service/systemd";
 import type { RunResult } from "../service/types";
@@ -111,17 +111,6 @@ describe("gateway install / status / uninstall", () => {
     expect(await Bun.file(plistPath(userHome)).text()).not.toContain("secret");
   });
 
-  test("status reports the service, the process, the projects and the sandbox", async () => {
-    await run({ kind: "gateway-install" });
-    const res = await run({ kind: "gateway-status" });
-    expect(res.code).toBe(0);
-    expect(res.out).toContain("Service (launchd): running (pid 77)");
-    expect(res.out).toContain("Process: not running");
-    expect(res.out).toContain("Projects: default (default)");
-    expect(res.out).toContain("Telegram: no token");
-    expect(res.out).toContain("network none");
-  });
-
   test("start, stop and restart go through the service, and say to install first", async () => {
     expect((await run({ kind: "gateway-restart" })).err).toContain("tcode gateway install");
     await run({ kind: "gateway-install" });
@@ -163,15 +152,26 @@ describe("gateway install / status / uninstall", () => {
   });
 });
 
-describe("gateway logs", () => {
-  test("prints the path and the last lines, or says there is no log", async () => {
-    expect((await run({ kind: "gateway-logs" })).out).toContain("no log yet");
-    await mkdir(gatewayDir(home), { recursive: true });
-    await Bun.write(gatewayLogPath(home), "one\ntwo\nthree\n");
-    const res = await run({ kind: "gateway-logs", lines: 2 });
-    expect(res.out).toContain(gatewayLogPath(home));
-    expect(res.out).toContain("two\nthree\n");
-    expect(res.out).not.toContain("one");
+describe("installService", () => {
+  test("installs the unit for the given home and returns where it went; gateway install goes through it", async () => {
+    const installs: string[][] = [];
+    const service = {
+      manager: "launchd" as const,
+      install: async (spec: { programArguments: string[]; workingDirectory: string }) => (installs.push(spec.programArguments), { unitPath: "/u/x.plist", hint: "h" }),
+      uninstall: async () => ({ removed: false }),
+      start: async () => {},
+      stop: async () => {},
+      restart: async () => {},
+      status: async () => ({ manager: "launchd" as const, installed: false, running: false }),
+    };
+    const res = await installService({ home, env: { TROPOS_HOME: home }, execPath: "/bin/tcode", userHome, service, git: async () => {} });
+    expect(res).toEqual({ unitPath: "/u/x.plist", hint: "h" });
+    expect(installs).toEqual([["/bin/tcode", "gateway"]]);
+    expect((await listProjects(home)).map((p) => p.id)).toEqual(["default"]);
+    // The command prints what installService returned, from the real fake-runner path.
+    const viaCommand = await run({ kind: "gateway-install" }, { service });
+    expect(viaCommand.out).toContain("Gateway installed (/u/x.plist)");
+    expect(installs).toHaveLength(2);
   });
 });
 

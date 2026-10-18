@@ -218,46 +218,10 @@ describe("pickShell", () => {
 });
 
 describe("tcode web", () => {
-  test("serves the session to a browser, opens it, and stops cleanly", async () => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const opened: string[] = [];
-    const model = new FakeModel([() => reply([textBlock("Hello from the web")])]);
-    const code = await main(["web", "--port", "0"], {
-      model,
-      out: (s) => out.push(s),
-      err: (s) => err.push(s),
-      env: { TROPOS_HOME: home, SHELL: "/bin/bash" },
-      cwd: project,
-      readStdin: async () => null,
-      openBrowser: (url) => opened.push(url),
-      webUntil: async (server) => {
-        const token = new URL(server.url).searchParams.get("token")!;
-        const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, {
-          headers: { Cookie: `tcode_session=${token}`, Origin: `http://127.0.0.1:${server.port}` },
-        } as unknown as string[]);
-        const messages: Array<{ t: string; id?: number; ok?: boolean; result?: unknown }> = [];
-        const done = new Promise<void>((resolve) => {
-          ws.onmessage = (e) => {
-            const m = JSON.parse(String(e.data));
-            messages.push(m);
-            if (m.t === "rpc_result" && m.id === 1) resolve();
-          };
-        });
-        await new Promise<void>((resolve) => (ws.onopen = () => resolve()));
-        ws.send(JSON.stringify({ t: "rpc", id: 1, method: "prompt", params: { text: "hi" } }));
-        await done;
-        expect(messages.find((m) => m.t === "rpc_result")).toMatchObject({ ok: true, result: "end_turn" });
-        expect(messages.some((m) => m.t === "hello")).toBe(true);
-        ws.close();
-      },
-    });
-    expect(code).toBe(0);
-    expect(out.join("")).toContain("Tropos Code is running at:");
-    expect(opened).toHaveLength(1);
-    expect(opened[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=/);
-    expect(model.requests).toHaveLength(1);
-    // The turn was saved like any other session.
-    expect((await listSessions(home, project)).length).toBe(1);
+  test("tcode web is a hidden alias of dashboard with a one-line notice", async () => {
+    const r = await cli(["web", "--help"]);
+    expect(r.code).toBe(0);
+    expect(r.err.split("\n")[0]).toBe("tcode web is now tcode dashboard.");
+    expect(r.out).toContain("Usage: tcode dashboard");
   });
 });

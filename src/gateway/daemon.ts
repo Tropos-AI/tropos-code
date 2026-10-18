@@ -69,6 +69,8 @@ export interface GatewayRun {
   err(text: string): void;
   /** Serve the local web UI (default true). */
   web?: boolean;
+  /** `tcode gateway --dev`: the dashboard also accepts the Vite dev server's origin. */
+  dev?: boolean;
   /** `--workspace <dir>`: a one-off project (id `cwd`) that is the default for this run only. Nothing is saved. */
   workspace?: string;
   /** Background services (a scheduler, say), started after the channels and stopped before them. */
@@ -544,7 +546,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           reload,
         },
       });
-      const server = await startWebServer({ host: chatHosts, admin, assets, token: await persistentToken(dir), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT });
+      const server = await startWebServer({ host: chatHosts, admin, assets, token: await persistentToken(dir), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev });
       webStop = () => server.stop();
       webUrl = server.url;
       webPort = server.port;

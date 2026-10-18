@@ -103,14 +103,15 @@ the context window, 6 a hook blocked the prompt or stopped the turn, 130 interru
 `--output-format json`, `cost_usd` is `null` when a model without a known price answered.
 `tcode -p "/review main"` runs a custom command or skill, as typing it in a session would.
 
-`tcode web` opens the same agent in your browser, much like OpenClaw's Control UI and Hermes'
+`tcode dashboard` opens the same agent in your browser, much like OpenClaw's Control UI and Hermes'
 dashboard. It shows chat with live tool calls and diffs, permission prompts, the model picker,
 sessions, and pages for skills, agents, MCP servers, hooks, plugins, memory and provider keys. The
-web app is built into `tcode` and runs on `127.0.0.1` only. The link it prints carries a secret key,
-which becomes an `HttpOnly`, `SameSite=Strict` cookie. Other sites can't reach it: the server checks
-the `Host` and `Origin` headers and sends a strict CSP. Options: `--port <n>` (default 4317, any free
-port if that one is taken), `--no-open`, and the usual session flags (`--model`, `--permission-mode`,
-`-c`, `-r` …).
+web app is built into `tcode`, is served by the background service (`tcode dashboard` starts it, or
+offers to install it, when it isn't running), and listens on `127.0.0.1` only. It keeps one port,
+4317; if another program holds it, Tropos says which one instead of moving, and you can pick another
+with `tcode config set webPort <port> --file gateway`. Other sites can't reach it: the server checks
+the `Host` and `Origin` headers and sends a strict CSP. `--no-open` only prints where it is.
+(`tcode web` still works as another name for `tcode dashboard`.)
 
 In a session:
 - Type `/` to see commands, custom commands and skills, color-coded, as you type. `@` suggests files.
@@ -132,7 +133,7 @@ projects from the web UI (Projects) or with `tcode projects add <path>`; in a ch
 
 ```bash
 tcode gateway install                     # runs at login (launchd on macOS, a systemd user unit on Linux)
-tcode gateway status                      # what's running, and the local web link
+tcode status                              # what's running: service, channels, dashboard, health
 tcode dashboard                           # open the web UI: Telegram token, pairing, projects, schedule, logs …
 tcode pairing approve telegram <code>     # let a person in (also in the web UI under Channels)
 ```
@@ -459,9 +460,16 @@ bun run build:all    # darwin/linux × arm64/x64 binaries
 ```
 
 The web app (`web/`, Vite + React + Tailwind) is built into the binary by `bun run build`. To work on
-it, run `bun run dev -- web --dev --port 4318 --no-open` and `bun run dev:web`, then open
-`http://localhost:5173/auth?token=<the key from the printed link>`. `http://localhost:5173/?demo=1` replays a scripted session without
-a server.
+it, run a development gateway on its own home and port, plus the Vite dev server:
+
+```bash
+mkdir -p /tmp/tropos-dev && echo '{"webPort": 4318}' > /tmp/tropos-dev/gateway.json
+TROPOS_HOME=/tmp/tropos-dev bun run dev -- gateway --dev
+bun run dev:web      # http://localhost:5173 proxies the socket to the gateway
+TROPOS_HOME=/tmp/tropos-dev bun run dev -- dashboard --code   # a code to log in with
+```
+
+`http://localhost:5173/?demo=1` replays a scripted session without a server.
 
 ## License
 
