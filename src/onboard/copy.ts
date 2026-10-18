@@ -56,7 +56,7 @@ export const STEP_WHY: Record<OnboardStepId, string> = {
 export const WELCOME_LINES: readonly string[] = [
   "Welcome to Tropos. I'll set everything up with you, one short step at a time.",
   STEP_WHY.welcome,
-  "Enter accepts what I suggest, s skips a step, b goes back. You can stop any time and run `tcode onboard` again to continue.",
+  "Enter accepts what I suggest · s/Esc skips a step · b/Ctrl+B goes back. You can stop any time and run `tcode onboard` again to continue.",
 ];
 
 export const RISK_NOTICE: readonly string[] = [

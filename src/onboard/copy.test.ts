@@ -28,6 +28,9 @@ test("the Telegram, welcome and notice copy", () => {
   expect(BOTFATHER_URL).toBe("https://t.me/BotFather");
   expect(BOTFATHER_STEPS).toHaveLength(3);
   expect(WELCOME_LINES).toHaveLength(3);
+  // Text fields have no "s"/"b" keys (they are typed text), so the keys the copy names must include Esc and Ctrl+B.
+  expect(WELCOME_LINES[2]).toContain("s/Esc skips");
+  expect(WELCOME_LINES[2]).toContain("b/Ctrl+B goes back");
   expect(RISK_NOTICE[2]).toContain("inside its own sandbox");
   expect(RISK_NOTICE.join(" ")).not.toContain("Docker");
 });
