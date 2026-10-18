@@ -1,7 +1,7 @@
 {
   "name": "tropos-code",
   "version": "0.4.1",
-  "description": "Tropos Code \u2014 an agentic coding CLI by Tropos Labs",
+  "description": "Tropos Code — an agentic coding CLI by Tropos Labs",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -44,6 +44,7 @@
     "clsx": "2.1.1",
     "dompurify": "3.4.17",
     "ink-testing-library": "4.0.0",
+    "jsqr": "1.4.0",
     "motion": "14.2.0",
     "pathe": "2.0.3",
     "react-dom": "19.3.0",
