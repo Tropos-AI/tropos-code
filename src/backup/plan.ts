@@ -33,7 +33,7 @@ const TOP_FILES = ["settings.json", "gateway.json", "models.json", "identity.jso
 const NEVER = new Set(["node_modules", ".cache", "cache", ".DS_Store"]);
 const NEVER_SUFFIX = [".tmp", ".lock", ".partial"];
 
-export const EXCLUDED_ALWAYS = ["index.db*", "snapshots/", "gateway/token", "gateway/gateway.log", "gateway/state.json", "backups/", "settings.json.bak*", "caches (cache/, .cache/, node_modules/)", "*.tmp, *.lock"];
+export const EXCLUDED_ALWAYS = ["index.db*", "snapshots/", "gateway/token", "gateway/devices.json", "gateway/login-codes.json", "gateway/gateway.log", "gateway/state.json", "backups/", "settings.json.bak*", "caches (cache/, .cache/, node_modules/)", "*.tmp, *.lock"];
 
 export function describeSelection(sel: BackupSelection): { includes: string[]; excludes: string[] } {
   const includes = [...TOP_FILES, "gateway/pairing.json", "gateway/cron/", "memories/", "skills/"];

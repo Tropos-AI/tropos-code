@@ -16,7 +16,7 @@ const HELP = `Usage: tcode backup <command>
       Verify, back up the current state, then write the files back. Parts: ${PARTS.join(", ")}.
       A backup that replaces files which can run code or let people in (hooks, MCP servers, skills, plugins, the
       pairing list, scheduled jobs, SOUL.md ...) is listed first and needs a separate confirmation; without a terminal
-      it needs --trust-code as well as --yes. gateway/token is never restored.
+      it needs --trust-code as well as --yes. gateway/token, devices.json and login-codes.json are never restored.
   list                    archives in ~/.tropos/backups
 `;
 

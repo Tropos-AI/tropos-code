@@ -30,6 +30,19 @@ test("loose modes are warned about and chmod fixes them, without being told to a
   expect((await stat(join(fx.home, "gateway"))).mode & 0o777).toBe(0o700);
 });
 
+test("the device and login-code files are secrets too", async () => {
+  fx = await makeFixture();
+  const devices = await fx.write("gateway/devices.json", "{}", 0o644);
+  const codes = await fx.write("gateway/login-codes.json", "{}", 0o644);
+  await chmod(join(fx.home, "gateway"), 0o700);
+  const before = await runOne(fx, permissionsCheck);
+  expect(byId(before, "permissions.secrets.gateway/devices.json")).toMatchObject({ level: "warn", fixable: true, safe: true });
+  expect(byId(before, "permissions.secrets.gateway/login-codes.json")).toMatchObject({ level: "warn" });
+  await runOne(fx, permissionsCheck, { fix: "safe" });
+  expect((await stat(devices)).mode & 0o777).toBe(0o600);
+  expect((await stat(codes)).mode & 0o777).toBe(0o600);
+});
+
 test("a stricter mode than required is accepted", async () => {
   fx = await makeFixture();
   await fx.write("gateway.json", "{}", 0o400);

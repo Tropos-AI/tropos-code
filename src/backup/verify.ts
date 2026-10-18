@@ -37,8 +37,8 @@ export function entryProblem(e: TarEntry): string | undefined {
   return `entry "${e.name}" is a ${e.kind === "hardlink" ? "hard link" : "special file"}, which backups never contain`;
 }
 
-/** Files a backup never restores: the gateway's token is minted per machine, so an archive must not set it. */
-export const NOT_RESTORABLE = new Set(["gateway/token"]);
+/** Files a backup never restores: they grant dashboard access, so an archive must not set them. */
+export const NOT_RESTORABLE = new Set(["gateway/token", "gateway/devices.json", "gateway/login-codes.json"]);
 
 export interface VerifyOptions {
   archive: string;

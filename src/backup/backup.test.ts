@@ -33,6 +33,8 @@ async function populate() {
   await put("gateway/chats.json", "{}");
   await put("gateway/cron/jobs.json", "[]");
   await put("gateway/token", "TOKEN");
+  await put("gateway/devices.json", "{}");
+  await put("gateway/login-codes.json", "{}");
   await put("gateway/gateway.log", "log");
   await put("gateway/state.json", "{}");
   await put("projects/k/s1.jsonl", "line\n");
@@ -68,11 +70,12 @@ describe("createBackup", () => {
     expect(members).toContain("projects/k/s1.jsonl");
     expect(members).toContain("gateway/cron/jobs.json");
     expect(members).toContain("plugins/p/plugin.json");
-    for (const no of ["index.db", "snapshots/x", "gateway/token", "gateway/gateway.log", "gateway/state.json", "backups/old.tar.gz"]) expect(members).not.toContain(no);
+    for (const no of ["index.db", "snapshots/x", "gateway/token", "gateway/devices.json", "gateway/login-codes.json", "gateway/gateway.log", "gateway/state.json", "backups/old.tar.gz"]) expect(members).not.toContain(no);
     const m = await readManifest(r.archive!);
     expect(m?.version).toBe(1);
     expect(m?.files.find((f) => f.path === "credentials.json")?.mode).toBe(0o600);
     expect(m?.excludes).toContain("backups/");
+    expect(m?.excludes).toEqual(expect.arrayContaining(["gateway/devices.json", "gateway/login-codes.json"]));
     expect(await readdir(join(home, "backups"))).not.toContain(".tropos-backup-staging");
   });
 
@@ -357,6 +360,17 @@ describe("restore trust", () => {
     expect(res.restored.map((f) => f.path)).toEqual(["memories/new.md"]);
     expect(await readFile(join(home, "gateway", "token"), "utf8")).toBe("TOKEN");
     expect(await readFile(join(home, "memories", "new.md"), "utf8")).toBe("m");
+  });
+
+  test("logged-in devices and login codes are never restored either: an archive cannot log a browser in", async () => {
+    const archive = await forge("d.tar.gz", { "gateway/devices.json": "ATTACKER", "gateway/login-codes.json": "ATTACKER", "memories/new.md": "m" });
+    const v = await verifyBackup({ archive });
+    expect(v.ok).toBe(false);
+    expect(v.problems.join()).toMatch(/gateway\/devices\.json.*not restorable/);
+    expect(v.problems.join()).toMatch(/gateway\/login-codes\.json.*not restorable/);
+    const res = await restoreBackup({ archive, home, now, safetyBackup: false });
+    expect(res.restored.map((f) => f.path)).toEqual(["memories/new.md"]);
+    expect(await readFile(join(home, "gateway", "devices.json"), "utf8")).toBe("{}");
   });
 
   test.each([

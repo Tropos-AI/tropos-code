@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Check } from "../types";
 import { finding, modeOf, octal } from "../util";
 
-const FILES = ["credentials.json", "gateway.json", join("gateway", "token"), join("gateway", "pairing.json")];
+const FILES = ["credentials.json", "gateway.json", join("gateway", "token"), join("gateway", "pairing.json"), join("gateway", "devices.json"), join("gateway", "login-codes.json")];
 const DIRS = ["", "gateway"];
 
 export const permissionsCheck: Check = {
