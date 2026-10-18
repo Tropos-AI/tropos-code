@@ -10,7 +10,7 @@ withDom();
 const { screen, cleanup, fireEvent, waitFor, within, configure } = await import("@testing-library/react");
 // The full suite runs this beside heavy tests: the default 1 s waitFor is too tight for a form this size under load.
 configure({ asyncUtilTimeout: 5000 });
-const { ConfigPage } = await import("@/app/pages/ConfigPage");
+const { ConfigPanel } = await import("@/app/pages/ConfigPage");
 const { describeField, errorLocation, getAtPath } = await import("@/components/admin/schema-utils");
 
 const SETTINGS_SCHEMA = {
@@ -76,10 +76,10 @@ describe("schema-utils", () => {
   });
 });
 
-describe("ConfigPage form", () => {
+describe("ConfigPanel form", () => {
   test("renders a control for each kind with its description, and no input for read-only fields", async () => {
     stubMatchMedia();
-    await mountAdmin(ConfigPage, setHandler(view()));
+    await mountAdmin(ConfigPanel, setHandler(view()));
     expect(await screen.findByText("The model new sessions start with.")).toBeTruthy();
     expect((screen.getByLabelText("model") as HTMLInputElement).value).toBe("claude-opus");
     const turns = screen.getByLabelText("maxTurns") as HTMLInputElement;
@@ -98,7 +98,7 @@ describe("ConfigPage form", () => {
   test("saves a text field on blur, once, and reports Saved", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     const input = (await screen.findByLabelText("model")) as HTMLInputElement;
     fireEvent.blur(input);
     expect(calls).toEqual([]);
@@ -112,7 +112,7 @@ describe("ConfigPage form", () => {
   test("Enter saves a number as a number", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     const input = (await screen.findByLabelText("maxTurns")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "50" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -122,7 +122,7 @@ describe("ConfigPage form", () => {
   test("a value outside min/max is refused in the browser", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     const input = (await screen.findByLabelText("maxTurns")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "500" } });
     fireEvent.blur(input);
@@ -138,7 +138,7 @@ describe("ConfigPage form", () => {
     handlers["config.set"] = () => {
       throw new Error("model: unknown model 'nope'");
     };
-    await mountAdmin(ConfigPage, handlers);
+    await mountAdmin(ConfigPanel, handlers);
     const input = (await screen.findByLabelText("model")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "nope" } });
     fireEvent.blur(input);
@@ -152,7 +152,7 @@ describe("ConfigPage form", () => {
   test("switches, selects and chip lists save immediately", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     fireEvent.click(await screen.findByRole("switch", { name: "autoCompact" }));
     await waitFor(() => expect(calls.at(-1)).toEqual({ path: "autoCompact", value: false }));
     fireEvent.change(screen.getByLabelText("effort"), { target: { value: "high" } });
@@ -168,7 +168,7 @@ describe("ConfigPage form", () => {
   test("Reset sends null for the field", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     fireEvent.click(await screen.findByRole("button", { name: "Reset model to default" }));
     await waitFor(() => expect(calls).toEqual([{ path: "model", value: null }]));
   });
@@ -176,7 +176,7 @@ describe("ConfigPage form", () => {
   test("key/value rows send only what changed and never the masked value", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     const save = await screen.findByRole("button", { name: "Save env" });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByLabelText("env value 2") as HTMLInputElement).placeholder).toContain("set");
@@ -195,7 +195,7 @@ describe("ConfigPage form", () => {
   test("a row without a name is refused and the rows stay", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     fireEvent.click(await screen.findByRole("button", { name: "Add entry" }));
     fireEvent.change(screen.getByLabelText("env value 3"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "Save env" }));
@@ -207,7 +207,7 @@ describe("ConfigPage form", () => {
   test("the JSON fallback validates before sending", async () => {
     stubMatchMedia();
     const calls: Array<{ path: string; value: unknown }> = [];
-    await mountAdmin(ConfigPage, setHandler(view(), calls));
+    await mountAdmin(ConfigPanel, setHandler(view(), calls));
     const area = (await screen.findByLabelText("hooks")) as HTMLTextAreaElement;
     fireEvent.change(area, { target: { value: "{ nope" } });
     fireEvent.click(screen.getByRole("button", { name: "Save hooks" }));
@@ -223,7 +223,7 @@ describe("ConfigPage form", () => {
     const calls: Array<{ path: string; value: unknown }> = [];
     const schema = { type: "object", properties: { telegram: { type: "object", properties: { botToken: { type: "string", description: "Bot token." } } } } };
     const current = { file: "gateway" as const, path: "/g.json", schema, value: { telegram: { botToken: "••••" } } };
-    await mountAdmin(ConfigPage, { ...setHandler(current, calls), "config.get": () => current });
+    await mountAdmin(ConfigPanel, { ...setHandler(current, calls), "config.get": () => current });
     fireEvent.click(await screen.findByRole("tab", { name: "Gateway" }));
     await screen.findByLabelText("botToken");
     const input = screen.getByLabelText("botToken") as HTMLInputElement;
@@ -240,7 +240,7 @@ describe("ConfigPage form", () => {
   test("an unavailable server shows a calm error with Retry", async () => {
     stubMatchMedia();
     let fail = true;
-    await mountAdmin(ConfigPage, { "config.get": () => { if (fail) throw new Error("Not available in the demo."); return view(); } });
+    await mountAdmin(ConfigPanel, { "config.get": () => { if (fail) throw new Error("Not available in the demo."); return view(); } });
     await screen.findByText("Not available in the demo.");
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -248,12 +248,12 @@ describe("ConfigPage form", () => {
   });
 });
 
-describe("ConfigPage raw mode", () => {
+describe("ConfigPanel raw mode", () => {
   const RAW = '{\n  "model": "claude-opus"\n}\n';
 
   async function openRaw(extra: AdminHandlers = {}) {
     stubMatchMedia();
-    const mounted = await mountAdmin(ConfigPage, { ...setHandler(view()), "config.raw": () => ({ text: RAW, path: "/home/me/.tropos/settings.json" }), ...extra });
+    const mounted = await mountAdmin(ConfigPanel, { ...setHandler(view()), "config.raw": () => ({ text: RAW, path: "/home/me/.tropos/settings.json" }), ...extra });
     fireEvent.click(await screen.findByRole("radio", { name: "Raw JSON" }));
     const area = (await screen.findByLabelText("settings.json")) as HTMLTextAreaElement;
     return { ...mounted, area };

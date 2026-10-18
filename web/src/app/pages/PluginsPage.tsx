@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import type { PanelData, PanelItem } from "@core/ui/runtime";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { PageActions } from "@/components/pages/page-actions";
 import { PanelEmpty, withInlineCode } from "@/components/pages/panel-empty";
 import { DetailField, DetailList, DisclosureRow, looksLikePath, PathLine, SectionCard } from "@/components/pages/panel-parts";
@@ -107,18 +107,17 @@ function PluginsList({ data }: { data: PanelData }) {
   );
 }
 
-export function PluginsPage() {
+export function PluginsPanel() {
   const resource = usePanel("plugins");
   return (
-    <PageFrame
-      title="Plugins"
-      eyebrow="Extensions"
-      description="Folders that bundle skills, agents, commands and hooks. Everything a plugin adds shows up on the other pages too."
-      actions={<PageActions resource={resource} summary={resource.data?.subtitle} noun="plugins" />}
-    >
+    <PanelStack>
+      <PanelHead
+        description="Folders that bundle skills, agents, commands and hooks. Everything a plugin adds shows up on the other pages too."
+        actions={<PageActions resource={resource} summary={resource.data?.subtitle} noun="plugins" />}
+      />
       <ResourceView resource={resource} noun="plugins">
         {(data) => <PluginsList data={data} />}
       </ResourceView>
-    </PageFrame>
+    </PanelStack>
   );
 }

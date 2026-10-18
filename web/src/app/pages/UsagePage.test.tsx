@@ -8,7 +8,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, within } = await import("@testing-library/react");
-const { UsagePage } = await import("@/app/pages/UsagePage");
+const { UsagePanel } = await import("@/app/pages/UsagePage");
 const { chartSummary } = await import("@/components/admin/usage-chart");
 
 function summary(days: number, over: Partial<UsageSummary> = {}): UsageSummary {
@@ -38,10 +38,10 @@ describe("chartSummary", () => {
   });
 });
 
-describe("UsagePage", () => {
+describe("UsagePanel", () => {
   test("shows the headline numbers, an accessible chart, the models and the top sessions", async () => {
     stubMatchMedia();
-    const { socket } = await mountAdmin(UsagePage, { "usage.summary": (p) => summary((p as { days: number }).days) });
+    const { socket } = await mountAdmin(UsagePanel, { "usage.summary": (p) => summary((p as { days: number }).days) });
     await screen.findByText("$14.50");
     expect(socket.callsOf("usage.summary")[0]!.params).toEqual({ days: 30 });
     const totals = screen.getByRole("list", { hidden: true, name: "Usage by model" });
@@ -62,14 +62,14 @@ describe("UsagePage", () => {
 
   test("an unknown total cost is a dash with the reason", async () => {
     stubMatchMedia();
-    await mountAdmin(UsagePage, { "usage.summary": (p) => summary((p as { days: number }).days, { totals: { sessions: 1, turns: 2, inputTokens: 10, outputTokens: 5 } }) });
+    await mountAdmin(UsagePanel, { "usage.summary": (p) => summary((p as { days: number }).days, { totals: { sessions: 1, turns: 2, inputTokens: 10, outputTokens: 5 } }) });
     await screen.findByText(/a model without a known price took part/i);
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
   test("the range switch asks for 7 and 90 days", async () => {
     stubMatchMedia();
-    const { socket } = await mountAdmin(UsagePage, { "usage.summary": (p) => summary((p as { days: number }).days) });
+    const { socket } = await mountAdmin(UsagePanel, { "usage.summary": (p) => summary((p as { days: number }).days) });
     await screen.findByText("$14.50");
     fireEvent.click(screen.getByRole("radio", { name: "7 days" }));
     await screen.findByText("over 7 days");
@@ -80,7 +80,7 @@ describe("UsagePage", () => {
 
   test("an empty range is a calm empty state", async () => {
     stubMatchMedia();
-    await mountAdmin(UsagePage, { "usage.summary": () => summary(30, { totals: { sessions: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }, byDay: [], byModel: [], topSessions: [] }) });
+    await mountAdmin(UsagePanel, { "usage.summary": () => summary(30, { totals: { sessions: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 }, byDay: [], byModel: [], topSessions: [] }) });
     await screen.findByText("No usage in this range");
     expect(screen.queryByRole("img")).toBeNull();
   });
@@ -88,7 +88,7 @@ describe("UsagePage", () => {
   test("an error shows Retry", async () => {
     stubMatchMedia();
     let fail = true;
-    await mountAdmin(UsagePage, { "usage.summary": (p) => { if (fail) throw new Error("Not available in the demo."); return summary((p as { days: number }).days); } });
+    await mountAdmin(UsagePanel, { "usage.summary": (p) => { if (fail) throw new Error("Not available in the demo."); return summary((p as { days: number }).days); } });
     await screen.findByText("Not available in the demo.");
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));

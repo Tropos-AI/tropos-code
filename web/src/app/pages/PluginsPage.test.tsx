@@ -8,7 +8,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor } = await import("@testing-library/react");
-const { PluginsPage } = await import("@/app/pages/PluginsPage");
+const { PluginsPanel } = await import("@/app/pages/PluginsPage");
 
 const PLUGINS: PanelData = {
   title: "Plugins",
@@ -27,9 +27,9 @@ const PLUGINS: PanelData = {
 beforeEach(() => stubMatchMedia());
 afterEach(() => cleanup());
 
-describe("PluginsPage", () => {
+describe("PluginsPanel", () => {
   test("shows enabled and disabled badges with versions", async () => {
-    await mountPage(PluginsPage, { panel: () => PLUGINS });
+    await mountPage(PluginsPanel, { panel: () => PLUGINS });
     const on = (await screen.findByRole("button", { name: /tropos-essentials/ })).closest("li")!;
     const off = screen.getByRole("button", { name: /old-theme/ }).closest("li")!;
     expect(on.textContent).toContain("enabled");
@@ -38,7 +38,7 @@ describe("PluginsPage", () => {
   });
 
   test("expanding a plugin shows its root folder", async () => {
-    await mountPage(PluginsPage, { panel: () => PLUGINS });
+    await mountPage(PluginsPanel, { panel: () => PLUGINS });
     const row = await screen.findByRole("button", { name: /old-theme/, expanded: false });
     fireEvent.click(row);
     const detail = document.getElementById(row.getAttribute("aria-controls")!)!;
@@ -47,13 +47,13 @@ describe("PluginsPage", () => {
   });
 
   test("empty: says where plugins go", async () => {
-    await mountPage(PluginsPage, { panel: () => ({ ...PLUGINS, sections: [] }) });
+    await mountPage(PluginsPanel, { panel: () => ({ ...PLUGINS, sections: [] }) });
     expect(await screen.findByText("No plugins")).toBeTruthy();
     expect(screen.getByText("~/.tropos/plugins/").tagName).toBe("CODE");
   });
 
   test("each plugin has a switch that calls plugins.setEnabled", async () => {
-    const { socket } = await mountAdminPage(PluginsPage, { "plugins.setEnabled": (p: { name: string; enabled: boolean }) => p }, { panel: () => PLUGINS });
+    const { socket } = await mountAdminPage(PluginsPanel, { "plugins.setEnabled": (p: { name: string; enabled: boolean }) => p }, { panel: () => PLUGINS });
     const off = await screen.findByRole("switch", { name: "Enable old-theme" });
     expect(off.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByRole("switch", { name: "Disable tropos-essentials" }).getAttribute("aria-checked")).toBe("true");
@@ -65,7 +65,7 @@ describe("PluginsPage", () => {
   });
 
   test("when the admin call fails the panel keeps working and the reason shows in the details", async () => {
-    await mountAdminPage(PluginsPage, { "plugins.setEnabled": () => Promise.reject(new Error("Not available in the demo.")) }, { panel: () => PLUGINS });
+    await mountAdminPage(PluginsPanel, { "plugins.setEnabled": () => Promise.reject(new Error("Not available in the demo.")) }, { panel: () => PLUGINS });
     fireEvent.click(await screen.findByRole("switch", { name: "Enable old-theme" }));
     await waitFor(() => expect(document.querySelector('[role="switch"][aria-label="Enable old-theme"]')).not.toBeNull());
     const row = screen.getByRole("button", { name: /old-theme/ });

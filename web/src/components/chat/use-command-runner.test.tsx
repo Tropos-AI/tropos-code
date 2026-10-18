@@ -182,6 +182,10 @@ describe("useCommandRunner", () => {
     expect(window.location.hash).toBe("#/settings");
     await type("/skills");
     expect(window.location.hash).toBe("#/skills");
+    await type("/mcp");
+    expect(window.location.hash).toBe("#/extensions/mcp");
+    await type("/hooks");
+    expect(window.location.hash).toBe("#/extensions/hooks");
   });
 
   test("/learned opens the Memory page, where learned changes live", async () => {

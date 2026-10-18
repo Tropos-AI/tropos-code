@@ -5,10 +5,15 @@ import { useMemo, useState, type ReactNode } from "react";
 import type { DoctorFinding, DoctorReport, FindingLevel, StatusSnapshot } from "@core/web/admin/api";
 
 import { PageFrame } from "@/app/layout/PageFrame";
-import { hrefFor, type PageId } from "@/app/routes";
+import { LogsPanel } from "@/app/pages/LogsPage";
+import { UsagePanel } from "@/app/pages/UsagePage";
+import { hrefFor, STATUS_TABS } from "@/app/routes";
+import { useHashTab } from "@/app/use-hash-tab";
 import { AdminCard, ResultNote, useSectionActions } from "@/components/admin/admin-parts";
 import { useAdminResource } from "@/components/admin/use-admin-resource";
+import { Tabs, type TabItem } from "@/components/interior/tabs";
 import { PageActions } from "@/components/pages/page-actions";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { ResourceView } from "@/components/pages/resource-view";
 import type { Resource } from "@/components/pages/use-rpc-resource";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
@@ -61,7 +66,8 @@ type TileProps = {
   value: ReactNode;
   sub?: ReactNode;
   tone?: BadgeTone;
-  href?: PageId;
+  /** A route below "#/", for example "settings/service". */
+  href?: string;
   linkLabel?: string;
   wide?: boolean;
 };
@@ -72,7 +78,7 @@ function Tile({ label, value, sub, tone, href, linkLabel, wide }: TileProps) {
       <dt className="type-meta flex items-center gap-2 text-ink-3">
         {tone ? <span aria-hidden className={cn("size-1.5 rounded-full", tone === "ok" && "bg-ok", tone === "warn" && "bg-warn", tone === "error" && "bg-error", tone === "off" && "bg-ink-4", tone === "neutral" && "bg-ink-3")} /> : null}
         {href ? (
-          <a href={hrefFor(href)} aria-label={linkLabel ?? `Open ${label}`} className="rounded-[4px] outline-none after:absolute after:inset-0 after:rounded-[14px] after:content-[''] focus-visible:after:shadow-focus">
+          <a href={`#/${href}`} aria-label={linkLabel ?? `Open ${label}`} className="rounded-[4px] outline-none after:absolute after:inset-0 after:rounded-[14px] after:content-[''] focus-visible:after:shadow-focus">
             {label}
           </a>
         ) : (
@@ -104,7 +110,7 @@ function Overview({ status }: { status: StatusSnapshot }) {
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="neutral">{status.channel} channel</Badge>
           {status.updateAvailable ? (
-            <a href={hrefFor("system")} className="rounded-full outline-none focus-visible:shadow-focus">
+            <a href={`#/settings/service`} className="rounded-full outline-none focus-visible:shadow-focus">
               <Badge tone="accent">Update available: v{status.updateAvailable.replace(/^v/, "")}</Badge>
             </a>
           ) : (
@@ -112,10 +118,10 @@ function Overview({ status }: { status: StatusSnapshot }) {
           )}
         </div>
         <a
-          href={hrefFor("system")}
+          href="#/settings/service"
           className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-[8px] px-2 text-[13px] font-medium text-accent-ink outline-none transition-colors duration-150 hover:bg-accent-wash focus-visible:shadow-focus"
         >
-          System &amp; updates
+          Service &amp; updates
           <Icon name="arrow-right" size="sm" />
         </a>
       </Card>
@@ -123,7 +129,7 @@ function Overview({ status }: { status: StatusSnapshot }) {
         <Tile
           wide
           label="Service"
-          href="system"
+          href="settings/service"
           tone={serviceTone}
           value={serviceValue}
           sub={service.manager === "none" ? "No service manager on this system." : `${service.manager}${service.pid ? ` · pid ${service.pid}` : ""}${service.installed ? " · starts at login" : ""}`}
@@ -136,21 +142,21 @@ function Overview({ status }: { status: StatusSnapshot }) {
           sub={
             status.gateway.running
               ? `${status.gateway.pid ? `pid ${status.gateway.pid} · ` : ""}since ${formatDateTime(status.gateway.startedAt)}${status.gateway.webPort ? ` · web on port ${status.gateway.webPort}` : ""}`
-              : "Start it from System, or run tcode gateway."
+              : "Start it from Settings, or run tcode gateway."
           }
         />
-        <Tile label="Telegram" href="channels" tone={status.gateway.telegram ? "ok" : "off"} value={status.gateway.telegram ? "Connected" : "Off"} sub={status.gateway.telegram ? "The bot is polling." : "No bot configured."} />
-        <Tile label="Docker" href="system" tone={status.docker.ok ? "ok" : "warn"} value={status.docker.ok ? "Ready" : "Problem"} sub={status.docker.ok ? "Sandbox can run." : (status.docker.problem ?? "Docker is not reachable.")} />
+        <Tile label="Telegram" href="settings/channels" tone={status.gateway.telegram ? "ok" : "off"} value={status.gateway.telegram ? "Connected" : "Off"} sub={status.gateway.telegram ? "The bot is polling." : "No bot configured."} />
+        <Tile label="Docker" href="settings/advanced" tone={status.docker.ok ? "ok" : "warn"} value={status.docker.ok ? "Ready" : "Problem"} sub={status.docker.ok ? "Sandbox can run." : (status.docker.problem ?? "Docker is not reachable.")} />
         <Tile label="Projects" href="projects" value={status.projects.count} sub={`default: ${status.projects.defaultId}`} />
         <Tile
           label="Providers"
-          href="settings"
+          href="settings/models"
           linkLabel="Open provider settings"
           tone={connected.length > 0 ? "ok" : "warn"}
           value={`${connected.length} of ${status.providers.length}`}
           sub={connected.length > 0 ? connected.map((p) => p.name).join(", ") : "No provider connected."}
         />
-        <Tile wide label="Paired senders" href="channels" value={status.pairedSenders} sub={status.pairedSenders === 0 ? "Nobody can message the bot yet." : `${plural(status.pairedSenders, "person", "people")} can talk to it.`} />
+        <Tile wide label="Paired senders" href="settings/channels" value={status.pairedSenders} sub={status.pairedSenders === 0 ? "Nobody can message the bot yet." : `${plural(status.pairedSenders, "person", "people")} can talk to it.`} />
         <Tile wide label="Cron jobs" href="cron" value={status.cronJobs} sub={status.cronJobs === 0 ? "Nothing scheduled." : `${plural(status.cronJobs, "scheduled job")}.`} />
       </dl>
     </div>
@@ -278,7 +284,7 @@ function Health({ initial, onChanged }: { initial: DoctorReport; onChanged: () =
   );
 }
 
-export function StatusPage() {
+export function HealthPanel() {
   const status = useAdminResource("status.get");
   const doctor = useAdminResource("doctor.run");
   const refreshAll = () => {
@@ -293,12 +299,8 @@ export function StatusPage() {
     refresh: refreshAll,
   };
   return (
-    <PageFrame
-      title="Status & health"
-      eyebrow="Control"
-      description="What is installed and running, and whether anything needs attention."
-      actions={<PageActions resource={combined} noun="status" />}
-    >
+    <PanelStack>
+      <PanelHead description="What is installed and running, and whether anything needs attention." actions={<PageActions resource={combined} noun="status" />} />
       <ResourceView resource={status} noun="status">
         {(snapshot) => (
           <>
@@ -310,6 +312,28 @@ export function StatusPage() {
       <ResourceView resource={doctor} noun="health checks">
         {(report) => <Health initial={report} onChanged={status.refresh} />}
       </ResourceView>
+    </PanelStack>
+  );
+}
+
+const STATUS_ITEMS: TabItem[] = [
+  { value: "health", label: "Health" },
+  { value: "logs", label: "Logs" },
+  { value: "usage", label: "Usage" },
+];
+
+export function StatusPage() {
+  const [tab, setTab] = useHashTab("status", STATUS_TABS, "health");
+  return (
+    <PageFrame title="Status" eyebrow="Control" description="What is running, what it says, and what it costs.">
+      <Tabs
+        items={STATUS_ITEMS}
+        value={tab}
+        onValueChange={(next) => setTab(next as (typeof STATUS_TABS)[number])}
+        label="Status sections"
+        panelClassName="p-4 sm:p-6"
+        renderPanel={(value) => (value === "logs" ? <LogsPanel /> : value === "usage" ? <UsagePanel /> : <HealthPanel />)}
+      />
     </PageFrame>
   );
 }

@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { PageId } from "@/app/routes";
 import { mountPage, stubMatchMedia, TEST_STATE, type RpcHandlers } from "@/components/pages/page-test-kit";
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
 const { render, screen, cleanup, fireEvent, act } = await import("@testing-library/react");
 const { createElement } = await import("react");
 const { Brand, SidebarContent } = await import("@/app/layout/Sidebar");
+const { within, waitFor } = await import("@testing-library/react");
 
 beforeEach(() => stubMatchMedia());
 afterEach(() => cleanup());
@@ -127,5 +129,29 @@ describe("SidebarContent", () => {
     expect(navigated).toEqual([]);
     expect(store.getState().toasts.at(-1)).toMatchObject({ tone: "error", title: "Could not start a new session" });
     expect(store.getState().toasts.at(-1)?.description).toContain("disk full");
+  });
+
+  test("nine entries in three groups", async () => {
+    await mount();
+    const nav = screen.getByRole("navigation", { name: "Pages" });
+    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Projects", "Schedule", "Skills", "Agents", "Memory", "Extensions", "Status", "Settings"]);
+    expect(within(nav).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Work", "Agent", "Control"]);
+  });
+
+  test("Setup shows only while setup is unfinished", async () => {
+    function Sidebar() {
+      return createElement(SidebarContent, { page: "chat", navigate: () => {}, idPrefix: "t" });
+    }
+    await mountAdminPage(Sidebar, { "status.get": () => ({ needsOnboarding: true }) }, { sessions: () => [] });
+    const nav = screen.getByRole("navigation", { name: "Pages" });
+    await waitFor(() => expect(within(nav).getByRole("link", { name: "Setup" })).toBeTruthy());
+    const control = within(nav).getByRole("region", { name: "Control" });
+    expect(within(control).getAllByRole("link").map((a) => a.textContent)).toEqual(["Setup", "Status", "Settings"]);
+    cleanup();
+    await mountAdminPage(Sidebar, { "status.get": () => ({ needsOnboarding: false }) }, { sessions: () => [] });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(within(screen.getByRole("navigation", { name: "Pages" })).queryByRole("link", { name: "Setup" })).toBeNull();
   });
 });

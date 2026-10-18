@@ -1,5 +1,5 @@
 // web/src/app/routes.ts — the app's pages and a tiny hash router (#/chat, #/skills …). No router library.
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import type { IconName } from "@/components/ui/icon";
 
@@ -12,19 +12,18 @@ export const PAGES = [
   { id: "cron", label: "Schedule", title: "Schedule", icon: "calendar-clock", group: "Work" },
   { id: "skills", label: "Skills", title: "Skills", icon: "layers", group: "Agent" },
   { id: "agents", label: "Agents", title: "Agents", icon: "bot", group: "Agent" },
-  { id: "mcp", label: "MCP", title: "MCP servers", icon: "network", group: "Agent" },
-  { id: "hooks", label: "Hooks", title: "Hooks", icon: "workflow", group: "Agent" },
-  { id: "plugins", label: "Plugins", title: "Plugins", icon: "package", group: "Agent" },
   { id: "memory", label: "Memory", title: "Memory", icon: "brain", group: "Agent" },
-  { id: "setup", label: "Setup", title: "Setup", icon: "rocket", group: "Control" },
+  { id: "extensions", label: "Extensions", title: "Extensions", icon: "package", group: "Agent" },
   { id: "status", label: "Status", title: "Status & health", icon: "activity", group: "Control" },
-  { id: "channels", label: "Channels", title: "Channels & access", icon: "send", group: "Control" },
-  { id: "usage", label: "Usage", title: "Usage", icon: "bar-chart-3", group: "Control" },
-  { id: "logs", label: "Logs", title: "Logs", icon: "terminal", group: "Control" },
-  { id: "system", label: "System", title: "System", icon: "settings-2", group: "Control" },
-  { id: "config", label: "Config", title: "Configuration", icon: "sliders-horizontal", group: "Control" },
   { id: "settings", label: "Settings", title: "Settings", icon: "settings", group: "Control" },
-] as const satisfies ReadonlyArray<{ id: string; label: string; title: string; icon: IconName; group: NavGroup }>;
+  // Reached from the first-run card (and listed in the sidebar only while setup is unfinished).
+  { id: "setup", label: "Setup", title: "Setup", icon: "rocket", group: "Control", nav: false },
+] as const satisfies ReadonlyArray<{ id: string; label: string; title: string; icon: IconName; group: NavGroup; nav?: boolean }>;
+
+/** Tab ids per tabbed page, in display order. Sibling plans add to these (P7: "suggestions"). */
+export const SETTINGS_TABS = ["models", "autonomy", "channels", "phone", "service", "backups", "advanced"] as const;
+export const STATUS_TABS = ["health", "logs", "usage"] as const;
+export const EXTENSIONS_TABS = ["mcp", "hooks", "plugins"] as const;
 
 export type PageId = (typeof PAGES)[number]["id"];
 export type PageInfo = (typeof PAGES)[number];
@@ -45,20 +44,68 @@ export function pageInfo(page: PageId): PageInfo {
   return PAGES.find((p) => p.id === page) ?? PAGES[0];
 }
 
+/** Old addresses (the 17-page layout) → their place in the nine-page layout; null when the hash is current. */
+export function redirectHash(hash: string): string | null {
+  const [path = ""] = hash.replace(/^#\/?/, "").split("?");
+  const [page = "", sub = ""] = path.split("/");
+  switch (page) {
+    case "mcp":
+    case "hooks":
+    case "plugins":
+      return `#/extensions/${page}`;
+    case "logs":
+    case "usage":
+      return `#/status/${page}`;
+    case "channels":
+      return "#/settings/channels";
+    case "system":
+      return "#/settings/service";
+    case "config":
+      return "#/settings/advanced";
+    case "settings":
+      if (sub === "providers" || sub === "model") return "#/settings/models";
+      if (sub === "about") return "#/settings/service";
+      return null;
+    default:
+      return null;
+  }
+}
+
+/** The hash as the app should read it: a legacy address is already translated. */
+export function currentHash(): string {
+  const hash = window.location.hash;
+  return redirectHash(hash) ?? hash;
+}
+
 function subscribe(onChange: () => void): () => void {
-  window.addEventListener("hashchange", onChange);
-  return () => window.removeEventListener("hashchange", onChange);
+  const onHash = () => {
+    const target = redirectHash(window.location.hash);
+    // replaceState: the old address must not stay in the back button, and it doesn't fire hashchange.
+    if (target) window.history.replaceState(null, "", target);
+    onChange();
+  };
+  window.addEventListener("hashchange", onHash);
+  return () => window.removeEventListener("hashchange", onHash);
 }
 
 /** The current page (from the URL hash) and a navigate function. Links can also just use href={hrefFor(id)}. */
 export function useRoute(): [PageId, (page: PageId) => void] {
+  useEffect(() => {
+    const target = redirectHash(window.location.hash);
+    if (target) window.history.replaceState(null, "", target);
+  }, []);
   const page = useSyncExternalStore(
     subscribe,
-    () => pageFromHash(window.location.hash),
+    () => pageFromHash(currentHash()),
     () => DEFAULT_PAGE,
   );
   const navigate = useCallback((next: PageId) => {
-    if (pageFromHash(window.location.hash) !== next || !window.location.hash) window.location.hash = hrefFor(next);
+    if (pageFromHash(currentHash()) !== next || !window.location.hash) window.location.hash = hrefFor(next);
   }, []);
   return [page, navigate];
+}
+
+/** True for pages the sidebar always lists. */
+export function isNavPage(page: PageInfo): boolean {
+  return (page as { nav?: boolean }).nav !== false;
 }

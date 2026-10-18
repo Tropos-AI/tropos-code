@@ -6,7 +6,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor, within, act } = await import("@testing-library/react");
-const { LogsPage } = await import("@/app/pages/LogsPage");
+const { LogsPanel } = await import("@/app/pages/LogsPage");
 
 const TAIL = { path: "/home/me/.tropos/gateway/gateway.log", exists: true, lines: ["started gateway", "WARN slow reply", "ERROR telegram: 409 conflict", "idle"], offset: 100 };
 
@@ -21,10 +21,10 @@ function logHandlers(over: AdminHandlers = {}): AdminHandlers {
   return { "logs.tail": () => TAIL, "logs.since": () => ({ chunk: "", offset: 100, truncated: false }), ...over };
 }
 
-describe("LogsPage", () => {
+describe("LogsPanel", () => {
   test("shows the tail with errors and warnings marked", async () => {
     stubMatchMedia();
-    const { socket } = await mountAdmin(LogsPage, logHandlers());
+    const { socket } = await mountAdmin(LogsPanel, logHandlers());
     const log = await screen.findByRole("log", { name: "gateway log" });
     expect(within(log).getByText("started gateway")).toBeTruthy();
     const levels = Array.from(log.children).map((el) => el.getAttribute("data-level"));
@@ -35,7 +35,7 @@ describe("LogsPage", () => {
 
   test("a missing file is a calm empty state", async () => {
     stubMatchMedia();
-    await mountAdmin(LogsPage, logHandlers({ "logs.tail": () => ({ path: "/x/update.log", exists: false, lines: [], offset: 0 }) }));
+    await mountAdmin(LogsPanel, logHandlers({ "logs.tail": () => ({ path: "/x/update.log", exists: false, lines: [], offset: 0 }) }));
     await screen.findByText("No log yet");
     expect(screen.queryByRole("log")).toBeNull();
   });
@@ -43,7 +43,7 @@ describe("LogsPage", () => {
   test("a failing load shows Retry", async () => {
     stubMatchMedia();
     let fail = true;
-    await mountAdmin(LogsPage, logHandlers({ "logs.tail": () => { if (fail) throw new Error("Not available in the demo."); return TAIL; } }));
+    await mountAdmin(LogsPanel, logHandlers({ "logs.tail": () => { if (fail) throw new Error("Not available in the demo."); return TAIL; } }));
     await screen.findByText("Not available in the demo.");
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -52,7 +52,7 @@ describe("LogsPage", () => {
 
   test("switching the file loads that tail", async () => {
     stubMatchMedia();
-    const { socket } = await mountAdmin(LogsPage, logHandlers({ "logs.tail": (p) => ({ ...TAIL, lines: [`from ${(p as { name: string }).name}`] }) }));
+    const { socket } = await mountAdmin(LogsPanel, logHandlers({ "logs.tail": (p) => ({ ...TAIL, lines: [`from ${(p as { name: string }).name}`] }) }));
     await screen.findByText("from gateway");
     fireEvent.click(screen.getByRole("radio", { name: "Update" }));
     await screen.findByText("from update");
@@ -61,7 +61,7 @@ describe("LogsPage", () => {
 
   test("the filter narrows the lines", async () => {
     stubMatchMedia();
-    await mountAdmin(LogsPage, logHandlers());
+    await mountAdmin(LogsPanel, logHandlers());
     await screen.findByRole("log");
     fireEvent.change(screen.getByLabelText("Filter lines"), { target: { value: "telegram" } });
     const log = screen.getByRole("log");
@@ -85,7 +85,7 @@ describe("LogsPage", () => {
       clicks.push(this.download);
     };
     try {
-      await mountAdmin(LogsPage, logHandlers());
+      await mountAdmin(LogsPanel, logHandlers());
       await screen.findByRole("log");
       fireEvent.change(screen.getByLabelText("Filter lines"), { target: { value: "error" } });
       fireEvent.click(screen.getByRole("button", { name: "Copy" }));
@@ -99,7 +99,7 @@ describe("LogsPage", () => {
   });
 });
 
-describe("LogsPage live mode", () => {
+describe("LogsPanel live mode", () => {
   test("polls logs.since every 2 s with the returned offset and appends whole lines", async () => {
     stubMatchMedia();
     jest.useFakeTimers();
@@ -107,7 +107,7 @@ describe("LogsPage live mode", () => {
       { chunk: "second\nthird par", offset: 120, truncated: false },
       { chunk: "tial\n", offset: 125, truncated: false },
     ];
-    const { socket } = await mountAdmin(LogsPage, logHandlers({ "logs.since": () => chunks.shift() ?? { chunk: "", offset: 125, truncated: false } }));
+    const { socket } = await mountAdmin(LogsPanel, logHandlers({ "logs.since": () => chunks.shift() ?? { chunk: "", offset: 125, truncated: false } }));
     await screen.findByRole("log");
     expect(socket.callsOf("logs.since").length).toBe(0);
     await tick(2000);
@@ -122,7 +122,7 @@ describe("LogsPage live mode", () => {
   test("pause stops polling and resume continues from the same offset", async () => {
     stubMatchMedia();
     jest.useFakeTimers();
-    const { socket } = await mountAdmin(LogsPage, logHandlers());
+    const { socket } = await mountAdmin(LogsPanel, logHandlers());
     await screen.findByRole("log");
     await tick(2000);
     await waitFor(() => expect(socket.callsOf("logs.since").length).toBe(1));
@@ -139,7 +139,7 @@ describe("LogsPage live mode", () => {
   test("leaves no timer behind on unmount", async () => {
     stubMatchMedia();
     jest.useFakeTimers();
-    const { socket } = await mountAdmin(LogsPage, logHandlers());
+    const { socket } = await mountAdmin(LogsPanel, logHandlers());
     await screen.findByRole("log");
     await tick(2000);
     await waitFor(() => expect(socket.callsOf("logs.since").length).toBe(1));
@@ -152,7 +152,7 @@ describe("LogsPage live mode", () => {
     stubMatchMedia();
     jest.useFakeTimers();
     let n = 0;
-    await mountAdmin(LogsPage, logHandlers({ "logs.since": () => ({ chunk: `line ${++n}\n`, offset: 100 + n, truncated: false }) }));
+    await mountAdmin(LogsPanel, logHandlers({ "logs.since": () => ({ chunk: `line ${++n}\n`, offset: 100 + n, truncated: false }) }));
     const log = await screen.findByRole("log");
     // happy-dom has no layout: give the scroller one.
     let scrollTop = 500;
@@ -176,7 +176,7 @@ describe("LogsPage live mode", () => {
     jest.useFakeTimers();
     let first = true;
     const { socket } = await mountAdmin(
-      LogsPage,
+      LogsPanel,
       logHandlers({ "logs.since": () => (first ? ((first = false), { chunk: "", offset: 0, truncated: true }) : { chunk: "", offset: 0, truncated: false }) }),
     );
     await screen.findByRole("log");

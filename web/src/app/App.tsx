@@ -8,20 +8,13 @@ import { SidebarContent } from "@/app/layout/Sidebar";
 import { Toasts } from "@/app/layout/Toasts";
 import { TopBar } from "@/app/layout/TopBar";
 import { AgentsPage } from "@/app/pages/AgentsPage";
-import { ChannelsPage } from "@/app/pages/ChannelsPage";
-import { ConfigPage } from "@/app/pages/ConfigPage";
 import { CronPage } from "@/app/pages/CronPage";
-import { LogsPage } from "@/app/pages/LogsPage";
+import { ExtensionsPage } from "@/app/pages/ExtensionsPage";
 import { ProjectsPage } from "@/app/pages/ProjectsPage";
 import { SetupPage } from "@/app/pages/SetupPage";
 import { StatusPage } from "@/app/pages/StatusPage";
-import { SystemPage } from "@/app/pages/SystemPage";
-import { UsagePage } from "@/app/pages/UsagePage";
 import { ChatPage } from "@/app/pages/ChatPage";
-import { HooksPage } from "@/app/pages/HooksPage";
-import { McpPage } from "@/app/pages/McpPage";
 import { MemoryPage } from "@/app/pages/MemoryPage";
-import { PluginsPage } from "@/app/pages/PluginsPage";
 import { SettingsPage } from "@/app/pages/SettingsPage";
 import { SkillsPage } from "@/app/pages/SkillsPage";
 import { pageInfo, useRoute, type PageId } from "@/app/routes";
@@ -33,22 +26,15 @@ import { useConnection, useHello } from "@/lib/store";
 
 const PAGE_COMPONENTS: Record<PageId, ComponentType> = {
   chat: ChatPage,
-  skills: SkillsPage,
-  agents: AgentsPage,
-  mcp: McpPage,
-  hooks: HooksPage,
-  plugins: PluginsPage,
-  memory: MemoryPage,
-  settings: SettingsPage,
   projects: ProjectsPage,
   cron: CronPage,
-  setup: SetupPage,
+  skills: SkillsPage,
+  agents: AgentsPage,
+  memory: MemoryPage,
+  extensions: ExtensionsPage,
   status: StatusPage,
-  channels: ChannelsPage,
-  usage: UsagePage,
-  logs: LogsPage,
-  system: SystemPage,
-  config: ConfigPage,
+  settings: SettingsPage,
+  setup: SetupPage,
 };
 
 export const WIDE_QUERY = "(min-width: 1024px)";

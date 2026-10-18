@@ -8,7 +8,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
-const { ChannelsPage } = await import("@/app/pages/ChannelsPage");
+const { ChannelsPanel } = await import("@/app/pages/ChannelsPage");
 
 const has = (selector: string): boolean => document.querySelector(selector) !== null;
 const TOKEN = "123456:SECRET-TOKEN-abcdef";
@@ -56,10 +56,10 @@ function handlers(overrides: Record<string, (params: never) => unknown> = {}) {
 beforeEach(() => stubMatchMedia());
 afterEach(() => cleanup());
 
-describe("ChannelsPage", () => {
+describe("ChannelsPanel", () => {
   test("shows the bot, the token source and never a token", async () => {
     const { handlers: h } = handlers();
-    await mountAdminPage(ChannelsPage, h);
+    await mountAdminPage(ChannelsPanel, h);
     expect(await screen.findByText("@tropos_bot")).toBeTruthy();
     expect(document.body.textContent).toContain("token from gateway.json");
     expect(screen.getByRole("button", { name: "Test connection" })).toBeTruthy();
@@ -70,14 +70,14 @@ describe("ChannelsPage", () => {
 
   test("Test connection reports the result", async () => {
     const { handlers: h } = handlers({ "channels.telegram.test": () => ({ ok: false, error: "Unauthorized" }) });
-    await mountAdminPage(ChannelsPage, h);
+    await mountAdminPage(ChannelsPanel, h);
     fireEvent.click(await screen.findByRole("button", { name: "Test connection" }));
     expect((await screen.findByText("Unauthorized")).closest('[role="alert"]')).toBeTruthy();
   });
 
   test("replacing the token sends it once and clears the field", async () => {
     const { handlers: h } = handlers();
-    const { socket } = await mountAdminPage(ChannelsPage, h);
+    const { socket } = await mountAdminPage(ChannelsPanel, h);
     fireEvent.click(await screen.findByRole("button", { name: "Replace token" }));
     const field = (await screen.findByLabelText("Bot token")) as HTMLInputElement;
     fireEvent.change(field, { target: { value: TOKEN } });
@@ -92,7 +92,7 @@ describe("ChannelsPage", () => {
       "channels.get": () => ({ telegram: { configured: false, source: null } }),
       "channels.telegram.set": () => Promise.reject(new Error(`Telegram refused ${TOKEN}`)),
     });
-    await mountAdminPage(ChannelsPage, h);
+    await mountAdminPage(ChannelsPanel, h);
     expect(await screen.findByText("not configured")).toBeTruthy();
     expect(document.body.textContent).toContain("@BotFather");
     fireEvent.change(screen.getByLabelText("Bot token"), { target: { value: TOKEN } });
@@ -104,7 +104,7 @@ describe("ChannelsPage", () => {
 
   test("an environment token cannot be removed from here", async () => {
     const { handlers: h } = handlers({ "channels.get": () => ({ telegram: { configured: true, source: "env", bot: BOT } }) });
-    await mountAdminPage(ChannelsPage, h);
+    await mountAdminPage(ChannelsPanel, h);
     await screen.findByText("@tropos_bot");
     expect(document.body.textContent).toContain("TROPOS_TELEGRAM_BOT_TOKEN");
     expect(has('button[aria-label="Remove token"]') || [...document.querySelectorAll("button")].some((b) => b.textContent === "Remove token")).toBe(false);
@@ -112,7 +112,7 @@ describe("ChannelsPage", () => {
 
   test("Remove token asks first", async () => {
     const { handlers: h } = handlers();
-    const { socket } = await mountAdminPage(ChannelsPage, h);
+    const { socket } = await mountAdminPage(ChannelsPanel, h);
     fireEvent.click(await screen.findByRole("button", { name: "Remove token" }));
     const dialog = await screen.findByRole("dialog");
     expect(socket.adminOf("channels.telegram.clear")).toHaveLength(0);
@@ -123,7 +123,7 @@ describe("ChannelsPage", () => {
 
   test("lists approved and pending senders; revoke confirms", async () => {
     const { handlers: h } = handlers();
-    const { socket } = await mountAdminPage(ChannelsPage, h);
+    const { socket } = await mountAdminPage(ChannelsPanel, h);
     const approved = await screen.findByRole("list", { name: "Approved senders" });
     expect(approved.textContent).toContain("4242");
     expect(screen.getByRole("list", { name: "Pending requests" }).textContent).toContain("expires in");
@@ -137,7 +137,7 @@ describe("ChannelsPage", () => {
 
   test("Approve a code posts it and announces the sender", async () => {
     const { handlers: h } = handlers();
-    const { socket } = await mountAdminPage(ChannelsPage, h);
+    const { socket } = await mountAdminPage(ChannelsPanel, h);
     fireEvent.change(await screen.findByLabelText("Pairing code"), { target: { value: " K7Q2-9XMA " } });
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(socket.adminOf("pairing.approve")[0]?.params).toEqual({ channel: "telegram", code: "K7Q2-9XMA" }));
@@ -146,14 +146,14 @@ describe("ChannelsPage", () => {
 
   test("a wrong code shows the server's reason", async () => {
     const { handlers: h } = handlers({ "pairing.approve": () => Promise.reject(new Error("That code is wrong or has expired.")) });
-    await mountAdminPage(ChannelsPage, h);
+    await mountAdminPage(ChannelsPanel, h);
     fireEvent.change(await screen.findByLabelText("Pairing code"), { target: { value: "nope" } });
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(await screen.findByText(/wrong or has expired/)).toBeTruthy();
   });
 
   test("calm error states with retry when the admin API is unavailable", async () => {
-    await mountAdminPage(ChannelsPage, {
+    await mountAdminPage(ChannelsPanel, {
       "channels.get": () => Promise.reject(new Error("Not available in the demo.")),
       "pairing.list": () => Promise.reject(new Error("not connected")),
     });

@@ -1,7 +1,7 @@
 // web/src/components/setup/FirstRunRedirect.tsx — asks status.get once after the connection opens and, when the owner
 // still has to finish setting up, shows a dismissible card that links to #/setup. It never navigates by itself.
 // "Dismissed" lasts for the browser session (sessionStorage), so a reload does not nag but a new visit does.
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, m } from "motion/react";
 
 import { hrefFor, useRoute } from "@/app/routes";
@@ -9,7 +9,7 @@ import { IconButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { CROSSFADE, INSTANT } from "@/lib/springs";
-import { useAdmin, useConnection } from "@/lib/store";
+import { useNeedsOnboarding } from "@/components/setup/use-needs-onboarding";
 
 export const FIRST_RUN_DISMISSED_KEY = "tropos.firstRun.dismissed";
 
@@ -30,30 +30,10 @@ function remember(): void {
 }
 
 export function FirstRunRedirect() {
-  const admin = useAdmin();
-  const open = useConnection().status === "open";
   const reduced = usePrefersReducedMotion();
   const [route] = useRoute();
-  const [needs, setNeeds] = useState(false);
   const [dismissed, setDismissed] = useState(wasDismissed);
-  const asked = useRef(false);
-
-  useEffect(() => {
-    if (!open || asked.current || dismissed) return;
-    asked.current = true;
-    let live = true;
-    admin("status.get").then(
-      (status) => {
-        if (live && status.needsOnboarding) setNeeds(true);
-      },
-      () => {
-        // Not available (demo, older server): stay quiet.
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [open, admin, dismissed]);
+  const needs = useNeedsOnboarding(!dismissed);
 
   const visible = needs && !dismissed && route !== "setup";
 

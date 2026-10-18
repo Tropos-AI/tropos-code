@@ -8,7 +8,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor, within, act } = await import("@testing-library/react");
-const { McpPage, mcpView } = await import("@/app/pages/McpPage");
+const { McpPanel, mcpView } = await import("@/app/pages/McpPage");
 
 const MCP: PanelData = {
   title: "MCP servers",
@@ -45,10 +45,10 @@ describe("mcpView", () => {
   });
 });
 
-describe("McpPage", () => {
+describe("McpPanel", () => {
   test("renders a sortable table; sorting by Tools reorders the rows", async () => {
     stubMatchMedia({ width: 1280 });
-    await mountPage(McpPage, { panel: () => MCP });
+    await mountPage(McpPanel, { panel: () => MCP });
     await screen.findByRole("table", { name: "MCP servers" });
     expect(rowOrder()).toEqual(["github", "linear", "postgres", "figma"]);
     const toolsHeader = screen.getByRole("columnheader", { name: "Tools" });
@@ -66,7 +66,7 @@ describe("McpPage", () => {
 
   test("a server's name opens a drawer with its details", async () => {
     stubMatchMedia({ width: 1280 });
-    await mountPage(McpPage, { panel: () => MCP });
+    await mountPage(McpPanel, { panel: () => MCP });
     await act(async () => {
       fireEvent.click(await screen.findByRole("button", { name: /^postgres.*show details/ }));
       await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
@@ -79,7 +79,7 @@ describe("McpPage", () => {
 
   test("below 720px the rows become stacked cards", async () => {
     stubMatchMedia({ width: 375 });
-    await mountPage(McpPage, { panel: () => MCP });
+    await mountPage(McpPanel, { panel: () => MCP });
     const list = await screen.findByRole("list", { name: "MCP servers" });
     expect(screen.queryByRole("table")).toBeNull();
     expect(within(list).getAllByRole("listitem")).toHaveLength(4);
@@ -89,7 +89,7 @@ describe("McpPage", () => {
   test("empty: explains mcpServers with a copyable example", async () => {
     stubMatchMedia();
     const written = stubClipboard();
-    await mountPage(McpPage, { panel: () => ({ ...MCP, sections: [] }) });
+    await mountPage(McpPanel, { panel: () => ({ ...MCP, sections: [] }) });
     expect(await screen.findByText("No MCP servers")).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy the example settings" }));
@@ -102,7 +102,7 @@ describe("McpPage", () => {
   test("saved servers list with state; Remove asks first", async () => {
     stubMatchMedia({ width: 1280 });
     let servers = [{ name: "github", type: "stdio" as const, target: "github-mcp-server stdio", state: "connected" as const, tools: 41 }];
-    const { socket } = await mountAdminPage(McpPage, { "mcp.list": () => servers, "mcp.remove": () => { servers = []; return servers; } }, { panel: () => MCP });
+    const { socket } = await mountAdminPage(McpPanel, { "mcp.list": () => servers, "mcp.remove": () => { servers = []; return servers; } }, { panel: () => MCP });
     const list = await screen.findByRole("list", { name: "Saved servers" });
     expect(list.textContent).toContain("github-mcp-server stdio");
     fireEvent.click(within(list).getByRole("button", { name: "Remove github" }));
@@ -115,7 +115,7 @@ describe("McpPage", () => {
 
   test("Add server: test shows tools, then mcp.add sends a stdio server", async () => {
     stubMatchMedia({ width: 1280 });
-    const { socket } = await mountAdminPage(McpPage, { "mcp.list": () => [], "mcp.test": () => ({ ok: true, tools: ["read", "write"] }), "mcp.add": () => [] }, { panel: () => MCP });
+    const { socket } = await mountAdminPage(McpPanel, { "mcp.list": () => [], "mcp.test": () => ({ ok: true, tools: ["read", "write"] }), "mcp.add": () => [] }, { panel: () => MCP });
     fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
     await screen.findByText("Add an MCP server");
     const dialog = document.body;
@@ -135,7 +135,7 @@ describe("McpPage", () => {
 
   test("a failing test shows the error; http needs a URL; admin failure keeps the panel", async () => {
     stubMatchMedia({ width: 1280 });
-    await mountAdminPage(McpPage, { "mcp.list": () => Promise.reject(new Error("Not available in the demo.")), "mcp.test": () => ({ ok: false, tools: [], error: "spawn nope ENOENT" }) }, { panel: () => MCP });
+    await mountAdminPage(McpPanel, { "mcp.list": () => Promise.reject(new Error("Not available in the demo.")), "mcp.test": () => ({ ok: false, tools: [], error: "spawn nope ENOENT" }) }, { panel: () => MCP });
     expect(await screen.findByRole("table", { name: "MCP servers" })).toBeTruthy();
     expect(await screen.findByText(/isn't available right now/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Add server" }));

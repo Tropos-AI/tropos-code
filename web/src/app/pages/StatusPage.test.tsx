@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { DoctorReport, StatusSnapshot } from "@core/web/admin/api";
 
@@ -118,5 +118,32 @@ describe("StatusPage", () => {
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("v0.4.1");
+  });
+});
+
+describe("StatusPage tabs", () => {
+  beforeEach(() => window.history.replaceState(null, "", "#/status"));
+
+  test("Health, Logs and Usage; Health first, and the tiles link into Settings tabs", async () => {
+    stubMatchMedia();
+    await mountAdmin(StatusPage, { "status.get": () => STATUS, "doctor.run": () => REPORT });
+    expect(await screen.findAllByRole("tab")).toHaveLength(3);
+    expect(screen.getByRole("tab", { name: "Health" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Logs" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Usage" })).toBeTruthy();
+    const hrefs = (await screen.findAllByRole("link")).map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("#/settings/service");
+    expect(hrefs).toContain("#/settings/channels");
+    expect(hrefs.filter((h) => h === "#/system" || h === "#/channels")).toEqual([]);
+  });
+
+  test("#/status/logs opens Logs; choosing Usage writes the hash", async () => {
+    stubMatchMedia();
+    window.history.replaceState(null, "", "#/status/logs");
+    await mountAdmin(StatusPage, { "status.get": () => STATUS, "doctor.run": () => REPORT });
+    expect((await screen.findByRole("tab", { name: "Logs" })).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+    expect(window.location.hash).toBe("#/status/usage");
+    await screen.findByText("Couldn't load usage");
   });
 });

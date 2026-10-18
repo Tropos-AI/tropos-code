@@ -4,7 +4,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 
 import type { LogName } from "@core/web/admin/api";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { FIELD_CLASS } from "@/components/admin/admin-parts";
 import { useLogStream, MAX_LINES } from "@/components/admin/use-log-stream";
 import { useCopyToClipboard } from "@/components/interior/copy-button";
@@ -27,7 +27,7 @@ const NAMES: Array<{ value: LogName; label: string; blurb: string }> = [
 const LINE_CHOICES = [100, 200, 500, 1000];
 const NEAR_BOTTOM = 24;
 
-export function LogsPage() {
+export function LogsPanel() {
   const [name, setName] = useState<LogName>("gateway");
   const [count, setCount] = useState(200);
   const [live, setLive] = useState(true);
@@ -74,12 +74,8 @@ export function LogsPage() {
   const busy = stream.status === "loading";
 
   return (
-    <PageFrame
-      title="Logs"
-      eyebrow="Control"
-      description={blurb}
-      actions={<PageActions resource={{ status: busy ? "loading" : "ready", data: undefined, error: null, refresh: stream.reload }} noun="logs" />}
-    >
+    <PanelStack>
+      <PanelHead description={blurb} actions={<PageActions resource={{ status: busy ? "loading" : "ready", data: undefined, error: null, refresh: stream.reload }} noun="logs" />} />
       <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
         <SegmentedControl
           label="Log file"
@@ -192,6 +188,6 @@ export function LogsPage() {
           ) : null}
         </Card>
       )}
-    </PageFrame>
+    </PanelStack>
   );
 }

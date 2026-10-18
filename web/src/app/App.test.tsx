@@ -71,7 +71,7 @@ describe("App shell", () => {
     await mount();
     expect(screen.getByRole("main")).toBeTruthy();
     const nav = screen.getByRole("navigation", { name: "Pages" });
-    for (const label of ["Chat", "Skills", "Agents", "MCP", "Hooks", "Plugins", "Memory", "Settings"]) {
+    for (const label of ["Chat", "Skills", "Agents", "Extensions", "Memory", "Status", "Settings"]) {
       expect(nav.textContent).toContain(label);
     }
     expect(screen.getByRole("banner").textContent).toContain("Fix the flaky test");

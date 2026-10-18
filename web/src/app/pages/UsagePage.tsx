@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 
 import type { UsageSummary } from "@core/web/admin/api";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { hrefFor } from "@/app/routes";
 import { AdminCard } from "@/components/admin/admin-parts";
 import { DailyChart, ModelBars } from "@/components/admin/usage-chart";
@@ -88,20 +88,16 @@ function UsageBody({ usage, days }: { usage: UsageSummary; days: number }) {
   );
 }
 
-export function UsagePage() {
+export function UsagePanel() {
   const [days, setDays] = useState<7 | 30 | 90>(30);
   const resource = useAdminResource("usage.summary", { days });
   return (
-    <PageFrame
-      title="Usage"
-      eyebrow="Control"
-      description="Tokens and cost of every session, by day and by model."
-      actions={<PageActions resource={resource} noun="usage" />}
-    >
+    <PanelStack>
+      <PanelHead description="Tokens and cost of every session, by day and by model." actions={<PageActions resource={resource} noun="usage" />} />
       <SegmentedControl label="Time range" options={RANGES} value={String(days)} onValueChange={(v) => setDays(Number(v) as 7 | 30 | 90)} className="w-[17rem] max-w-full" />
       <ResourceView resource={resource} noun="usage">
         {(usage) => <UsageBody usage={usage} days={days} />}
       </ResourceView>
-    </PageFrame>
+    </PanelStack>
   );
 }

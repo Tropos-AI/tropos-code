@@ -7,7 +7,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, within } = await import("@testing-library/react");
-const { HooksPage, hookView } = await import("@/app/pages/HooksPage");
+const { HooksPanel, hookView } = await import("@/app/pages/HooksPage");
 
 const HOOKS: PanelData = {
   title: "Hooks",
@@ -34,9 +34,9 @@ describe("hookView", () => {
   });
 });
 
-describe("HooksPage", () => {
+describe("HooksPanel", () => {
   test("shows events with their matcher chip, grouped by source", async () => {
-    await mountPage(HooksPage, { panel: () => HOOKS });
+    await mountPage(HooksPanel, { panel: () => HOOKS });
     const settings = await screen.findByRole("region", { name: /Settings/ });
     const pre = within(settings).getByRole("button", { name: /PreToolUse/ }).closest("li")!;
     expect(pre.textContent).toContain("Bash");
@@ -46,7 +46,7 @@ describe("HooksPage", () => {
   });
 
   test("expanding a hook shows the full command in a mono block and its timeout", async () => {
-    await mountPage(HooksPage, { panel: () => HOOKS });
+    await mountPage(HooksPanel, { panel: () => HOOKS });
     const row = await screen.findByRole("button", { name: /^Stop/, expanded: false });
     fireEvent.click(row);
     const detail = document.getElementById(row.getAttribute("aria-controls")!)!;
@@ -56,7 +56,7 @@ describe("HooksPage", () => {
   });
 
   test("empty: explains where hooks go", async () => {
-    await mountPage(HooksPage, { panel: () => ({ ...HOOKS, sections: [] }) });
+    await mountPage(HooksPanel, { panel: () => ({ ...HOOKS, sections: [] }) });
     expect(await screen.findByText("No hooks")).toBeTruthy();
     expect(screen.getByText('"hooks"').tagName).toBe("CODE");
   });

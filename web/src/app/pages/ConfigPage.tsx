@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 
 import type { ConfigFile, ConfigView } from "@core/web/admin/api";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { ConfigForm } from "@/components/admin/config-form";
 import { RawEditor } from "@/components/admin/config-raw";
 import { useAdminResource } from "@/components/admin/use-admin-resource";
@@ -83,10 +83,11 @@ function FilePanel({ file }: { file: ConfigFile }) {
   );
 }
 
-export function ConfigPage() {
+export function ConfigPanel() {
   return (
-    <PageFrame title="Configuration" eyebrow="Control" description="Everything in settings.json and gateway.json. Secrets are never shown: leave a secret field empty to keep it.">
+    <PanelStack>
+      <PanelHead description="Everything in settings.json and gateway.json. Secrets are never shown: leave a secret field empty to keep it." />
       <Tabs items={FILES} defaultValue="settings" label="Config files" panelClassName="p-4 sm:p-6" renderPanel={(value) => <FilePanel key={value} file={value as ConfigFile} />} />
-    </PageFrame>
+    </PanelStack>
   );
 }

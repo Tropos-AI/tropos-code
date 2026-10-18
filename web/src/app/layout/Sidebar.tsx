@@ -2,9 +2,10 @@
 // The same content renders in the desktop <aside> and inside the narrow-screen Drawer.
 import { m } from "motion/react";
 
-import { hrefFor, NAV_GROUPS, PAGES, type PageId } from "@/app/routes";
+import { hrefFor, isNavPage, NAV_GROUPS, PAGES, type PageId } from "@/app/routes";
 import { SessionList } from "@/app/layout/SessionList";
 import { Badge } from "@/components/ui/badge";
+import { useNeedsOnboarding } from "@/components/setup/use-needs-onboarding";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
@@ -54,6 +55,9 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
   const session = useSessionState();
   const busy = session?.busy ?? false;
   const reduced = usePrefersReducedMotion();
+  const needsSetup = useNeedsOnboarding();
+  // Setup is listed first in Control only while it is unfinished.
+  const listed = [...PAGES.filter((p) => p.id === "setup" && needsSetup), ...PAGES.filter(isNavPage)];
 
   const newSession = async () => {
     try {
@@ -99,7 +103,7 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
           <section key={group} aria-label={group}>
             <h2 className="px-2.5 pb-1 pt-3 text-[10.5px] font-medium uppercase tracking-[0.08em] text-ink-3">{group}</h2>
             <ul className="grid grid-cols-2 gap-0.5">
-              {PAGES.filter((p) => p.group === group).map((p) => {
+              {listed.filter((p) => p.group === group).map((p) => {
                 const active = p.id === page;
                 return (
                   <li key={p.id} className="relative">

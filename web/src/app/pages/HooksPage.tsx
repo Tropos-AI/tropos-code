@@ -2,7 +2,7 @@
 // "hooks")). Each row is an event with its matcher as a mono chip; details show the full command and its timeout.
 import type { PanelData, PanelItem } from "@core/ui/runtime";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { PageActions } from "@/components/pages/page-actions";
 import { PanelEmpty } from "@/components/pages/panel-empty";
 import { CommandBlock, DetailField, DetailList, DisclosureRow, MonoChip, SectionCard, splitSectionTitle } from "@/components/pages/panel-parts";
@@ -107,19 +107,18 @@ function HooksList({ data }: { data: PanelData }) {
   );
 }
 
-export function HooksPage() {
+export function HooksPanel() {
   const resource = usePanel("hooks");
   const count = resource.data?.sections.reduce((n, s) => n + s.items.length, 0);
   return (
-    <PageFrame
-      title="Hooks"
-      eyebrow="Extensions"
-      description="Shell commands that run on agent events. They get the event as JSON on stdin and can block, allow or add context."
-      actions={<PageActions resource={resource} summary={resource.data?.subtitle ?? (count ? `${count} ${count === 1 ? "hook" : "hooks"}` : undefined)} noun="hooks" />}
-    >
+    <PanelStack>
+      <PanelHead
+        description="Shell commands that run on agent events. They get the event as JSON on stdin and can block, allow or add context."
+        actions={<PageActions resource={resource} summary={resource.data?.subtitle ?? (count ? `${count} ${count === 1 ? "hook" : "hooks"}` : undefined)} noun="hooks" />}
+      />
       <ResourceView resource={resource} noun="hooks">
         {(data) => <HooksList data={data} />}
       </ResourceView>
-    </PageFrame>
+    </PanelStack>
   );
 }

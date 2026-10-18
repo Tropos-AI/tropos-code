@@ -6,7 +6,7 @@ import type { McpServerView as ManagedServer } from "@core/web/admin/api";
 
 import type { PanelData, PanelItem } from "@core/ui/runtime";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { CopyIconButton } from "@/components/pages/copy-chip";
 import { PageActions } from "@/components/pages/page-actions";
 import { splitEmptyText, withInlineCode } from "@/components/pages/panel-empty";
@@ -314,7 +314,7 @@ function ManagedServers({ servers, onChanged }: { servers: ManagedServer[]; onCh
   );
 }
 
-export function McpPage() {
+export function McpPanel() {
   const admin = useAdmin();
   const resource = usePanel("mcp");
   const managed = useRpcResource("mcp.list", () => admin("mcp.list"));
@@ -324,19 +324,18 @@ export function McpPage() {
     resource.refresh();
   };
   return (
-    <PageFrame
-      title="MCP servers"
-      eyebrow="Extensions"
-      description="Model Context Protocol servers and the tools they give the agent."
-      actions={
+    <PanelStack>
+      <PanelHead
+        description="Model Context Protocol servers and the tools they give the agent."
+        actions={
         <>
           <PageActions resource={resource} summary={resource.data?.subtitle} noun="MCP servers" />
           <Button variant="primary" size="sm" icon="plus" onClick={() => setAdding(true)} aria-haspopup="dialog">
             Add server
           </Button>
         </>
-      }
-    >
+        }
+      />
       <ResourceView resource={resource} noun="MCP servers">
         {(data) => <McpServers data={data} />}
       </ResourceView>
@@ -350,6 +349,6 @@ export function McpPage() {
           reload();
         }}
       />
-    </PageFrame>
+    </PanelStack>
   );
 }

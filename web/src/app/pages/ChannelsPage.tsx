@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import type { PairingView } from "@core/web/admin/api";
 
-import { PageFrame } from "@/app/layout/PageFrame";
+import { PanelHead, PanelStack } from "@/components/pages/panel-head";
 import { PageActions } from "@/components/pages/page-actions";
 import { ResourceView } from "@/components/pages/resource-view";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
@@ -206,12 +206,13 @@ function HowItWorks() {
   );
 }
 
-export function ChannelsPage() {
+export function ChannelsPanel() {
   return (
-    <PageFrame title="Channels & access" eyebrow="Control" description="Where Tropos can be reached from, and who is allowed in.">
+    <PanelStack>
+      <PanelHead description="Where Tropos can be reached from, and who is allowed in." />
       <TelegramCard />
       <AccessCard />
       <HowItWorks />
-    </PageFrame>
+    </PanelStack>
   );
 }

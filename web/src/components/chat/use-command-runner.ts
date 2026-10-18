@@ -21,8 +21,9 @@ export function isTurnInput(command: CommandResult): boolean {
   return command.kind === "none" || command.kind === "prompt" || command.kind === "custom";
 }
 
-function navigate(page: PageId): void {
-  window.location.hash = hrefFor(page);
+/** A page, or a tab of one ("extensions/mcp"). */
+function navigate(path: PageId | `${PageId}/${string}`): void {
+  window.location.hash = path.includes("/") ? `#/${path}` : hrefFor(path as PageId);
 }
 
 export function describeUndo(kind: "undo" | "redo", result: UndoResult): { tone: "ok" | "info"; title: string; description?: string } {
@@ -75,6 +76,7 @@ async function execute(store: AppStore, command: CommandResult, typed: string): 
       return navigate("settings");
     case "list":
       // What was learned lives on the Memory page, next to the notes it changed.
+      if (command.what === "mcp" || command.what === "hooks" || command.what === "plugins") return navigate(`extensions/${command.what}`);
       return navigate(command.what === "learned" ? "memory" : command.what);
     case "learned_undo":
       return attempt(store, "Could not undo", async () => {
