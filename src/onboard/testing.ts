@@ -77,16 +77,21 @@ export function fakeDocker(opts: { daemon?: boolean; image?: boolean } = {}): { 
 }
 
 export function testDeps(home: string, over: Partial<OnboardDepsInput> = {}): OnboardDeps {
+  // A fake Telegram server (telegramBaseUrl) is a real local HTTP server, so calls to it go through the real fetch.
+  const net = fakeNet().fetch;
+  const base = over.telegramBaseUrl;
+  const baseFetch = base ? (((input: RequestInfo | URL, init?: RequestInit) => (String(input).startsWith(base) ? fetch(input, init) : net(input, init))) as typeof fetch) : net;
   const docker = fakeDocker({ daemon: false });
   return makeOnboardDeps({
     home,
     userHome: `${home}/..`,
     env: { PATH: "" },
-    fetch: fakeNet().fetch,
+    fetch: baseFetch,
     service: fakeService(),
     execPath: "/fake/bin/tcode",
     now: () => Date.UTC(2026, 9, 15, 12),
     doctor: { checks: [] },
+    alive: () => false,
     ...over,
     runner: { ...fakeRunner({ exec: docker.exec }), ...over.runner },
   });

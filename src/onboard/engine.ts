@@ -9,7 +9,7 @@ import { gatewayFile, updateConfigFile, updateUserSettings } from "../config/sto
 import { runDoctor } from "../doctor/engine";
 import { defaultRunner } from "../doctor/runner";
 import type { DoctorOptions, Report, Runner } from "../doctor/types";
-import { isRecord, readJsonFile } from "../doctor/util";
+import { isRecord, pidAlive, readJsonFile } from "../doctor/util";
 import { loadGatewayConfig, gatewayLogPath, telegramToken } from "../gateway/config";
 import { ensureDefaultProject } from "../gateway/projects";
 import { TelegramApi } from "../gateway/telegram/api";
@@ -27,6 +27,14 @@ const VALIDATE_TIMEOUT_MS = 15_000;
 const LOCAL_PROBE_MS = 1_500;
 const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/;
 
+/** A message meant for the person running setup, shown as it is (no stack, no jargon). */
+export class OnboardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OnboardError";
+  }
+}
+
 export interface OnboardDeps {
   /** Tropos's data directory. */
   home: string;
@@ -43,6 +51,10 @@ export interface OnboardDeps {
   anthropicModels?: (key: string, signal: AbortSignal) => Promise<string[]>;
   /** Doctor settings for the health step (tests pass `checks`). */
   doctor?: Partial<DoctorOptions>;
+  /** Whether a process is running (the gateway's pid). Tests replace it. */
+  alive(pid: number): boolean;
+  /** Telegram's API address; only tests set it. */
+  telegramBaseUrl?: string;
 }
 
 export interface OnboardDepsInput extends Partial<Omit<OnboardDeps, "home" | "env" | "runner">> {
@@ -67,6 +79,8 @@ export function makeOnboardDeps(input: OnboardDepsInput): OnboardDeps {
     scriptPath: input.scriptPath ?? process.argv[1],
     anthropicModels: input.anthropicModels,
     doctor: input.doctor,
+    alive: input.alive ?? pidAlive,
+    telegramBaseUrl: input.telegramBaseUrl,
   };
 }
 

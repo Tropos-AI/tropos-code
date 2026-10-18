@@ -336,6 +336,15 @@ export interface OnboardStep {
   detail?: string;
 }
 
+/** Someone who wrote to the bot while setup listened: shown on the computer so the owner can say "that's me". */
+export interface OwnerCandidateView {
+  senderId: string;
+  chatId: number;
+  name: string;
+  username?: string;
+  at: number;
+}
+
 export interface OnboardState {
   steps: OnboardStep[];
   /** Every required step done. */
