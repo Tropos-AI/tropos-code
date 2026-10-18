@@ -15,11 +15,11 @@ export const MAX_FILE_CHARS = 40_000;
 const MAX_READ_BYTES = MAX_FILE_CHARS * 4;
 
 /** Shares of MAX_FILE_CHARS an oversized file keeps: its start, its end, and the rules from between. */
-const HEAD_CHARS = Math.floor(MAX_FILE_CHARS * 0.45);
-const TAIL_CHARS = Math.floor(MAX_FILE_CHARS * 0.15);
-const DIGEST_CHARS = Math.floor(MAX_FILE_CHARS * 0.35);
-/** Bytes read from the end of a file too large to read whole; always covers TAIL_CHARS. */
-const TAIL_BYTES = TAIL_CHARS * 4;
+const HEAD_SHARE = 0.45;
+const TAIL_SHARE = 0.15;
+const DIGEST_SHARE = 0.35;
+/** Bytes read from the end of a file too large to read whole; always covers its tail share. */
+const TAIL_BYTES = Math.floor(MAX_FILE_CHARS * TAIL_SHARE) * 4;
 
 /** Lines that state a rule: cutting them out of the middle would silently drop a constraint. */
 const POLICY_LINE = /\b(must|never|always|don't|do not|security|secret|credential|password|token|test)\b/i;
@@ -35,9 +35,13 @@ function fromCharBoundary(buf: Buffer): string {
  * Shortens an oversized memory file: 45% head and 15% tail (cut at line breaks where possible) and, in
  * between, up to 35% of the omitted middle's policy lines (must/never/security/test...), in order and
  * deduplicated. `start` is the file's text from its first byte; `end`, when the file was too large to
- * read whole, is text from its last bytes. Markers name the file so the model can Read all of it.
+ * read whole, is text from its last bytes. `cap` is the budget the shares are taken from (the notes stores pass
+ * their own, smaller limits). Markers name the file so the model can Read all of it.
  */
-export function truncateMemoryText(path: string, start: string, end: string | null, size: string): string {
+export function truncateMemoryText(path: string, start: string, end: string | null, size: string, cap: number = MAX_FILE_CHARS): string {
+  const HEAD_CHARS = Math.floor(cap * HEAD_SHARE);
+  const TAIL_CHARS = Math.floor(cap * TAIL_SHARE);
+  const DIGEST_CHARS = Math.floor(cap * DIGEST_SHARE);
   let headEnd = Math.min(HEAD_CHARS, start.length);
   const headBreak = start.lastIndexOf("\n", headEnd);
   if (headBreak > HEAD_CHARS / 2) headEnd = headBreak;

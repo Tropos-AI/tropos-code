@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, lstat, mkdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { legacyToCurrent } from "../home/layout";
 import { atomicWrite } from "../memory/notes";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
 import { isInside } from "../paths";
@@ -50,7 +51,7 @@ const SKILL_ROOTS = ["skills", LEARNED_SKILLS_DIR];
 
 /**
  * Whether `path` is a file the learning loop writes for an entry of `kind`, under the Tropos home:
- * memory and user notes in memories/, skill files inside a skill folder, the identity files, and
+ * memory and user notes in the workspace, skill files inside a skill folder, the identity files, and
  * day notes. Undo only ever writes such a path. Purely lexical: the caller checks symlinks.
  */
 export function isLearnedPath(home: string, kind: LedgerKind, path: string): boolean {
@@ -60,12 +61,17 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
   switch (kind) {
     case "memory":
     case "user":
-      return parts.length === 2 && parts[0] === "memories" && (parts[1] === "MEMORY.md" || parts[1] === "USER.md");
+      // LEGACY_LAYOUT: memories/ until the migration moves the notes into the workspace.
+      return parts.length === 2 && (parts[0] === "memories" || parts[0] === "workspace") && (parts[1] === "MEMORY.md" || parts[1] === "USER.md");
     case "skill":
       // <root>/<skill>/<file…>; dot-folders (.archive) are not skills.
       return parts.length >= 3 && SKILL_ROOTS.includes(parts[0]!) && !parts[1]!.startsWith(".");
     case "identity":
-      return parts.length === 1 && (parts[0] === "IDENTITY.md" || parts[0] === "SOUL.md");
+      // LEGACY_LAYOUT: the home root until the migration moves them into the workspace.
+      return (
+        (parts.length === 1 || (parts.length === 2 && parts[0] === "workspace")) &&
+        (parts[parts.length - 1] === "IDENTITY.md" || parts[parts.length - 1] === "SOUL.md")
+      );
     case "daily":
       return parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!);
     case "agent":
@@ -209,7 +215,8 @@ export class Ledger {
       if (id === undefined) {
         const open = all.filter((e) => e.action !== "undo" && !e.undone).reverse();
         if (open.length === 0) return { ok: false, reason: "Nothing to undo." };
-        for (const e of open) {
+        for (const raw of open) {
+          const e = await this.moved(raw);
           if (await this.refusal(e)) continue;
           const now = await readCurrent(resolve(e.path)).catch(() => undefined);
           if (now === undefined || hashOf(now) !== e.after) continue;
@@ -221,8 +228,9 @@ export class Ledger {
           return { ok: false, reason: "Nothing to undo: every learned change left was edited, moved or never written since. Undo one by id to see why." };
         }
       } else {
-        entry = all.find((e) => e.id === id);
-        if (!entry) return { ok: false, reason: `No ledger entry ${id}.` };
+        const found = all.find((e) => e.id === id);
+        if (!found) return { ok: false, reason: `No ledger entry ${id}.` };
+        entry = await this.moved(found);
         if (entry.action === "undo") return { ok: false, reason: `${entry.id} is itself an undo.` };
         if (entry.undone) return { ok: false, reason: `${entry.id} was already undone.` };
         const refused = await this.refusal(entry);
@@ -262,6 +270,23 @@ export class Ledger {
       await this.append(undo);
       return { ok: true, entry: { ...entry, undone: true } };
     });
+  }
+
+  /**
+   * The entry with its path where the file lives now: a change recorded before the layout change names the old place,
+   * and the migration has since moved the file.
+   */
+  private async moved(entry: LedgerEntry): Promise<LedgerEntry> {
+    if (await lstat(resolve(entry.path)).then(() => true, () => false)) return entry;
+    for (const home of [resolve(this.home), await realpath(this.home).catch(() => this.home)]) {
+      // LEGACY_LAYOUT
+      const rel = relative(home, resolve(entry.path));
+      const now = rel.startsWith("..") ? undefined : legacyToCurrent(rel.split(sep).join("/"));
+      if (now === undefined) continue;
+      const path = join(home, now);
+      if ((await lstat(path).catch(() => null))?.isFile()) return { ...entry, path };
+    }
+    return entry;
   }
 
   /** A skill folder directly inside a skills root (not the root itself). */

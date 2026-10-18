@@ -6,6 +6,7 @@ import { z } from "zod";
 import { errorText } from "../error-text";
 import { blockedPlaceholder, scanText } from "../learning/threats";
 import { atomicWrite } from "../memory/notes";
+import { resolveLayoutPath } from "../home/layout";
 import { isInside } from "../paths";
 import { makeDiff } from "../tools/diff";
 import { resolveToolPath } from "../tools/paths";
@@ -13,8 +14,8 @@ import { defineTool, type Actor, type AnyTool, type ToolOutput } from "../tools/
 import { neutraliseHarnessTags } from "./tags";
 
 /**
- * The agent's identity under the Tropos home: IDENTITY.md (name, emoji, vibe), SOUL.md (voice and
- * values, free text) and identity.json (first-run state). Both Markdown files are prompt text the
+ * The agent's identity: IDENTITY.md (name, emoji, vibe) and SOUL.md (voice and values, free text) in the
+ * workspace, and identity.json (first-run state) at the Tropos home. Both Markdown files are prompt text the
  * agent may write, so they are neutralised on load and never authorize anything.
  */
 export interface Identity {
@@ -127,11 +128,15 @@ function capSoul(text: string): string {
   return soul.length > MAX_SOUL_CHARS ? `${soul.slice(0, MAX_SOUL_CHARS).trimEnd()}${SOUL_TRUNCATED}` : soul;
 }
 
+// LEGACY_LAYOUT: resolveLayoutPath reads the home-root files until the migration moves them into the workspace.
+const identityPath = (home: string): string => resolveLayoutPath(home, "IDENTITY.md");
+const soulPath = (home: string): string => resolveLayoutPath(home, "SOUL.md");
+
 /** The identity as configured; fields that are missing or placeholders are left out. Unreadable files count as absent. */
 export async function loadIdentity(home: string): Promise<Identity> {
   const [idText, soulText] = await Promise.all([
-    readSmall(join(home, IDENTITY_FILE)).catch(() => null),
-    readSmall(join(home, SOUL_FILE)).catch(() => null),
+    readSmall(identityPath(home)).catch(() => null),
+    readSmall(soulPath(home)).catch(() => null),
   ]);
   const id: Identity = idText === null ? {} : parseIdentityFile(idText);
   const soul = soulText === null ? "" : capSoul(soulText);
@@ -173,8 +178,8 @@ export async function bootstrapPending(home: string): Promise<boolean> {
  */
 function homeFile(home: string, file: string): string {
   const root = resolveToolPath(home, "/");
-  const target = resolveToolPath(join(home, file), "/");
-  if (!isInside(target, root) || target === root) throw new Error(`${join(home, file)} resolves outside ${root}`);
+  const target = resolveToolPath(file, "/");
+  if (!isInside(target, root) || target === root) throw new Error(`${file} resolves outside ${root}`);
   return target;
 }
 
@@ -185,7 +190,7 @@ async function writeHomeFile(target: string, text: string): Promise<void> {
 }
 
 export async function markBootstrapped(home: string): Promise<void> {
-  const target = homeFile(home, IDENTITY_STATE_FILE);
+  const target = homeFile(home, join(home, IDENTITY_STATE_FILE));
   const state = await readState(home);
   await writeHomeFile(target, `${JSON.stringify({ ...state, bootstrapped: true }, null, 2)}\n`);
 }
@@ -277,7 +282,7 @@ export async function saveIdentity(
   if (Object.keys(patch).length === 0) return { ok: false, problem: "set needs at least one of name, emoji or vibe." };
   const scan = scanText(Object.values(patch).join("\n"));
   if (!scan.ok) return { ok: false, problem: `Not saved: ${scan.reason}.` };
-  const path = homeFile(home, IDENTITY_FILE);
+  const path = homeFile(home, identityPath(home));
   const before = await readSmall(path);
   const after = updateIdentityFile(before, patch);
   await writeHomeFile(path, after);
@@ -296,7 +301,8 @@ function fieldProblem(field: Field, value: string): string | undefined {
 }
 
 function targetsFor(home: string, action: Input["action"]): string[] {
-  const files = action === "set" ? [IDENTITY_FILE, IDENTITY_STATE_FILE] : action === "soul" ? [SOUL_FILE] : [IDENTITY_STATE_FILE];
+  const state = join(home, IDENTITY_STATE_FILE);
+  const files = action === "set" ? [identityPath(home), state] : action === "soul" ? [soulPath(home)] : [state];
   return files.map((file) => homeFile(home, file));
 }
 
@@ -335,7 +341,7 @@ export function createIdentityTool(opts: IdentityToolOptions): AnyTool {
     if (text.length > MAX_SOUL_CHARS) return fail(`soul is ${text.length.toLocaleString("en-US")} chars, over the ${MAX_SOUL_CHARS.toLocaleString("en-US")}-char limit. Tighten it.`);
     const scan = scanText(text);
     if (!scan.ok) return fail(`Not saved: ${scan.reason}.`);
-    const path = homeFile(home, SOUL_FILE);
+    const path = homeFile(home, soulPath(home));
     const before = await readSmall(path);
     const after = text.endsWith("\n") ? text : `${text}\n`;
     if (before === after) return { content: `SOUL.md already says exactly that (${path}); nothing changed.`, summary: "unchanged" };
@@ -366,10 +372,10 @@ export function createIdentityTool(opts: IdentityToolOptions): AnyTool {
     },
     // SOUL.md and IDENTITY.md ride in every later session: the dialog shows what will be written.
     preview: (input) => {
-      if (input.action === "soul") return { header: homeFile(home, SOUL_FILE), text: input.soul ?? "" };
+      if (input.action === "soul") return { header: homeFile(home, soulPath(home)), text: input.soul ?? "" };
       if (input.action === "set") {
         const lines = FIELDS.filter((f) => input[f] !== undefined).map((f) => `${LABELS[f]}: ${input[f]}`);
-        return { header: homeFile(home, IDENTITY_FILE), text: lines.join("\n") };
+        return { header: homeFile(home, identityPath(home)), text: lines.join("\n") };
       }
       return undefined;
     },

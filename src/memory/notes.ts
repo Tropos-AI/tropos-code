@@ -1,8 +1,11 @@
 // src/memory/notes.ts
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname } from "node:path";
+import { truncateMemoryText } from "../context/memory";
 import { neutraliseHarnessTags } from "../context/tags";
+import { resolveLayoutPath } from "../home/layout";
+import { workspaceDir } from "../paths";
 import type { Ledger } from "../learning/ledger";
 import { blockedPlaceholder, scanText } from "../learning/threats";
 import type { Actor } from "../tools/types";
@@ -18,7 +21,7 @@ export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 
 /** Entries are kept apart by a lone "§" line so a file stays readable and hand-editable. */
 export const ENTRY_SEPARATOR = "\n§\n";
 
-const FILES: Record<NotesTarget, string> = { memory: "MEMORY.md", user: "USER.md" };
+const FILES = { memory: "MEMORY.md", user: "USER.md" } as const;
 
 const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile" };
 
@@ -76,7 +79,7 @@ export async function atomicWrite(path: string, text: string): Promise<void> {
 }
 
 /**
- * The agent's persistent notes (MEMORY.md) and the user profile (USER.md) under <home>/memories.
+ * The agent's persistent notes (MEMORY.md) and the user profile (USER.md) in the workspace (<home>/workspace).
  * Every change re-reads the file inside a per-store lock, so parallel tool calls don't lose writes.
  * New entry text is threat-scanned (notes ride into every later session), and with a ledger every
  * change is recorded so the user can see and undo it.
@@ -93,11 +96,11 @@ export class NotesStore {
   }
 
   get dir(): string {
-    return join(this.home, "memories");
+    return workspaceDir(this.home);
   }
 
   path(target: NotesTarget): string {
-    return join(this.dir, FILES[target]);
+    return resolveLayoutPath(this.home, FILES[target]); // LEGACY_LAYOUT: memories/ until the migration moves it
   }
 
   async entries(target: NotesTarget): Promise<string[]> {
@@ -157,6 +160,7 @@ export class NotesStore {
     edit: (entries: string[]) => string[] | string,
   ): Promise<NotesResult> {
     const run = this.queue.then(async (): Promise<NotesResult> => {
+      const path = this.path(target);
       const before = await this.readRaw(target);
       const entries = before === null ? [] : splitEntries(before);
       const next = edit(entries);
@@ -177,14 +181,14 @@ export class NotesStore {
       await this.ledger?.record({
         actor: actor ?? "agent",
         kind: target === "memory" ? "memory" : "user",
-        path: this.path(target),
+        path,
         action,
         summary,
         before,
         after,
       });
-      await mkdir(this.dir, { recursive: true, mode: DIR_MODE });
-      await atomicWrite(this.path(target), after);
+      await mkdir(dirname(path), { recursive: true, mode: DIR_MODE });
+      await atomicWrite(path, after);
       return { ok: true, entries: next };
     });
     this.queue = run.catch(() => {});
@@ -266,7 +270,11 @@ export async function notesContext(
       opts.warn?.(`An entry in the ${LABELS[target]} was blocked: ${scan.reason} (${store.path(target)})`);
       return blockedPlaceholder(scan.reason);
     });
-    parts.push(`<notes source="${SOURCES[target]}">${header}\n${neutraliseNoteTags(shown.join(ENTRY_SEPARATOR))}\n</notes>`);
+    // A hand edit can push a store over its cap; it is then cut like any oversized memory file instead of filling the prompt.
+    const limit = MEMORY_LIMITS[target];
+    const joined = shown.join(ENTRY_SEPARATOR);
+    const body = joined.length > limit ? truncateMemoryText(store.path(target), joined, null, `${joined.length.toLocaleString("en-US")} chars`, limit) : joined;
+    parts.push(`<notes source="${SOURCES[target]}">${header}\n${neutraliseNoteTags(body)}\n</notes>`);
   }
   return parts.join("\n");
 }

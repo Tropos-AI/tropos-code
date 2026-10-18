@@ -119,6 +119,14 @@ describe("size caps", () => {
     expect(out.length).toBeLessThan(MAX_FILE_CHARS + 300);
   });
 
+  test("a smaller cap scales the head, tail and digest shares", () => {
+    const rules = Array.from({ length: 200 }, (_, i) => `rule ${i}: always do thing ${i}`).join("\n");
+    const out = truncateMemoryText("/r/USER.md", `${"h".repeat(3_000)}\n${rules}\n${"t".repeat(3_000)}`, null, "n chars", 1_000);
+    expect(out.length).toBeLessThan(1_000 + 300);
+    expect(out).toStartWith("h".repeat(400));
+    expect(out).toEndWith("t".repeat(100));
+  });
+
   test("a file over 1 MB is read only as far as the cap, start and end", async () => {
     await writeFile(join(repo, "TROPOS.md"), `${"b".repeat(1_000_000)}\nnever skip tests here\n${"é".repeat(500_000)}\nend rule`);
     const [file] = await loadMemory(repo, home);

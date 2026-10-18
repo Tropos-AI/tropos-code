@@ -68,7 +68,7 @@ test("a failed write shows the current entries", async () => {
 });
 
 test("disk errors become error results", async () => {
-  await mkdir(join(home, "memories", "MEMORY.md"), { recursive: true });
+  await mkdir(join(home, "workspace", "MEMORY.md"), { recursive: true });
   const out = await createMemoryTool(store).run({ target: "memory", action: "add", content: "x" }, makeToolContext());
   expect(out.isError).toBe(true);
   expect(out.content).toStartWith("Could not update the agent notes:");

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { isLearnedPath, Ledger, type LedgerKind, sha256 } from "./ledger";
@@ -20,7 +20,7 @@ afterEach(async () => {
   await removeDir(outside);
 });
 
-const memPath = () => join(home, "memories", "MEMORY.md");
+const memPath = () => join(home, "workspace", "MEMORY.md");
 
 async function write(path: string, text: string) {
   await mkdir(join(path, ".."), { recursive: true });
@@ -249,4 +249,36 @@ test("default undo skips stuck entries and takes the newest one that still match
     ok: false,
     reason: "Nothing to undo: every learned change left was edited, moved or never written since. Undo one by id to see why.",
   });
+});
+
+test("workspace memory and identity files are learned paths", () => {
+  expect(isLearnedPath(home, "user", join(home, "workspace", "USER.md"))).toBe(true);
+  expect(isLearnedPath(home, "memory", join(home, "workspace", "MEMORY.md"))).toBe(true);
+  expect(isLearnedPath(home, "identity", join(home, "workspace", "SOUL.md"))).toBe(true);
+  expect(isLearnedPath(home, "memory", join(home, "workspace", "README.md"))).toBe(false);
+  expect(isLearnedPath(home, "identity", join(home, "workspace", "sub", "SOUL.md"))).toBe(false);
+  // LEGACY_LAYOUT: the old places stay accepted.
+  expect(isLearnedPath(home, "user", join(home, "memories", "USER.md"))).toBe(true);
+  expect(isLearnedPath(home, "identity", join(home, "IDENTITY.md"))).toBe(true);
+});
+
+test("undo of a change recorded before the move restores the moved file", async () => {
+  const old = join(home, "memories", "USER.md");
+  const e = await ledger.record({ actor: "agent", kind: "user", path: old, action: "add", summary: "add: b", before: "a\n", after: "a\n§\nb\n" });
+  await write(old, "a\n§\nb\n");
+  await mkdir(join(home, "workspace"), { recursive: true });
+  await rename(old, join(home, "workspace", "USER.md"));
+  expect(await ledger.undo(e.id)).toMatchObject({ ok: true });
+  expect(await readFile(join(home, "workspace", "USER.md"), "utf8")).toBe("a\n");
+  expect(existsSync(old)).toBe(false);
+});
+
+test("an id-less undo also follows a moved file, and still refuses an edited one", async () => {
+  const old = join(home, "SOUL.md");
+  await ledger.record({ actor: "agent", kind: "identity", path: old, action: "soul", summary: "s", before: "x\n", after: "y\n" });
+  await write(join(home, "workspace", "SOUL.md"), "edited by hand\n");
+  expect(await ledger.undo()).toMatchObject({ ok: false });
+  await write(join(home, "workspace", "SOUL.md"), "y\n");
+  expect(await ledger.undo()).toMatchObject({ ok: true });
+  expect(await readFile(join(home, "workspace", "SOUL.md"), "utf8")).toBe("x\n");
 });
