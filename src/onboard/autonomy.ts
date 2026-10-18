@@ -3,7 +3,8 @@
 import { AutonomyError, setAutonomy, setChatBackend } from "../gateway/autonomy";
 import { loadGatewayConfig } from "../gateway/config";
 import type { AutonomyLevel, ChatSettingsView } from "../web/admin/api";
-import { OnboardError, type OnboardDeps } from "./engine";
+import type { OnboardDeps } from "./engine";
+import { OnboardError } from "./errors";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
 
 export class UnconfinedNotConfirmedError extends OnboardError {

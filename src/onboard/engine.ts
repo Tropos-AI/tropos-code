@@ -9,7 +9,7 @@ import { gatewayFile, updateConfigFile, updateUserSettings } from "../config/sto
 import { runDoctor } from "../doctor/engine";
 import { defaultRunner } from "../doctor/runner";
 import type { DoctorOptions, Report, Runner } from "../doctor/types";
-import { isRecord, pidAlive, readJsonFile } from "../doctor/util";
+import { pidAlive } from "../doctor/util";
 import { loadGatewayConfig, gatewayLogPath, telegramToken } from "../gateway/config";
 import { ensureDefaultProject } from "../gateway/projects";
 import { TelegramApi } from "../gateway/telegram/api";
@@ -24,7 +24,13 @@ import { confinementAvailable } from "../exec/confined";
 import { dashboardLoginLink, dashboardPort } from "../web/links";
 import { loginCodesFor } from "../web/login-codes";
 import { tailscaleStatus, type TailscaleStatus } from "../remote/tailscale";
-import { readOnboardingFlags, writeOnboardingFlags } from "./flags";
+import { bootstrapPending, loadIdentity } from "../context/identity";
+import { ensureChatSettings } from "../gateway/autonomy";
+import { FilePairing } from "../gateway/pairing";
+import { readChatSettings } from "./autonomy";
+import { AUTONOMY_CHOICES } from "./copy";
+import { OnboardError } from "./errors";
+import { readOnboardingFlags, updateOnboardingFlags, writeOnboardingFlags } from "./flags";
 
 export const DEFAULT_SANDBOX_IMAGE = "alpine:3.22";
 const VALIDATE_TIMEOUT_MS = 15_000;
@@ -32,13 +38,7 @@ const VALIDATE_TIMEOUT_MS = 15_000;
 const LOCAL_PROBE_MS = 1_500;
 const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/;
 
-/** A message meant for the person running setup, shown as it is (no stack, no jargon). */
-export class OnboardError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "OnboardError";
-  }
-}
+export { OnboardError };
 
 export interface OnboardDeps {
   /** Tropos's data directory. */
@@ -197,16 +197,35 @@ export async function checkSandbox(deps: OnboardDeps, opts: { pull?: boolean } =
   return { ok: present, docker: true, image, imagePresent: present, ...(problem ? { problem } : {}) };
 }
 
-async function approvedSenders(home: string): Promise<number> {
-  const pairing = await readJsonFile(join(home, "gateway", "pairing.json"));
-  return isRecord(pairing) && Array.isArray(pairing.approved) ? pairing.approved.length : 0;
-}
-
 export async function telegramConfigured(deps: OnboardDeps): Promise<boolean> {
   try {
     return Boolean(telegramToken(await loadGatewayConfig(deps.home), deps.env));
   } catch {
     return false;
+  }
+}
+
+/** Whether a bot token is set, and who (if anyone) is the owner of the bot. */
+export async function telegramState(deps: OnboardDeps): Promise<{ token: boolean; owner: { channel: string; senderId: string } | null }> {
+  const owner = await new FilePairing({ path: join(deps.home, "gateway", "pairing.json") }).owner().catch(() => null);
+  return { token: await telegramConfigured(deps), owner };
+}
+
+/** Phone access (Tailscale) is turned on in the gateway config. */
+export async function phoneEnabled(home: string): Promise<boolean> {
+  try {
+    return (await loadGatewayConfig(home)).remoteAccess.tailscale;
+  } catch {
+    return false;
+  }
+}
+
+/** Projects added besides the built-in default. */
+export async function registeredProjectCount(home: string): Promise<number> {
+  try {
+    return (await loadGatewayConfig(home)).projects.length;
+  } catch {
+    return 0;
   }
 }
 
@@ -218,14 +237,18 @@ export function healthReport(deps: OnboardDeps): Promise<Report> {
 // ---------- the state ----------
 
 const TITLES: Record<OnboardStepId, string> = {
-  provider: "Connect a model provider",
+  welcome: "Welcome",
+  provider: "Connect a model",
   model: "Choose a model",
-  telegram: "Connect Telegram",
-  pairing: "Pair your Telegram account",
-  sandbox: "Prepare the sandbox",
+  identity: "Name and personality",
+  projects: "Projects",
+  autonomy: "Autonomy",
+  telegram: "Telegram",
+  phone: "Phone access",
   service: "Run in the background",
-  health: "Health check",
+  done: "All set",
 };
+export const STEP_ORDER = ["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"] as const satisfies readonly OnboardStepId[];
 export const REQUIRED_STEPS: readonly OnboardStepId[] = ["provider", "model"];
 
 const step = (id: OnboardStepId, status: OnboardStep["status"], detail?: string): OnboardStep => ({
@@ -236,11 +259,31 @@ const step = (id: OnboardStepId, status: OnboardStep["status"], detail?: string)
   ...(detail ? { detail } : {}),
 });
 
-export async function computeOnboardState(deps: OnboardDeps): Promise<OnboardState> {
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+async function identityStep(home: string): Promise<OnboardStep> {
+  if (await bootstrapPending(home)) return step("identity", "todo", "Optional: give your agent a name.");
+  const { name, emoji } = await loadIdentity(home);
+  return step("identity", "done", name ? `${emoji ? `${emoji} ` : ""}${name}` : "You chose not to name it");
+}
+
+async function autonomyStep(deps: OnboardDeps): Promise<OnboardStep> {
+  const chat = await readChatSettings(deps).catch(() => null);
+  if (!chat) return step("autonomy", "todo", "Default: Balanced.");
+  const label = AUTONOMY_CHOICES.find((c) => c.level === chat.autonomy)?.label ?? chat.autonomy;
+  if (chat.backend === "docker") return step("autonomy", "todo", "Chats use Docker today. Running them on this computer is faster and keeps the sandbox.");
+  if (!chat.explicit) return step("autonomy", "todo", `Default: ${label}.`);
+  return step("autonomy", "done", chat.allowUnconfined && chat.confinement === null ? `${label} on this computer, unconfined` : label);
+}
+
+/** `health: false` skips the doctor run (the "done" step then reads `todo`), for the places that only need the checklist. */
+export async function computeOnboardState(deps: OnboardDeps, opts: { health?: boolean } = {}): Promise<OnboardState> {
   const flags = await readOnboardingFlags(deps.home);
   const providers = await detectProviders(deps);
   const connected = providers.filter((p) => p.source !== null);
   const steps: OnboardStep[] = [];
+
+  steps.push(flags.startedAt ? step("welcome", "done") : step("welcome", "todo"));
 
   steps.push(
     connected.length
@@ -262,19 +305,23 @@ export async function computeOnboardState(deps: OnboardDeps): Promise<OnboardSta
       : step("model", "todo", connected.length ? `${model} needs ${owner}, which is not connected. Pick a model from a connected provider.` : "Connect a provider first."),
   );
 
+  steps.push(await identityStep(deps.home));
+
+  const projects = await registeredProjectCount(deps.home);
+  steps.push(projects ? step("projects", "done", plural(projects, "project")) : step("projects", "todo", "Optional: choose the folders Tropos may work in."));
+
+  steps.push(await autonomyStep(deps));
+
+  const tg = await telegramState(deps);
   steps.push(
-    (await telegramConfigured(deps)) ? step("telegram", "done", "Bot token set") : step("telegram", "todo", "Optional: chat with Tropos from Telegram."),
+    tg.token && tg.owner
+      ? step("telegram", "done", "Bot connected; you are the owner")
+      : tg.token
+        ? step("telegram", "todo", "Bot connected. Message it so I can recognise you.")
+        : step("telegram", "todo", "Optional: chat with Tropos from Telegram."),
   );
 
-  const senders = await approvedSenders(deps.home);
-  steps.push(senders ? step("pairing", "done", `${senders} approved sender${senders === 1 ? "" : "s"}`) : step("pairing", "todo", "Nobody is approved yet; message your bot to get a code."));
-
-  const sandbox = await checkSandbox(deps);
-  steps.push(
-    sandbox.ok
-      ? step("sandbox", "done", `Docker is running and ${sandbox.image} is present`)
-      : step("sandbox", sandbox.docker ? "todo" : "warn", sandbox.problem),
-  );
+  steps.push((await phoneEnabled(deps.home)) ? step("phone", "done", "Open from your phone through Tailscale") : step("phone", "todo", "Optional: open the dashboard from your phone."));
 
   const svc = await deps.service.status().catch(() => null);
   steps.push(
@@ -285,22 +332,40 @@ export async function computeOnboardState(deps: OnboardDeps): Promise<OnboardSta
         : step("service", "todo", "Optional: keep the gateway running in the background."),
   );
 
-  const report = await healthReport(deps).catch(() => null);
-  steps.push(
-    !report
-      ? step("health", "warn", "The health check could not run.")
-      : report.summary.error
-        ? step("health", "error", `${report.summary.error} error${report.summary.error === 1 ? "" : "s"}, ${report.summary.warn} warning${report.summary.warn === 1 ? "" : "s"}`)
-        : report.summary.warn
-          ? step("health", "warn", `${report.summary.warn} warning${report.summary.warn === 1 ? "" : "s"}`)
-          : step("health", "done", "No problems found"),
-  );
+  if (opts.health === false) steps.push(step("done", "todo"));
+  else {
+    const report = await healthReport(deps).catch(() => null);
+    steps.push(
+      !report
+        ? step("done", "warn", "The health check could not run.")
+        : report.summary.error
+          ? step("done", "error", `${plural(report.summary.error, "error")}, ${plural(report.summary.warn, "warning")}`)
+          : report.summary.warn
+            ? step("done", "warn", plural(report.summary.warn, "warning"))
+            : step("done", "done", "No problems found"),
+    );
+  }
 
   // A step the owner chose to skip shows as skipped unless it has been done since; the required ones cannot be skipped.
   const skipped = new Set(flags.skipped ?? []);
   const merged = steps.map((s) => (s.status !== "done" && s.optional && skipped.has(s.id) ? { ...s, status: "skipped" as const } : s));
   const complete = REQUIRED_STEPS.every((id) => merged.find((s) => s.id === id)?.status === "done");
   return { steps: merged, complete, dismissed: Boolean(flags.dismissedAt) };
+}
+
+/** Setup was opened: remembered, and the chat settings are fixed now so a later approval can't change them. */
+export async function markStarted(deps: OnboardDeps): Promise<void> {
+  const flags = await readOnboardingFlags(deps.home);
+  if (!flags.startedAt) await updateOnboardingFlags(deps.home, { startedAt: new Date(deps.now()).toISOString() });
+  await ensureChatSettings(deps.home);
+}
+
+/** Records the skip at once (so a closed terminal remembers it). The required steps cannot be skipped. */
+export async function skipStep(deps: OnboardDeps, id: OnboardStepId): Promise<OnboardState> {
+  if (REQUIRED_STEPS.includes(id)) throw new OnboardError("This step is needed: Tropos can't answer without it.");
+  const prior = (await readOnboardingFlags(deps.home)).skipped ?? [];
+  await updateOnboardingFlags(deps.home, { skipped: [...new Set([...prior, id])] });
+  return computeOnboardState(deps, { health: false });
 }
 
 // ---------- keys and models ----------
@@ -445,14 +510,16 @@ export async function finish(deps: OnboardDeps, opts: { skipped?: OnboardStepId[
   const prior = await readOnboardingFlags(deps.home);
   const requested: string[] = opts.skipped ?? prior.skipped ?? [];
   const skipped = [...new Set(requested)].filter((id) => !(REQUIRED_STEPS as readonly string[]).includes(id));
-  await writeOnboardingFlags(deps.home, { dismissedAt: new Date(deps.now()).toISOString(), ...(skipped.length ? { skipped } : {}), ...(prior.autonomyChosen ? { autonomyChosen: true } : {}) });
+  // Merged into what is there, so startedAt, reminded and the autonomy choice survive.
+  const { skipped: _old, ...rest } = prior;
+  await writeOnboardingFlags(deps.home, { ...rest, dismissedAt: new Date(deps.now()).toISOString(), ...(skipped.length ? { skipped } : {}) });
   return computeOnboardState(deps);
 }
 
 /** Forgets that the wizard was finished or skipped, so every step is offered again. */
 export async function reopen(deps: OnboardDeps): Promise<OnboardState> {
-  // What the owner already chose stays chosen; only "finished" and "skipped" are forgotten.
+  // What the owner already chose stays chosen, and a reminder is never shown twice; "finished", "started" and "skipped" are forgotten.
   const prior = await readOnboardingFlags(deps.home);
-  await writeOnboardingFlags(deps.home, prior.autonomyChosen ? { autonomyChosen: true } : {});
+  await writeOnboardingFlags(deps.home, { ...(prior.autonomyChosen ? { autonomyChosen: true } : {}), ...(prior.reminded ? { reminded: prior.reminded } : {}) });
   return computeOnboardState(deps);
 }

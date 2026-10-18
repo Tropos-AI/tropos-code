@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { m } from "motion/react";
 
+import { STEP_WHY } from "@core/onboard/copy";
 import type { OnboardState, OnboardStep, OnboardStepId } from "@core/web/admin/api";
 
 import { PageFrame } from "@/app/layout/PageFrame";
@@ -11,7 +12,7 @@ import { PageActions } from "@/components/pages/page-actions";
 import { ResourceView } from "@/components/pages/resource-view";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
 import { LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
-import { HealthStep, PairingStep, SandboxStep, ServiceStep, TelegramStep } from "@/components/setup/host-steps";
+import { HealthStep, ServiceStep, TelegramStep } from "@/components/setup/host-steps";
 import { ModelStep, ProviderStep } from "@/components/setup/provider-steps";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,16 +30,6 @@ const STATUS: Record<OnboardStep["status"], { tone: BadgeTone; label: string; ic
   error: { tone: "error", label: "problem", icon: "circle-alert" },
 };
 
-const SUMMARY: Record<OnboardStepId, string> = {
-  provider: "Connect the AI provider that does the thinking.",
-  model: "Choose which model answers.",
-  telegram: "Talk to Tropos from your phone through your own bot.",
-  pairing: "Let your own Telegram account in.",
-  sandbox: "Docker keeps commands from chats away from your machine.",
-  service: "Start Tropos by itself when you log in.",
-  health: "Make sure everything above works together.",
-};
-
 /** The first step still to do, required ones first; what the wizard opens on. */
 export function firstOpenStep(steps: OnboardStep[], skipped: ReadonlySet<OnboardStepId>): OnboardStepId | null {
   const open = (s: OnboardStep) => (s.status === "todo" || s.status === "error" || s.status === "warn") && !skipped.has(s.id);
@@ -52,7 +43,7 @@ interface StepBodyProps {
   skip: (id: OnboardStepId) => void;
 }
 
-function StepBody({ step, steps, changed, skip }: StepBodyProps) {
+function StepBody({ step, changed, skip }: StepBodyProps) {
   switch (step.id) {
     case "provider":
       return <ProviderStep onChanged={changed} />;
@@ -60,14 +51,17 @@ function StepBody({ step, steps, changed, skip }: StepBodyProps) {
       return <ModelStep onChanged={changed} />;
     case "telegram":
       return <TelegramStep onChanged={changed} onSkip={() => skip("telegram")} />;
-    case "pairing":
-      return <PairingStep telegramReady={steps.find((s) => s.id === "telegram")?.status === "done"} onChanged={changed} onSkip={() => skip("pairing")} />;
-    case "sandbox":
-      return <SandboxStep onChanged={changed} onSkip={() => skip("sandbox")} />;
     case "service":
       return <ServiceStep onChanged={changed} />;
-    case "health":
+    case "done":
       return <HealthStep onChanged={changed} />;
+    default:
+      // Until the guided panels land, these steps are set up in the terminal.
+      return (
+        <p className="text-[13px] leading-relaxed text-ink-2">
+          {STEP_WHY[step.id]} For now, set this up in the terminal with <code className="font-mono">tcode onboard</code>.
+        </p>
+      );
   }
 }
 
@@ -99,7 +93,7 @@ function StepItem({ step, index, steps, open, skipped, onToggle, changed, skip }
               <span className="text-[14.5px] font-medium text-ink">{step.title}</span>
               {step.optional ? <span className="text-[11.5px] text-ink-3">optional</span> : null}
             </span>
-            <span className="mt-0.5 block text-[12.5px] leading-snug text-ink-3">{step.detail ?? SUMMARY[step.id]}</span>
+            <span className="mt-0.5 block text-[12.5px] leading-snug text-ink-3">{step.detail ?? STEP_WHY[step.id]}</span>
           </span>
           <Badge tone={status.tone}>{status.label}</Badge>
           <span aria-hidden className={cn("text-ink-3 transition-transform duration-150 motion-reduce:transition-none", open && "rotate-90")}>

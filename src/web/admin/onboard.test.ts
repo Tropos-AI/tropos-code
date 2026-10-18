@@ -43,4 +43,5 @@ test("bad parameters are refused with a plain message", async () => {
   await expect(h["onboard.validateKey"]!({ provider: "", key: "x" })).rejects.toThrow("Choose a provider");
   await expect(h["onboard.validateKey"]!({ provider: "deepseek" } as never)).rejects.toThrow("Choose a provider");
   await expect(h["onboard.finish"]!({ skipped: ["nope"] } as never)).rejects.toThrow("Unknown step");
+  await expect(h["onboard.finish"]!({ skipped: ["sandbox"] } as never)).rejects.toThrow("Unknown step");
 });

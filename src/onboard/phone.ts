@@ -6,7 +6,8 @@ import { TailscaleError } from "../remote/tailscale";
 import { remoteUrl } from "../web/links";
 import type { PhoneStatusView } from "../web/admin/api";
 import { TAILSCALE_DOWNLOAD_URL } from "./copy";
-import { OnboardError, type OnboardDeps } from "./engine";
+import type { OnboardDeps } from "./engine";
+import { OnboardError } from "./errors";
 
 export async function phoneStatus(deps: OnboardDeps): Promise<PhoneStatusView> {
   const config = await loadGatewayConfig(deps.home);

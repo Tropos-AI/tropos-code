@@ -15,13 +15,16 @@ const has = (selector: string): boolean => document.querySelector(selector) !== 
 const SECRET = "sk-test-VERY-SECRET-987654";
 
 const STEPS: OnboardStep[] = [
-  { id: "provider", title: "Connect a provider", status: "todo", optional: false },
+  { id: "welcome", title: "Welcome", status: "todo", optional: true },
+  { id: "provider", title: "Connect a model", status: "todo", optional: false },
   { id: "model", title: "Choose a model", status: "todo", optional: false },
-  { id: "telegram", title: "Telegram bot", status: "todo", optional: true },
-  { id: "pairing", title: "Approve yourself", status: "todo", optional: true },
-  { id: "sandbox", title: "Docker sandbox", status: "warn", optional: true, detail: "Docker is not running" },
-  { id: "service", title: "Run at login", status: "todo", optional: true },
-  { id: "health", title: "Health check", status: "todo", optional: false },
+  { id: "identity", title: "Name and personality", status: "todo", optional: true },
+  { id: "projects", title: "Projects", status: "todo", optional: true },
+  { id: "autonomy", title: "Autonomy", status: "todo", optional: true, detail: "Default: Balanced." },
+  { id: "telegram", title: "Telegram", status: "todo", optional: true },
+  { id: "phone", title: "Phone access", status: "todo", optional: true },
+  { id: "service", title: "Run in the background", status: "todo", optional: true },
+  { id: "done", title: "All set", status: "todo", optional: true },
 ];
 
 const PROVIDERS = (saved: boolean): ProviderInfoView[] => [
@@ -88,8 +91,8 @@ describe("firstOpenStep", () => {
   test("is the first required step still to do, else an optional one", () => {
     expect(firstOpenStep(STEPS, new Set())).toBe("provider");
     const required = STEPS.map((s) => (s.optional ? s : { ...s, status: "done" as const }));
-    expect(firstOpenStep(required, new Set())).toBe("telegram");
-    expect(firstOpenStep(required, new Set(["telegram", "pairing", "sandbox", "service"]))).toBeNull();
+    expect(firstOpenStep(required, new Set())).toBe("welcome");
+    expect(firstOpenStep(required, new Set(STEPS.filter((s) => s.optional).map((s) => s.id)))).toBeNull();
   });
 });
 
@@ -98,12 +101,15 @@ describe("SetupPage", () => {
     const s = server();
     await mountAdminPage(SetupPage, s.admin, s.rpc);
     const list = await screen.findByRole("list", { name: "Setup steps" });
-    expect(within(list).getAllByRole("listitem")).toHaveLength(7);
-    expect(screen.getByText("0 of 3 required steps done")).toBeTruthy();
-    const provider = screen.getByRole("button", { name: /Connect a provider/ });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(10);
+    expect(screen.getByText("0 of 2 required steps done")).toBeTruthy();
+    const provider = screen.getByRole("button", { name: /Connect a model/ });
     expect(provider.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("button", { name: /Telegram bot/ }).textContent).toContain("optional");
-    expect(screen.getByRole("button", { name: /Docker sandbox/ }).textContent).toContain("Docker is not running");
+    expect(screen.getByRole("button", { name: /Telegram/ }).textContent).toContain("optional");
+    expect(screen.getByRole("button", { name: /Autonomy/ }).textContent).toContain("Default: Balanced.");
+    // A step with no setup panel yet says what it is for and points to the terminal.
+    fireEvent.click(screen.getByRole("button", { name: /Projects/ }));
+    expect(screen.getByText(/set this up in the terminal with/)).toBeTruthy();
   });
 
   test("calm error with retry when the admin API is unavailable", async () => {
@@ -126,7 +132,7 @@ describe("SetupPage", () => {
     expect(socket.adminOf("onboard.validateKey")[0]?.params).toEqual({ provider: "openai", key: SECRET });
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     await waitFor(() => expect(socket.callsOf("providers.connect")[0]?.params).toEqual({ id: "openai", key: SECRET }));
-    await waitFor(() => expect(document.body.textContent).toContain("1 of 3 required steps done"));
+    await waitFor(() => expect(document.body.textContent).toContain("1 of 2 required steps done"));
     expect(document.body.innerHTML).not.toContain(SECRET);
   });
 
@@ -163,7 +169,7 @@ describe("SetupPage", () => {
     fireEvent.change(await screen.findByLabelText("OpenAI API key"), { target: { value: SECRET } });
     fireEvent.click(screen.getByRole("button", { name: "Save key" }));
     await waitFor(() => expect(socket.callsOf("providers.connect")).toHaveLength(1));
-    await waitFor(() => expect(document.body.textContent).toContain("1 of 3"));
+    await waitFor(() => expect(document.body.textContent).toContain("1 of 2"));
     // The wizard moves on to the model step by itself once the provider is done.
     fireEvent.click(await screen.findByRole("radio", { name: "OpenAI" }));
     fireEvent.click(await screen.findByRole("button", { name: "Use gpt-b" }));
@@ -173,7 +179,7 @@ describe("SetupPage", () => {
   test("telegram: instructions, token goes to channels.telegram.set, skip works", async () => {
     const s = server();
     const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Telegram bot/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram/ }));
     expect(await screen.findByText(/@BotFather/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Bot token"), { target: { value: "123:abc" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify and save" }));
@@ -184,37 +190,15 @@ describe("SetupPage", () => {
   test("telegram: Skip moves on and the step reads skipped", async () => {
     const s = server();
     await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Telegram bot/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Skip Telegram" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Telegram bot/ }).textContent).toContain("skipped"));
-  });
-
-  test("pairing: approves a code and says to add the bot first", async () => {
-    const s = server();
-    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Approve yourself/ }));
-    expect(await screen.findByText(/Add your Telegram bot first/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("Pairing code"), { target: { value: "ABCD-1234" } });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await waitFor(() => expect(socket.adminOf("pairing.approve")[0]?.params).toEqual({ channel: "telegram", code: "ABCD-1234" }));
-    expect(await screen.findByText(/Approved sender 4242/)).toBeTruthy();
-  });
-
-  test("sandbox: explains Docker, pulls the image", async () => {
-    const s = server();
-    const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Docker sandbox/ }));
-    expect(await screen.findByText(/isn't downloaded yet/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Skip: chats will not run commands until Docker is available/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Pull image" }));
-    await waitFor(() => expect(socket.adminOf("sandbox.check").some((c) => (c.params as { pull?: boolean } | undefined)?.pull === true)).toBe(true));
-    expect(await screen.findByText("The sandbox image is ready.")).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Telegram/ }).textContent).toContain("skipped"));
   });
 
   test("service: Run at login installs it and says what it does", async () => {
     const s = server();
     const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Run at login/, expanded: false }));
+    fireEvent.click(await screen.findByRole("button", { name: /Run in the background/, expanded: false }));
     expect(await screen.findByText(/adds a launchd \(macOS\) entry/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Run at login" }));
     await waitFor(() => expect(socket.adminOf("service.install")).toHaveLength(1));
@@ -223,7 +207,7 @@ describe("SetupPage", () => {
   test("health: runs the doctor and applies a single fix", async () => {
     const s = server();
     const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
-    fireEvent.click(await screen.findByRole("button", { name: /Health check/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /All set/ }));
     const findings = await screen.findByRole("list", { name: "Findings" });
     expect(findings.textContent).toContain("gateway.json is readable by others");
     fireEvent.click(within(findings).getByRole("button", { name: /Fix: gateway.json/ }));
@@ -236,7 +220,7 @@ describe("SetupPage", () => {
     const { socket } = await mountAdminPage(SetupPage, s.admin, s.rpc);
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss setup" }));
     await waitFor(() => expect(socket.adminOf("onboard.finish")).toHaveLength(1));
-    expect(socket.adminOf("onboard.finish")[0]?.params).toEqual({ skipped: ["telegram", "pairing", "sandbox", "service"] });
+    expect(socket.adminOf("onboard.finish")[0]?.params).toEqual({ skipped: ["welcome", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"] });
     fireEvent.click(await screen.findByRole("button", { name: "Reopen setup" }));
     await waitFor(() => expect(socket.adminOf("onboard.reopen")).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Dismiss setup" })).toBeTruthy();

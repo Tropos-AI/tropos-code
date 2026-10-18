@@ -10,6 +10,10 @@ export interface OnboardingFlags {
   skipped?: string[];
   /** The owner picked the autonomy level in setup or in Settings (the stored `chat` key can't tell: it is written at start-up). */
   autonomyChosen?: boolean;
+  /** ISO time setup was first opened (the welcome step is done from then on). */
+  startedAt?: string;
+  /** Steps whose "set this up later" reminder was already shown. */
+  reminded?: string[];
 }
 
 export const onboardingFlagsPath = (home: string) => join(home, "onboarding.json");
@@ -19,10 +23,13 @@ export async function readOnboardingFlags(home: string): Promise<OnboardingFlags
     const json = JSON.parse(await readFile(onboardingFlagsPath(home), "utf8")) as unknown;
     if (!json || typeof json !== "object" || Array.isArray(json)) return {};
     const o = json as Record<string, unknown>;
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
     return {
       dismissedAt: typeof o.dismissedAt === "string" ? o.dismissedAt : undefined,
-      skipped: Array.isArray(o.skipped) ? o.skipped.filter((x): x is string => typeof x === "string") : undefined,
+      skipped: strings(o.skipped),
       ...(o.autonomyChosen === true ? { autonomyChosen: true } : {}),
+      ...(typeof o.startedAt === "string" ? { startedAt: o.startedAt } : {}),
+      ...(Array.isArray(o.reminded) ? { reminded: strings(o.reminded) } : {}),
     };
   } catch {
     return {};
@@ -38,6 +45,8 @@ export async function writeOnboardingFlags(home: string, flags: OnboardingFlags)
 }
 
 /** Merges `patch` into the stored flags. */
-export async function updateOnboardingFlags(home: string, patch: OnboardingFlags): Promise<void> {
-  await writeOnboardingFlags(home, { ...(await readOnboardingFlags(home)), ...patch });
+export async function updateOnboardingFlags(home: string, patch: OnboardingFlags): Promise<OnboardingFlags> {
+  const merged = { ...(await readOnboardingFlags(home)), ...patch };
+  await writeOnboardingFlags(home, merged);
+  return merged;
 }

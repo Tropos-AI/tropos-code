@@ -77,7 +77,7 @@ describe("--non-interactive", () => {
     expect(((await stat(join(fx.ctx.home, "credentials.json"))).mode & 0o777).toString(8)).toBe("600");
     expect(JSON.parse(await read("settings.json")).model).toBe("deepseek/deepseek-chat");
     const flags = JSON.parse(await read("onboarding.json"));
-    expect(flags.skipped.sort()).toEqual(["sandbox", "service", "telegram"]);
+    expect(flags.skipped.sort()).toEqual(["service", "telegram"]); // --skip-sandbox is accepted and does nothing
     expect(flags.dismissedAt).toBeTruthy();
     expect(fx.stdout() + fx.stderr()).not.toContain(GOOD_KEY);
   });
@@ -122,14 +122,14 @@ describe("--non-interactive", () => {
     expect(fx.stderr()).not.toContain("9:bad");
   });
 
-  test("--install-service installs the service; sandbox image is pulled when Docker works", async () => {
+  test("--install-service installs the service", async () => {
     fx = await makeFixture({ env: { DS_KEY: GOOD_KEY } });
     const service = fakeService();
     const docker = fakeDocker({ image: false });
     const argv = [...base, "--provider", "deepseek", "--api-key-env", "DS_KEY", "--install-service"];
     expect(await runOnboard(argv, fx.ctx, { engine: engine({ service, runner: fakeRunner({ exec: docker.exec }) }) })).toBe(0);
     expect(service.installed).toHaveLength(1);
-    expect(docker.hasImage).toBe(true);
+    expect(docker.log).toEqual([]); // the sandbox image is no longer pulled during setup
   });
 
   test("--json prints one object with the steps and no key", async () => {
@@ -170,7 +170,7 @@ describe("interactive", () => {
     expect(code).toBe(0);
     const out = fx.stdout();
     expect(out).toContain("~/.tropos/credentials.json");
-    expect(out).toContain("Docker sandbox");
+    expect(out).toContain("Connect a model");
     expect(out).not.toContain(GOOD_KEY);
     expect(questions.some((q) => q.includes("API key"))).toBe(true);
     expect(JSON.parse(await read("credentials.json")).deepseek.apiKey).toBe(GOOD_KEY);
@@ -178,7 +178,7 @@ describe("interactive", () => {
     expect(service.installed).toHaveLength(1);
     expect(opened).toHaveLength(1);
     expect(opened[0]).toMatch(/^http:\/\/127\.0\.0\.1:4321\/#login=[A-Za-z0-9_-]{43}$/);
-    expect(JSON.parse(await read("onboarding.json")).skipped).toEqual(["telegram", "sandbox"]);
+    expect(JSON.parse(await read("onboarding.json")).skipped).toEqual(["telegram"]);
     expect(fx.asked[0]).toContain("understand");
   });
 
@@ -238,14 +238,6 @@ describe("interactive", () => {
     expect(JSON.parse(await read("gateway.json")).telegram.botToken).toBe("123:good");
     expect(fx.stdout()).toContain("@tropos_bot");
     expect(fx.stderr()).not.toContain("9:bad");
-  });
-
-  test("sandbox: offers to pull a missing image", async () => {
-    fx = await makeFixture({ interactive: true, env: { ANTHROPIC_API_KEY: "x" }, answers: [false /*telegram*/, true /*pull*/, false /*service*/] });
-    const docker = fakeDocker({ image: false });
-    const { ctx } = terminal([]);
-    expect(await runOnboard(["--accept-risk", "--no-open"], ctx, { engine: engine({ runner: fakeRunner({ exec: docker.exec }), anthropicModels: async () => [] }), alive: () => false })).toBe(0);
-    expect(docker.hasImage).toBe(true);
   });
 
   test("a finished setup is not asked again, but --reset asks every step", async () => {

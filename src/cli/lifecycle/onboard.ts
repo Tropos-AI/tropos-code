@@ -3,7 +3,6 @@
 import { parseFlags } from "../../doctor/flags";
 import { pidAlive } from "../../doctor/util";
 import {
-  checkSandbox,
   computeOnboardState,
   detectProviders,
   finish,
@@ -34,8 +33,7 @@ import type { LifecycleContext, LifecycleRun } from "./types";
 const HELP = `Usage: tcode onboard [options]
 
 Guided first-run setup: connect a model provider, choose a model, optionally connect
-Telegram, prepare the Docker sandbox, install the background service, check health and
-open the dashboard. Safe to run again; it only asks about what is not set up yet.
+Telegram, install the background service, check health and open the dashboard. Safe to run again; it only asks about what is not set up yet.
 
 Options:
   --reset                    ask every step again
@@ -50,7 +48,7 @@ Options:
   --install-service          install the background service
   --skip-telegram            skip Telegram
   --skip-service             skip the background service
-  --skip-sandbox             skip the Docker sandbox
+  --skip-sandbox             accepted for older scripts; does nothing
   --json                     print the result as JSON (non-interactive)
   --help                     show this text
 
@@ -125,7 +123,7 @@ export async function runOnboard(argv: string[], ctx: LifecycleContext, cli: Onb
     }
   }
   return nonInteractive
-    ? wizard.runFlags({ provider: v.get("provider"), keyEnv: v.get("api-key-env"), model: v.get("model"), telegramEnv: v.get("telegram-token-env"), skipTelegram: f.has("skip-telegram"), skipService: f.has("skip-service"), skipSandbox: f.has("skip-sandbox"), installService: f.has("install-service") })
+    ? wizard.runFlags({ provider: v.get("provider"), keyEnv: v.get("api-key-env"), model: v.get("model"), telegramEnv: v.get("telegram-token-env"), skipTelegram: f.has("skip-telegram"), skipService: f.has("skip-service"), installService: f.has("install-service") })
     : wizard.runInteractive({ reset: f.has("reset") });
 }
 
@@ -136,7 +134,6 @@ interface FlagInput {
   telegramEnv?: string;
   skipTelegram: boolean;
   skipService: boolean;
-  skipSandbox: boolean;
   installService: boolean;
 }
 
@@ -167,7 +164,7 @@ class Wizard {
   // ---- non-interactive ----
 
   async runFlags(a: FlagInput): Promise<number> {
-    let state = await computeOnboardState(this.deps);
+    let state = await computeOnboardState(this.deps, { health: false });
     const fail = (message: string) => {
       this.problems.push(message);
       return this.report(state, false);
@@ -212,12 +209,7 @@ class Wizard {
       await saveTelegram(this.deps, token);
     } else if (a.skipTelegram) this.skipped.add("telegram");
 
-    // sandbox, service
-    if (a.skipSandbox) this.skipped.add("sandbox");
-    else {
-      const box = await checkSandbox(this.deps, { pull: true });
-      if (!box.ok) this.problems.push(`Sandbox: ${box.problem}`);
-    }
+    // service
     if (a.skipService) this.skipped.add("service");
     else if (a.installService) {
       try {
@@ -244,18 +236,16 @@ class Wizard {
 
   async runInteractive(o: { reset: boolean }): Promise<number> {
     const { ctx } = this;
-    let state = await computeOnboardState(this.deps);
+    let state = await computeOnboardState(this.deps, { health: false });
     ctx.out(`What I found:\n${renderState(state)}\n`);
     const todo = (id: OnboardStepId) => o.reset || ["todo", "warn"].includes(this.status(state, id).status);
-    const refresh = async () => void (state = await computeOnboardState(this.deps));
+    const refresh = async () => void (state = await computeOnboardState(this.deps, { health: false }));
 
     if (todo("provider") && !(await this.providerStep())) return 1;
     await refresh();
     if (todo("model") && !(await this.modelStep())) return 1;
     await refresh();
     if (todo("telegram") && this.status(state, "telegram").status !== "skipped") await this.telegramStep();
-    await refresh();
-    if (todo("sandbox") && this.status(state, "sandbox").status !== "skipped") await this.sandboxStep();
     await refresh();
     if (this.status(state, "service").status !== "skipped" && (o.reset || this.status(state, "service").status === "todo")) await this.serviceStep();
 
@@ -360,23 +350,6 @@ class Wizard {
       ctx.err(`Telegram did not accept it: ${me.error}\n`);
     }
     this.skipped.add("telegram");
-  }
-
-  private async sandboxStep(): Promise<void> {
-    const { ctx } = this;
-    const box = await checkSandbox(this.deps);
-    if (box.ok) return;
-    if (!box.docker) {
-      ctx.out(`${box.problem} Only Telegram chats need it; install Docker and run \`tcode onboard\` again.\n`);
-      this.skipped.add("sandbox");
-      return;
-    }
-    if (!(await this.ask(`Download the sandbox image ${box.image} now?`, true))) {
-      this.skipped.add("sandbox");
-      return;
-    }
-    const after = await checkSandbox(this.deps, { pull: true });
-    ctx.out(after.ok ? `Sandbox image ${after.image} is ready.\n` : `${after.problem}\n`);
   }
 
   private async serviceStep(): Promise<void> {

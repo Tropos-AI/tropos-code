@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { readOnboardingFlags } from "./flags";
-import { checkSandbox, computeOnboardState, finish, installService, listModels, pickDefaultModel, redactKey, reopen, saveKey, saveModel, saveTelegram, validateKey, verifyTelegram } from "./engine";
+import { FilePairing } from "../gateway/pairing";
+import { saveIdentity } from "../context/identity";
+import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
+import { checkSandbox, computeOnboardState, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
+import { STEP_WHY } from "./copy";
 import { GOOD_KEY, fakeDocker, fakeNet, fakeService, testDeps } from "./testing";
 
 let root: string;
@@ -18,14 +21,80 @@ afterEach(() => removeDir(root));
 const stepOf = (s: Awaited<ReturnType<typeof computeOnboardState>>, id: string) => s.steps.find((x) => x.id === id)!;
 
 describe("computeOnboardState", () => {
-  test("a bare machine: provider and model todo, not complete, optional steps marked optional", async () => {
-    const s = await computeOnboardState(testDeps(home));
-    expect(stepOf(s, "provider").status).toBe("todo");
-    expect(stepOf(s, "model").status).toBe("todo");
+  test("a bare machine lists the ten steps in order; only provider and model are required", async () => {
+    const s = await computeOnboardState(testDeps(home), { health: false });
+    expect(s.steps.map((x) => x.id)).toEqual(["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"]);
+    expect(s.steps.filter((x) => !x.optional).map((x) => x.id)).toEqual(["provider", "model"]);
+    expect(["welcome", "identity", "projects", "autonomy", "telegram", "phone", "done"].map((id) => stepOf(s, id).status)).toEqual(Array(7).fill("todo"));
     expect(s.complete).toBe(false);
     expect(s.dismissed).toBe(false);
-    expect(s.steps.filter((x) => !x.optional).map((x) => x.id)).toEqual(["provider", "model"]);
-    expect(stepOf(s, "sandbox").status).toBe("warn");
+    expect(Object.keys(STEP_WHY)).toHaveLength(10);
+  });
+
+  test("identity, projects, autonomy, telegram and phone are read from the machine", async () => {
+    const appDir = join(root, "app");
+    await mkdir(appDir);
+    await saveIdentity(home, { name: "Ada", emoji: "🦊" });
+    await writeFile(join(home, "gateway.json"), JSON.stringify({ projects: [{ id: "app", name: "app", path: appDir }], chat: { autonomy: "balanced", backend: "host" }, telegram: { botToken: "1:x" }, remoteAccess: { tailscale: true } }));
+    const pairing = new FilePairing({ path: join(home, "gateway", "pairing.json") });
+    await pairing.approveSender("telegram", "7");
+    await pairing.setOwner("telegram", "7");
+    await updateOnboardingFlags(home, { autonomyChosen: true });
+    const s = await computeOnboardState(testDeps(home), { health: false });
+    for (const id of ["identity", "projects", "autonomy", "telegram", "phone"]) expect(stepOf(s, id).status).toBe("done");
+    expect(stepOf(s, "identity").detail).toBe("🦊 Ada");
+    expect(stepOf(s, "projects").detail).toBe("1 project");
+    expect(stepOf(s, "autonomy").detail).toBe("Balanced");
+    expect(stepOf(s, "telegram").detail).toBe("Bot connected; you are the owner");
+    expect(await telegramState(testDeps(home))).toEqual({ token: true, owner: { channel: "telegram", senderId: "7" } });
+    expect(await phoneEnabled(home)).toBe(true);
+    expect(await registeredProjectCount(home)).toBe(1);
+  });
+
+  test("a bot without an owner, and a Docker chat backend, stay todo with what to do next", async () => {
+    await writeFile(join(home, "gateway.json"), JSON.stringify({ telegram: { botToken: "1:x" }, chat: { autonomy: "ask", backend: "docker" } }));
+    const s = await computeOnboardState(testDeps(home), { health: false });
+    expect(stepOf(s, "telegram").status).toBe("todo");
+    expect(stepOf(s, "telegram").detail).toBe("Bot connected. Message it so I can recognise you.");
+    expect(stepOf(s, "autonomy").status).toBe("todo");
+    expect(stepOf(s, "autonomy").detail).toBe("Chats use Docker today. Running them on this computer is faster and keeps the sandbox.");
+  });
+
+  test("autonomy not yet chosen says what the default is; unconfined consent is part of the detail", async () => {
+    expect(stepOf(await computeOnboardState(testDeps(home), { health: false }), "autonomy").detail).toBe("Default: Balanced.");
+    await writeFile(join(home, "gateway.json"), JSON.stringify({ chat: { autonomy: "autonomous", backend: "host", allowUnconfined: true } }));
+    await updateOnboardingFlags(home, { autonomyChosen: true });
+    const s = await computeOnboardState(testDeps(home, { confinement: async () => null }), { health: false });
+    expect(stepOf(s, "autonomy").detail).toBe("Autonomous on this computer, unconfined");
+  });
+
+  test("skipStep records at once and refuses required steps; finish keeps startedAt and reminded; reopen keeps only reminded", async () => {
+    const deps = testDeps(home);
+    await markStarted(deps);
+    await updateOnboardingFlags(home, { reminded: ["phone"] });
+    expect(stepOf(await skipStep(deps, "telegram"), "telegram").status).toBe("skipped");
+    await expect(skipStep(deps, "model")).rejects.toThrow("This step is needed");
+    await finish(deps);
+    expect(await readOnboardingFlags(home)).toMatchObject({ startedAt: "2026-10-15T12:00:00.000Z", skipped: ["telegram"], reminded: ["phone"] });
+    await reopen(deps);
+    expect(await readOnboardingFlags(home)).toEqual({ reminded: ["phone"] });
+  });
+
+  test("markStarted fixes the chat settings before anyone is approved", async () => {
+    await markStarted(testDeps(home));
+    expect(JSON.parse(await readFile(join(home, "gateway.json"), "utf8"))).toHaveProperty("chat");
+    expect(stepOf(await computeOnboardState(testDeps(home), { health: false }), "welcome").status).toBe("done");
+  });
+
+  test("the done step carries the doctor's verdict only when health is asked for", async () => {
+    const doctor = { checks: [{ id: "t", area: "t", title: "t", run: async () => [{ id: "t", level: "warn" as const, message: "w" }] }] };
+    const deps = testDeps(home, { doctor });
+    expect(stepOf(await computeOnboardState(deps), "done").status).toBe("warn");
+    expect(stepOf(await computeOnboardState(deps, { health: true }), "done").detail).toBe("1 warning");
+    expect(stepOf(await computeOnboardState(deps, { health: false }), "done").status).toBe("todo");
+    const bad = testDeps(home, { doctor: { checks: [{ id: "t", area: "t", title: "t", run: async () => [{ id: "t", level: "error" as const, message: "e" }] }] } });
+    expect(stepOf(await computeOnboardState(bad), "done").status).toBe("error");
+    expect(stepOf(await computeOnboardState(testDeps(home)), "done").status).toBe("done");
   });
 
   test("an env key makes provider done, and the default model counts when its provider is connected", async () => {
@@ -55,32 +124,9 @@ describe("computeOnboardState", () => {
     expect(stepOf(s, "provider").detail).toContain("Ollama");
   });
 
-  test("telegram, pairing, sandbox, service and health are read from the machine", async () => {
-    await writeFile(join(home, "gateway.json"), JSON.stringify({ telegram: { botToken: "1:x" } }));
-    await mkdir(join(home, "gateway"), { recursive: true });
-    await writeFile(join(home, "gateway", "pairing.json"), JSON.stringify({ approved: [{ channel: "telegram", senderId: "1" }] }));
-    const docker = fakeDocker();
-    const s = await computeOnboardState(
-      testDeps(home, {
-        runner: { exec: docker.exec },
-        service: fakeService({ installed: true, running: true }),
-        doctor: { checks: [{ id: "t", area: "t", title: "t", run: async () => [{ id: "t", level: "warn", message: "w" }] }] },
-      }),
-    );
-    expect(stepOf(s, "telegram").status).toBe("done");
-    expect(stepOf(s, "pairing").detail).toBe("1 approved sender");
-    expect(stepOf(s, "sandbox").status).toBe("done");
+  test("service is read from the machine", async () => {
+    const s = await computeOnboardState(testDeps(home, { service: fakeService({ installed: true, running: true }) }), { health: false });
     expect(stepOf(s, "service").detail).toContain("running");
-    expect(stepOf(s, "health").status).toBe("warn");
-  });
-
-  test("health is an error when the doctor finds one; docker without the image is todo", async () => {
-    const docker = fakeDocker({ image: false });
-    const s = await computeOnboardState(
-      testDeps(home, { runner: { exec: docker.exec }, doctor: { checks: [{ id: "t", area: "t", title: "t", run: async () => [{ id: "t", level: "error", message: "e" }] }] } }),
-    );
-    expect(stepOf(s, "health").status).toBe("error");
-    expect(stepOf(s, "sandbox").status).toBe("todo");
   });
 
   test("skipped flags turn undone optional steps into skipped, never the required ones", async () => {
