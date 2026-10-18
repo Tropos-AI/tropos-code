@@ -159,6 +159,18 @@ describe("ChannelsPanel", () => {
     });
     const alerts = await screen.findAllByRole("alert");
     expect(alerts.map((a) => a.textContent).join(" ")).toContain("Not available in the demo.");
-    expect(screen.getAllByRole("button", { name: "Retry" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "Retry" }).length).toBe(3);
+  });
+
+  test("the Access card marks the owner and the panel lists logged-in devices", async () => {
+    const h = handlers({
+      "pairing.list": () => ({ ...PAIRING, owner: { channel: "telegram", senderId: "4242" } }),
+      "devices.list": () => [{ id: "d1", name: "Chrome on macOS", createdAt: 1, lastSeen: Date.now(), via: "local", current: true }],
+    });
+    await mountAdminPage(ChannelsPanel, h.handlers);
+    const approved = await screen.findByRole("list", { name: "Approved senders" });
+    expect(within(approved).getByText("Owner")).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Devices" })).toBeTruthy();
+    expect(screen.getByText("Chrome on macOS")).toBeTruthy();
   });
 });

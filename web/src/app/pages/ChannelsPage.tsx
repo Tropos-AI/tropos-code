@@ -10,6 +10,8 @@ import { PageActions } from "@/components/pages/page-actions";
 import { ResourceView } from "@/components/pages/resource-view";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
 import { ConfirmDialog, LiveRegion, Notice, SectionCard, useAction } from "@/components/setup/admin-ui";
+import { DevicesCard } from "@/components/pages/settings/devices-card";
+import { OwnerPicker } from "@/components/pages/settings/owner-picker";
 import { ApproveCodeForm, ApprovedList, PendingList, TelegramTokenForm } from "@/components/setup/channel-forms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,6 +150,7 @@ function AccessCard() {
               <h3 className="text-[13px] font-medium text-ink">Approved senders</h3>
               <ApprovedList pairing={pairing} onRevoke={(sender) => { revoke.clear(); setRevoking(sender); }} />
             </div>
+            <OwnerPicker pairing={pairing} onChanged={resource.refresh} />
             <div className="flex flex-col gap-2">
               <h3 className="text-[13px] font-medium text-ink">Waiting for approval</h3>
               <PendingList pairing={pairing} />
@@ -212,6 +215,7 @@ export function ChannelsPanel() {
       <PanelHead description="Where Tropos can be reached from, and who is allowed in." />
       <TelegramCard />
       <AccessCard />
+      <DevicesCard />
       <HowItWorks />
     </PanelStack>
   );

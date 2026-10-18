@@ -6,6 +6,7 @@ import type { PairingView, TelegramInfo } from "@core/web/admin/api";
 
 import { redactKey } from "@/components/pages/settings/connect-form";
 import { Notice, TextField, useAction } from "@/components/setup/admin-ui";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { clockTime, relativeTime } from "@/lib/admin-format";
 import { useAdmin, useAppStore } from "@/lib/store";
@@ -123,7 +124,10 @@ export function ApprovedList({ pairing, onRevoke }: { pairing: PairingView; onRe
       {pairing.approved.map((sender) => (
         <li key={`${sender.channel}:${sender.senderId}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3.5 py-2.5">
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[13px] text-ink">{sender.senderId}</p>
+            <p className="flex flex-wrap items-center gap-2 font-mono text-[13px] text-ink">
+              {sender.senderId}
+              {pairing.owner?.channel === sender.channel && pairing.owner.senderId === sender.senderId ? <Badge tone="accent">Owner</Badge> : null}
+            </p>
             <p className="text-[12px] text-ink-3">
               {sender.channel} · approved <time dateTime={new Date(sender.approvedAt).toISOString()}>{clockTime(sender.approvedAt)}</time>
             </p>
