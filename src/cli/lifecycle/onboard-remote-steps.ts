@@ -33,19 +33,19 @@ async function claimOwner(io: WizardIO, token: string, bot: string): Promise<"ne
   let shown: string | null = null;
   let spin: Spinner | null = null;
 
+  // The window is open: show the link once, then the spinner (a spinner rewrites its line, so nothing may print above it).
   const onWindow = ({ nonce }: { nonce: string }) => {
-    if (nonce === shown) return;
-    shown = nonce;
-    const link = ownerClaimLink(bot, nonce);
-    flow.note([...wrapAll("On your phone, tap this link (or scan the code) and press Start. That is how I know it's you:"), link, ...qrLines(link)]);
-  };
-  const waiting = () => {
+    if (nonce !== shown) {
+      shown = nonce;
+      const link = ownerClaimLink(bot, nonce);
+      flow.note([...wrapAll("On your phone, tap this link (or scan the code) and press Start. That is how I know it's you:"), link, ...qrLines(link)]);
+    }
     spin = flow.spinner();
     spin.start("Waiting for you to tap Start in Telegram…");
   };
 
   for (;;) {
-    waiting();
+    spin = null;
     let candidate;
     try {
       candidate = await nextOwnerCandidate(deps, token, { mode, signal: AbortSignal.timeout(cli.telegramWaitMs ?? DEFAULT_TELEGRAM_WAIT_MS), exclude, onWindow });
