@@ -45,24 +45,25 @@ async function until(check: () => boolean, ms = 10_000) {
 }
 
 describe("hideMounts", () => {
-  test("hidden paths are masked inside the container: a file with /dev/null, a folder with a read-only tmpfs; missing ones add nothing", async () => {
+  test("hidden paths are masked inside the container: a file with /dev/null, a folder with a read-only tmpfs; missing ones too", async () => {
     const ws = realpathSync(await makeTmpDir("tropos-hide-"));
     try {
       await writeFile(join(ws, "USER.md"), "u");
       await mkdir(join(ws, "memory"));
       const args = hideMounts(ws, [join(ws, "USER.md"), join(ws, "memory"), join(ws, "MEMORY.md"), join(ws, "skills")]);
-      expect(args).toEqual(["-v", `/dev/null:${join(ws, "USER.md")}:ro`, "--tmpfs", `${join(ws, "memory")}:ro`]);
+      expect(args).toEqual(["-v", `/dev/null:${join(ws, "USER.md")}:ro`, "--tmpfs", `${join(ws, "memory")}:ro`, "-v", `/dev/null:${join(ws, "MEMORY.md")}:ro`, "--tmpfs", `${join(ws, "skills")}:ro`]);
     } finally {
       await removeDir(ws);
     }
   });
-  test("a path outside the workspace, or a link, is not masked", async () => {
+  test("a path outside the workspace is not masked; a link makes the sandbox refuse", async () => {
     const ws = realpathSync(await makeTmpDir("tropos-hide-"));
     const out = realpathSync(await makeTmpDir("tropos-hide-out-"));
     try {
       await writeFile(join(out, "x.md"), "x");
-      await symlink(join(out, "x.md"), join(ws, "link.md"));
-      expect(hideMounts(ws, [join(out, "x.md"), join(ws, "link.md")])).toEqual([]);
+      expect(hideMounts(ws, [join(out, "x.md")])).toEqual([]);
+      await symlink(join(out, "x.md"), join(ws, "USER.md"));
+      expect(() => hideMounts(ws, [join(ws, "USER.md")])).toThrow(/is a link/);
     } finally {
       await removeDir(ws);
       await removeDir(out);

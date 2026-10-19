@@ -8,7 +8,7 @@ import { MalformedToolCallError } from "../providers/chat";
 import type { Effort, Mode } from "../config/constants";
 import type { HookEvent } from "../config/settings";
 import { modeReminder } from "../context/system-prompt";
-import { decide, type PermissionContext } from "../permissions/engine";
+import { decide, ownFilePath, type PermissionContext } from "../permissions/engine";
 import { danglingToolResults, type MessageParam } from "../session/store";
 import { toolKind, type AnyTool, type ToolContext, type ToolOutput, type ToolResultContent } from "../tools/types";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, ToolStatus, TurnEndReason } from "./events";
@@ -499,7 +499,9 @@ export class Agent {
       // approvedPaths lets file tools refuse if the path resolves differently at write time (TOCTOU).
       const permissions = this.opts.permissions();
       // isDenied lets search tools drop files covered by deny rules when they scan a directory.
+      // A search over a folder that holds the chief's own files omits them for everyone (the owner reads them with an asked Read).
       const isDenied = (path: string) =>
+        (!subject.paths.includes(path) && ownFilePath({ toolName: tool.name, kind, paths: [path] }, permissions) !== undefined) ||
         decide({ toolName: tool.name, kind, paths: [path] }, permissions).behavior === "deny" ||
         decide({ toolName: "Read", kind: "read", paths: [path] }, permissions).behavior === "deny";
       const progress = (text: string) => emit({ type: "tool_progress", id: block.id, text });

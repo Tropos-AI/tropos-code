@@ -91,6 +91,17 @@ async function walk(root: string, rel: string, out: PlanEntry[], skipped: Backup
   else skipped.push({ path: rel, reason: "not a regular file" });
 }
 
+/** The first directory above `rel` (below the home) that is a link: walking through it would read outside the home. */
+async function linkedParent(root: string, rel: string): Promise<string | undefined> {
+  const parts = rel.split("/").slice(0, -1);
+  for (let i = 1; i <= parts.length; i++) {
+    const sub = parts.slice(0, i).join("/");
+    const st = await lstat(join(root, sub)).catch(() => undefined);
+    if (st?.isSymbolicLink()) return sub;
+  }
+  return undefined;
+}
+
 /** The files to back up, in a stable order. Never follows symlinks; those that point outside the home are skipped. */
 export async function planBackup(home: string, sel: BackupSelection): Promise<BackupPlan> {
   const entries: PlanEntry[] = [];
@@ -112,7 +123,12 @@ export async function planBackup(home: string, sel: BackupSelection): Promise<Ba
   }
   if (bulky) roots.push("plugins", "learning");
   if (sel.workspace) roots.push("workspace");
-  for (const rel of roots) await walk(home, rel, entries, skipped);
+  for (const rel of roots) {
+    // A linked folder above a nested root (workspace, projects/<key>) would lead the walk out of the home.
+    const link = await linkedParent(home, rel);
+    if (link) skipped.push({ path: rel, reason: `not backed up (${link} is a symlink)` });
+    else await walk(home, rel, entries, skipped);
+  }
   entries.sort((a, b) => (a.rel < b.rel ? -1 : 1));
   return { entries, skipped, ...describeSelection(sel) };
 }

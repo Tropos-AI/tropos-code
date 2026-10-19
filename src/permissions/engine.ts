@@ -224,7 +224,7 @@ function foldPath(path: string): string {
 }
 
 /** The first of the request's paths that lies in one of the chief's own files. */
-function ownFilePath(req: PermissionRequest, ctx: PermissionContext): string | undefined {
+export function ownFilePath(req: PermissionRequest, ctx: PermissionContext): string | undefined {
   if (!ctx.ownFiles?.length || STORE_TOOL_NAMES.has(req.toolName)) return undefined;
   const own = ctx.ownFiles.map(foldPath);
   return req.paths.find((p) => own.some((dir) => isInside(foldPath(p), dir)));

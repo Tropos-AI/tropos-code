@@ -583,6 +583,21 @@ describe("the home layout with the chief inside workspace/", () => {
     expect(risky[5]?.why).toMatch(/^a subagent/);
   });
 
+  test("a symlinked folder above a nested root is not followed out of the home", async () => {
+    const outside = join(root, "outside");
+    await mkdir(join(outside, "memory"), { recursive: true });
+    await writeFile(join(outside, "USER.md"), "stolen");
+    await writeFile(join(outside, "memory", "j.md"), "stolen");
+    await symlink(outside, join(home, "workspace"));
+    await mkdir(join(outside, "notes"), { recursive: true });
+    await writeFile(join(outside, "notes", "n.md"), "stolen");
+    await mkdir(join(home, "projects"), { recursive: true });
+    await symlink(outside, join(home, "projects", "linked"));
+    const plan = await planBackup(home, sel);
+    expect(plan.entries.filter((e) => e.rel.startsWith("workspace/") || e.rel.startsWith("projects/linked/"))).toEqual([]);
+    expect(plan.skipped.some((s) => s.path === "workspace/USER.md" && /symlink/.test(s.reason))).toBe(true);
+  });
+
   test("gateway/devices.json and login-codes.json stay out of a backup that includes the workspace", async () => {
     await seed();
     await put("gateway/devices.json", "{}");

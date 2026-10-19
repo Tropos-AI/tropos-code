@@ -184,11 +184,21 @@ test("the chief's own files are masked after the project bind and the workspace 
   expect(carve).toBeGreaterThan(0);
   expect(at(args, ...nullFile(join(ws, "USER.md")))).toBeGreaterThan(carve);
   expect(at(args, ...emptyDir(join(ws, "memory")))).toBeGreaterThan(carve);
-  expect(at(args, ...nullFile(join(ws, "AGENTS.md")))).toBe(-1); // missing: nothing to mask
+  expect(at(args, ...nullFile(join(ws, "AGENTS.md")))).toBe(-1); // missing, and the workspace is read-only here: nothing can be created
   // The workspace as the project: after the project bind.
   c = paths(ws);
   args = bwrapArgs(c, ws);
   const projectBind = at(args, "--bind", ws, ws);
   expect(at(args, ...nullFile(join(ws, "USER.md")))).toBeGreaterThan(projectBind);
   expect(at(args, ...emptyDir(join(ws, "memory")))).toBeGreaterThan(projectBind);
+});
+
+test("missing own files inside a writable workspace get read-only placeholders, so a command can't create them", () => {
+  const ws = join(userHome, ".tropos", "workspace");
+  mkdirSync(ws, { recursive: true });
+  const c = paths(ws);
+  const args = bwrapArgs(c, ws);
+  const projectBind = at(args, "--bind", ws, ws);
+  for (const name of ["USER.md", "SOUL.md", "AGENTS.md", "MEMORY.md", "BOOTSTRAP.md", "IDENTITY.md"]) expect(at(args, ...nullFile(join(ws, name)))).toBeGreaterThan(projectBind);
+  for (const name of ["memory", "skills", "skills-learned"]) expect(at(args, ...emptyDir(join(ws, name)))).toBeGreaterThan(projectBind);
 });

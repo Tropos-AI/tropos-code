@@ -38,9 +38,11 @@ const LABEL = "tropos=1";
 const OWNER_LABEL = "tropos.pid";
 
 /**
- * `docker run` arguments that mask the existing `hide` paths inside the workspace: a file with /dev/null, a folder with
- * an empty read-only tmpfs. A path outside the workspace, a missing one, or one that is a link is left alone (a link's
- * target isn't the chief's file, and the container could swap the link anyway).
+ * `docker run` arguments that mask the `hide` paths inside the workspace: a file with /dev/null, a folder with an empty
+ * read-only tmpfs. A missing path is masked too (a placeholder, `.md` names being files), or a command could create
+ * USER.md or memory/ and plant text the chief later loads. A path outside the workspace is left alone; one that is a
+ * link makes the sandbox refuse to start, since a mount can't be put over the link itself and the container could
+ * swap it.
  */
 export function hideMounts(workspace: string, hide: readonly string[]): string[] {
   let root: string;
@@ -50,15 +52,16 @@ export function hideMounts(workspace: string, hide: readonly string[]): string[]
     return [];
   }
   return hide.flatMap((path) => {
-    if (path !== root && !path.startsWith(root + sep) && !(path === workspace || path.startsWith(workspace + sep))) return [];
-    let info: ReturnType<typeof lstatSync>;
+    if (!(path === root || path.startsWith(root + sep)) && !(path === workspace || path.startsWith(workspace + sep))) return [];
+    let info: ReturnType<typeof lstatSync> | undefined;
     try {
       info = lstatSync(path);
     } catch {
-      return [];
+      info = undefined;
     }
-    if (info.isSymbolicLink()) return [];
-    return info.isDirectory() ? ["--tmpfs", `${path}:ro`] : ["-v", `/dev/null:${path}:ro`];
+    if (info?.isSymbolicLink()) throw new Error(`${path} is a link; the sandbox won't run until it is replaced by a real file or folder.`);
+    const isDir = info ? info.isDirectory() : !path.endsWith(".md");
+    return isDir ? ["--tmpfs", `${path}:ro`] : ["-v", `/dev/null:${path}:ro`];
   });
 }
 

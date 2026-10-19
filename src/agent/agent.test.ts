@@ -61,6 +61,9 @@ function harness(steps: Step[], over: {
     onAllowAlways?: AgentOptions["onAllowAlways"];
     emit?: (e: AgentEvent) => void;
     tools?: AnyTool[];
+    ownFiles?: string[];
+    role?: "owner" | "guest";
+    confine?: boolean;
   } = {}): Harness {
   const model = new FakeModel(steps);
   const events: AgentEvent[] = [];
@@ -79,6 +82,7 @@ function harness(steps: Step[], over: {
       cwd: "/work",
       home: "/home/u",
       allowedDirs: ["/work"],
+      ...(over.ownFiles ? { ownFiles: over.ownFiles, role: over.role, confine: over.confine } : {}),
     }),
     askPermission:
       over.ask ??
@@ -644,6 +648,33 @@ describe("Agent failure paths keep history valid", () => {
     expect(seen?.("/work/secrets/a")).toBe(true);
     expect(seen?.("/work/x.txt")).toBe(true);
     expect(seen?.("/work/other.txt")).toBe(false);
+  });
+
+  test("a search over a folder with the chief's own files omits them, whoever asks; the asked file itself stays", async () => {
+    for (const over of [{ role: "guest" as const }, { role: "owner" as const, confine: true }, { role: "owner" as const }]) {
+      let seen: ((p: string) => boolean) | undefined;
+      const grep = defineTool({
+        name: "Grep",
+        kind: "read",
+        description: "x",
+        schema: z.object({}),
+        summarize: () => "grep",
+        subject: () => ({ paths: ["/work"] }),
+        run: async (_i, ctx) => {
+          seen = ctx.isDenied;
+          return { content: "ok" };
+        },
+      });
+      const h = harness([() => reply([toolUseBlock("g", "Grep", {})], "tool_use"), () => reply([textBlock("ok")])], {
+        tools: [grep] as AnyTool[],
+        ownFiles: ["/work/USER.md", "/work/memory"],
+        ...over,
+      });
+      await run(h);
+      expect(seen?.("/work/USER.md")).toBe(true);
+      expect(seen?.("/work/memory/2026-10-16.md")).toBe(true);
+      expect(seen?.("/work/app.ts")).toBe(false);
+    }
   });
 
   test("contextText throwing ends the turn with an error instead of rejecting", async () => {

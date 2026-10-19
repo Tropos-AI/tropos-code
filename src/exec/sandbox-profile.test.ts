@@ -162,6 +162,9 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(paths, `cat "${join(ws, "memory", "2026-10-16.md")}"`)).not.toBe(0);
       expect(run(paths, `echo x > "${join(ws, "memory", "new.md")}"`)).not.toBe(0);
       expect(run(paths, `echo x > "${join(ws, "MEMORY.md")}"`)).not.toBe(0); // missing files can't be created either
+      expect(existsSync(join(ws, "MEMORY.md"))).toBe(false);
+      expect(run(paths, `mkdir "${join(ws, "skills")}"`)).not.toBe(0);
+      expect(existsSync(join(ws, "skills"))).toBe(false);
       // The rest of the workspace is still the project: readable and writable.
       expect(run(paths, `echo hi > "${join(ws, "app.ts")}" && cat "${join(ws, "app.ts")}"`)).toBe(0);
       // Seen from another project, the workspace carve-out stays readable but the chief's files do not.

@@ -63,7 +63,13 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   if (carve && reopened.some((secret) => isInside(carveOut, secret))) args.push("--ro-bind", carveOut, carveOut);
 
   // The chief's own files, last among the binds that could bring them back (the project or the workspace carve-out).
-  for (const own of paths.ownFiles.filter(isStatable)) args.push(...hide(own));
+  // One that doesn't exist yet is covered by an empty read-only placeholder (like .git below), or a command could create
+  // USER.md or memory/ and plant text the chief later loads. Only where the workspace is writable (inside the project):
+  // elsewhere it is a read-only bind and nothing can be created.
+  for (const own of paths.ownFiles) {
+    if (isStatable(own)) args.push(...hide(own));
+    else if (!exists(own) && isInside(own, project)) args.push(...protect(own, own.endsWith(".md") ? "file" : "dir"));
+  }
 
   // `.git` as a mount point can't be renamed (EBUSY): `mv .git g2; write g2/hooks/x; mv g2 .git` fails.
   for (const [i, git] of paths.gitDirs.entries()) {
