@@ -185,7 +185,8 @@ describe("SkillsPage › managing skills", () => {
     await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.write", params: { source: "user", name: "bun-testing", content: "---\ndescription: d\n---\nnew body" } }));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "SKILL.md" })).toBeNull());
     await settle();
-  });
+    // Two round trips and an editor that mounts lazily: a busy CI machine has taken over 5 s.
+  }, 20_000);
 
   test("Delete asks first, then deletes", async () => {
     const { socket } = await mountAdminPage(SkillsPage, { "skills.delete": () => ({ ok: true }), "skills.archived": ARCHIVED_NONE }, { panel: () => WITH_SOURCES });
