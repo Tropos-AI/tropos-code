@@ -122,6 +122,7 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     mode,
     rules: ctx.rules,
     cwd: ctx.cwd,
+    // `~` in a rule is the user's home; everything of Tropos's own (stores, own files) comes from ctx.home below.
     home: homedir(),
     allowedDirs: ctx.allowedDirs,
     confine: ctx.origin === "channel",

@@ -92,12 +92,13 @@ export function execAsks(exec: ExecBackend | undefined, tools: AnyTool[]): Rule[
  * asking, as the owner's do: the save is announced, recorded in the ledger for undo and threat-scanned. Anything
  * outside the folder still asks, and the chief's files stay denied.
  */
-export function specialistPermissions(base: PermissionContext, spec: Specialist, deny: Rule[], ask: Rule[]): PermissionContext {
+export function specialistPermissions(base: PermissionContext, spec: Specialist, deny: Rule[], ask: Rule[], role: SessionRole): PermissionContext {
   const own = canonicalStorePath(base.home, spec.dir);
   return capAutonomy(
     {
       ...base,
-      role: "owner",
+      // The session's own role: the subagent context drops it, and a scheduled run's specialist is no owner.
+      role,
       stores: own ? { paths: [own], askBeforeSaving: false } : undefined,
       rules: { ...base.rules, deny: [...base.rules.deny, ...deny], ask: [...base.rules.ask, ...ask] },
     },
@@ -289,7 +290,7 @@ export async function runSpecialist(
     const rules = specialistDenyRules(deps.home, spec, others);
     const kit = await specialistKit(spec, deps, ctx.cwd());
     const asks = execAsks(ctx.exec, kit.tools);
-    const permissions = (): PermissionContext => specialistPermissions(deps.permissions(), spec, rules, asks);
+    const permissions = (): PermissionContext => specialistPermissions(deps.permissions(), spec, rules, asks, deps.role);
     let logged: Promise<void> = Promise.resolve();
     const out = await runSubagent(
       { ...spec, prompt: `${SPECIALIST_RULES}\n\n${spec.prompt.trim()}`, model: specialistModel(spec, deps.config().model) },

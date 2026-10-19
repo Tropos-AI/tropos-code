@@ -53,6 +53,7 @@ export interface PermissionContext {
   mode: Mode;
   rules: PermissionRules;
   cwd: string;
+  /** The user's home, for `~` in rules and commands. Never Tropos's home: its stores arrive in `stores`. */
   home: string;
   allowedDirs: string[];
   /** Paths outside allowedDirs are denied, not asked about: sessions started from a messaging channel. */

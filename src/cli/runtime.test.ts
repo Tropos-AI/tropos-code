@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { BOOTSTRAP_TEXT } from "../context/identity";
 import { lstat, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { ProviderRouter } from "../providers/router";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
@@ -114,6 +115,15 @@ test("permissionContext carries the role, the origin's confinement and the store
   for (const own of workspaceOwnPaths(ctx.home)) expect(local.ownFiles).toContain(own);
   const asking = { ...ctx, origin: "channel" as const, role: "guest" as const, settings: { ...DEFAULT_SETTINGS, learning: { ...DEFAULT_SETTINGS.learning, askBeforeSaving: true } } };
   expect(permissionContext(asking, "default")).toMatchObject({ mode: "default", confine: true, role: "guest", stores: { askBeforeSaving: true } });
+});
+
+test("permissionContext takes Tropos's stores and own files from the Tropos home, wherever it is; `home` is the user's, for ~ in rules", () => {
+  const elsewhere = { ...ctx, home: join(dir, "custom-tropos-home") };
+  const pc = permissionContext(elsewhere, "default");
+  expect(pc.stores!.paths).toContain(journalDir(elsewhere.home));
+  expect(pc.ownFiles).toContain(workspaceOwnPaths(elsewhere.home)[0]!);
+  expect(pc.instructionFiles).toContain(join(elsewhere.home, "workspace", "TROPOS.md"));
+  expect(pc.home).toBe(homedir());
 });
 
 test("permissionContext reads the chat's autonomy on every decision, so a change applies to the open session", () => {

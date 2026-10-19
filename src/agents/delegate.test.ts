@@ -225,7 +225,7 @@ test("execAsks: an unconfined shell always asks for a specialist, a confined or 
 test("a specialist's saves inside its own folder run unasked; elsewhere they ask or are denied", async () => {
   const kit = await specialistKit(spec, deps, "/repo");
   const base: PermissionContext = { ...withRules([]), mode: "default" };
-  const pc = specialistPermissions(base, spec, specialistDenyRules(home, spec, []), []);
+  const pc = specialistPermissions(base, spec, specialistDenyRules(home, spec, []), [], "owner");
   const req = (name: string, input: Record<string, unknown>) => {
     const t = kit.tools.find((x) => x.name === name)!;
     return { toolName: name, kind: t.kind ?? "edit", paths: t.subject(input as never, "/repo").paths };
@@ -238,6 +238,19 @@ test("a specialist's saves inside its own folder run unasked; elsewhere they ask
   expect(decide({ toolName: "Memory", kind: "edit", paths: [join(home, "agents/other/MEMORY.md")] }, pc).behavior).not.toBe("allow");
   // A save with one target outside the folder asks.
   expect(decide({ toolName: "SkillManage", kind: "edit", paths: [join(spec.dir, "MEMORY.md"), join(home, "workspace", "skills-learned", "x")] }, pc).behavior).not.toBe("allow");
+});
+
+test("a specialist runs as the session's role, never as the owner by default: a scheduled run's specialist saves nothing unasked", async () => {
+  const kit = await specialistKit(spec, deps, "/repo");
+  const base: PermissionContext = { ...withRules([]), mode: "default" };
+  const save = (() => {
+    const t = kit.tools.find((x) => x.name === "Memory")!;
+    return { toolName: "Memory", kind: t.kind ?? "edit", paths: t.subject({ action: "add", target: "memory", content: "x" } as never, "/repo").paths };
+  })();
+  expect(specialistPermissions(base, spec, [], [], "owner").role).toBe("owner");
+  const scheduled = specialistPermissions(base, spec, [], [], "scheduled");
+  expect(scheduled.role).toBe("scheduled");
+  expect(decide(save, scheduled).behavior).not.toBe("allow");
 });
 
 test("a specialist's save is announced with its label", async () => {
