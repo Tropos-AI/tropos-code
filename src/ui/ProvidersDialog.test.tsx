@@ -5,9 +5,11 @@ import type { ProviderInfo } from "../providers/registry";
 import type { ProviderStatus } from "../providers/router";
 import { ProvidersDialog } from "./ProvidersDialog";
 import type { ProviderControl } from "./runtime";
-import { settle } from "../../test/helpers/wait";
+import { settle, waitFor } from "../../test/helpers/wait";
 
 const tick = () => settle(30);
+/** The list loads asynchronously; keys pressed before it is there land on nothing. */
+const listed = (r: { lastFrame(): string | undefined }) => waitFor(() => expect(r.lastFrame()).toContain("Anthropic"));
 const DOWN = "\x1b[B";
 const ENTER = "\r";
 const ESC = "\x1b";
@@ -62,7 +64,7 @@ function open(control: ProviderControl, currentModel = "claude-opus-5-5") {
 describe("ProvidersDialog", () => {
   test("lists providers with their connection state", async () => {
     const { r } = open(fakeControl().control);
-    await tick();
+    await listed(r);
     const frame = r.lastFrame()!;
     expect(frame).toContain("Providers");
     expect(frame).toMatch(/Anthropic\s+● ANTHROPIC_API_KEY or ant auth login · in use/);
@@ -73,52 +75,52 @@ describe("ProvidersDialog", () => {
 
   test("a connected provider goes straight to its models; typing filters; enter picks", async () => {
     const { r, picked } = open(fakeControl({ deepseek: ["deepseek-chat", "deepseek-reasoner"] }).control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(r.lastFrame()).toContain("DeepSeek models");
-    expect(r.lastFrame()).toContain("deepseek-reasoner");
+    await waitFor(() => expect(r.lastFrame()).toContain("DeepSeek models"));
+    await waitFor(() => expect(r.lastFrame()).toContain("deepseek-reasoner"));
     r.stdin.write("reas");
     await tick();
     expect(r.lastFrame()).not.toContain("deepseek-chat");
     r.stdin.write(ENTER);
     await tick();
-    expect(picked).toEqual(["deepseek/deepseek-reasoner"]);
+    await waitFor(() => expect(picked).toEqual(["deepseek/deepseek-reasoner"]));
   });
 
   test("an unconnected provider asks for a key first, masks it, saves it, then lists models", async () => {
     const { control, log } = fakeControl({ xai: ["grok-code"] });
     const { r, picked } = open(control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(r.lastFrame()).toContain("Connect xAI");
-    expect(r.lastFrame()).toContain("https://xai.test/keys");
+    await waitFor(() => expect(r.lastFrame()).toContain("Connect xAI"));
+    await waitFor(() => expect(r.lastFrame()).toContain("https://xai.test/keys"));
     r.stdin.write("xai-secret-1");
     await tick();
     r.stdin.write(BACKSPACE);
     await tick();
     expect(r.lastFrame()).not.toContain("xai-secret");
-    expect(r.lastFrame()).toContain("•".repeat(11));
+    await waitFor(() => expect(r.lastFrame()).toContain("•".repeat(11)));
     r.stdin.write(ENTER);
     await tick();
     await tick();
-    expect(log).toEqual(["connect xai xai-secret-"]);
-    expect(r.lastFrame()).toContain("xAI models");
+    await waitFor(() => expect(log).toEqual(["connect xai xai-secret-"]));
+    await waitFor(() => expect(r.lastFrame()).toContain("xAI models"));
     r.stdin.write(ENTER);
     await tick();
-    expect(picked).toEqual(["xai/grok-code"]);
+    await waitFor(() => expect(picked).toEqual(["xai/grok-code"]));
   });
 
   test("a rejected key shows the error and stays on the key step", async () => {
     const { r } = open(fakeControl().control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN + DOWN);
     await tick();
     r.stdin.write(ENTER);
@@ -127,45 +129,45 @@ describe("ProvidersDialog", () => {
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(r.lastFrame()).toContain("Connect xAI");
-    expect(r.lastFrame()).toContain("paste just the key");
+    await waitFor(() => expect(r.lastFrame()).toContain("Connect xAI"));
+    await waitFor(() => expect(r.lastFrame()).toContain("paste just the key"));
   });
 
   test("when the model list fails, the typed text is used as the model id", async () => {
     const { r, picked } = open(fakeControl({ deepseek: new Error("timeout") }).control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(r.lastFrame()).toContain("Could not list models: timeout");
+    await waitFor(() => expect(r.lastFrame()).toContain("Could not list models: timeout"));
     r.stdin.write("deepseek-chat");
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(picked).toEqual(["deepseek/deepseek-chat"]);
+    await waitFor(() => expect(picked).toEqual(["deepseek/deepseek-chat"]));
   });
 
   test("d removes a saved key, k replaces one, esc steps back and then closes", async () => {
     const { control, log } = fakeControl();
     const { r, closed } = open(control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write("d");
     await tick();
     await tick();
-    expect(log).toEqual(["disconnect deepseek"]);
-    expect(r.lastFrame()).toMatch(/DeepSeek\s+○ not connected/);
+    await waitFor(() => expect(log).toEqual(["disconnect deepseek"]));
+    await waitFor(() => expect(r.lastFrame()).toMatch(/DeepSeek\s+○ not connected/));
     r.stdin.write("k");
     await tick();
-    expect(r.lastFrame()).toContain("Connect DeepSeek");
+    await waitFor(() => expect(r.lastFrame()).toContain("Connect DeepSeek"));
     r.stdin.write(ESC);
     await tick();
-    expect(r.lastFrame()).toContain("Providers");
+    await waitFor(() => expect(r.lastFrame()).toContain("Providers"));
     r.stdin.write(ESC);
     await tick();
-    expect(closed()).toBe(1);
+    await waitFor(() => expect(closed()).toBe(1));
   });
 
   test("a failing disconnect shows its error instead of an unhandled rejection", async () => {
@@ -174,24 +176,24 @@ describe("ProvidersDialog", () => {
       throw new Error("keychain locked");
     };
     const { r } = open(control);
-    await tick();
+    await listed(r);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write("d");
     await tick();
     await tick();
-    expect(r.lastFrame()).toContain("keychain locked");
+    await waitFor(() => expect(r.lastFrame()).toContain("keychain locked"));
   });
 
   test("marks the provider and model in use", async () => {
     const { r } = open(fakeControl({ deepseek: ["deepseek-chat", "deepseek-reasoner"] }).control, "deepseek/deepseek-chat");
-    await tick();
-    expect(r.lastFrame()).toMatch(/DeepSeek\s+● connected · saved key · in use/);
+    await listed(r);
+    await waitFor(() => expect(r.lastFrame()).toMatch(/DeepSeek\s+● connected · saved key · in use/));
     expect(r.lastFrame()).not.toMatch(/Anthropic.*in use/);
     r.stdin.write(DOWN);
     await tick();
     r.stdin.write(ENTER);
     await tick();
-    expect(r.lastFrame()).toContain("deepseek-chat (current)");
+    await waitFor(() => expect(r.lastFrame()).toContain("deepseek-chat (current)"));
   });
 });

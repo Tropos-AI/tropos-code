@@ -108,7 +108,8 @@ const selectedLine = (frame: string) => frame.split("\n").find((l) => l.includes
 describe("ModelPicker", () => {
   test("lists ready providers' models in sections, marks the current one, and shows effort", async () => {
     const { r, asked } = open();
-    await tick();
+    // Each section loads on its own; the failing one settles last.
+    await waitFor(() => expect(r.lastFrame()).toContain("Could not list models: 401 Unauthorized"));
     const frame = r.lastFrame()!;
     expect(frame).toContain("Select model");
     expect(frame).toContain("⌕ ");
