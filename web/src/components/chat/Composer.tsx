@@ -206,7 +206,7 @@ export function Composer({ value, onValueChange, onSubmitted }: Props) {
   const open = connection.status === "open";
 
   const commands = useMemo(() => [...builtinSuggestions(), ...extraSuggestions(hello?.commands ?? [])], [hello?.commands]);
-  const sentHistory = useMemo(() => done.flatMap((i) => (i.kind === "user" ? [i.text] : [])), [done]);
+  const sentHistory = useMemo(() => done.flatMap((i) => (i.kind === "user" && i.text ? [i.text] : [])), [done]);
 
   // ── suggestions (derived from the value and caret) ──
   const context = suggestionState(value, cursor);

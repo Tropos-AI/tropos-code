@@ -62,6 +62,23 @@ describe("Composer attachments", () => {
     expect(screen.queryByRole("list", { name: "Attachments" })).toBeNull();
   });
 
+  test("a message of images alone is skipped by ↑: it recalls the last typed text", async () => {
+    const { box, pick, socket } = mount();
+    fireEvent.change(box, { target: { value: "earlier", selectionStart: 7, selectionEnd: 7 } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" });
+    });
+    await act(async () => socket.deliver({ t: "rpc_result", id: socket.rpcs("prompt")[0]!.id, ok: true, result: "end_turn" }));
+    await pick(png());
+    await waitFor(() => expect(screen.getByRole("img", { name: "shot.png" })).toBeTruthy());
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter" });
+    });
+    expect(socket.rpcs("prompt")).toHaveLength(2);
+    fireEvent.keyDown(box, { key: "ArrowUp" });
+    expect(box.value).toBe("earlier");
+  });
+
   test("pasting an image from the clipboard attaches it instead of typing anything", async () => {
     const { box, paste } = mount();
     await act(async () => {
