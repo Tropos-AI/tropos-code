@@ -237,3 +237,29 @@ test("lessons keep the rest of a hand-edited AGENTS.md, and undo restores it", a
   await ledger.undo(entry!.id);
   expect(await readFile(join(home, "workspace", "AGENTS.md"), "utf8")).toBe(mine);
 });
+
+test("a store pointed at a specialist folder writes there, records it in the ledger and undoes", async () => {
+  const dir = join(home, "agents", "reviewer");
+  const ledger = new Ledger(home);
+  const own = new NotesStore(home, { ledger, dir, targets: ["memory"] });
+  expect(own.dir).toBe(dir);
+  expect(own.allows("memory")).toBe(true);
+  expect(own.allows("user")).toBe(false);
+  expect(new NotesStore(home).allows("lessons")).toBe(true);
+  await own.add("memory", "PRs need a changelog line");
+  expect(await readFile(join(dir, "MEMORY.md"), "utf8")).toBe("PRs need a changelog line\n");
+  const [entry] = await ledger.list();
+  expect(entry).toMatchObject({ kind: "memory", path: join(dir, "MEMORY.md") });
+  expect((await ledger.undo()).ok).toBe(true);
+  expect(await own.entries("memory")).toEqual([]);
+  expect(existsSync(join(home, "workspace", "MEMORY.md"))).toBe(false);
+});
+
+test("notesContext lists only the allowed targets", async () => {
+  await store.add("user", "chief's private profile");
+  const own = new NotesStore(home, { dir: join(home, "agents", "reviewer"), targets: ["memory"] });
+  await own.add("memory", "own note");
+  const text = await notesContext(own);
+  expect(text).toContain("own note");
+  expect(text).not.toContain("private profile");
+});

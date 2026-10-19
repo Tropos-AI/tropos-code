@@ -35,6 +35,8 @@ export interface DailyNotesOptions {
   /** Called after each successful append, e.g. to record it in the learning ledger. Errors are ignored. */
   onChange?(e: DailyChange): Promise<void> | void;
   now?: () => Date;
+  /** The journal folder; default <workspace>/memory. A specialist keeps its own in its folder. */
+  dir?: string;
 }
 
 export type DailyAppendResult = { ok: true; path: string } | { ok: false; error: string };
@@ -198,7 +200,7 @@ export class DailyNotes {
   }
 
   get dir(): string {
-    return journalDir(this.home);
+    return this.opts.dir ?? journalDir(this.home);
   }
 
   now(): Date {
@@ -276,7 +278,8 @@ export class DailyNotes {
     if (!DATE.test(date)) return null;
     const text = await readNoFollow(this.path(date));
     const mine = text === null ? [] : parseJournal(text).filter((e) => this.mine(e));
-    const legacy = await readNoFollow(join(legacyNotesDir(this.home, this.cwd), `${date}.md`)); // LEGACY_LAYOUT
+    // LEGACY_LAYOUT: a journal in a custom folder (a specialist's) never reads the chief's per-project notes.
+    const legacy = this.opts.dir ? null : await readNoFollow(join(legacyNotesDir(this.home, this.cwd), `${date}.md`));
     if (legacy === null && text === null) return null;
     const parts = [legacy?.trim() ?? "", ...mine.map(listEntry)].filter((p) => p.length > 0);
     return parts.length === 0 ? "" : parts.join("\n");
@@ -288,7 +291,7 @@ export class DailyNotes {
     const oldest = localDate(shiftDays(this.clock(), -(days - 1)));
     const names = [
       ...(await readdir(this.dir).catch(() => [] as string[])),
-      ...(await readdir(legacyNotesDir(this.home, this.cwd)).catch(() => [] as string[])), // LEGACY_LAYOUT
+      ...(this.opts.dir ? [] : await readdir(legacyNotesDir(this.home, this.cwd)).catch(() => [] as string[])), // LEGACY_LAYOUT
     ];
     const dates = [...new Set(names.map((n) => DAY_FILE.exec(n)?.[1]).filter((d): d is string => d !== undefined && d >= oldest))].sort().reverse();
     const out: Array<{ date: string; text: string }> = [];

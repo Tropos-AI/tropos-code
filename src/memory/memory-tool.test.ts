@@ -130,3 +130,14 @@ test("target lessons asks about workspace/AGENTS.md", () => {
   expect(tool.subject({ target: "lessons", action: "add", content: "x" }, "/")).toEqual({ paths: [join(home, "workspace", "AGENTS.md")] });
   expect(tool.schema.safeParse({ target: "lessons", action: "add", content: "x" }).success).toBe(true);
 });
+
+test("a store limited to memory refuses the other targets and writes nothing", async () => {
+  const dir = join(home, "agents", "reviewer");
+  const own = new NotesStore(home, { dir, targets: ["memory"] });
+  const tool = createMemoryTool(own);
+  const out = await tool.run({ target: "user", action: "add", content: "x" }, makeToolContext());
+  expect(out).toEqual({ content: 'This agent keeps only its own notes (target "memory").', isError: true });
+  expect((await tool.run({ target: "memory", action: "add", content: "y" }, makeToolContext())).isError).toBeFalsy();
+  expect(await own.entries("user")).toEqual([]);
+  expect(await store.entries("user")).toEqual([]);
+});

@@ -1,7 +1,7 @@
 // src/memory/notes.ts
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { truncateMemoryText } from "../context/memory";
 import { neutraliseHarnessTags } from "../context/tags";
 import { resolveLayoutPath } from "../home/layout";
@@ -12,6 +12,8 @@ import type { Actor } from "../tools/types";
 import { sectionEntries, withSectionEntries } from "./agents-file";
 
 export type NotesTarget = "memory" | "user" | "lessons";
+
+const ALL_TARGETS: readonly NotesTarget[] = ["memory", "user", "lessons"];
 
 /**
  * Character budgets per store. They are deliberately small: the notes ride in every session's first
@@ -89,19 +91,29 @@ export async function atomicWrite(path: string, text: string): Promise<void> {
 export class NotesStore {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly ledger?: Ledger;
+  private readonly folder?: string;
+  private readonly targets: readonly NotesTarget[];
 
+  /** `dir` moves the store into another folder (a specialist's); `targets` limits which notes it holds. */
   constructor(
     private readonly home: string,
-    opts: { ledger?: Ledger } = {},
+    opts: { ledger?: Ledger; dir?: string; targets?: NotesTarget[] } = {},
   ) {
     this.ledger = opts.ledger;
+    this.folder = opts.dir;
+    this.targets = opts.targets ?? ALL_TARGETS;
   }
 
   get dir(): string {
-    return workspaceDir(this.home);
+    return this.folder ?? workspaceDir(this.home);
+  }
+
+  allows(target: NotesTarget): boolean {
+    return this.targets.includes(target);
   }
 
   path(target: NotesTarget): string {
+    if (this.folder !== undefined) return join(this.folder, target === "lessons" ? "AGENTS.md" : FILES[target]);
     // Lessons are the "## Lessons" items of the workspace AGENTS.md, which has no legacy home.
     if (target === "lessons") return workspaceFile(this.home, "AGENTS.md");
     return resolveLayoutPath(this.home, FILES[target]); // LEGACY_LAYOUT: memories/ until the migration moves it
@@ -268,7 +280,8 @@ export async function notesContext(
   opts: { warn?: (message: string) => void; targets?: readonly NotesTarget[] } = {},
 ): Promise<string> {
   const parts: string[] = [];
-  for (const target of opts.targets ?? (["memory", "user", "lessons"] as const)) {
+  for (const target of opts.targets ?? ALL_TARGETS) {
+    if (!store.allows(target)) continue;
     const entries = await store.entries(target);
     if (entries.length === 0) continue;
     const header = usageHeader(notesSize(entries), MEMORY_LIMITS[target]);

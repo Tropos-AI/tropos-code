@@ -311,3 +311,21 @@ test("a project path or name can't make entries belong to another project", asyn
   expect(entries.map((e) => e.key).sort()).toEqual([projectKey(evil), projectKey(victim)].sort());
   expect(formatJournalEntry({ name: "a\nb", path: "/p", body: "x" }).split("\n")[0]).toStartWith("## a b (/p)");
 });
+
+test("a journal pointed at another folder appends and reads there", async () => {
+  const dir = join(home, "agents", "reviewer", "memory");
+  const notes = new DailyNotes(home, CWD, { dir, now: () => new Date(2026, 9, 14, 8, 0) });
+  expect(notes.dir).toBe(dir);
+  await notes.append("own entry");
+  expect(await readFile(join(dir, "2026-10-14.md"), "utf8")).toContain("own entry");
+  expect(await dailyNotesContext(notes)).toContain("own entry");
+  expect(await dailyNotesContext(new DailyNotes(home, CWD, { now: () => new Date(2026, 9, 14, 8, 0) }))).toBe("");
+});
+
+test("a journal in a custom folder ignores the chief's legacy per-project notes", async () => {
+  await mkdir(legacyNotesDir(home, CWD), { recursive: true });
+  await writeFile(join(legacyNotesDir(home, CWD), "2026-10-14.md"), "chief legacy secret\n");
+  const own = new DailyNotes(home, CWD, { dir: join(home, "agents", "reviewer", "memory"), now: () => new Date(2026, 9, 14, 8, 0) });
+  expect(await own.read("2026-10-14")).toBeNull();
+  expect(await own.recent(3)).toEqual([]);
+});

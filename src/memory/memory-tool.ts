@@ -105,6 +105,9 @@ export function createMemoryTool(store: NotesStore): AnyTool {
     summarize,
     subject: (input) => ({ paths: [store.path(input.target)] }),
     async run(input, ctx) {
+      if (!store.allows(input.target)) {
+        return { content: 'This agent keeps only its own notes (target "memory").', isError: true };
+      }
       const actor = ctx.actor;
       if (!input.operations) {
         if (!input.action) return { content: "Give either action or operations.", isError: true };
