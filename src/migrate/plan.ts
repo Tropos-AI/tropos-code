@@ -3,15 +3,18 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fmString, parseFrontmatter } from "../extensions/frontmatter";
-import { IDENTITY_FILE, MAX_SOUL_CHARS, SOUL_FILE, isEmojiLike, parseIdentityFile, updateIdentityFile } from "../context/identity";
+import { MAX_SOUL_CHARS, isEmojiLike, parseIdentityFile, updateIdentityFile } from "../context/identity";
 import { Ledger } from "../learning/ledger";
 import { scanText } from "../learning/threats";
 
 /** Imported content comes from somebody else's tool: the strict rules apply. */
 const STRICT = { strict: true } as const;
 import { ENTRY_SEPARATOR, MEMORY_LIMITS, NotesStore, atomicWrite, notesSize } from "../memory/notes";
-import { legacyNotesDir } from "../memory/daily";
-import { isInside } from "../paths";
+import { resolveLayoutPath } from "../home/layout";
+import { appendNewDay } from "../home/migrate";
+import { AGENTS_TEMPLATE } from "../memory/agents-file";
+import { appendJournalText, formatJournalEntry, parseJournal } from "../memory/daily";
+import { isInside, journalDir, projectKey, userSkillsDir, workspaceDir, workspaceFile } from "../paths";
 import { PROVIDERS, parseModelId } from "../providers/registry";
 import { readCredentials, saveApiKey } from "../providers/credentials";
 import { MemoryDoc, readSource, locateSource, type SkillCandidate, type SourceBundle } from "./source";
@@ -141,8 +144,9 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       const text = b.soul.text.trim() + "\n";
       const id = "identity:soul";
       const scan = scanText(text, STRICT);
-      const target = join(home, SOUL_FILE);
-      const existing = await readOrNull(target);
+      const target = workspaceFile(home, "SOUL.md");
+      // A blank SOUL.md (a placeholder) is empty, not "yours". A home not laid out yet is read where its file still is.
+      const existing = (await readOrNull(resolveLayoutPath(home, "SOUL.md")))?.trim() ? await readOrNull(resolveLayoutPath(home, "SOUL.md")) : null;
       const hash = sha(text);
       if (!b.soul.text.trim()) skip(id, "identity", "soul", b.soul.rel, "empty");
       else if (!scan.ok) skip(id, "identity", "soul", b.soul.rel, `threat scanner: ${scan.reason}`);
@@ -151,14 +155,14 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       else {
         const long = text.length > MAX_SOUL_CHARS ? `; Tropos loads only the first ${MAX_SOUL_CHARS.toLocaleString("en-US")} characters` : "";
         const alongside = existing !== null;
-        const dest = alongside ? join(home, "SOUL.imported.md") : target;
+        const dest = alongside ? join(workspaceDir(home), "SOUL.imported.md") : target;
         add({ id, category: "identity", kind: "soul", source: b.soul.rel, dest, action: alongside ? "alongside" : "create", files: [fileOf(b.soul.rel, text)], reason: (alongside ? "SOUL.md already exists; yours is kept, review SOUL.imported.md and merge by hand" : "") + long || undefined, bytes: text.length });
         importedText.push(text);
         plan.ops.push({
           itemIds: [id],
           keys: { [id]: { hash, dest } },
           run: async () => {
-            await ensureDir(home);
+            await ensureDir(workspaceDir(home));
             if (!alongside) await ledger.record({ actor, kind: "identity", path: dest, action: "import", summary: `import SOUL.md from ${label}`, before: null, after: text });
             await atomicWrite(dest, text);
           },
@@ -169,8 +173,9 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       const id = "identity:fields";
       const parsed = parseIdentityFile(b.identity.text);
       if (parsed.emoji && !isEmojiLike(parsed.emoji)) delete parsed.emoji;
-      const target = join(home, IDENTITY_FILE);
-      const existing = await readOrNull(target);
+      const target = workspaceFile(home, "IDENTITY.md");
+      const current = await readOrNull(resolveLayoutPath(home, "IDENTITY.md"));
+      const existing = current?.trim() ? current : null;
       const have = existing ? parseIdentityFile(existing) : {};
       const bad = Object.values(parsed).map((v) => scanText(v ?? "", STRICT)).find((r) => !r.ok);
       const patch: typeof parsed = {};
@@ -188,7 +193,7 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
           itemIds: [id],
           keys: { [id]: { hash, dest: target } },
           run: async () => {
-            await ensureDir(home);
+            await ensureDir(workspaceDir(home));
             await ledger.record({ actor, kind: "identity", path: target, action: "import", summary: `import identity from ${label}`, before: existing, after });
             await atomicWrite(target, after);
           },
@@ -232,9 +237,9 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
         }
         overflow.push(entry);
         importedText.push(entry);
-        overflowKeys[key] = { hash, dest: join(home, "memories", `imported-${opts.source}.md`) };
+        overflowKeys[key] = { hash, dest: join(workspaceDir(home), `imported-${opts.source}.md`) };
         overflowIds.push(id);
-        add({ id, category: "memory", kind: "note", source: src, dest: join(home, "memories", `imported-${opts.source}.md`), action: "overflow", reason: `over the ${limit}-char ${target === "memory" ? "MEMORY.md" : "USER.md"} budget`, bytes: entry.length, files: [fileOf(doc.file.rel, entry)] });
+        add({ id, category: "memory", kind: "note", source: src, dest: join(workspaceDir(home), `imported-${opts.source}.md`), action: "overflow", reason: `over the ${limit}-char ${target === "memory" ? "MEMORY.md" : "USER.md"} budget`, bytes: entry.length, files: [fileOf(doc.file.rel, entry)] });
       });
       if (added.length) {
         plan.ops.push({
@@ -248,12 +253,12 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       }
     }
     if (overflow.length) {
-      const file = join(home, "memories", `imported-${opts.source}.md`);
+      const file = join(workspaceDir(home), `imported-${opts.source}.md`);
       plan.ops.push({
         itemIds: overflowIds,
         keys: overflowKeys,
         run: async () => {
-          await ensureDir(join(home, "memories"));
+          await ensureDir(workspaceDir(home));
           const before = await readOrNull(file);
           const head = `# Notes imported from ${label} that did not fit the notes budget\n\nTropos does not load this file. Move what matters into MEMORY.md or USER.md by hand.\n`;
           const body = overflow.join("\n\n---\n\n");
@@ -262,59 +267,72 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       });
     }
 
-    // daily notes
-    const dir = legacyNotesDir(home, join(home, "workspace"));
+    // daily notes: one journal entry per source day, under the default workspace's heading
+    const workspace = workspaceDir(home);
+    const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
     for (const d of b.daily) {
       const id = `daily:${d.date}`;
       const text = d.text.trim();
-      const dest = join(dir, `${d.date}.md`);
+      const dest = join(journalDir(home), `${d.date}.md`);
       const hash = sha(text);
       const scan = scanText(text, STRICT);
       const existing = await readOrNull(dest);
+      const mine = existing === null ? [] : parseJournal(existing).filter((e) => e.key === projectKey(workspace));
       if (!text) skip(id, "memory", "daily", d.rel, "empty");
       else if (!scan.ok) skip(id, "memory", "daily", d.rel, `threat scanner: ${scan.reason}`, dest);
       else if (done(id, hash)) skip(id, "memory", "daily", d.rel, "already imported", dest);
-      else if (existing !== null && existing.includes(text)) skip(id, "memory", "daily", d.rel, "already in that day note", dest);
+      else if (mine.some((e) => flat(e.body).includes(flat(text)))) skip(id, "memory", "daily", d.rel, "already in that day note", dest);
       else {
-        const after = existing === null ? `${text}\n` : `${existing.replace(/\n*$/, "\n")}\n## Imported from ${label}\n\n${text}\n`;
+        const block = formatJournalEntry({ name: "workspace", path: workspace, body: text });
+        const lead = existing !== null && existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+        const after = `${existing ?? `# ${d.date}\n\n`}${lead}${block}`;
         add({ id, category: "memory", kind: "daily", source: d.rel, dest, action: existing === null ? "create" : "append", bytes: text.length, files: [fileOf(d.rel, text)] });
         importedText.push(text);
         plan.ops.push({
           itemIds: [id],
           keys: { [id]: { hash, dest } },
           run: async () => {
-            await ensureDir(dir);
             await ledger.record({ actor, kind: "daily", path: dest, action: "import", summary: `import ${d.rel} from ${label}`, before: existing, after });
-            await atomicWrite(dest, after);
+            await appendNewDay(dest, d.date);
+            await appendJournalText(dest, `${lead}${block}`);
           },
         });
       }
     }
   }
 
-  // ---- AGENTS.md -> TROPOS.md ------------------------------------------------------------------
+  // ---- AGENTS.md -> workspace/AGENTS.md, above the sections Tropos keeps up to date itself ------
   if (want("agents") && b.agents) {
     const id = "agents:AGENTS.md";
     const text = b.agents.text.trim();
     const hash = sha(text);
-    const dest = join(home, "TROPOS.md");
+    const dest = workspaceFile(home, "AGENTS.md");
     const marker = `<!-- tropos-migrate:${opts.source}:agents`;
-    const existing = await readOrNull(dest);
+    const current = (await readOrNull(dest)) ?? null;
+    const existing = current?.trim() ? current : null;
+    // An earlier version put it in TROPOS.md.
+    const earlier = (await readOrNull(join(home, "TROPOS.md"))) ?? "";
     const scan = scanText(text, STRICT);
+    const has = (t: string | null): boolean => t?.includes(`${marker} ${hash.slice(0, 12)} -->`) ?? false;
     if (!text) skip(id, "agents", "agents", b.agents.rel, "empty");
     else if (!scan.ok) skip(id, "agents", "agents", b.agents.rel, `threat scanner: ${scan.reason}`, dest);
-    else if (done(id, hash) || existing?.includes(`${marker} ${hash.slice(0, 12)} -->`)) skip(id, "agents", "agents", b.agents.rel, "already imported", dest);
-    else if (existing?.includes(marker)) skip(id, "agents", "agents", b.agents.rel, "an earlier import is in TROPOS.md and AGENTS.md has changed since; edit TROPOS.md by hand", dest);
+    else if (done(id, hash) || has(existing) || has(earlier)) skip(id, "agents", "agents", b.agents.rel, "already imported", dest);
+    else if (existing?.includes(marker) || earlier.includes(marker)) skip(id, "agents", "agents", b.agents.rel, "an earlier import is in AGENTS.md and the source AGENTS.md has changed since; edit AGENTS.md by hand", dest);
     else {
-      const section = `${marker} ${hash.slice(0, 12)} -->\n## Imported from ${label} (AGENTS.md)\n\n${text}\n`;
-      const after = existing === null ? section : `${existing.replace(/\n*$/, "\n")}\n${section}`;
-      add({ id, category: "agents", kind: "agents", source: b.agents.rel, dest, action: existing === null ? "create" : "append", reason: "added as a section; existing content is kept", bytes: text.length, files: [fileOf(b.agents.rel, text)] });
+      // A "## Lessons" or "## Heartbeat" heading in the imported text would be read as Tropos's own section.
+      const safe = text.replace(/^##(\s+(?:Lessons|Heartbeat)\s*)$/gim, "###$1");
+      const section = `${marker} ${hash.slice(0, 12)} -->\n## Imported from ${label} (AGENTS.md)\n\n${safe}\n\n`;
+      const base = existing ?? AGENTS_TEMPLATE;
+      const lines = base.split("\n");
+      const at = lines.findIndex((l) => /^## (?:Lessons|Heartbeat)\s*$/i.test(l));
+      const after = at < 0 ? `${base.replace(/\n*$/, "\n")}\n${section.trimEnd()}\n` : `${lines.slice(0, at).join("\n")}${at > 0 ? "\n" : ""}${section}${lines.slice(at).join("\n")}`;
+      add({ id, category: "agents", kind: "agents", source: b.agents.rel, dest, action: existing === null ? "create" : "append", reason: "added above the Lessons and Heartbeat sections; existing content is kept", bytes: text.length, files: [fileOf(b.agents.rel, text)] });
       importedText.push(text);
       plan.ops.push({
         itemIds: [id],
         keys: { [id]: { hash, dest } },
         run: async () => {
-          await ensureDir(home);
+          await ensureDir(workspaceDir(home));
           await atomicWrite(dest, after);
         },
       });
@@ -363,7 +381,7 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
       const hash = sha(c.files.map((f) => `${f.rel}\0${f.text}`).join("\0\0"));
       const key = `skill:${c.srcName}`;
       const rec = record?.items[key];
-      const skillsDir = join(home, "skills");
+      const skillsDir = userSkillsDir(home);
       let name = base;
       let action: PlanItem["action"] = "create";
       let note = [flagged ? `FLAGGED (${flagged}) but imported: --allow-flagged` : "", c.skippedFiles.length ? `left out: ${c.skippedFiles.join(", ")}` : "", base !== c.srcName ? `renamed from ${c.srcName}` : ""].filter(Boolean).join("; ");

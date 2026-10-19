@@ -151,7 +151,8 @@ function toEntry(raw: string, cwd: string): JournalEntry {
   return entry;
 }
 
-async function appendNewDay(file: string, date: string): Promise<void> {
+/** Creates a journal day file with its `# <date>` title; of two first writers only one writes the title. */
+export async function appendNewDay(file: string, date: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true, mode: DIR_MODE });
   const h = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, FILE_MODE).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "EEXIST") return null;
@@ -350,11 +351,14 @@ export function layoutNotice(r: LayoutMigration): string | null {
 }
 
 /** Lays the home out at a start and says what happened on stderr; a failure is reported and never stops the start. */
-export async function layoutAtStart(home: string, version: string, err: (text: string) => void, now: () => number = Date.now): Promise<void> {
+export async function layoutAtStart(home: string, version: string, err: (text: string) => void, now: () => number = Date.now): Promise<LayoutMigration | undefined> {
   try {
-    const notice = layoutNotice(await ensureHomeLayout(home, { now, version }));
+    const r = await ensureHomeLayout(home, { now, version });
+    const notice = layoutNotice(r);
     if (notice) err(`tcode: ${notice}\n`);
+    return r;
   } catch (error) {
     err(`tcode: couldn't lay out ~/.tropos: ${error instanceof Error ? error.message : String(error)}\n`);
+    return undefined;
   }
 }

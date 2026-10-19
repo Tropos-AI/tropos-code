@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { CATEGORIES, MigrateError, SOURCE_IDS, detectSources, executePlan, hasWrites, planMigration, publicPlan, type Category, type SkillConflict, type SourceId } from "../../migrate";
+import { layoutAtStart } from "../../home/migrate";
 import { renderPlan, renderResult, renderSources } from "../../migrate/render";
 import type { LifecycleRun } from "./types";
 
@@ -84,18 +85,16 @@ const run: LifecycleRun = async (argv, ctx) => {
   if (!dryRun && !v.yes && !ctx.interactive) return usage("without a terminal, pass --yes to import or --dry-run to see the plan");
 
   try {
-    const plan = await planMigration(
-      {
-        source: what as SourceId,
-        sourceDir: v.source ? resolve(ctx.cwd, v.source) : undefined,
-        only: only as Category[] | undefined,
-        skillConflict: conflict as SkillConflict,
-        migrateSecrets: v["migrate-secrets"] ?? false,
-        allowFlagged: v["allow-flagged"] ?? false,
-        allowScripts: v["allow-scripts"] ?? false,
-      },
-      deps,
-    );
+    const planOptions = {
+      source: what as SourceId,
+      sourceDir: v.source ? resolve(ctx.cwd, v.source) : undefined,
+      only: only as Category[] | undefined,
+      skillConflict: conflict as SkillConflict,
+      migrateSecrets: v["migrate-secrets"] ?? false,
+      allowFlagged: v["allow-flagged"] ?? false,
+      allowScripts: v["allow-scripts"] ?? false,
+    };
+    let plan = await planMigration(planOptions, deps);
     if (dryRun || !hasWrites(plan)) {
       ctx.out(v.json ? `${JSON.stringify({ dryRun, ...publicPlan(plan) }, null, 2)}\n` : renderPlan(plan, dryRun));
       return 0;
@@ -105,6 +104,9 @@ const run: LifecycleRun = async (argv, ctx) => {
       ctx.out("Cancelled.\n");
       return 1;
     }
+    // The imports land in the workspace: lay an old home out first (it makes its own backup), then plan again on the new layout.
+    const laid = await layoutAtStart(ctx.home, ctx.version, ctx.err, ctx.now);
+    if (laid?.ran) plan = await planMigration(planOptions, deps);
     const result = await executePlan(plan, deps, { backup: !v["no-backup"], onProgress: (m) => ctx.err(`${m}\n`) });
     ctx.out(v.json ? `${JSON.stringify({ ...publicPlan(plan), result }, null, 2)}\n` : renderResult(result));
     return result.failed.length ? 1 : 0;

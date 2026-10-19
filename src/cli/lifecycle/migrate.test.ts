@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeHermes, makeOpenClaw } from "../../migrate/fixtures";
 import { makeFixture, type Fixture } from "./lifecycle-fixture";
@@ -25,6 +25,16 @@ describe("tcode migrate", () => {
     expect(await run(["hermes", "--skill-conflict", "x"], f.ctx)).toBe(64);
   });
 
+  test("a Hermes import on an old home migrates the layout first", async () => {
+    await mkdir(join(f.ctx.home, "memories"), { recursive: true });
+    await writeFile(join(f.ctx.home, "memories", "USER.md"), "Prefers tabs");
+    expect(await run(["hermes", "--yes", "--no-backup"], f.ctx)).toBe(0);
+    const user = await readFile(join(f.ctx.home, "workspace", "USER.md"), "utf8");
+    expect(user).toContain("Prefers tabs");
+    expect(user).toContain("Prefers metric units");
+    expect(await exists(join(f.ctx.home, "memories"))).toBe(false);
+  });
+
   test("without a terminal it needs --yes or --dry-run", async () => {
     expect(await run(["openclaw"], f.ctx)).toBe(64);
     expect(f.stderr()).toContain("--yes");
@@ -48,7 +58,7 @@ describe("tcode migrate", () => {
 
   test("--yes imports, and a second run reports nothing to do", async () => {
     expect(await run(["hermes", "--yes"], f.ctx)).toBe(0);
-    expect(await readFile(join(f.ctx.home, "SOUL.md"), "utf8")).toContain("Hermes");
+    expect(await readFile(join(f.ctx.home, "workspace", "SOUL.md"), "utf8")).toContain("Hermes");
     expect(f.stdout()).toContain("Imported");
     expect(await exists(join(f.ctx.home, "credentials.json"))).toBe(false);
     const out = f.stdout().length;
@@ -58,8 +68,8 @@ describe("tcode migrate", () => {
 
   test("--only limits what is planned; --migrate-secrets writes the key", async () => {
     expect(await run(["hermes", "--yes", "--only", "skills", "--migrate-secrets", "--no-backup"], f.ctx)).toBe(0);
-    expect(await exists(join(f.ctx.home, "SOUL.md"))).toBe(false);
-    expect(await exists(join(f.ctx.home, "skills", "docker-tips", "SKILL.md"))).toBe(true);
+    expect(await readFile(join(f.ctx.home, "workspace", "SOUL.md"), "utf8")).toBe(""); // laid out empty, nothing imported into it
+    expect(await exists(join(f.ctx.home, "workspace", "skills", "docker-tips", "SKILL.md"))).toBe(true);
     expect(await readFile(join(f.ctx.home, "credentials.json"), "utf8")).toContain("sk-or-123");
     expect(f.stdout()).not.toContain("sk-or-123");
   });
@@ -88,12 +98,12 @@ describe("tcode migrate", () => {
   test("--allow-scripts is accepted; by default imported skill files are not executable", async () => {
     await writeFile(join(f.ctx.userHome, ".hermes", "skills", "notes", "run.sh"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
     expect(await run(["hermes", "--yes", "--only", "skills"], f.ctx)).toBe(0);
-    expect((await stat(join(f.ctx.home, "skills", "notes", "run.sh"))).mode & 0o111).toBe(0);
+    expect((await stat(join(f.ctx.home, "workspace", "skills", "notes", "run.sh"))).mode & 0o111).toBe(0);
     const g = await makeFixture();
     await makeHermes(join(g.ctx.userHome, ".hermes"));
     await writeFile(join(g.ctx.userHome, ".hermes", "skills", "notes", "run.sh"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
     expect(await run(["hermes", "--yes", "--only", "skills", "--allow-scripts"], g.ctx)).toBe(0);
-    expect((await stat(join(g.ctx.home, "skills", "notes", "run.sh"))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(g.ctx.home, "workspace", "skills", "notes", "run.sh"))).mode & 0o777).toBe(0o700);
     await g.cleanup();
   });
 

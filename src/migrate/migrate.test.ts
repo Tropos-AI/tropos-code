@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseJournal } from "../memory/daily";
+import { sectionEntries } from "../memory/agents-file";
 import { MEMORY_LIMITS, NotesStore } from "../memory/notes";
 import { readCredentials } from "../providers/credentials";
 import { executePlan, planMigration, publicPlan, hasWrites } from "./index";
@@ -37,9 +39,9 @@ describe("OpenClaw", () => {
     const before = await snapshot(e.userHome);
     const plan = await planMigration(opts("openclaw"), e.deps);
     const dests = Object.fromEntries(plan.items.map((i) => [i.id.split(":").slice(0, 2).join(":"), i.dest]));
-    expect(dests["identity:soul"]).toBe(join(e.home, "SOUL.md"));
-    expect(dests["identity:fields"]).toBe(join(e.home, "IDENTITY.md"));
-    expect(dests["agents:AGENTS.md"]).toBe(join(e.home, "TROPOS.md"));
+    expect(dests["identity:soul"]).toBe(join(e.home, "workspace", "SOUL.md"));
+    expect(dests["identity:fields"]).toBe(join(e.home, "workspace", "IDENTITY.md"));
+    expect(dests["agents:AGENTS.md"]).toBe(join(e.home, "workspace", "AGENTS.md"));
     expect(plan.items.filter((i) => i.kind === "daily").map((i) => i.dest)).toHaveLength(2);
     expect(plan.items.filter((i) => i.kind === "note" && i.action === "create").length).toBe(3);
     expect(plan.suggestions[0]).toContain("anthropic/claude-opus-4-5");
@@ -55,24 +57,57 @@ describe("OpenClaw", () => {
     const plan = await planMigration(opts("openclaw"), e.deps);
     const r = await executePlan(plan, e.deps, { backup: true });
     expect(r.failed).toEqual([]);
-    expect(await text(join(e.home, "SOUL.md"))).toContain("Be warm");
-    expect(await text(join(e.home, "IDENTITY.md"))).toMatch(/Name: Clawd[\s\S]*Emoji: 🦞/);
+    expect(await text(join(e.home, "workspace", "SOUL.md"))).toContain("Be warm");
+    expect(await text(join(e.home, "workspace", "IDENTITY.md"))).toMatch(/Name: Clawd[\s\S]*Emoji: 🦞/);
     const notes = new NotesStore(e.home);
     expect((await notes.entries("memory")).join("|")).toContain("Likes short answers");
     expect((await notes.entries("user")).join("|")).toContain("Athens");
-    expect(await text(join(e.home, "TROPOS.md"))).toContain("## Imported from OpenClaw (AGENTS.md)");
+    expect(await text(join(e.home, "workspace", "AGENTS.md"))).toContain("## Imported from OpenClaw (AGENTS.md)");
     // workspace skill wins over the shared one of the same name
-    expect(await text(join(e.home, "skills", "deploy-app", "SKILL.md"))).not.toContain("shared copy");
-    expect(await exists(join(e.home, "skills", "pdf-tools", "SKILL.md"))).toBe(true);
+    expect(await text(join(e.home, "workspace", "skills", "deploy-app", "SKILL.md"))).not.toContain("shared copy");
+    expect(await exists(join(e.home, "workspace", "skills", "pdf-tools", "SKILL.md"))).toBe(true);
     // The exec bit is not carried over unless --allow-scripts.
-    expect((await stat(join(e.home, "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o777).toBe(0o600);
-    expect((await stat(join(e.home, "skills", "deploy-app"))).mode & 0o777).toBe(0o700);
-    expect((await stat(join(e.home, "SOUL.md"))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(e.home, "workspace", "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o777).toBe(0o600);
+    expect((await stat(join(e.home, "workspace", "skills", "deploy-app"))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(e.home, "workspace", "SOUL.md"))).mode & 0o777).toBe(0o600);
     expect((await stat(join(e.home, "migrations"))).mode & 0o777).toBe(0o700);
     expect((await stat(join(e.home, "migrations", "openclaw.json"))).mode & 0o777).toBe(0o600);
-    const daily = (await readdir(join(e.home, "projects"), { recursive: true })).filter((n) => n.endsWith("2026-10-01.md"));
-    expect(daily).toHaveLength(1);
     expect(r.backup).toBeUndefined(); // nothing existed to back up
+  });
+
+  test("an OpenClaw import lands in the workspace, and imported AGENTS.md text sits above the managed sections", async () => {
+    await executePlan(await planMigration(opts("openclaw"), e.deps), e.deps, { backup: false });
+    const ws = join(e.home, "workspace");
+    expect(await text(join(ws, "SOUL.md"))).toContain("Be warm and precise.");
+    expect(await text(join(ws, "IDENTITY.md"))).toContain("Name: Clawd");
+    expect(await exists(join(ws, "skills", "deploy-app", "SKILL.md"))).toBe(true);
+    const agents = await text(join(ws, "AGENTS.md"));
+    expect(agents).toContain("<!-- tropos-migrate:openclaw:agents");
+    expect(agents.indexOf("Keep commits small")).toBeLessThan(agents.indexOf("## Lessons"));
+    expect(sectionEntries(agents, "Lessons")).toEqual([]);
+    expect(sectionEntries(agents, "Heartbeat")).toEqual([]);
+  });
+
+  test("imported AGENTS.md text can't pose as a managed section", async () => {
+    await put(join(e.openclaw, "workspace", "AGENTS.md"), "# Rules\n## Heartbeat\n- check the stove\n");
+    await executePlan(await planMigration(opts("openclaw", { only: ["agents"] }), e.deps), e.deps, { backup: false });
+    expect(sectionEntries(await text(join(e.home, "workspace", "AGENTS.md")), "Heartbeat")).toEqual([]);
+  });
+
+  test("an OpenClaw day note becomes a journal entry of the default workspace, once", async () => {
+    await executePlan(await planMigration(opts("openclaw", { only: ["memory"] }), e.deps), e.deps, { backup: false });
+    const day = parseJournal(await text(join(e.home, "workspace", "memory", "2026-10-01.md")));
+    expect(day[0]).toMatchObject({ name: "workspace", path: join(e.home, "workspace"), body: "- Decided to use Bun." });
+    const again = await planMigration(opts("openclaw", { only: ["memory"] }), e.deps);
+    expect(again.items.filter((i) => i.kind === "daily" && i.action !== "skip")).toEqual([]);
+  });
+
+  test("an AGENTS.md imported into TROPOS.md by an earlier version counts as imported", async () => {
+    const first = await planMigration(opts("openclaw", { only: ["agents"] }), e.deps);
+    const hash = first.ops[0]!.keys[Object.keys(first.ops[0]!.keys)[0]!]!.hash;
+    await put(join(e.home, "TROPOS.md"), `<!-- tropos-migrate:openclaw:agents ${hash.slice(0, 12)} -->\n## Imported from OpenClaw (AGENTS.md)\n`);
+    const plan = await planMigration(opts("openclaw", { only: ["agents"] }), e.deps);
+    expect(find(plan, "agents:AGENTS.md")).toMatchObject({ action: "skip", reason: "already imported" });
   });
 
   test("idempotent: a second run plans no writes", async () => {
@@ -86,43 +121,43 @@ describe("OpenClaw", () => {
   });
 
   test("SOUL.md is kept; the import lands in SOUL.imported.md", async () => {
-    await put(join(e.home, "SOUL.md"), "mine\n");
+    await put(join(e.home, "workspace", "SOUL.md"), "mine\n");
     const plan = await planMigration(opts("openclaw", { only: ["identity"] }), e.deps);
-    expect(find(plan, "identity:soul")).toMatchObject({ action: "alongside", dest: join(e.home, "SOUL.imported.md") });
+    expect(find(plan, "identity:soul")).toMatchObject({ action: "alongside", dest: join(e.home, "workspace", "SOUL.imported.md") });
     await executePlan(plan, e.deps, { backup: false });
-    expect(await text(join(e.home, "SOUL.md"))).toBe("mine\n");
-    expect(await text(join(e.home, "SOUL.imported.md"))).toContain("Be warm");
+    expect(await text(join(e.home, "workspace", "SOUL.md"))).toBe("mine\n");
+    expect(await text(join(e.home, "workspace", "SOUL.imported.md"))).toContain("Be warm");
   });
 
   test("existing IDENTITY.md fields are never overwritten", async () => {
-    await put(join(e.home, "IDENTITY.md"), "- Name: Mine\n");
+    await put(join(e.home, "workspace", "IDENTITY.md"), "- Name: Mine\n");
     const plan = await planMigration(opts("openclaw", { only: ["identity"] }), e.deps);
     await executePlan(plan, e.deps, { backup: false });
-    const t = await text(join(e.home, "IDENTITY.md"));
+    const t = await text(join(e.home, "workspace", "IDENTITY.md"));
     expect(t).toContain("Name: Mine");
     expect(t).toContain("Emoji: 🦞");
     expect(t).not.toContain("Clawd");
   });
 
-  test("TROPOS.md keeps existing content", async () => {
-    await put(join(e.home, "TROPOS.md"), "my rules\n");
+  test("AGENTS.md keeps existing content", async () => {
+    await put(join(e.home, "workspace", "AGENTS.md"), "my rules\n");
     await executePlan(await planMigration(opts("openclaw", { only: ["agents"] }), e.deps), e.deps, { backup: false });
-    const t = await text(join(e.home, "TROPOS.md"));
+    const t = await text(join(e.home, "workspace", "AGENTS.md"));
     expect(t.startsWith("my rules\n")).toBe(true);
     expect(t).toContain("Keep commits small");
   });
 
   test("skill name clashes: rename (default), skip, overwrite", async () => {
-    await put(join(e.home, "skills", "pdf-tools", "SKILL.md"), "---\ndescription: mine\n---\nmine\n");
+    await put(join(e.home, "workspace", "skills", "pdf-tools", "SKILL.md"), "---\ndescription: mine\n---\nmine\n");
     const rename = await planMigration(opts("openclaw", { only: ["skills"] }), e.deps);
-    expect(find(rename, "skill:shared:skills/pdf-tools")).toMatchObject({ action: "rename", dest: join(e.home, "skills", "pdf-tools-imported") });
+    expect(find(rename, "skill:shared:skills/pdf-tools")).toMatchObject({ action: "rename", dest: join(e.home, "workspace", "skills", "pdf-tools-imported") });
     const skip = await planMigration(opts("openclaw", { only: ["skills"], skillConflict: "skip" }), e.deps);
     expect(find(skip, "skill:shared:skills/pdf-tools")?.action).toBe("skip");
     const over = await planMigration(opts("openclaw", { only: ["skills"], skillConflict: "overwrite" }), e.deps);
     expect(find(over, "skill:shared:skills/pdf-tools")?.action).toBe("overwrite");
     await executePlan(over, e.deps, { backup: false });
-    expect(await text(join(e.home, "skills", "pdf-tools", "SKILL.md"))).toContain("Steps go here");
-    expect(await readdir(join(e.home, "skills"))).not.toContain(expect.stringMatching(/^\.migrate/));
+    expect(await text(join(e.home, "workspace", "skills", "pdf-tools", "SKILL.md"))).toContain("Steps go here");
+    expect(await readdir(join(e.home, "workspace", "skills"))).not.toContain(expect.stringMatching(/^\.migrate/));
   });
 
   test("a shadowed shared skill is reported, not imported twice", async () => {
@@ -177,11 +212,11 @@ describe("OpenClaw", () => {
     expect(find(plan, "skill:workspace:skills/deploy-app")?.reason).toContain("changed since the last import");
     const over = await planMigration(opts("openclaw", { only: ["skills"], skillConflict: "overwrite" }), e.deps);
     await executePlan(over, e.deps, { backup: false });
-    expect(await text(join(e.home, "skills", "deploy-app", "SKILL.md"))).toContain("new");
+    expect(await text(join(e.home, "workspace", "skills", "deploy-app", "SKILL.md"))).toContain("new");
   });
 
   test("the safety backup is made when Tropos data exists", async () => {
-    await put(join(e.home, "TROPOS.md"), "x\n");
+    await put(join(e.home, "workspace", "AGENTS.md"), "x\n");
     const r = await executePlan(await planMigration(opts("openclaw", { only: ["agents"] }), e.deps), e.deps, { backup: true });
     expect(r.backup).toBeTruthy();
     expect(await exists(r.backup!)).toBe(true);
@@ -211,10 +246,10 @@ describe("notes budget", () => {
     const plan = await planMigration(opts("hermes", { only: ["memory"] }), e.deps);
     const overflow = plan.items.filter((i) => i.action === "overflow");
     expect(overflow).toHaveLength(1);
-    expect(overflow[0]!.dest).toBe(join(e.home, "memories", "imported-hermes.md"));
+    expect(overflow[0]!.dest).toBe(join(e.home, "workspace", "imported-hermes.md"));
     await executePlan(plan, e.deps, { backup: false });
     expect(await new NotesStore(e.home).entries("memory")).toEqual(["small one", "small two"]);
-    expect(await text(join(e.home, "memories", "imported-hermes.md"))).toContain(big);
+    expect(await text(join(e.home, "workspace", "imported-hermes.md"))).toContain(big);
     // re-run adds nothing and does not duplicate the overflow
     const again = await planMigration(opts("hermes", { only: ["memory"] }), e.deps);
     expect(hasWrites(again)).toBe(false);
@@ -238,7 +273,7 @@ describe("Hermes", () => {
     const plan = await planMigration(opts("hermes"), e.deps);
     expect(find(plan, "identity:soul")?.action).toBe("create");
     expect(plan.items.filter((i) => i.kind === "note" && i.action === "create")).toHaveLength(3);
-    expect(plan.items.filter((i) => i.kind === "skill" && i.action === "create").map((i) => i.dest).sort()).toEqual([join(e.home, "skills", "docker-tips"), join(e.home, "skills", "notes")]);
+    expect(plan.items.filter((i) => i.kind === "skill" && i.action === "create").map((i) => i.dest).sort()).toEqual([join(e.home, "workspace", "skills", "docker-tips"), join(e.home, "workspace", "skills", "notes")]);
     expect(plan.suggestions[0]).toContain("openrouter/anthropic/claude-sonnet-4");
     expect(await exists(join(e.home, "settings.json"))).toBe(false);
   });
@@ -268,7 +303,7 @@ describe("safety", () => {
     expect(find(plan, "skill:skills:skills/notes")?.reason).toContain("outside");
     expect(find(plan, "skill:skills:skills/linked")?.reason).toContain("symlink");
     await executePlan(plan, e.deps, { backup: false });
-    expect(await exists(join(e.home, "skills", "notes"))).toBe(false);
+    expect(await exists(join(e.home, "workspace", "skills", "notes"))).toBe(false);
   });
 
   test("a SOUL.md symlinked outside the source is not read", async () => {
@@ -285,7 +320,7 @@ describe("safety", () => {
     const plan = await planMigration(opts("hermes", { only: ["identity"] }), e.deps);
     expect(plan.warnings.join("\n")).toContain("truncated");
     await executePlan(plan, e.deps, { backup: false });
-    const t = await text(join(e.home, "SOUL.md"));
+    const t = await text(join(e.home, "workspace", "SOUL.md"));
     expect(t.length).toBeLessThanOrEqual(256 * 1024 + 2);
     expect(t.startsWith("ok[31m")).toBe(true);
     expect(t).not.toContain("\x1b");
@@ -301,7 +336,7 @@ describe("safety", () => {
     await put(join(e.hermes, "skills", "My Skill_2", "SKILL.md"), "---\ndescription: d\n---\n");
     await put(join(e.hermes, "skills", "---", "SKILL.md"), "---\ndescription: d\n---\n");
     const plan = await planMigration(opts("hermes", { only: ["skills"] }), e.deps);
-    expect(find(plan, "skill:skills:skills/My Skill_2")?.dest).toBe(join(e.home, "skills", "my-skill-2"));
+    expect(find(plan, "skill:skills:skills/My Skill_2")?.dest).toBe(join(e.home, "workspace", "skills", "my-skill-2"));
     expect(find(plan, "skill:skills:skills/---")?.action).toBe("skip");
   });
 });
@@ -320,7 +355,7 @@ describe("scripts in skills", () => {
     expect(item.files?.find((f) => f.path === "scripts/run.sh")?.script).toBe(true);
     expect(item.files?.find((f) => f.path === "SKILL.md")?.script).toBeFalsy();
     await executePlan(plan, e.deps, { backup: false });
-    expect((await stat(join(e.home, "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o111).toBe(0);
+    expect((await stat(join(e.home, "workspace", "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o111).toBe(0);
 
     const trusted = await makeEnv();
     try {
@@ -328,8 +363,8 @@ describe("scripts in skills", () => {
       await chmod(join(trusted.openclaw, "workspace", "skills", "deploy-app", "scripts", "run.sh"), 0o755);
       const p2 = await planMigration(opts("openclaw", { only: ["skills"], allowScripts: true }), trusted.deps);
       await executePlan(p2, trusted.deps, { backup: false });
-      expect((await stat(join(trusted.home, "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o777).toBe(0o700);
-      expect((await stat(join(trusted.home, "skills", "deploy-app", "SKILL.md"))).mode & 0o777).toBe(0o600);
+      expect((await stat(join(trusted.home, "workspace", "skills", "deploy-app", "scripts", "run.sh"))).mode & 0o777).toBe(0o700);
+      expect((await stat(join(trusted.home, "workspace", "skills", "deploy-app", "SKILL.md"))).mode & 0o777).toBe(0o600);
     } finally {
       await trusted.cleanup();
     }
