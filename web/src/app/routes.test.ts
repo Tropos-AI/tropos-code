@@ -32,7 +32,7 @@ describe("pages and tabs", () => {
   test("nine navigable pages plus Setup, and the tab ids sibling plans rely on", () => {
     expect(PAGES.map((p) => p.id)).toEqual(["chat", "projects", "cron", "skills", "agents", "memory", "extensions", "status", "settings", "setup"]);
     expect(PAGES.filter((p) => "nav" in p && p.nav === false).map((p) => p.id)).toEqual(["setup"]);
-    expect(SETTINGS_TABS).toEqual(["models", "autonomy", "channels", "phone", "service", "backups", "advanced"]);
+    expect(SETTINGS_TABS).toEqual(["models", "autonomy", "channels", "phone", "suggestions", "service", "backups", "advanced"]);
     expect(STATUS_TABS).toEqual(["health", "logs", "usage"]);
     expect(EXTENSIONS_TABS).toEqual(["mcp", "hooks", "plugins"]);
   });
