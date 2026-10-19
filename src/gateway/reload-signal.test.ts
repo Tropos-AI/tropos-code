@@ -1,0 +1,57 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { stateFile } from "./daemon";
+import { looksLikeGateway, onReloadSignal, RELOAD_SIGNAL, requestGatewayReload } from "./reload-signal";
+
+let home: string;
+beforeEach(async () => {
+  home = await makeTmpDir();
+});
+afterEach(() => removeDir(home));
+
+async function writeState(pid: number) {
+  await mkdir(join(stateFile(home), ".."), { recursive: true });
+  await writeFile(stateFile(home), JSON.stringify({ pid, startedAt: "t", telegram: false }));
+}
+
+test("signals the running gateway's pid", async () => {
+  await writeState(4242);
+  const sent: unknown[] = [];
+  expect(await requestGatewayReload(home, (p, s) => sent.push([p, s]))).toBe(true);
+  expect(sent).toEqual([[4242, "SIGUSR2"]]);
+  expect(await requestGatewayReload(join(home, "none"), () => {})).toBe(false);
+  expect(await requestGatewayReload(home, () => { throw Object.assign(new Error(), { code: "ESRCH" }); })).toBe(false);
+});
+
+test("a recorded pid that is not a gateway process is never signalled", async () => {
+  // A stale pid reused by anything else must not get a signal (SIGUSR2's default action ends a process).
+  await writeState(4242);
+  const sent: unknown[] = [];
+  expect(await requestGatewayReload(home, (p, s) => sent.push([p, s]), async () => false)).toBe(false);
+  expect(sent).toEqual([]);
+});
+
+test("a process counts as the gateway by its command line, and this process always does", async () => {
+  const other = Bun.spawn(["sh", "-c", "sleep 30; echo other"], { stdout: "ignore", stderr: "ignore" });
+  const gateway = Bun.spawn(["sh", "-c", "sleep 30; echo tcode gateway"], { stdout: "ignore", stderr: "ignore" });
+  try {
+    expect(await looksLikeGateway(process.pid)).toBe(true);
+    expect(await looksLikeGateway(other.pid)).toBe(false);
+    expect(await looksLikeGateway(gateway.pid)).toBe(true);
+    expect(await looksLikeGateway(2 ** 22 + 12345)).toBe(false);
+  } finally {
+    other.kill();
+    gateway.kill();
+  }
+});
+
+test("onReloadSignal runs the handler on SIGUSR2 and stops after the returned off()", async () => {
+  let hits = 0;
+  const off = onReloadSignal(() => hits++);
+  process.emit(RELOAD_SIGNAL as NodeJS.Signals);
+  expect(hits).toBe(1);
+  off();
+  expect(process.listenerCount(RELOAD_SIGNAL)).toBe(0);
+});

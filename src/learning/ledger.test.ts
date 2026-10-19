@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { isLearnedPath, Ledger, type LedgerKind, sha256 } from "./ledger";
+import { isLearnedPath, Ledger, type LedgerKind, recordSetupChange, sha256 } from "./ledger";
 
 let home: string;
 let outside: string;
@@ -338,4 +338,44 @@ test("a specialist's own skill folder is dropped on undo like any skill folder",
   expect((await ledger.undo(e.id)).ok).toBe(true);
   expect(existsSync(join(home, "agents", "a", "skills", "lint"))).toBe(false);
   expect(existsSync(join(home, "agents", "a", "skills"))).toBe(true);
+});
+
+const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1";
+
+test("only settings.json and gateway.json count as setup files", () => {
+  expect(isLearnedPath(home, "setup", join(home, "settings.json"))).toBe(true);
+  expect(isLearnedPath(home, "setup", join(home, "gateway.json"))).toBe(true);
+  expect(isLearnedPath(home, "setup", join(home, "workspace", "MEMORY.md"))).toBe(false);
+  expect(isLearnedPath(home, "setup", join(home, "gateway", "pairing.json"))).toBe(false);
+});
+
+test("a setup change undoes at value level and refuses once the value moved on", async () => {
+  await writeFile(join(home, "gateway.json"), JSON.stringify({ proactive: { enabled: false } }));
+  const e = await recordSetupChange(ledger, { actor: "agent", path: join(home, "gateway.json"), configPath: "proactive.enabled", action: "proactive.set", summary: "proactive off", before: true, after: false });
+  expect((await ledger.undo(e.id)).ok).toBe(true);
+  expect(JSON.parse(await readFile(join(home, "gateway.json"), "utf8")).proactive.enabled).toBe(true);
+  const e2 = await recordSetupChange(ledger, { actor: "agent", path: join(home, "gateway.json"), configPath: "proactive.enabled", action: "x", summary: "x", before: true, after: false });
+  expect(await ledger.undo(e2.id)).toEqual({ ok: false, reason: "It changed since; nothing was undone." });
+});
+
+test("undoing a setup change that added a key removes it, and the bare /learned undo skips what it can't apply", async () => {
+  await writeFile(join(home, "settings.json"), JSON.stringify({ theme: "dark", mcpServers: { gh: { command: "x" } } }));
+  const added = await recordSetupChange(ledger, { actor: "agent", path: join(home, "settings.json"), configPath: "mcpServers.gh", action: "mcp.add", summary: "added gh", before: undefined, after: { command: "x" } });
+  await recordSetupChange(ledger, { actor: "agent", path: join(home, "gateway.json"), action: "autonomy.lower", summary: "autonomy ask", noUndo: "no" });
+  const out = await ledger.undo();
+  expect(out).toMatchObject({ ok: true, entry: { id: added.id } });
+  expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8"))).toEqual({ theme: "dark", mcpServers: {} });
+});
+
+test("secrets never reach the blobs, and such a change cannot be undone", async () => {
+  await recordSetupChange(ledger, { actor: "agent", path: join(home, "gateway.json"), configPath: "telegram", action: "telegram.connect", summary: "Telegram connected", before: {}, after: { botToken: TOKEN } });
+  for (const f of await readdir(join(home, "learning", "blobs"))) expect(await readFile(join(home, "learning", "blobs", f), "utf8")).not.toContain(TOKEN);
+  const removed = await recordSetupChange(ledger, { actor: "agent", path: join(home, "settings.json"), configPath: "mcpServers.gh", action: "mcp.remove", summary: "x", before: { command: "x", env: { T: "v" } }, after: null });
+  expect(removed.noUndo).toContain("secret");
+  expect(await ledger.undo(removed.id)).toEqual({ ok: false, reason: removed.noUndo! });
+});
+
+test("an entry recorded noUndo refuses with its reason", async () => {
+  const e = await recordSetupChange(ledger, { actor: "agent", path: join(home, "gateway.json"), action: "autonomy.lower", summary: "autonomy ask", noUndo: "Raise autonomy in Settings → Autonomy." });
+  expect(await ledger.undo(e.id)).toEqual({ ok: false, reason: "Raise autonomy in Settings → Autonomy." });
 });

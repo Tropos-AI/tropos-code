@@ -15,6 +15,8 @@ export interface PanelItem {
   hint?: string;
   aside?: string;
   status?: "ok" | "warn" | "error" | "off";
+  /** False when the row is a change that can't be reverted; its last detail line says why. Unset means "as usual". */
+  undoable?: boolean;
   /** Lines shown under the list for the selected row. */
   detail?: string[];
 }

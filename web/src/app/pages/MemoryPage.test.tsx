@@ -81,6 +81,18 @@ describe("MemoryPage", () => {
     expect(await screen.findByText("Nothing learned yet.")).toBeTruthy();
   });
 
+  test("a learned row that can't be undone shows its reason and no Undo button", async () => {
+    const locked: PanelData = {
+      title: "Learned",
+      sections: [{ items: [{ key: "s1", label: "setup: autonomy ask", hint: "saved while we talked", aside: "2026-10-14 14:02", status: "ok", undoable: false, detail: ["autonomy.lower by agent", "/home/me/.tropos/gateway.json", "t", "Raise autonomy in Settings → Autonomy."] }] }],
+    };
+    await mountPage(MemoryPage, { panel: panels(MEMORY, locked) });
+    const card = await screen.findByRole("region", { name: /Learned/ });
+    await within(card).findByText("setup: autonomy ask");
+    expect(within(card).queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(within(card).getByText("Raise autonomy in Settings → Autonomy.")).toBeTruthy();
+  });
+
   test("the Learned card lists ledger entries; Undo appears only on changes that can still be reverted", async () => {
     const { socket } = await mountPage(MemoryPage, { panel: panels(MEMORY, LEARNED), "learned.undo": () => ({ summary: "skill: SkillManage patch bun-testing" }) });
     const card = await screen.findByRole("region", { name: /Learned/ });

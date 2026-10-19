@@ -6,7 +6,8 @@ import { ProviderRouter } from "../providers/router";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
 import { settle, waitFor } from "../../test/helpers/wait";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "../agent/events";
-import { Ledger } from "../learning/ledger";
+import { Ledger, recordSetupChange } from "../learning/ledger";
+import { onReloadSignal } from "../gateway/reload-signal";
 import { NOTHING } from "../learning/review-prompts";
 import type { LearningLoop } from "../learning/review";
 import type { SearchIndex } from "../memory/search-index";
@@ -687,6 +688,31 @@ describe("learning and identity", () => {
     expect(original!.detail![0]).toBe("add by agent (undone)");
     expect(original!.aside).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
     expect(await rt.undoLearned(original!.key)).toEqual({ ok: false, reason: `${original!.key} was already undone.` });
+  });
+
+  test("undoing a setup change asks the gateway to reload; noUndo entries show as not undoable", async () => {
+    await setup();
+    const { runtime: rt } = await runtime();
+    await mkdir(join(ctx.home, "gateway"), { recursive: true });
+    await writeFile(join(ctx.home, "gateway", "state.json"), JSON.stringify({ pid: process.pid, startedAt: "t", telegram: false }));
+    await writeFile(join(ctx.home, "gateway.json"), JSON.stringify({ proactive: { enabled: false } }));
+    const e = await recordSetupChange(ctx.ext.ledger, { actor: "agent", path: join(ctx.home, "gateway.json"), configPath: "proactive.enabled", action: "proactive.set", summary: "proactive off", before: true, after: false });
+    const locked = await recordSetupChange(ctx.ext.ledger, { actor: "agent", path: join(ctx.home, "gateway.json"), action: "autonomy.lower", summary: "autonomy ask", noUndo: "Raise autonomy in Settings → Autonomy." });
+    let hits = 0;
+    const off = onReloadSignal(() => hits++);
+    try {
+      const items = (await rt.panel("learned")).sections[0]!.items;
+      expect(items.find((i) => i.key === locked.id)).toMatchObject({ undoable: false });
+      expect(items.find((i) => i.key === locked.id)!.detail!.at(-1)).toBe("Raise autonomy in Settings → Autonomy.");
+      expect(items.find((i) => i.key === e.id)!.undoable).not.toBe(false);
+      expect(await rt.undoLearned(e.id)).toMatchObject({ ok: true });
+      await waitFor(() => expect(hits).toBe(1));
+      expect(await rt.undoLearned(locked.id)).toEqual({ ok: false, reason: "Raise autonomy in Settings → Autonomy." });
+      await settle();
+      expect(hits).toBe(1);
+    } finally {
+      off();
+    }
   });
 
   test("clear and resume reset the skills seen this session", async () => {

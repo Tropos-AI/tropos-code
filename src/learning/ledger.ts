@@ -5,10 +5,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { legacyToCurrent } from "../home/layout";
 import { atomicWrite } from "../memory/notes";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
+import { configFile, getAt, parsePath, readConfigRaw, sameJson, setAt, stripSecrets, unsetAt, updateConfigFile, type ConfigFileName } from "../config/store";
 import { isInside } from "../paths";
 import type { Actor } from "../tools/types";
 
-export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily" | "agent";
+export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily" | "agent" | "setup";
 
 /**
  * One change to a learned file. `before` and `after` are sha256 hashes of the file's contents
@@ -24,6 +25,10 @@ export interface LedgerEntry {
   summary: string;
   before: string | null;
   after: string | null;
+  /** A "setup" entry: the dotted path of the changed value inside the config file at `path`. */
+  configPath?: string;
+  /** Why undo refuses this entry (shown instead of an Undo button). */
+  noUndo?: string;
   /** On an "undo" entry: the id of the entry it reverted. */
   undoes?: string;
   /** Set by list(): a later "undo" entry reverted this one. */
@@ -88,6 +93,9 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
         (parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!)) ||
         (parts.length === 3 && parts[0] === "workspace" && parts[1] === "memory" && DAY_NOTE.test(parts[2]!))
       );
+    case "setup":
+      // Config values only; the entry's configPath says which one.
+      return parts.length === 1 && (parts[0] === "settings.json" || parts[0] === "gateway.json");
     case "agent":
       if (inSpecialist(parts)) return parts.length === 3 && parts[2] === "AGENT.md";
       return parts.length === 2 && parts[0] === "agents" && parts[1]!.endsWith(".md") && !parts[1]!.startsWith(".");
@@ -205,6 +213,8 @@ export class Ledger {
         before: await this.putBlob(e.before),
         after: await this.putBlob(e.after),
         ...(e.undoes ? { undoes: e.undoes } : {}),
+        ...(e.configPath ? { configPath: e.configPath } : {}),
+        ...(e.noUndo ? { noUndo: e.noUndo } : {}),
       };
       await this.append(entry);
       return entry;
@@ -233,6 +243,11 @@ export class Ledger {
         for (const raw of open) {
           const e = await this.moved(raw);
           if (await this.refusal(e)) continue;
+          if (e.kind === "setup") {
+            if (await this.setupRefusal(e)) continue;
+            entry = e;
+            break;
+          }
           const now = await readCurrent(resolve(e.path)).catch(() => undefined);
           if (now === undefined || hashOf(now) !== e.after) continue;
           entry = e;
@@ -250,6 +265,11 @@ export class Ledger {
         if (entry.undone) return { ok: false, reason: `${entry.id} was already undone.` };
         const refused = await this.refusal(entry);
         if (refused) return { ok: false, reason: refused };
+        if (entry.kind === "setup") {
+          const why = await this.setupRefusal(entry);
+          if (why) return { ok: false, reason: why };
+          return this.undoSetup(entry);
+        }
         current = await readCurrent(resolve(entry.path));
         if (current === undefined) return { ok: false, reason: `${entry.path} is not a regular file.` };
         if (hashOf(current) !== entry.after) {
@@ -257,6 +277,7 @@ export class Ledger {
         }
       }
 
+      if (entry.kind === "setup") return this.undoSetup(entry);
       const target = resolve(entry.path);
       if (entry.before === null) {
         if (current !== null) await rm(target, { force: true });
@@ -289,6 +310,48 @@ export class Ledger {
       await this.append(undo);
       return { ok: true, entry: { ...entry, undone: true } };
     });
+  }
+
+  /** Why a setup entry cannot be undone now, or undefined: it holds no secret, and the value is still what the entry wrote. */
+  private async setupRefusal(entry: LedgerEntry): Promise<string | undefined> {
+    if (entry.noUndo) return entry.noUndo;
+    if (!entry.configPath) return "It does not name a setting; nothing was undone.";
+    const file = this.configFileOf(entry);
+    if (!file) return `${entry.path} is not a settings file.`;
+    try {
+      const current = stripAt(entry.configPath, getAt(await readConfigRaw(file), entry.configPath));
+      const after: unknown = entry.after === null ? null : JSON.parse(await this.getBlob(entry.after));
+      return sameJson(current ?? null, after) ? undefined : SETUP_MOVED;
+    } catch {
+      return `Couldn't read ${basename(entry.path)}; nothing was undone.`;
+    }
+  }
+
+  private configFileOf(entry: LedgerEntry) {
+    const name = basename(entry.path).replace(/\.json$/, "");
+    return name === "settings" || name === "gateway" ? configFile(this.home, name as ConfigFileName) : undefined;
+  }
+
+  /** Writes the entry's `before` value back (null removes the key) and records the undo. Call it only after setupRefusal. */
+  private async undoSetup(entry: LedgerEntry): Promise<UndoResult> {
+    const file = this.configFileOf(entry)!;
+    const path = entry.configPath!;
+    const before: unknown = entry.before === null ? null : JSON.parse(await this.getBlob(entry.before));
+    await updateConfigFile(file, (draft) => (before === null ? unsetAt(draft, path) : setAt(draft, path, before)));
+    await this.append({
+      id: randomBytes(6).toString("hex"),
+      ts: this.now().toISOString(),
+      actor: "user",
+      kind: "setup",
+      path: entry.path,
+      configPath: path,
+      action: "undo",
+      summary: `undo ${entry.action}: ${entry.summary}`,
+      before: entry.after,
+      after: entry.before,
+      undoes: entry.id,
+    });
+    return { ok: true, entry: { ...entry, undone: true } };
   }
 
   /**
@@ -354,6 +417,41 @@ export class Ledger {
       dir = parent;
     }
   }
+}
+
+const SETUP_MOVED = "It changed since; nothing was undone.";
+const SECRET_NOTE = "It held a secret, which Tropos never copies into the ledger.";
+
+/** `value` (the setting at the dotted `configPath`) without its secrets; stripped in place, so mcpServers.<name> loses its env. */
+function stripAt(configPath: string | undefined, value: unknown): unknown {
+  if (!configPath) return stripSecrets(value);
+  const segments = parsePath(configPath);
+  const wrapped = segments.reduceRight<unknown>((inner, key) => ({ [key]: inner }), value);
+  return getAt(stripSecrets(wrapped), segments);
+}
+
+/**
+ * Records a change to settings.json or gateway.json, one value per entry. The blobs hold the value without secrets;
+ * a change that removed or replaced a secret cannot be undone (the old value was never kept).
+ */
+export async function recordSetupChange(
+  ledger: Ledger,
+  r: { actor: Actor; path: string; configPath?: string; action: string; summary: string; before?: unknown; after?: unknown; noUndo?: string },
+): Promise<LedgerEntry> {
+  const blob = (v: unknown): string => JSON.stringify(stripAt(r.configPath, v) ?? null);
+  const heldSecret = r.before !== undefined && !sameJson(stripAt(r.configPath, r.before) ?? null, r.before ?? null);
+  const noUndo = r.noUndo ?? (heldSecret ? SECRET_NOTE : undefined);
+  return ledger.record({
+    actor: r.actor,
+    kind: "setup",
+    path: r.path,
+    ...(r.configPath ? { configPath: r.configPath } : {}),
+    action: r.action,
+    summary: r.summary,
+    before: blob(r.before),
+    after: blob(r.after),
+    ...(noUndo ? { noUndo } : {}),
+  });
 }
 
 function hashOf(text: string | null): string | null {

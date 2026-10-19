@@ -167,7 +167,8 @@ function MemoryList({ data }: { data: PanelData }) {
 function LearnedRow({ item, busy, onUndo }: { item: PanelItem; busy: boolean; onUndo: () => void }) {
   const undone = item.status === "off";
   const isUndo = item.hint === "undo";
-  const [action, path] = item.detail ?? [];
+  const [action, path, , reason] = item.detail ?? [];
+  const canUndo = !undone && !isUndo && item.undoable !== false;
   return (
     <li className={cn("flex items-start gap-3 px-4 py-3 sm:px-5", undone && "opacity-60")}>
       <span aria-hidden className={cn("mt-1.5 size-2 shrink-0 rounded-full", undone ? "bg-rule" : isUndo ? "bg-warn" : "bg-accent")} />
@@ -190,8 +191,9 @@ function LearnedRow({ item, busy, onUndo }: { item: PanelItem; busy: boolean; on
             </>
           ) : null}
         </p>
+        {item.undoable === false && reason ? <p className="mt-1 text-[12px] text-ink-3">{reason}</p> : null}
       </div>
-      {!undone && !isUndo ? (
+      {canUndo ? (
         <Button size="sm" variant="ghost" icon="undo-2" disabled={busy} onClick={onUndo} title="Put the file back as it was before this change">
           Undo
         </Button>

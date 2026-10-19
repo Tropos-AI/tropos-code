@@ -46,6 +46,7 @@ import type { Theme } from "../ui/theme";
 import { makeOnboardDeps } from "../onboard/engine";
 import { takeSetupReminder } from "../onboard/reminders";
 import type { SecretVault } from "../tools/setup/secrets";
+import { requestGatewayReload } from "../gateway/reload-signal";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
 
 const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
@@ -585,7 +586,8 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
               hint: e.action === "undo" ? "undo" : by[e.actor],
               aside: e.ts.slice(0, 16).replace("T", " "),
               status: e.undone ? ("off" as const) : e.action === "undo" ? ("warn" as const) : ("ok" as const),
-              detail: [`${e.action} by ${e.actor}${e.undone ? " (undone)" : ""}`, e.path, e.ts],
+              ...(e.noUndo ? { undoable: false } : {}),
+              detail: [`${e.action} by ${e.actor}${e.undone ? " (undone)" : ""}`, e.path, e.ts, ...(e.noUndo ? [e.noUndo] : [])],
             })),
           },
         ].filter((section) => section.items.length > 0),
@@ -784,6 +786,8 @@ export async function createRuntime(
       // An undo racing the review's own write could be overwritten by it.
       if (loops().some((l) => l.running)) return { ok: false, reason: "The background review is saving; try again in a moment." };
       const out = await ctx.ext.ledger.undo(id);
+      // The gateway holds the config in memory: tell it to re-read what the undo just wrote.
+      if (out.ok && out.entry.kind === "setup") void requestGatewayReload(ctx.home);
       return out.ok ? { ok: true, summary: `${out.entry.kind}: ${out.entry.summary}` } : out;
     },
     identity: () => identity,
