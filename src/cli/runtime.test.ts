@@ -19,7 +19,8 @@ import { DARK } from "../ui/theme";
 import { ModelPrefs } from "../config/model-prefs";
 import { loadExtensions, sessionTools } from "./extensions";
 import { troposStorePaths } from "../learning/stores";
-import { dailyNotesDir } from "../memory/daily";
+import { legacyNotesDir } from "../memory/daily";
+import { journalDir } from "../paths";
 import { channelContext } from "../gateway/policy";
 import { createRuntime, createToolContext, makeAgent, permissionContext, type AppContext } from "./runtime";
 
@@ -103,7 +104,9 @@ test("input history is saved per project and reloaded", async () => {
 test("permissionContext carries the role, the origin's confinement and the stores, the project journal included", () => {
   const local = permissionContext(ctx, "plan");
   expect(local).toMatchObject({ mode: "plan", cwd: dir, allowedDirs: [dir], confine: false, role: "owner", stores: { askBeforeSaving: false } });
-  expect(local.stores!.paths).toEqual([...troposStorePaths(ctx.home), dailyNotesDir(ctx.home, ctx.cwd)]);
+  expect(local.stores!.paths).toEqual([...troposStorePaths(ctx.home), legacyNotesDir(ctx.home, ctx.cwd)]);
+  // The journal is under workspace/memory, which troposStorePaths already holds.
+  expect(local.stores!.paths).toContain(journalDir(ctx.home));
   const asking = { ...ctx, origin: "channel" as const, role: "guest" as const, settings: { ...DEFAULT_SETTINGS, learning: { ...DEFAULT_SETTINGS.learning, askBeforeSaving: true } } };
   expect(permissionContext(asking, "default")).toMatchObject({ mode: "default", confine: true, role: "guest", stores: { askBeforeSaving: true } });
 });
@@ -711,8 +714,8 @@ describe("learning and identity", () => {
     await rt.shutdown();
     expect(model.requests).toHaveLength(4);
     expect(JSON.stringify(model.requests[2]!.messages.at(-1))).toContain("session is ending");
-    const [note] = await readdir(dailyNotesDir(ctx.home, dir));
-    expect(await readFile(join(dailyNotesDir(ctx.home, dir), note!), "utf8")).toContain("Shipped the build fix on main");
+    const [note] = await readdir(journalDir(ctx.home));
+    expect(await readFile(join(journalDir(ctx.home), note!), "utf8")).toContain("Shipped the build fix on main");
     expect(notices(events)).toContainEqual(expect.stringContaining("💡 Learned: DailyNote"));
     expect(await readCounters()).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
   });

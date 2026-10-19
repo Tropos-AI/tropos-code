@@ -77,7 +77,11 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
         (parts[parts.length - 1] === "IDENTITY.md" || parts[parts.length - 1] === "SOUL.md")
       );
     case "daily":
-      return parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!);
+      // LEGACY_LAYOUT: projects/<key>/notes/ until the migration moves the day notes into the journal.
+      return (
+        (parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!)) ||
+        (parts.length === 3 && parts[0] === "workspace" && parts[1] === "memory" && DAY_NOTE.test(parts[2]!))
+      );
     case "agent":
       return parts.length === 2 && parts[0] === "agents" && parts[1]!.endsWith(".md") && !parts[1]!.startsWith(".");
     default:

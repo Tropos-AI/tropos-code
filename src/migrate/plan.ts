@@ -10,7 +10,7 @@ import { scanText } from "../learning/threats";
 /** Imported content comes from somebody else's tool: the strict rules apply. */
 const STRICT = { strict: true } as const;
 import { ENTRY_SEPARATOR, MEMORY_LIMITS, NotesStore, atomicWrite, notesSize } from "../memory/notes";
-import { dailyNotesDir } from "../memory/daily";
+import { legacyNotesDir } from "../memory/daily";
 import { isInside } from "../paths";
 import { PROVIDERS, parseModelId } from "../providers/registry";
 import { readCredentials, saveApiKey } from "../providers/credentials";
@@ -263,7 +263,7 @@ export async function planMigration(opts: MigrateOptions, deps: MigrateDeps): Pr
     }
 
     // daily notes
-    const dir = dailyNotesDir(home, join(home, "workspace"));
+    const dir = legacyNotesDir(home, join(home, "workspace"));
     for (const d of b.daily) {
       const id = `daily:${d.date}`;
       const text = d.text.trim();

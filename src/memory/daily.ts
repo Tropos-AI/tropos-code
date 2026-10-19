@@ -1,13 +1,15 @@
 // src/memory/daily.ts
-import { mkdir, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { constants } from "node:fs";
+import { mkdir, open, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import { neutraliseHarnessTags } from "../context/tags";
 import { errorText } from "../error-text";
 import { blockedPlaceholder, scanText } from "../learning/threats";
+import { journalDir } from "../paths";
 import { projectDir } from "../session/store";
 import { defineTool, type Actor, type AnyTool } from "../tools/types";
-import { atomicWrite } from "./notes";
 
 /** One entry's longest text: a note records a decision or finding, not a transcript. */
 export const MAX_DAILY_ENTRY_CHARS = 2_000;
@@ -16,6 +18,7 @@ export const DAILY_CONTEXT_CHARS = 2_800;
 
 /** Notes can hold project details: the directory and files are owner-only. */
 const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** A day file's name; group 1 is its date. */
@@ -36,9 +39,94 @@ export interface DailyNotesOptions {
 
 export type DailyAppendResult = { ok: true; path: string } | { ok: false; error: string };
 
-/** Day notes for one project: <home>/projects/<project>/notes/. */
-export function dailyNotesDir(home: string, cwd: string): string {
+/** LEGACY_LAYOUT: day notes used to be one folder per project, <home>/projects/<project>/notes/. */
+export function legacyNotesDir(home: string, cwd: string): string {
   return join(projectDir(home, cwd), "notes");
+}
+
+/** One journal entry: a heading naming the project, then the note. */
+export interface JournalEntry {
+  time?: string;
+  name: string;
+  path: string;
+  body: string;
+}
+
+/** The user's home shows as "~" so a journal stays readable and doesn't spell out the account name. */
+function shortPath(path: string): string {
+  const home = homedir();
+  if (path === home) return "~";
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
+function longPath(path: string): string {
+  if (path === "~") return homedir();
+  return path.startsWith("~/") ? `${homedir()}${path.slice(1)}` : path;
+}
+
+/** `## HH:MM · name (path)`, the body as a list item (continuation lines indented two spaces), a blank line. */
+export function formatJournalEntry(e: JournalEntry): string {
+  const [first, ...rest] = e.body.split(/\r?\n/);
+  const tail = rest.map((line) => (line.trim() ? `  ${line.trimEnd()}` : ""));
+  const heading = `## ${e.time ? `${e.time} · ` : ""}${e.name} (${shortPath(e.path)})`;
+  return `${[heading, `- ${first!.trimEnd()}`, ...tail].join("\n")}\n\n`;
+}
+
+const HEADING = /^## (?:(\d{2}:\d{2}) · )?(.*)$/;
+
+/** The entries of a journal day; its `# <date>` title and anything before the first heading are ignored. */
+export function parseJournal(text: string): JournalEntry[] {
+  const out: JournalEntry[] = [];
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = HEADING.exec(lines[i]!);
+    if (!m || !m[2]!.endsWith(")") || m[2]!.lastIndexOf(" (") < 0) continue;
+    const cut = m[2]!.lastIndexOf(" (");
+    const body: string[] = [];
+    let end = i + 1;
+    while (end < lines.length && !lines[end]!.startsWith("## ")) body.push(lines[end++]!);
+    while (body.length > 0 && body[body.length - 1] === "") body.pop();
+    const [first = "", ...rest] = body;
+    const entry: JournalEntry = {
+      name: m[2]!.slice(0, cut),
+      path: longPath(m[2]!.slice(cut + 2, -1)),
+      body: [first.replace(/^- ?/, ""), ...rest.map((l) => l.replace(/^ {1,2}/, ""))].join("\n"),
+    };
+    if (m[1]) entry.time = m[1];
+    out.push(entry);
+    i = end - 1;
+  }
+  return out;
+}
+
+/** O_NOFOLLOW: a symlink planted at a day file is an error, never a write or read through it. */
+async function readNoFollow(path: string): Promise<string | null> {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Appends text in one write (O_APPEND), so concurrent appends from separate processes never overwrite each other.
+ * The directory is created 0700 and the file 0600; a symlink at `file` is refused.
+ */
+export async function appendJournalText(file: string, text: string): Promise<void> {
+  await mkdir(join(file, ".."), { recursive: true, mode: DIR_MODE });
+  const handle = await open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, FILE_MODE);
+  try {
+    await handle.write(text);
+  } finally {
+    await handle.close();
+  }
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -58,16 +146,17 @@ function normalise(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** "- HH:MM first line", later lines indented so the entry stays one list item. */
-function formatEntry(text: string, at: Date): string {
-  const [first, ...rest] = text.split(/\r?\n/);
+/** "- HH:MM first line", later lines indented so the entry stays one list item (what the context shows). */
+function listEntry(e: JournalEntry): string {
+  const [first, ...rest] = e.body.split("\n");
   const tail = rest.map((line) => (line.trim() ? `  ${line.trimEnd()}` : ""));
-  return [`- ${pad(at.getHours())}:${pad(at.getMinutes())} ${first!.trimEnd()}`, ...tail].join("\n");
+  return [`- ${e.time ? `${e.time} ` : ""}${first!.trimEnd()}`, ...tail].join("\n");
 }
 
 /**
- * Append-only day files of durable notes (decisions, findings, state of work). Nothing here edits or
- * removes an entry: what a session wrote stays for later sessions, and only the user prunes it by hand.
+ * Append-only journal days of durable notes (decisions, findings, state of work) in workspace/memory/<date>.md, one
+ * heading per entry naming the project. Nothing here edits or removes an entry: what a session wrote stays for later
+ * sessions, and only the user prunes it by hand. A project reads only its own entries.
  */
 export class DailyNotes {
   private queue: Promise<unknown> = Promise.resolve();
@@ -82,7 +171,7 @@ export class DailyNotes {
   }
 
   get dir(): string {
-    return dailyNotesDir(this.home, this.cwd);
+    return journalDir(this.home);
   }
 
   now(): Date {
@@ -92,6 +181,11 @@ export class DailyNotes {
   /** The file for a "YYYY-MM-DD" date. */
   path(date: string): string {
     return join(this.dir, `${date}.md`);
+  }
+
+  /** Whether a journal entry belongs to this project. */
+  private mine(e: JournalEntry): boolean {
+    return projectDir(this.home, e.path) === projectDir(this.home, this.cwd);
   }
 
   append(text: string, actor: Actor = "agent"): Promise<DailyAppendResult> {
@@ -107,15 +201,35 @@ export class DailyNotes {
       const scan = scanText(entry);
       if (!scan.ok) return { ok: false, error: `Not saved: ${scan.reason}.` };
       const at = this.clock();
-      const path = this.path(localDate(at));
-      const before = await this.readPath(path);
-      if (before !== null && normalise(before).includes(normalise(entry))) {
+      const date = localDate(at);
+      const path = this.path(date);
+      const before = await readNoFollow(path);
+      const mineToday = before === null ? [] : parseJournal(before).filter((e) => this.mine(e));
+      if (mineToday.some((e) => normalise(e.body).includes(normalise(entry)))) {
         return { ok: false, error: "That text is already in today's notes." };
       }
-      const base = before === null || before.length === 0 ? "" : before.endsWith("\n") ? before : `${before}\n`;
-      const after = `${base}${formatEntry(entry, at)}\n`;
-      await mkdir(this.dir, { recursive: true, mode: DIR_MODE });
-      await atomicWrite(path, after);
+      const title = `# ${date}\n\n`;
+      if (before === null) {
+        // Exclusive create: of two first writers only one writes the title, the other sees EEXIST and just appends.
+        await mkdir(this.dir, { recursive: true, mode: DIR_MODE });
+        await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, FILE_MODE).then(
+          async (handle) => {
+            try {
+              await handle.write(title);
+            } finally {
+              await handle.close();
+            }
+          },
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== "EEXIST") throw error;
+          },
+        );
+      }
+      const block = formatJournalEntry({ time: `${pad(at.getHours())}:${pad(at.getMinutes())}`, name: basename(this.cwd) || this.cwd, path: this.cwd, body: entry });
+      // A hand-edited file may lack its final line break; keep the heading on its own line.
+      const lead = before !== null && before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+      await appendJournalText(path, `${lead}${block}`);
+      const after = `${before ?? title}${lead}${block}`;
       try {
         await this.opts.onChange?.({ path, before, after, actor });
       } catch {
@@ -127,37 +241,35 @@ export class DailyNotes {
     return run;
   }
 
-  /** A day's notes, or null when that day has none (or the date is malformed). */
+  /**
+   * This project's entries of a day in list form (`- HH:MM text`), after the legacy per-project day note when
+   * that file still exists; null when the day has neither (or the date is malformed).
+   */
   async read(date: string): Promise<string | null> {
     if (!DATE.test(date)) return null;
-    return this.readPath(this.path(date));
+    const text = await readNoFollow(this.path(date));
+    const mine = text === null ? [] : parseJournal(text).filter((e) => this.mine(e));
+    const legacy = await readNoFollow(join(legacyNotesDir(this.home, this.cwd), `${date}.md`)); // LEGACY_LAYOUT
+    if (legacy === null && text === null) return null;
+    const parts = [legacy?.trim() ?? "", ...mine.map(listEntry)].filter((p) => p.length > 0);
+    return parts.length === 0 ? "" : parts.join("\n");
   }
 
-  /** Day files from the last `days` calendar days (today included), newest first. */
+  /** Days from the last `days` calendar days (today included) with notes for this project, newest first. */
   async recent(days: number): Promise<Array<{ date: string; text: string }>> {
     if (days <= 0) return [];
     const oldest = localDate(shiftDays(this.clock(), -(days - 1)));
-    const names = await readdir(this.dir).catch(() => [] as string[]);
-    const dates = names
-      .map((n) => DAY_FILE.exec(n)?.[1])
-      .filter((d): d is string => d !== undefined && d >= oldest)
-      .sort()
-      .reverse();
+    const names = [
+      ...(await readdir(this.dir).catch(() => [] as string[])),
+      ...(await readdir(legacyNotesDir(this.home, this.cwd)).catch(() => [] as string[])), // LEGACY_LAYOUT
+    ];
+    const dates = [...new Set(names.map((n) => DAY_FILE.exec(n)?.[1]).filter((d): d is string => d !== undefined && d >= oldest))].sort().reverse();
     const out: Array<{ date: string; text: string }> = [];
     for (const date of dates) {
       const text = await this.read(date);
       if (text !== null && text.trim()) out.push({ date, text });
     }
     return out;
-  }
-
-  private async readPath(path: string): Promise<string | null> {
-    try {
-      return await readFile(path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
   }
 }
 
@@ -236,7 +348,7 @@ export function createDailyNoteTool(notes: DailyNotes): AnyTool {
     name: "DailyNote",
     kind: "edit",
     description:
-      "Append a durable note (a decision, a finding, the state of the work) to today's notes for this project. " +
+      "Append a durable note (a decision, a finding, the state of the work) to today's journal under this project's name. " +
       "Append-only: entries can't be edited or removed, and text already in today's notes is refused. " +
       `At most ${MAX_DAILY_ENTRY_CHARS.toLocaleString("en-US")} chars. Newer sessions see today's and yesterday's notes; ` +
       'older ones are found with SessionSearch source "notes". Never save secrets.',

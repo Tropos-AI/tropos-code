@@ -19,7 +19,7 @@ import { loadIdentity } from "../context/identity";
 import { runCurator } from "../learning/curator";
 import { savedNotice } from "../learning/saved-notice";
 import { canonicalStorePath, STORE_TOOLS, troposStorePaths } from "../learning/stores";
-import { dailyNotesDir } from "../memory/daily";
+import { legacyNotesDir } from "../memory/daily";
 import { commandMessage, expandCommand, MAX_EXTENSION_BYTES, type CommandIO } from "../extensions/commands";
 import { renderSkill, skillListing } from "../extensions/skills";
 import type { HookRunner } from "../hooks/runner";
@@ -108,8 +108,8 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     role: ctx.role,
     autonomy: ctx.autonomy?.(),
     stores: {
-      // The journal is still per project, so it is a store of its own here, held to the same no-links check.
-      paths: [...troposStorePaths(ctx.home), canonicalStorePath(ctx.home, dailyNotesDir(ctx.home, ctx.cwd))].filter((p) => p !== undefined),
+      // The journal (workspace/memory) is in troposStorePaths; the project's old notes folder stays a store, held to the same no-links check.
+      paths: [...troposStorePaths(ctx.home), canonicalStorePath(ctx.home, legacyNotesDir(ctx.home, ctx.cwd))].filter((p) => p !== undefined), // LEGACY_LAYOUT
       askBeforeSaving: ctx.settings.learning.askBeforeSaving,
     },
   };

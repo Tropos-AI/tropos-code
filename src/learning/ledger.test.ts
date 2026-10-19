@@ -155,6 +155,12 @@ test("parallel records are all kept", async () => {
   expect(Date.parse((await fresh.list())[0]!.ts)).not.toBeNaN();
 });
 
+test("journal days are learned paths", () => {
+  expect(isLearnedPath(home, "daily", join(home, "workspace", "memory", "2026-10-16.md"))).toBe(true);
+  expect(isLearnedPath(home, "daily", join(home, "workspace", "memory", "notes.md"))).toBe(false);
+  expect(isLearnedPath(home, "daily", join(home, "workspace", "other", "2026-10-16.md"))).toBe(false);
+});
+
 test("isLearnedPath allows only the files each kind writes, under the home", () => {
   const ok: Array<[LedgerKind, string]> = [
     ["memory", "memories/MEMORY.md"],
