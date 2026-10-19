@@ -1,8 +1,10 @@
 // src/tools/bash/bash.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { ExecBackend } from "../../exec/backend";
+import { localBackend } from "../../exec/local";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { toInputSchema } from "../schema";
@@ -199,6 +201,27 @@ describe("Bash", () => {
     const out = await bashTool.run({ command: "head -c 100000 /dev/zero | tr '\\0' 'a'" }, ctx());
     expect(String(out.content).length).toBeLessThan(16_000);
     expect(out.content).toContain("characters truncated");
+  });
+
+  test("a cwd marker a sandboxed command turned into a FIFO or a link to /dev/zero neither hangs nor floods the tool", async () => {
+    for (const plant of ["fifo", "zero"] as const) {
+      const host = join(dir, `marker-${plant}`);
+      if (plant === "fifo") expect(Bun.spawnSync(["mkfifo", host]).exitCode).toBe(0);
+      else symlinkSync("/dev/zero", host);
+      // The script writes its marker elsewhere; the host side finds what the command planted.
+      const exec: ExecBackend = {
+        kind: "local",
+        spawn: (opts) => localBackend.spawn(opts),
+        signal: (child, sig) => localBackend.signal(child, sig),
+        alive: (child) => localBackend.alive(child),
+        close: () => localBackend.close(),
+        cwdMarker: () => ({ inside: "/dev/null", host }),
+      };
+      const c = makeToolContext({ root: dir, exec });
+      const out = await bashTool.run({ command: "echo ran" }, c);
+      expect(out.content).toBe("ran");
+      expect(c.cwd()).toBe(dir);
+    }
   });
 
   test("subject is the command and the working directory it runs in", () => {

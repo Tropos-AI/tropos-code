@@ -1,6 +1,6 @@
 // src/paths.ts
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, relative, isAbsolute, sep } from "node:path";
 
@@ -25,6 +25,31 @@ export function expandHome(p: string, home: string = homedir()): string {
   if (p === "~") return home;
   if (p.startsWith("~/")) return join(home, p.slice(2));
   return p;
+}
+
+/**
+ * A small file's text, or null when it is missing, isn't a plain file, or is over `maxBytes`. For files a sandboxed
+ * command can write (its run dir): a link isn't followed and a FIFO doesn't block, so a planted `/dev/zero` or pipe
+ * can neither hang nor exhaust the process that reads it.
+ */
+export function readSmallFileSync(path: string, maxBytes: number): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.size > maxBytes) return null;
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const read = readSync(fd, buffer, 0, maxBytes + 1, 0);
+    return read > maxBytes ? null : buffer.toString("utf8", 0, read);
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** True when `path` equals `dir` or is nested below it. Both must be absolute. */

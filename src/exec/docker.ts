@@ -9,9 +9,10 @@
 // child's process group. No fake ChildProcess, no event plumbing; a failure is a non-zero exit with a message.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
+import { readSmallFileSync } from "../paths";
 import type { CwdMarker, ExecBackend, ExecSpawn, FilesHold } from "./backend";
 import { type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
 
@@ -492,7 +493,8 @@ export class DockerBackend implements ExecBackend {
     const r = this.runs.get(child);
     if (!r) return undefined;
     try {
-      const n = Number.parseInt(readFileSync(r.pidFile, "utf8").trim(), 10);
+      // The container can write the run dir: a link or a FIFO planted as the pid file must not hang or flood the host.
+      const n = Number.parseInt((readSmallFileSync(r.pidFile, 64) ?? "").trim(), 10);
       return Number.isInteger(n) && n > 0 ? n : undefined;
     } catch {
       return undefined;

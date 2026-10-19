@@ -1,11 +1,32 @@
 // src/paths.test.ts
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  absolutePathEnv, agentsDir, expandHome, isInside, journalDir, learnedSkillsDir, projectKey, safeWhich, troposHome, userSkillsDir,
-  workspaceDir, workspaceFile,
+  absolutePathEnv, agentsDir, expandHome, isInside, journalDir, learnedSkillsDir, projectKey, readSmallFileSync, safeWhich, troposHome,
+  userSkillsDir, workspaceDir, workspaceFile,
 } from "./paths";
+
+describe("readSmallFileSync", () => {
+  test("reads a small plain file; a link, a FIFO, a folder, a missing or an oversized file give null at once", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tropos-small-"));
+    try {
+      writeFileSync(join(dir, "marker"), "/work/app\n");
+      expect(readSmallFileSync(join(dir, "marker"), 64)).toBe("/work/app\n");
+      symlinkSync("/dev/zero", join(dir, "zero"));
+      expect(readSmallFileSync(join(dir, "zero"), 64)).toBeNull();
+      expect(Bun.spawnSync(["mkfifo", join(dir, "fifo")]).exitCode).toBe(0);
+      expect(readSmallFileSync(join(dir, "fifo"), 64)).toBeNull();
+      expect(readSmallFileSync(dir, 64)).toBeNull();
+      expect(readSmallFileSync(join(dir, "missing"), 64)).toBeNull();
+      writeFileSync(join(dir, "big"), "x".repeat(65));
+      expect(readSmallFileSync(join(dir, "big"), 64)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("projectKey", () => {
   test("starts with a readable, sanitized form of the path", () => {

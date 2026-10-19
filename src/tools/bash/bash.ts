@@ -1,11 +1,11 @@
 // src/tools/bash/bash.ts
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { constants } from "node:os";
 import { z } from "zod";
 import type { ExecBackend } from "../../exec/backend";
 import { localBackend } from "../../exec/local";
-import { isInside } from "../../paths";
+import { isInside, readSmallFileSync } from "../../paths";
 import { defineTool } from "../types";
 import { OutputBuffer } from "./output-buffer";
 
@@ -16,6 +16,8 @@ const KILL_TRIES = 10;
 const KILL_RETRY_MS = 100;
 const DRAIN_MS = 200;
 const STREAM_LIMIT = 15_000; // stdout and stderr each; about 30k characters combined
+/** A working directory path, with room to spare. */
+const MARKER_LIMIT = 64 * 1024;
 
 const schema = z.object({
   command: z.string().min(1).describe("The shell command to run."),
@@ -166,12 +168,11 @@ export const bashTool = defineTool({
 
     const notes: string[] = [];
     try {
-      if (existsSync(cwdFile)) {
-        const next = readFileSync(cwdFile, "utf8").trim();
-        if (next && next !== startDir && existsSync(next) && statSync(next).isDirectory()) {
-          if (ctx.allowedDirs.some((d) => isInside(next, d))) ctx.setCwd(next);
-          else notes.push(`[working directory stays at ${startDir}: ${next} is outside the project]`);
-        }
+      // A sandbox's command can write the marker: a link or a FIFO there must not hang or flood the tool.
+      const next = readSmallFileSync(cwdFile, MARKER_LIMIT)?.trim();
+      if (next && next !== startDir && existsSync(next) && statSync(next).isDirectory()) {
+        if (ctx.allowedDirs.some((d) => isInside(next, d))) ctx.setCwd(next);
+        else notes.push(`[working directory stays at ${startDir}: ${next} is outside the project]`);
       }
     } finally {
       rmSync(cwdFile, { force: true });
