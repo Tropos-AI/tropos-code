@@ -84,3 +84,5 @@ export const journalDir = (home: string): string => join(workspaceDir(home), "me
 export const userSkillsDir = (home: string): string => join(workspaceDir(home), "skills");
 export const learnedSkillsDir = (home: string): string => join(workspaceDir(home), "skills-learned");
 export const agentsDir = (home: string): string => join(home, "agents");
+/** Where chats' git worktrees live: `<home>/worktrees/<project>/<task>`. */
+export const worktreesDir = (home: string): string => join(home, "worktrees");
