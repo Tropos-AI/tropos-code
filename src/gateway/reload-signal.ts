@@ -16,13 +16,28 @@ async function gatewayPid(home: string): Promise<unknown> {
   }
 }
 
+const TROPOS_NAME = /^(tcode|tropos)$/i;
+const baseName = (path: string): string => path.split("/").pop() ?? "";
+/** A script a runtime (bun, node) runs as Tropos: the `tcode` link, or the entry point of a Tropos checkout or package. */
+const TROPOS_SCRIPT = /(^|\/)(tcode|tropos|tropos-code)\/(src|dist)\/[^/]+$/i;
+
+/**
+ * True for `tcode gateway` as a command line: the program is the tcode/tropos binary (or a runtime running Tropos's
+ * script), and `gateway` is an argument of its own. `vim /tmp/gateway` or `python serve.py gateway` never count.
+ */
+export function isGatewayCommand(command: string): boolean {
+  const words = command.trim().split(/\s+/);
+  const program = TROPOS_NAME.test(baseName(words[0] ?? "")) ? 0 : words[1] && (TROPOS_NAME.test(baseName(words[1])) || TROPOS_SCRIPT.test(words[1])) ? 1 : -1;
+  return program >= 0 && words.slice(program + 1).includes("gateway");
+}
+
 /** True when `pid` is this process or a `tcode gateway` command line: a pid left in state.json may have been reused. */
 export async function looksLikeGateway(pid: number): Promise<boolean> {
   if (pid === process.pid) return true;
   try {
     const proc = Bun.spawn(["ps", "-p", String(pid), "-o", "command="], { stdout: "pipe", stderr: "ignore" });
     const command = await new Response(proc.stdout).text();
-    return /\bgateway\b/.test(command);
+    return isGatewayCommand(command);
   } catch {
     return false;
   }
