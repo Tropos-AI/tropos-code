@@ -13,7 +13,11 @@ export default defineConfig({
   fullyParallel: true,
   workers: 4,
   reporter: "list",
+  // Four workers share one fixture server: a page can take a while to arrive, so waits are for signals, not times.
+  timeout: 90_000,
+  expect: { timeout: 10_000 },
   use: {
+    navigationTimeout: 60_000,
     baseURL: `http://127.0.0.1:${PORT}`,
     // Optional: a Chromium already on this machine, when the revision this Playwright wants isn't downloaded.
     launchOptions: process.env.E2E_CHROMIUM ? { executablePath: process.env.E2E_CHROMIUM } : {},

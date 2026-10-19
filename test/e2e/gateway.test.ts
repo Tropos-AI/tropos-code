@@ -211,7 +211,8 @@ describe("tcode gateway", () => {
 
   test("a scheduled job runs in a sandboxed session and its result is delivered to the chat", async () => {
     await mkdir(join(home, "gateway", "cron"), { recursive: true });
-    const soon = Date.now() + 700;
+    // Already due: the scheduler runs due jobs as soon as it starts (after the channels), whatever the start takes.
+    const soon = Date.now() - 1_000;
     await Bun.write(
       join(home, "gateway", "cron", "jobs.json"),
       JSON.stringify({

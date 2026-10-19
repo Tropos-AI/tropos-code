@@ -4,6 +4,7 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gotoReady } from "./ready";
 
 const OUT = join(import.meta.dirname, "out");
 const WIDTHS = [320, 375, 768, 1024, 1440];
@@ -40,7 +41,7 @@ for (const scheme of SCHEMES)
     for (const step of STEPS) {
       test(`setup ${step} ${width} ${scheme}`, async ({ browser, baseURL }) => {
         const page = await open(browser, width, scheme);
-        await page.goto(`${baseURL}/#/setup`);
+        await gotoReady(page, `${baseURL}/#/setup`);
         await show(page, step);
         await page.waitForLoadState("networkidle");
 
@@ -89,7 +90,7 @@ for (const scheme of SCHEMES)
 
 test("keyboard: every step header is reachable with Tab and opens with Enter or Space", async ({ browser, baseURL }) => {
   const page = await open(browser, 1024, "light");
-  await page.goto(`${baseURL}/#/setup`);
+  await gotoReady(page, `${baseURL}/#/setup`);
   await expect(page.getByRole("heading", { level: 1, name: "Setup" })).toBeVisible();
   await expect(page.locator('button[aria-controls^="setup-step-"]')).toHaveCount(10);
   const ids = await page.locator('button[aria-controls^="setup-step-"]').evaluateAll((els) => els.map((e) => e.getAttribute("aria-controls")!));
@@ -113,7 +114,7 @@ test("keyboard: every step header is reachable with Tab and opens with Enter or 
 
 test("reduced motion: an opened step panel is fully visible at once, with nothing animating", async ({ browser, baseURL }) => {
   const page = await open(browser, 375, "light", "reduce");
-  await page.goto(`${baseURL}/#/setup`);
+  await gotoReady(page, `${baseURL}/#/setup`);
   await header(page, "done").click();
   const panel = page.locator("#setup-step-done");
   await expect(panel).toBeVisible();

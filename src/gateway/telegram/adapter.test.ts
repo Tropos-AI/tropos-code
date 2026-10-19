@@ -395,7 +395,8 @@ describe("TelegramAdapter", () => {
     server.pushMessage(CHAT, CHAT, "slow");
     server.pushMessage(CHAT, CHAT, "queued 1");
     server.pushMessage(CHAT, CHAT, "queued 2");
-    await Bun.sleep(50);
+    // All three handled (the slow turn running, two queued behind it).
+    await server.waitFor(() => server.allHandled() && session().prompts.includes("slow"));
     // Revoked meanwhile: the session behind the chat refuses to start again.
     session().onPrompt = async (text, s) => {
       if (text === "slow") return (await gate, s.emit(assistantEvent("ran slow")), "end_turn");
@@ -403,16 +404,15 @@ describe("TelegramAdapter", () => {
     };
     release();
     await server.waitFor(() => session().prompts.includes("queued 1"));
-    await Bun.sleep(50);
-    expect(session().prompts).toEqual(["warm", "slow", "queued 1"]);
-    expect(server.textsTo(CHAT).join("\n")).not.toContain("went wrong");
     // Approved again later: the next message opens the chat afresh.
     session().onPrompt = async (text, s) => (s.emit(assistantEvent(`echo: ${text}`)), "end_turn");
     const opens = sessions.opens;
     server.pushMessage(CHAT, CHAT, "back");
     await server.waitFor(() => server.textsTo(CHAT).includes("echo: back"));
     expect(sessions.opens).toBe(opens + 1);
-    expect(session().prompts).not.toContain("queued 2");
+    // One chat's turns run in order: had "queued 2" survived the drop, it would have run before "back".
+    expect(session().prompts).toEqual(["warm", "slow", "queued 1", "back"]);
+    expect(server.textsTo(CHAT).join("\n")).not.toContain("went wrong");
   });
 
   test("a turn that fails with a user-facing error says so in its own words", async () => {
@@ -538,6 +538,8 @@ describe("TelegramAdapter", () => {
     const ctx = await setup();
     await ctx.server.waitFor(() => ctx.server.getUpdatesOffsets.length > 0);
     ctx.server.failGetUpdates = 3;
+    // The poll already waiting runs out (after its 1 s), then the next three fail: the message comes after them.
+    await ctx.server.waitFor(() => ctx.server.failGetUpdates === 0 && ctx.logs.filter((l) => l.includes("polling failed")).length === 3, 5_000);
     ctx.server.pushMessage(CHAT, CHAT, "after failures");
     await ctx.server.waitFor(() => ctx.server.textsTo(CHAT).includes("echo: after failures"));
     expect(ctx.session().prompts).toEqual(["after failures"]);

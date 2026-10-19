@@ -4,6 +4,7 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { gotoReady } from "./ready";
 
 const OUT = join(import.meta.dirname, "out");
 const WIDTHS = [320, 375, 768, 1024, 1440];
@@ -48,7 +49,7 @@ for (const scheme of SCHEMES)
     for (const [name, path] of Object.entries(SCREENS)) {
       test(`${name} ${width} ${scheme}`, async ({ browser, baseURL }) => {
         const page = await open(browser, { width, scheme, loggedIn: name !== "login" });
-        await page.goto(baseURL + path);
+        await gotoReady(page, baseURL + path);
         if (name === "login") await expect(page.getByLabel("Login code")).toBeVisible();
         if (name === "chat") await startChat(page);
         if (name === "phone") await expect(page.getByText(/mac\.tail1234\.ts\.net/).first()).toBeVisible();
@@ -103,7 +104,7 @@ test("keyboard only: Tab to the code field, type a fresh code, Enter → the app
   const page = await open(browser, { width: 1024, loggedIn: false });
   const code = await (await fetch("http://127.0.0.1:4392/")).text();
   expect(code).toMatch(/^\d{6}$/);
-  await page.goto(baseURL!);
+  await gotoReady(page, baseURL!);
   const field = page.getByLabel("Login code");
   await expect(field).toBeVisible();
   // It starts focused; Tab around until the keyboard has landed on it (never touching the mouse).
@@ -119,7 +120,7 @@ test("keyboard only: Tab to the code field, type a fresh code, Enter → the app
 
 test("reduced motion: the Settings tabs switch without animation and nothing is hidden", async ({ browser, baseURL }) => {
   const page = await open(browser, { width: 375, reducedMotion: "reduce" });
-  await page.goto(`${baseURL}/#/settings/channels`);
+  await gotoReady(page, `${baseURL}/#/settings/channels`);
   await expect(page.getByRole("tablist", { name: "Settings sections" })).toBeVisible();
   for (const label of ["Phone access", "Autonomy", "Backups", "Channels & devices"]) {
     await page.getByRole("tab", { name: label }).click();
@@ -141,7 +142,7 @@ test("reduced motion: the Settings tabs switch without animation and nothing is 
 
 test("approve on a phone-width screen runs the command", async ({ browser, baseURL }) => {
   const page = await open(browser, { width: 375 });
-  await page.goto(`${baseURL}/#/chat`);
+  await gotoReady(page, `${baseURL}/#/chat`);
   await startChat(page);
   const yes = page.getByRole("group", { name: PROCEED }).getByRole("button", { name: /^Yes/ }).first();
   // A tap that lands while the dialog is still opening is lost, so tap again until the prompt closes.
