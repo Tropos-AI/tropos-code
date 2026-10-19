@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
+import { busyBackend, recordingBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { toInputSchema } from "../schema";
 import { readTool } from "./read";
@@ -154,5 +155,45 @@ describe("Read", () => {
     expect(schema.type).toBe("object");
     expect(schema.required).toEqual(["file_path"]);
     expect("$schema" in schema).toBe(false);
+  });
+});
+
+describe("Read: a folder swapped for a link while the file is opened", () => {
+  test("a parent folder swapped for a link after the path was checked is refused, and nothing outside is read", async () => {
+    const root = await makeTmpDir();
+    try {
+      await mkdir(join(root, "project", "sub"), { recursive: true });
+      await mkdir(join(root, "outside"));
+      await writeFile(join(root, "project", "sub", "id_ed25519"), "decoy\n");
+      await writeFile(join(root, "outside", "id_ed25519"), "PRIVATE KEY\n");
+      const ctx = makeToolContext({ root: join(root, "project"), exec: swappingBackend(join(root, "project", "sub"), join(root, "outside")) });
+      const out = await run({ file_path: "sub/id_ed25519" }, ctx);
+      expect(out.isError).toBe(true);
+      expect(String(out.content)).toContain("changed while it was being opened");
+      expect(String(out.content)).not.toContain("PRIVATE KEY");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
+  test("while the sandbox still runs a command, nothing is read and the reason is given", async () => {
+    const out = await run({ file_path: "three.txt" }, makeToolContext({ root: dir, exec: busyBackend("A background command is still running.") }));
+    expect(out).toEqual({ content: "A background command is still running.", isError: true });
+  });
+
+  test("the sandbox is held while the file is read and released afterwards, also when the read fails", async () => {
+    const events: string[] = [];
+    const ctx = makeToolContext({ root: dir, exec: recordingBackend(events) });
+    expect((await run({ file_path: "three.txt" }, ctx)).isError).toBeUndefined();
+    expect((await run({ file_path: "nope.txt" }, ctx)).isError).toBe(true);
+    expect(events).toEqual(["held", "released", "held", "released"]);
+  });
+
+  test("a FIFO is refused at once instead of hanging the read", async () => {
+    const fifo = join(dir, "pipe");
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    const out = await run({ file_path: "pipe" });
+    expect(out.isError).toBe(true);
+    expect(String(out.content)).toContain("not a regular file");
   });
 });

@@ -1,11 +1,10 @@
 // src/tools/write/write.ts
-import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
+import { cannotWrite, checkFreshness, makeParentDirs, openVerified, replaceContents, holdSandbox, staleText } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
-import { defineTool, type ToolOutput } from "../types";
+import { defineTool, type ToolContext, type ToolOutput } from "../types";
 
 const schema = z.object({
   file_path: z.string().min(1).describe("Path to the file, absolute or relative to the working directory."),
@@ -32,22 +31,41 @@ export const writeTool = defineTool({
     if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
       return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
     }
-    let output: ToolOutput;
+    const held = await holdSandbox(ctx);
+    if ("content" in held) return held;
     try {
-      const fresh = await checkFreshness(path, ctx);
-      if (!fresh.ok) return { content: fresh.error, isError: true };
-      const before = fresh.missing ? "" : await readFile(path, "utf8");
-      await mkdir(dirname(path), { recursive: true });
-      await writeFileNoFollow(path, input.content);
-      ctx.readState.record(path, (await stat(path)).mtimeMs);
-      const diff = makeDiff(path, before, input.content);
-      const lineCount = input.content.split("\n").length - (input.content.endsWith("\n") ? 1 : 0);
-      output = fresh.missing
-        ? { content: `Created ${path} (${lineCount} lines).`, display: diff, summary: `created, ${lineCount} lines` }
-        : { content: `Overwrote ${path}.`, display: diff, summary: `+${diff.added} −${diff.removed}` };
-    } catch (error) {
-      return cannotWrite(path, error);
+      return await writeAt(path, input, ctx);
+    } finally {
+      held.release();
     }
-    return output;
   },
 });
+
+/** Write, once the sandbox is held. */
+async function writeAt(path: string, input: z.infer<typeof schema>, ctx: ToolContext): Promise<ToolOutput> {
+  let output: ToolOutput;
+  try {
+    const fresh = await checkFreshness(path, ctx);
+    if (!fresh.ok) return { content: fresh.error, isError: true };
+    await makeParentDirs(dirname(path));
+    const { handle, info } = await openVerified(path, fresh.missing ? "create" : "update", { project: ctx.allowedDirs });
+    let before = "";
+    try {
+      // The file opened must still be the one that was read.
+      if (!fresh.missing && info.mtimeMs !== fresh.mtimeMs) return { content: staleText(path), isError: true };
+      if (!fresh.missing) before = await handle.readFile("utf8");
+      await replaceContents(handle, input.content);
+      ctx.readState.record(path, (await handle.stat()).mtimeMs);
+    } finally {
+      await handle.close();
+    }
+    const diff = makeDiff(path, before, input.content);
+    const lineCount = input.content.split("\n").length - (input.content.endsWith("\n") ? 1 : 0);
+    output = fresh.missing
+      ? { content: `Created ${path} (${lineCount} lines).`, display: diff, summary: `created, ${lineCount} lines` }
+      : { content: `Overwrote ${path}.`, display: diff, summary: `+${diff.added} −${diff.removed}` };
+  } catch (error) {
+    return cannotWrite(path, error);
+  }
+  return output;
+}

@@ -1,7 +1,7 @@
 // src/gateway/chat-exec.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
-import { mkdirSync, symlinkSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { link, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
@@ -74,6 +74,16 @@ test("docker: with Docker up, the container backend (or the test's), confined", 
   expect(await chatBackend(input({ config: config({ backend: "docker" }), role: "owner", override: () => backend }))).toEqual({ backend, confined: true });
 });
 
+test("docker: only a guest's container stops what its commands leave running", async () => {
+  const stops = (b: ExecBackend) => (b as unknown as { stopLeftovers: boolean }).stopLeftovers;
+  const owner = await chatBackend(input({ config: config({ backend: "docker" }), role: "owner" }));
+  expect(stops(owner.backend)).toBe(false);
+  await owner.backend.close();
+  const guest = await chatBackend(input({ config: config({ backend: "host" }), role: "guest" }));
+  expect(stops(guest.backend)).toBe(true);
+  await guest.backend.close();
+});
+
 test("host: Docker's answer doesn't matter to the owner", async () => {
   let asked = false;
   const backend = fake();
@@ -106,6 +116,22 @@ test.skipIf(!canConfine)("host with confinement: the confined backend, confined"
   const scheduled = await chatBackend(input({ config: config({ backend: "host" }), role: "scheduled" }));
   expect(pathsOf(scheduled.backend).map((p) => p.split("/").at(-1))).toEqual(["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"]);
   await scheduled.backend.close();
+});
+
+test.skipIf(!canConfine)("host with confinement: the .env files of the owner's other projects are denied, the session's own are not", async () => {
+  const other = join(dir, "other");
+  mkdirSync(other);
+  await writeFile(join(other, ".env"), "TOKEN=1");
+  await writeFile(join(workspace, ".env"), "OWN=1");
+  await mkdir(join(home, "workspace"), { recursive: true });
+  await writeFile(join(home, "workspace", ".env"), "CHIEF=1");
+  const withOther = gatewayConfigSchema.parse({ chat: { backend: "host" }, projects: [{ id: "other", name: "Other", path: other }, { id: "app", name: "App", path: workspace }] });
+  const got = await chatBackend(input({ config: withOther, role: "owner" }));
+  const realDir = realpathSync(dir);
+  const denied = (got.backend as unknown as { paths: { otherProjectSecrets: string[] } }).paths.otherProjectSecrets.map((p) => p.slice(realDir.length));
+  // The default project (the chief's workspace) counts as another project too.
+  expect(denied.sort()).toEqual(["/home/.tropos/workspace/.env", "/other/.env"]);
+  await got.backend.close();
 });
 
 test.skipIf(!canConfine)("host: a project that can't be confined fails closed with the reason", async () => {

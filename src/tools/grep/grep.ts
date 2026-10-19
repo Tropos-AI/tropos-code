@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { holdSandbox, openVerified, type VerifiedFile } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 import { assertContainedPattern, namesDir, walkFiles } from "../walk";
@@ -154,6 +155,24 @@ async function runRipgrep(
   }
 }
 
+/** A file's bytes for the search, or null when it can't be read, isn't a plain file, or no longer lies where it was found. */
+async function readSearched(file: string, within: readonly string[] | undefined, isDenied?: (path: string) => boolean): Promise<Buffer | null> {
+  let opened: VerifiedFile;
+  try {
+    opened = await openVerified(file, "read", { within });
+  } catch {
+    return null;
+  }
+  try {
+    if (!opened.info.isFile() || opened.info.size > MAX_FILE_BYTES || isDenied?.(opened.real)) return null;
+    return await opened.handle.readFile();
+  } catch {
+    return null;
+  } finally {
+    await opened.handle.close();
+  }
+}
+
 async function runFallback(
   base: string,
   input: GrepInput,
@@ -186,8 +205,10 @@ async function runFallback(
   }
 
   const lines: string[] = [];
+  // A single file must still be that file; one the walk found must still lie inside the searched folder.
+  const within = info.isFile() ? undefined : [base];
   for (const file of files) {
-    const buffer = await readFile(file).catch(() => null);
+    const buffer = await readSearched(file, within, isDenied);
     if (!buffer || buffer.length > MAX_FILE_BYTES || buffer.subarray(0, 8192).includes(0)) continue;
     const fileLines = buffer.toString("utf8").split(/\r?\n/);
     const hits = fileLines.flatMap((line, i) => (regex.test(line) ? [i] : []));
@@ -233,9 +254,15 @@ export function createGrepTool(opts: { rgPath: string | null }) {
         }
         throw error;
       }
-      return opts.rgPath
-        ? runRipgrep(opts.rgPath, base, input, ctx.signal, ctx.isDenied)
-        : runFallback(base, input, ctx.isDenied);
+      const held = await holdSandbox(ctx);
+      if ("content" in held) return held;
+      try {
+        return await (opts.rgPath
+          ? runRipgrep(opts.rgPath, base, input, ctx.signal, ctx.isDenied)
+          : runFallback(base, input, ctx.isDenied));
+      } finally {
+        held.release();
+      }
     },
   });
 }

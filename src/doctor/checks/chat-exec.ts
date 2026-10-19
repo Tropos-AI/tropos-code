@@ -3,7 +3,9 @@ import { lstat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { needsUnconfinedConsent } from "../../gateway/autonomy";
 import { loadGatewayConfig } from "../../gateway/config";
+import { ownerProjects } from "../../gateway/chat-exec";
 import { detectConfinement } from "../../exec/confined";
+import { tooBigToSearch } from "../../exec/confinement-paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "../../exec/env";
 import { isInside } from "../../paths";
 import type { Check } from "../types";
@@ -59,6 +61,19 @@ export const chatExecCheck: Check = {
     const confinement = await detectConfinement(env.runner.exec, env.platform);
     if (confinement) {
       out.push(finding("chat.exec", "ok", `Chat commands run on this machine, confined by ${confinement}, at ${level}`));
+      // The confinement denies a list of secrets, not the home folder, and leaves the network on: unasked, that is a lot.
+      if (level === "autonomous" || config.projects.some((p) => p.autonomy === "autonomous")) {
+        out.push(
+          finding("chat.exec.autonomous", "info", "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied", {
+            detail:
+              "Keys, tokens, shell histories, and the .env files in the top two folder levels of your other projects stay unreadable; other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+          }),
+        );
+      }
+      // Such a project is denied whole rather than searched in part: say so, since it can surprise.
+      for (const project of tooBigToSearch(ownerProjects(config, env.home))) {
+        out.push(finding("chat.exec.env-scan", "info", `Chats in other projects can't read ${project} at all: it has too many folders to search for .env files`));
+      }
     } else if (needsUnconfinedConsent(config, null)) {
       out.push(finding("chat.exec.held", "info", "Chats are held at ask: commands can't be confined here and running unconfined wasn't confirmed"));
     } else {

@@ -204,8 +204,10 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     "#!/bin/sh",
     'case "$1" in',
     "  exec) shift",
-    '    while [ "$#" -gt 0 ]; do case "$1" in -w) cd "$2" || exit 1; shift 2;; -e) shift 2;; *) break;; esac; done',
+    '    while [ "$#" -gt 0 ]; do case "$1" in -w) cd "$2" || exit 1; shift 2;; -e|-u) shift 2;; *) break;; esac; done',
     "    shift",
+    // Never run a sweep on the host: there `kill -9 -1` would kill every process of the test's user.
+    '    case "$*" in *tropos-sweep*|*"kill -9 -1"*) exit 0 ;; esac',
     '    exec "$@" ;;',
     "  *) exit 0 ;;",
     "esac",
@@ -314,6 +316,184 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     expect(r.out).toContain("hi");
     expect(r.err).not.toContain(COMMONDIR_TAMPERED);
     expect(r.code).toBe(3);
+  });
+});
+
+describe("DockerBackend stops what a guest's commands leave running (fake docker client)", () => {
+  // Logs every call, one per line. `exec` runs the command on the host in the given -w dir, except the sweep, which
+  // only answers (or fails when a `sweep-fails` file exists): on the host `kill -9 -1` would kill every process of the
+  // test's user.
+  const FAKE_DOCKER = [
+    "#!/bin/sh",
+    'here=$(dirname "$0")',
+    'echo "$*" >> "$here/calls"',
+    'case "$1" in',
+    "  exec) shift",
+    '    while [ "$#" -gt 0 ]; do case "$1" in -w) cd "$2" || exit 1; shift 2;; -e|-u) shift 2;; *) break;; esac; done',
+    "    shift",
+    '    case "$*" in *tropos-sweep*|*"kill -9 -1"*) [ -e "$here/sweep-fails" ] && exit 1; echo swept; exit 0 ;; esac',
+    '    exec "$@" ;;',
+    "  *) exit 0 ;;",
+    "esac",
+    "",
+  ].join("\n");
+  const user = `${process.getuid!()}:${process.getgid!()}`;
+  let fx: string;
+  let ws: string;
+  let n = 0;
+  const backends: DockerBackend[] = [];
+  const calls = () => (existsSync(join(fx, "calls")) ? readFileSync(join(fx, "calls"), "utf8") : "");
+  const sweeps = () => calls().split("\n").filter((line) => line.includes("tropos-sweep"));
+  const make = (stopLeftovers: boolean) => {
+    const b = new DockerBackend({ workspace: ws, dockerBin: join(fx, "docker"), runDir: join(fx, `run-${++n}`), stopLeftovers });
+    backends.push(b);
+    return b;
+  };
+  beforeAll(async () => {
+    fx = await makeTmpDir("tropos-fakedocker-sweep-");
+    ws = join(fx, "ws");
+    await mkdir(ws, { recursive: true });
+    await writeFile(join(fx, "docker"), FAKE_DOCKER, { mode: 0o755 });
+  });
+  afterAll(async () => {
+    for (const b of backends) await b.close();
+    await removeDir(fx);
+  });
+
+  test("after a guest's command ends, the next quiesce stops everything it left running in the container", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "echo hi", cwd: ws, env: {} }));
+    const before = sweeps().length;
+    expect(await backend.quiesce()).toBeUndefined();
+    const added = sweeps().slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toStartWith(`exec -u ${user} ${backend.name} sh -c `);
+    expect(added[0]).toContain("kill -9 -1");
+  });
+
+  test("the Bash tool sweeps a guest's container as soon as a command finishes", async () => {
+    const backend = make(true);
+    const before = sweeps().length;
+    const r = await bashTool.run({ command: "echo hi" }, makeToolContext({ root: ws, exec: backend }));
+    // The fake has no /run/tropos for the pid and cwd files, so only stdout is checked.
+    expect(String(r.content)).toStartWith("hi\n");
+    expect(sweeps().length).toBe(before + 1);
+  });
+
+  test("nothing run since the last sweep: no docker call at all", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    await backend.quiesce();
+    const before = calls().length;
+    expect(await backend.quiesce()).toBeUndefined();
+    expect(calls().length).toBe(before);
+  });
+
+  test("while a guest's background command still runs, file tools are told to wait and nothing is swept", async () => {
+    const backend = make(true);
+    const child = backend.spawn({ shell: "/bin/sh", script: "touch started; sleep 30", cwd: ws, env: {} });
+    const done = collect(child);
+    await until(() => existsSync(join(ws, "started")));
+    const before = sweeps().length;
+    expect(await backend.quiesce()).toContain("still running");
+    expect(sweeps().length).toBe(before);
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+    await done;
+    expect(await backend.quiesce()).toBeUndefined();
+    expect(sweeps().length).toBe(before + 1);
+  });
+
+  test("a sweep that fails keeps file tools waiting, and is tried again next time", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    await writeFile(join(fx, "sweep-fails"), "");
+    try {
+      expect(await backend.quiesce()).toContain("Couldn't stop");
+    } finally {
+      await rm(join(fx, "sweep-fails"));
+    }
+    expect(await backend.quiesce()).toBeUndefined();
+  });
+
+  const held = async (backend: DockerBackend) => {
+    const hold = await backend.holdForFiles();
+    if (!hold.ok) throw new Error(hold.reason);
+    return hold;
+  };
+
+  test("while a file tool holds a guest's sandbox, a new command waits, and runs once the hold is released", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    const hold = await held(backend);
+    const marker = join(ws, `ran-${n}`);
+    const done = collect(backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'`, cwd: ws, env: {} }));
+    await Bun.sleep(300);
+    expect(existsSync(marker)).toBe(false);
+    hold.release();
+    expect((await done).code).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("commands wait until the last of several file tools lets go", async () => {
+    const backend = make(true);
+    const first = await held(backend);
+    const second = await held(backend);
+    const marker = join(ws, `ran-${n}`);
+    const done = collect(backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'`, cwd: ws, env: {} }));
+    first.release();
+    first.release(); // a second release of the same hold changes nothing
+    await Bun.sleep(300);
+    expect(existsSync(marker)).toBe(false);
+    second.release();
+    await done;
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("a file tool can't hold a guest's sandbox while one of its commands runs", async () => {
+    const backend = make(true);
+    const marker = join(ws, `started-${n}`);
+    const child = backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'; sleep 30`, cwd: ws, env: {} });
+    const done = collect(child);
+    await until(() => existsSync(marker));
+    const hold = await backend.holdForFiles();
+    expect(hold.ok).toBe(false);
+    expect(hold.ok ? "" : hold.reason).toContain("still running");
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+    await done;
+    expect((await backend.holdForFiles()).ok).toBe(true);
+  });
+
+  test("an owner's container holds nothing back: a command runs while a file tool works", async () => {
+    const backend = make(false);
+    const hold = await held(backend);
+    try {
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script: "echo ran", cwd: ws, env: {} }));
+      expect(r.out).toContain("ran");
+    } finally {
+      hold.release();
+    }
+  });
+
+  test("a guest's container keeps itself alive as a user of its own, so the sweep can't stop it; commands run as the owner's user", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    const run = calls().split("\n").filter((line) => line.startsWith("run ") && line.includes(backend.name))[0]!;
+    expect(run).toContain(" -u 65534:65534 ");
+    expect(run).toContain(" -w / ");
+    expect(run).toEndWith(" sleep infinity");
+    const exec = calls().split("\n").filter((line) => line.startsWith("exec ") && line.includes(backend.name))[0]!;
+    expect(exec).toStartWith(`exec -u ${user} -w ${ws} `);
+  });
+
+  test("an owner's container never sweeps, and its keeper runs as the owner's user as before", async () => {
+    const backend = make(false);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    const before = sweeps().length;
+    expect(await backend.quiesce()).toBeUndefined();
+    expect(sweeps().length).toBe(before);
+    const run = calls().split("\n").filter((line) => line.startsWith("run ") && line.includes(backend.name))[0]!;
+    expect(run).toContain(` -u ${user} `);
+    expect(run).toContain(` -w ${ws} `);
   });
 });
 
@@ -573,6 +753,28 @@ d("Bash tool with ctx.exec = DockerBackend", () => {
       delete process.env.SECRET_TEST;
     }
   });
+});
+
+d("DockerBackend for a guest (real container)", () => {
+  let ws: string;
+  let backend: DockerBackend;
+  beforeAll(async () => {
+    ws = await makeTmpDir("tropos-dock-guest-");
+    backend = new DockerBackend({ workspace: ws, stopLeftovers: true });
+  });
+  afterAll(async () => {
+    await backend.close();
+    await removeDir(ws);
+  });
+
+  test("a loop a command leaves running in the background is gone after the command, and the container still works", async () => {
+    const c = makeToolContext({ root: ws, exec: backend });
+    await bashTool.run({ command: "(while :; do ln -sfn /tmp loop-link; rm -f loop-link; done) >/dev/null 2>&1 &" }, c);
+    expect(inContainer(backend.name, "ps -o args")).not.toContain("while");
+    expect(containerExists(backend.name)).toBe(true);
+    const r = await bashTool.run({ command: "echo still here; id -u" }, c);
+    expect(r.content).toBe(`still here\n${process.getuid!()}`);
+  }, 30_000);
 });
 
 d("DockerBackend protects what git runs on the host", () => {

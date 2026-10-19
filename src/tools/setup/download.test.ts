@@ -2,10 +2,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { busyBackend, recordingBackend } from "../../../test/helpers/swap-backend";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
+import { makeToolContext } from "../../../test/helpers/tool-context";
 import { download, downloadName, downloadTarget, MAX_DOWNLOAD_BYTES } from "./download";
+import { type ExtendKit, performExtend } from "./extend";
 
 let root: string;
 let project: string;
@@ -106,4 +109,45 @@ test("only https from a public host: http, credentials and private hosts are ref
 test("an HTTP error saves nothing", async () => {
   await expect(download({ url: "https://example.com/a" }, place(), { resolve: DNS, fetch: server("nope", {}, 404) })).rejects.toThrow(/404/);
   expect(await readdir(project)).toEqual([]);
+});
+
+test("a folder swapped for a link after the target was checked: no folder is created outside and nothing is fetched", async () => {
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await mkdir(join(project, "vendor"));
+  // The host lookup runs after the target was checked: a racing command acts then.
+  const racing = async (host: string) => {
+    await rename(join(project, "vendor"), join(project, "vendor.old"));
+    await symlink(outside, join(project, "vendor"));
+    return DNS(host);
+  };
+  await expect(download({ url: "https://example.com/a.zip", path: "vendor/lib/a.zip" }, place(), { resolve: racing, fetch: server() })).rejects.toThrow(/changed while it was being opened/);
+  expect(await readdir(outside)).toEqual([]);
+  expect(fetched).toEqual([]);
+});
+
+test("a folder swapped for a link while the file downloads: the file isn't put in place, here or outside", async () => {
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await mkdir(join(project, "vendor"));
+  const racing = (async (url: string) => {
+    fetched.push(url);
+    await rename(join(project, "vendor"), join(project, "vendor.old"));
+    await symlink(outside, join(project, "vendor"));
+    return new Response(BODY);
+  }) as unknown as typeof fetch;
+  await expect(download({ url: "https://example.com/a.zip", path: "vendor/a.zip" }, place(), { resolve: DNS, fetch: racing })).rejects.toThrow(/changed while it was being opened/);
+  expect(await readdir(outside)).toEqual([]);
+  expect(existsSync(join(project, "vendor.old", "a.zip"))).toBe(false);
+});
+
+test("the download waits for the chat's sandbox like the other file tools, and refuses while a command runs there", async () => {
+  const ctx = makeToolContext({ root: project, exec: busyBackend("A background command is still running.") });
+  const kit = { fetch: server(), resolve: DNS } as unknown as ExtendKit;
+  await expect(performExtend("download", { action: "download", url: "https://example.com/a.zip" }, ctx, kit)).rejects.toThrow("A background command is still running.");
+  expect(fetched).toEqual([]);
+  const events: string[] = [];
+  const ok = await performExtend("download", { action: "download", url: "https://example.com/a.zip" }, makeToolContext({ root: project, exec: recordingBackend(events) }), kit);
+  expect(ok).toContain("Downloaded");
+  expect(events).toEqual(["held", "released"]);
 });

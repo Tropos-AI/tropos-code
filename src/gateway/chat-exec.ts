@@ -5,7 +5,7 @@ import { confinedBackend, unconfinedBackend } from "../exec/confined";
 import { ConfinementError, requireSingleLinks } from "../exec/confinement-paths";
 import { DockerBackend } from "../exec/docker";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
-import { agentsDir } from "../paths";
+import { agentsDir, guestWorkspaceDir, workspaceDir } from "../paths";
 import type { GatewayConfig } from "./config";
 import { SandboxUnavailableError } from "./errors";
 import type { SessionRole } from "./types";
@@ -34,6 +34,11 @@ export interface ChatBackendInput {
   override?: (workspace: string) => ExecBackend;
 }
 
+/** Every project of the owner's a chat may work in: the registered ones first, then the managed workspaces. */
+export function ownerProjects(config: GatewayConfig, home: string): string[] {
+  return [...config.projects.map((p) => p.path), workspaceDir(home), guestWorkspaceDir(home)];
+}
+
 /**
  * The backend for one session, and whether its commands are confined.
  * - A guest (their chat, or a job made there) approves its own requests, and the host confinement still lets a command
@@ -57,7 +62,10 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
         throw err;
       }
     }
-    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide: [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))] }), confined: true };
+    const hide = [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))];
+    // A guest's command could leave a loop running that swaps a project folder for a link while a file tool, on the
+    // host as the owner, opens a file there: their container stops it once each command ends.
+    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide, stopLeftovers: role === "guest" }), confined: true };
   }
   if (input.override) return { backend: input.override(workspace), confined: true };
   if ((await input.confinement()) === null) {
@@ -67,7 +75,9 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     throw new SandboxUnavailableError(NO_CONFINEMENT);
   }
   try {
-    return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner" }), confined: true };
+    // A command may not read the .env files of the owner's other projects (the session's own project is skipped).
+    const otherProjects = ownerProjects(config, input.home);
+    return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner", otherProjects }), confined: true };
   } catch (err) {
     // A project that can't be confined (a linked sandbox cache, an untrusted bwrap …) gets no session, not a bare shell.
     if (err instanceof ConfinementError) throw new SandboxUnavailableError(err.message);

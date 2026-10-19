@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { lstat, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunResult } from "../types";
 import { byId, fakeRunner, makeFixture, runOne, type Fixture } from "../testing";
+import { ENV_SCAN_DIRS } from "../../exec/confinement-paths";
 import { chatExecCheck } from "./chat-exec";
 import { dockerCheck } from "./docker";
 
@@ -19,6 +21,48 @@ test("confined on this machine: ok, naming the tool and the level", async () => 
   const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
   expect(byId(r, "chat.exec")).toMatchObject({ level: "ok", message: "Chat commands run on this machine, confined by bwrap, at balanced" });
   expect(r.findings.some((f) => f.fixable)).toBe(false);
+});
+
+test("confined at autonomous: a note that commands have the network and can read the home folder outside the deny list", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", chat({ backend: "host", autonomy: "autonomous" }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  expect(byId(r, "chat.exec.autonomous")).toMatchObject({
+    level: "info",
+    message: "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied",
+    detail:
+      "Keys, tokens, shell histories, and the .env files in the top two folder levels of your other projects stay unreadable; other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+  });
+  expect(byId(r, "chat.exec.autonomous")!.fixable).toBeFalsy();
+});
+
+test("a project with too many folders to search for .env files is named: other chats can't read it at all", async () => {
+  fx = await makeFixture();
+  const big = join(fx.root, "big");
+  for (let i = 0; i <= ENV_SCAN_DIRS; i++) await mkdir(join(big, "libs", `d${i}`), { recursive: true });
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "host", autonomy: "balanced" }, projects: [{ id: "big", name: "Big", path: big }] }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  expect(byId(r, "chat.exec.env-scan")).toMatchObject({
+    level: "info",
+    message: `Chats in other projects can't read ${realpathSync(big)} at all: it has too many folders to search for .env files`,
+  });
+});
+
+test("a single project at autonomous gets the note too; balanced everywhere doesn't", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "host", autonomy: "balanced" }, projects: [{ id: "p", name: "P", path: fx.root, autonomy: "autonomous" }] }));
+  const one = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
+  expect(byId(one, "chat.exec.autonomous")).toBeDefined();
+  await fx.write("gateway.json", chat({ backend: "host", autonomy: "balanced" }));
+  const none = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
+  expect(byId(none, "chat.exec.autonomous")).toBeUndefined();
+});
+
+test("Docker at autonomous gets no such note: the container sees only the project", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", chat({ backend: "docker", autonomy: "autonomous" }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }) });
+  expect(byId(r, "chat.exec.autonomous")).toBeUndefined();
 });
 
 test("macOS names sandbox-exec", async () => {

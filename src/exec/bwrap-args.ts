@@ -63,6 +63,8 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   for (const secret of reopened) args.push(...hide(secret));
   if (reopened.length > 0 && isInside(paths.cacheDir, project) && exists(paths.cacheDir)) args.push("--bind", paths.cacheDir, paths.cacheDir);
   for (const dir of carveOuts) if (reopened.some((secret) => isInside(dir, secret))) args.push("--ro-bind", dir, dir);
+  // Other projects' .env files, after the carve-outs: the default project is usually one of them.
+  for (const file of paths.otherProjectSecrets) if (isStatable(file)) args.push(...hide(file));
 
   // The chief's own files, last among the binds that could bring them back (the project or the workspace carve-out).
   // One that doesn't exist yet is covered by an empty read-only placeholder (like .git below), or a command could create

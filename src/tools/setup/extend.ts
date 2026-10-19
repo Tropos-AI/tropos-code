@@ -8,6 +8,7 @@ import type { Ledger } from "../../learning/ledger";
 import type { Admin } from "../../web/admin";
 import type { McpServerView } from "../../web/admin/api";
 import type { ToolContext } from "../types";
+import { holdSandbox } from "../file-guard";
 import { download } from "./download";
 import { editedServer, mcpServerProblem, SetupRefused, unshowable, unshowableText, type SetupAction, type SetupInput } from "./matrix";
 import { findPlugin, installPlugin, pluginRuns, removePlugin } from "./plugin-install";
@@ -144,11 +145,19 @@ export async function performExtend(action: ExtendAction, input: SetupInput, ctx
     }
     case "download": {
       const url = need(input.url, "Say which URL to download.");
-      const out = await download(
-        { url, ...(input.path ? { path: input.path } : {}), ...(input.overwrite ? { overwrite: true } : {}) },
-        { cwd: ctx.cwd(), allowedDirs: ctx.allowedDirs },
-        { ...(kit.fetch ? { fetch: kit.fetch } : {}), ...(kit.resolve ? { resolve: kit.resolve } : {}) },
-      );
+      // It writes into the project from the host, like the file tools: the same hold on the chat's sandbox.
+      const held = await holdSandbox(ctx);
+      if ("content" in held) throw new Error(String(held.content));
+      let out;
+      try {
+        out = await download(
+          { url, ...(input.path ? { path: input.path } : {}), ...(input.overwrite ? { overwrite: true } : {}) },
+          { cwd: ctx.cwd(), allowedDirs: ctx.allowedDirs },
+          { ...(kit.fetch ? { fetch: kit.fetch } : {}), ...(kit.resolve ? { resolve: kit.resolve } : {}) },
+        );
+      } finally {
+        held.release();
+      }
       return `Downloaded ${url} to ${out.path}: ${out.size.toLocaleString("en-US")} bytes, sha256 ${out.sha256}.`;
     }
   }

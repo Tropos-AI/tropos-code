@@ -77,6 +77,36 @@ test("a platform without confinement is refused", () => {
   }
 });
 
+describe.skipIf(available === null)("other projects' .env files under real confinement", () => {
+  test("a command can't read another project's .env, even one whose path the profile can't spell, nor a project too big to search; its own project's .env it can", async () => {
+    const f = fixture();
+    const odd = join(f.fx, 'Straße "x"');
+    const plain = join(f.fx, "other");
+    const big = join(f.fx, "big");
+    for (const dir of [odd, plain, big]) mkdirSync(dir);
+    for (let i = 0; i <= 2_000; i++) mkdirSync(join(big, `d${i}`));
+    writeFileSync(join(odd, ".env"), "ODD-SECRET");
+    writeFileSync(join(plain, ".env.local"), "PLAIN-SECRET");
+    writeFileSync(join(big, "notes.txt"), "BIG-SECRET");
+    writeFileSync(join(f.project, ".env"), "OWN");
+    writeFileSync(join(f.outside, "README"), "readable");
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [odd, plain, big, f.project] });
+    try {
+      const run = (script: string) => collect(backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} }));
+      for (const [file, secret] of [[join(odd, ".env"), "ODD-SECRET"], [join(plain, ".env.local"), "PLAIN-SECRET"], [join(big, "notes.txt"), "BIG-SECRET"]] as const) {
+        const r = await run(`cat '${file.replace(/'/g, `'\\''`)}'`);
+        expect(r.out).not.toContain(secret);
+        expect(r.code).not.toBe(0);
+      }
+      expect((await run("cat .env")).out).toBe("OWN");
+      expect((await run(`cat '${join(f.outside, "README")}'`)).out).toBe("readable");
+    } finally {
+      await backend.close();
+      rmSync(f.fx, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe.skipIf(available === null)("with real confinement", () => {
   let f: ReturnType<typeof fixture>;
   let backend: ReturnType<typeof confinedBackend>;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { busyBackend, recordingBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { readTool } from "../read/read";
@@ -133,5 +134,60 @@ describe("Edit", () => {
     } finally {
       await chmod(join(dir, "f.ts"), 0o644);
     }
+  });
+});
+
+describe("Edit: a folder swapped for a link while the file is opened", () => {
+  test("an existing file behind a swapped parent is left untouched and its text isn't shown", async () => {
+    const outside = await makeTmpDir();
+    try {
+      await mkdir(join(dir, "sub"));
+      await writeFile(join(dir, "sub", "rc"), "hello");
+      await writeFile(join(outside, "rc"), "hello precious");
+      // Both files get the same mtime, so the freshness check alone can't tell them apart.
+      const then = new Date(2020, 0, 1);
+      await utimes(join(dir, "sub", "rc"), then, then);
+      await utimes(join(outside, "rc"), then, then);
+      const ctx = makeToolContext({ root: dir });
+      await readTool.run({ file_path: "sub/rc" }, ctx);
+      ctx.exec = swappingBackend(join(dir, "sub"), outside);
+      const out = await editTool.run({ file_path: "sub/rc", old_string: "hello", new_string: "pwned" }, ctx);
+      expect(out.isError).toBe(true);
+      expect(String(out.content)).toContain("changed while it was being opened");
+      expect(JSON.stringify(out)).not.toContain("precious");
+      expect(await readFile(join(outside, "rc"), "utf8")).toBe("hello precious");
+    } finally {
+      await removeDir(outside);
+    }
+  });
+
+  test("creating a file under a swapped parent creates nothing outside", async () => {
+    const outside = await makeTmpDir();
+    try {
+      await mkdir(join(dir, "sub"));
+      const ctx = makeToolContext({ root: dir, exec: swappingBackend(join(dir, "sub"), outside) });
+      const out = await editTool.run({ file_path: "sub/new.ts", old_string: "", new_string: "x" }, ctx);
+      expect(out.isError).toBe(true);
+      expect(await stat(join(outside, "new.ts")).catch(() => null)).toBeNull();
+    } finally {
+      await removeDir(outside);
+    }
+  });
+
+  test("the sandbox is held while the file is edited and released afterwards, also when the edit fails", async () => {
+    const ctx = await prepared("hello");
+    const events: string[] = [];
+    ctx.exec = recordingBackend(events);
+    expect((await editTool.run({ file_path: "f.ts", old_string: "hello", new_string: "bye" }, ctx)).isError).toBeUndefined();
+    expect((await editTool.run({ file_path: "f.ts", old_string: "absent", new_string: "x" }, ctx)).isError).toBe(true);
+    expect(events).toEqual(["held", "released", "held", "released"]);
+  });
+
+  test("while the sandbox still runs a command, nothing is edited", async () => {
+    const ctx = await prepared("hello");
+    ctx.exec = busyBackend("A background command is still running.");
+    const out = await editTool.run({ file_path: "f.ts", old_string: "hello", new_string: "bye" }, ctx);
+    expect(out).toEqual({ content: "A background command is still running.", isError: true });
+    expect(await file()).toBe("hello");
   });
 });

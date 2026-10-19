@@ -84,7 +84,8 @@ operating system (`sandbox-exec` on macOS, `bwrap` on Linux) or run in Docker:
 - writes only to the project, temp folders and per-sandbox package caches; never to `.git/hooks`, `.git/config`,
   `.husky`, the project's `.tropos` settings or `~/.tropos` (so no chat can raise its own level);
 - no reads of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, cloud and Docker credentials,
-  keychains, browser profiles or `~/.tropos`;
+  other coding agents' folders, shell histories, keychains, browser profiles, `~/.tropos` or your other projects'
+  `.env` files;
 - an allowlisted environment, so exported tokens and keys don't come along;
 - a chat can lower its autonomy level but never raise it; MCP tools and setup changes always ask; a chat has no
   WebFetch and no "always allow".
@@ -145,7 +146,8 @@ Files inside a repository arrive with the code, so Tropos treats them as untrust
 - Nobody is in by default: an unknown sender gets a one-time code (valid for an hour, a few per hour at most), and
   nothing they write reaches the agent until you approve the code on this computer.
 - `tcode pairing list` and `revoke` manage who is in; `tcode security audit` lists paired senders.
-- Guests' commands run only in Docker, in their own folder or projects you shared.
+- Guests' commands run only in Docker, in their own folder or projects you shared. Whatever a command leaves running
+  there is stopped when it ends, and while a guest's background job runs, the file tools in that chat wait.
 
 ## Releases
 

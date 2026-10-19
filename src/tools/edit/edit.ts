@@ -1,11 +1,10 @@
 // src/tools/edit/edit.ts
-import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
+import { cannotWrite, checkFreshness, makeParentDirs, openVerified, replaceContents, holdSandbox, staleText } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
-import { defineTool, type ToolOutput } from "../types";
+import { defineTool, type ToolContext, type ToolOutput } from "../types";
 
 const schema = z.object({
   file_path: z.string().min(1).describe("Path to the file, absolute or relative to the working directory."),
@@ -44,23 +43,44 @@ export const editTool = defineTool({
     if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
       return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
     }
-    let output: ToolOutput;
+    const held = await holdSandbox(ctx);
+    if ("content" in held) return held;
     try {
-      const fresh = await checkFreshness(path, ctx);
-      if (!fresh.ok) return { content: fresh.error, isError: true };
+      return await editAt(path, input, ctx);
+    } finally {
+      held.release();
+    }
+  },
+});
 
-      if (fresh.missing) {
-        if (input.old_string !== "") return { content: `File not found: ${path}`, isError: true };
-        await mkdir(dirname(path), { recursive: true });
-        await writeFileNoFollow(path, input.new_string);
-        ctx.readState.record(path, (await stat(path)).mtimeMs);
-        return { content: `Created ${path}.`, display: makeDiff(path, "", input.new_string), summary: "created" };
-      }
-      if (input.old_string === "") {
-        return { content: `${path} already exists; give the text to replace in old_string.`, isError: true };
-      }
+/** Edit, once the sandbox is held. */
+async function editAt(path: string, input: z.infer<typeof schema>, ctx: ToolContext): Promise<ToolOutput> {
+  let output: ToolOutput;
+  try {
+    const fresh = await checkFreshness(path, ctx);
+    if (!fresh.ok) return { content: fresh.error, isError: true };
 
-      const original = await readFile(path, "utf8");
+    if (fresh.missing) {
+      if (input.old_string !== "") return { content: `File not found: ${path}`, isError: true };
+      await makeParentDirs(dirname(path));
+      const { handle } = await openVerified(path, "create", { project: ctx.allowedDirs });
+      try {
+        await replaceContents(handle, input.new_string);
+        ctx.readState.record(path, (await handle.stat()).mtimeMs);
+      } finally {
+        await handle.close();
+      }
+      return { content: `Created ${path}.`, display: makeDiff(path, "", input.new_string), summary: "created" };
+    }
+    if (input.old_string === "") {
+      return { content: `${path} already exists; give the text to replace in old_string.`, isError: true };
+    }
+
+    const { handle, info } = await openVerified(path, "update");
+    try {
+      // The file opened must still be the one that was read.
+      if (info.mtimeMs !== fresh.mtimeMs) return { content: staleText(path), isError: true };
+      const original = await handle.readFile("utf8");
       const crlf = original.includes("\r\n");
       const toFile = (s: string) => (crlf ? s.replace(/\r?\n/g, "\r\n") : s);
       const oldText = toFile(input.old_string);
@@ -88,8 +108,8 @@ export const editTool = defineTool({
         const at = original.indexOf(oldText);
         updated = original.slice(0, at) + newText + original.slice(at + oldText.length);
       }
-      await writeFileNoFollow(path, updated);
-      ctx.readState.record(path, (await stat(path)).mtimeMs);
+      await replaceContents(handle, updated);
+      ctx.readState.record(path, (await handle.stat()).mtimeMs);
       const diff = makeDiff(path, original.replace(/\r\n/g, "\n"), updated.replace(/\r\n/g, "\n"));
       const replaced = input.replace_all ? count : 1;
       output = {
@@ -97,9 +117,11 @@ export const editTool = defineTool({
         display: diff,
         summary: `+${diff.added} −${diff.removed}`,
       };
-    } catch (error) {
-      return cannotWrite(path, error);
+    } finally {
+      await handle.close();
     }
-    return output;
-  },
-});
+  } catch (error) {
+    return cannotWrite(path, error);
+  }
+  return output;
+}

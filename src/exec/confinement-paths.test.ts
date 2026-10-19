@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CACHE_PATHS, ConfinementError, confinementPaths, requireSingleLinks, SECRET_PATHS } from "./confinement-paths";
+import { CACHE_PATHS, ConfinementError, confinementPaths, ENV_SCAN_DIRS, requireSingleLinks, SECRET_PATHS } from "./confinement-paths";
 import { SANDBOX_CACHE_ENV } from "./env";
 
 let fx: string;
@@ -22,6 +22,93 @@ test("the secrets list holds every path the spec names", () => {
   for (const p of [".ssh", ".aws", ".gnupg", ".config/gh", ".docker/config.json", ".netrc", "Library/Keychains"]) expect(SECRET_PATHS).toContain(p);
   for (const p of [".claude", ".kube", ".password-store", "Library/Application Support/Google/Chrome", "Library/Safari", ".mozilla", "/Library/Keychains"]) expect(SECRET_PATHS).toContain(p);
   for (const p of [".npm", ".bun/install/cache", ".cache/pip", "Library/Caches/Homebrew", "go/pkg/mod"]) expect(CACHE_PATHS).toContain(p);
+});
+
+test("shell histories, other agents' and tools' tokens and the usual credential files are secrets too", () => {
+  const histories = [".zsh_history", ".zsh_sessions", ".bash_history", ".bash_sessions", ".history", ".local/share/fish/fish_history", ".python_history", ".node_repl_history", ".psql_history", ".mysql_history", ".sqlite_history", ".lesshst"];
+  const tokens = [".vault-token", ".terraform.d", ".config/op", ".codex", ".gemini", ".config/gcloud", ".azure", ".kube", ".docker/config.json"];
+  const credentials = [".netrc", ".pgpass", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml", ".config/gh", "Library/Keychains"];
+  for (const p of [...histories, ...tokens, ...credentials]) expect(SECRET_PATHS).toContain(p);
+  expect(new Set(SECRET_PATHS).size).toBe(SECRET_PATHS.length);
+});
+
+test("the .env files of the owner's other projects are denied; the session's own project and projects inside it are left alone", () => {
+  const proj = mk("proj");
+  writeFileSync(join(proj, ".env"), "OWN=1");
+  const inner = mk("proj", "packages", "lib");
+  writeFileSync(join(inner, ".env"), "INNER=1");
+  const other = mk("other");
+  for (const name of [".env", ".env.local", ".envrc", "README.md", ".environment"]) writeFileSync(join(other, name), "x");
+  writeFileSync(join(mk("other", "apps", "web"), ".env.production"), "x");
+  writeFileSync(join(mk("other", "node_modules", "pkg"), ".env"), "x");
+  writeFileSync(join(mk("other", ".git"), ".env"), "x");
+  // A Python virtualenv is often called .env: a folder, nothing secret in it.
+  mk("venvy", ".env", "bin");
+  symlinkSync(other, join(fx, "otherlink"));
+  const paths = confinementPaths({
+    project: proj,
+    home: join(fx, "h", ".tropos"),
+    userHome: mk("h"),
+    env: { TMPDIR: mk("tmp") },
+    platform: "linux",
+    otherProjects: [proj, inner, join(fx, "otherlink"), join(fx, "venvy"), join(fx, "missing")],
+  });
+  expect([...paths.otherProjectSecrets].sort()).toEqual([join(other, ".env"), join(other, ".env.local"), join(other, ".envrc"), join(other, "apps", "web", ".env.production")].sort());
+});
+
+const withOthers = (project: string, otherProjects: string[]) =>
+  confinementPaths({ project, home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux", otherProjects });
+/** More folders than the search looks at in one project. */
+const crowd = (...parts: string[]) => {
+  for (let i = 0; i <= ENV_SCAN_DIRS; i++) mk(...parts, `d${i}`);
+};
+
+test("a project with more folders than the search looks at is denied whole, so none of its .env files is missed", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  writeFileSync(join(big, ".env"), "x");
+  expect(withOthers(mk("proj"), [big]).otherProjectSecrets).toEqual([big]);
+});
+
+test("each project gets its own search: one too big to search doesn't leave the next one unsearched", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  const small = mk("small");
+  writeFileSync(join(small, ".env"), "x");
+  expect(withOthers(mk("proj"), [big, small]).otherProjectSecrets).toEqual([big, join(small, ".env")]);
+});
+
+test("a project too big to search that holds the session's project is denied around it, never the session's project itself", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  writeFileSync(join(big, "README.md"), "x");
+  const proj = mk("big", "apps", "app");
+  mk("big", "apps", "other-app");
+  const denied = withOthers(proj, [big]).otherProjectSecrets;
+  expect([...denied].sort()).toEqual([join(big, "README.md"), join(big, "apps", "other-app"), join(big, "libs")].sort());
+});
+
+test("a project denied whole still has its linked .env files and its links into the home folder denied where they point", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  const stash = mk("h", "stash");
+  writeFileSync(join(stash, "app.env"), "x");
+  symlinkSync(join(stash, "app.env"), join(big, ".env"));
+  writeFileSync(join(mk("h", "deep"), "db.env"), "x");
+  symlinkSync(join(fx, "h", "deep", "db.env"), join(mk("big", "apps", "web"), ".env.local"));
+  const shared = mk("h", "shared-secrets");
+  symlinkSync(shared, join(big, "shared"));
+  // A link to a system folder (a toolchain, say) stays readable: no owner secrets there, and denying it breaks builds.
+  symlinkSync("/usr/bin", join(big, "tools"));
+  // A link to the home folder itself holds the session's project: never denied.
+  symlinkSync(join(fx, "h"), join(big, "home"));
+  const denied = withOthers(mk("h", "proj"), [big]).otherProjectSecrets;
+  expect([...denied].sort()).toEqual([big, join(stash, "app.env"), join(fx, "h", "deep", "db.env"), shared].sort());
+});
+
+test("without other projects nothing extra is denied", () => {
+  const paths = confinementPaths({ project: mk("proj"), home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
+  expect(paths.otherProjectSecrets).toEqual([]);
 });
 
 test("paths are real paths; Tropos's home is denied and its workspace carved out; caches and temp are writable", () => {
