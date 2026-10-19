@@ -1,4 +1,4 @@
-// web/src/app/layout/Sidebar.test.tsx — the brand (agent identity, version, demo badge), New session and page nav.
+// web/src/app/layout/Sidebar.test.tsx — the brand (logo, version, demo badge), New session and page nav.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { PageId } from "@/app/routes";
@@ -15,21 +15,19 @@ const { within, waitFor } = await import("@testing-library/react");
 beforeEach(() => stubMatchMedia());
 afterEach(() => cleanup());
 
-const brandLink = () => screen.getByRole("link", { name: /Tropos Code/ });
+const brandLink = () => screen.getByRole("link", { name: "Tropos Code" });
 
 describe("Brand", () => {
-  test("the logo without a background, then the agent's name; no Tropos Code text beside it", () => {
-    render(createElement(Brand, { version: "0.5.2", identity: { name: "Nova", emoji: "🦊" } }));
+  test("the logo without a background and the version chip; no name beside it", () => {
+    render(createElement(Brand, { version: "0.5.2" }));
     const link = brandLink();
     expect(link.querySelector("img")!.getAttribute("src")).toBe("/brand/favicon-192.png");
-    expect(link.textContent).toBe("Novav0.5.2");
+    expect(link.textContent).toBe("v0.5.2");
+    expect(link.getAttribute("aria-label")).toBe("Tropos Code");
     expect(link.getAttribute("href")).toBe("#/chat");
   });
 
-  test("no identity, or one without a name: the logo alone", () => {
-    render(createElement(Brand, { identity: { emoji: "🦊" } }));
-    expect(brandLink().textContent).toBe("");
-    cleanup();
+  test("without a version: the logo alone", () => {
     render(createElement(Brand, {}));
     expect(brandLink().textContent).toBe("");
     expect(brandLink().querySelector("img")).toBeTruthy();
@@ -59,23 +57,17 @@ describe("SidebarContent", () => {
     return { ...mounted, navigated, closed: () => closed };
   }
 
-  test("the brand shows the agent's identity from hello", async () => {
-    await mount({}, {}, { name: "Nova", emoji: "🦊" });
-    expect(brandLink().textContent).toContain("Nova");
-    expect(screen.getByText("v0.5.2")).toBeTruthy();
-  });
-
-  test("a name saved mid-session arrives with the next state and replaces the one from hello", async () => {
-    const { socket } = await mount({}, {}, { name: "Nova" });
-    expect(brandLink().textContent).toContain("Nova");
+  test("the brand is the logo and the version, never the agent's name from hello or a later state", async () => {
+    const { socket } = await mount({}, {}, { name: "Nova", emoji: "🦊" });
+    expect(brandLink().textContent).toBe("v0.5.2");
     await act(async () => {
       socket.deliver({ t: "state", state: { ...TEST_STATE, identity: { name: "Bob", emoji: "🔧" } } });
     });
-    expect(brandLink().textContent).toContain("Bob");
-    expect(brandLink().textContent).not.toContain("Nova");
+    expect(brandLink().textContent).toBe("v0.5.2");
+    expect(brandLink().getAttribute("aria-label")).toBe("Tropos Code");
   });
 
-  test("without an identity the brand is just the logo; showBrand=false hides it", async () => {
+  test("without an identity the brand is the same; showBrand=false hides it", async () => {
     await mount();
     expect(brandLink().textContent).toBe("v0.5.2");
     cleanup();

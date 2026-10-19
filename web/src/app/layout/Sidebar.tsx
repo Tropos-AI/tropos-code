@@ -24,16 +24,15 @@ type Props = {
   idPrefix: string;
 };
 
-/** The logo (the tab's icon, without a background), then the agent's own name when it has one. */
-export function Brand({ version, demo, identity }: { version?: string; demo?: boolean; identity?: { name?: string; emoji?: string } }) {
+/** The logo (the tab's icon, without a background) and the version; the agent's name lives in the chat, not here. */
+export function Brand({ version, demo }: { version?: string; demo?: boolean }) {
   return (
     <a
       href={hrefFor("chat")}
-      aria-label={identity?.name ? `${identity.name} · Tropos Code` : "Tropos Code"}
+      aria-label="Tropos Code"
       className="-mx-1 flex items-center gap-2.5 rounded-[9px] px-1 py-1 outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]"
     >
       <img src="/brand/favicon-192.png" alt="" width={26} height={26} className="size-[26px] shrink-0 select-none" draggable={false} />
-      {identity?.name ? <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">{identity.name}</span> : null}
       {demo ? (
         <Badge tone="accent" className="ml-auto">
           demo
@@ -68,7 +67,7 @@ export function SidebarContent({ page, navigate, onNavigated, showBrand = true, 
     <div className="flex h-full min-h-0 flex-col">
       {showBrand ? (
         <div className="px-4 pb-3 pt-4">
-          <Brand version={hello?.version} demo={store.demo} identity={session?.identity ?? hello?.identity} />
+          <Brand version={hello?.version} demo={store.demo} />
         </div>
       ) : null}
 
