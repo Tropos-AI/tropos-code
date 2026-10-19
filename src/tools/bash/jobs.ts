@@ -7,6 +7,8 @@ import { OutputBuffer } from "./output-buffer";
 /** Unread output kept per stream between two reads; the middle is dropped beyond this. */
 const UNREAD_LIMIT = 15_000;
 const KILL_GRACE_MS = 5_000;
+const KILL_TRIES = 10;
+const KILL_RETRY_MS = 100;
 const POLL_MS = 25;
 
 export type JobStatus =
@@ -134,9 +136,9 @@ export class JobTable {
     const { child, backend } = job;
     if (backend.alive(child)) {
       backend.signal(child, "SIGTERM");
-      if (!(await waitForGroupExit(job, graceMs))) {
+      // One SIGKILL to a group can miss a child the shell forks at that moment (macOS), so it is repeated until none is left.
+      for (let tries = 0; tries < KILL_TRIES && !(await waitForGroupExit(job, tries === 0 ? graceMs : KILL_RETRY_MS)); tries++) {
         backend.signal(child, "SIGKILL");
-        await waitForGroupExit(job, 1_000);
       }
     }
     await Promise.race([job.exited, Bun.sleep(1_000)]);

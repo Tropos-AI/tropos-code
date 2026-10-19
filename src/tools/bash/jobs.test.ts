@@ -159,4 +159,23 @@ describe("JobTable", () => {
     expect(calls.at(-1)).toBe("SIGTERM");
     child.kill("SIGKILL");
   });
+
+  test("kill() repeats SIGKILL while the group lives on, so a child forked just as the first one landed is not left behind", async () => {
+    const calls: string[] = [];
+    let kills = 0;
+    const backend = {
+      ...localBackend,
+      signal: (_c: unknown, sig: string) => {
+        calls.push(sig);
+        if (sig === "SIGKILL") kills++;
+      },
+      alive: () => kills < 3,
+    } as unknown as import("../../exec/backend").ExecBackend;
+    const t = table();
+    const child = spawn("/bin/bash", ["-c", "sleep 0.2"], { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const id = t.add("fake", child, backend);
+    await t.kill(id, 50);
+    expect(calls).toEqual(["SIGTERM", "SIGKILL", "SIGKILL", "SIGKILL"]);
+    child.kill("SIGKILL");
+  });
 });

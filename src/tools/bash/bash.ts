@@ -12,6 +12,8 @@ import { OutputBuffer } from "./output-buffer";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 5_000;
+const KILL_TRIES = 10;
+const KILL_RETRY_MS = 100;
 const DRAIN_MS = 200;
 const STREAM_LIMIT = 15_000; // stdout and stderr each; about 30k characters combined
 
@@ -107,9 +109,15 @@ export const bashTool = defineTool({
     const signalGroup = (sig: NodeJS.Signals) => exec.signal(child, sig);
     const terminate = () => {
       signalGroup("SIGTERM");
-      killTimer ??= setTimeout(() => {
-        if (groupAlive()) signalGroup("SIGKILL");
-      }, KILL_GRACE_MS);
+      // One SIGKILL to a group can miss a child the shell forks at that moment (macOS), so it is repeated until none is left.
+      let tries = 0;
+      const kill = () => {
+        if (!groupAlive() || tries++ >= KILL_TRIES) return;
+        signalGroup("SIGKILL");
+        killTimer = setTimeout(kill, KILL_RETRY_MS);
+        killTimer.unref();
+      };
+      killTimer ??= setTimeout(kill, KILL_GRACE_MS);
     };
     const timeoutMs = input.timeout_ms ?? DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
