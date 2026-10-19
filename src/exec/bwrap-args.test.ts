@@ -202,3 +202,10 @@ test("missing own files inside a writable workspace get read-only placeholders, 
   for (const name of ["USER.md", "SOUL.md", "AGENTS.md", "MEMORY.md", "BOOTSTRAP.md", "IDENTITY.md"]) expect(at(args, ...nullFile(join(ws, name)))).toBeGreaterThan(projectBind);
   for (const name of ["memory", "skills", "skills-learned"]) expect(at(args, ...emptyDir(join(ws, name)))).toBeGreaterThan(projectBind);
 });
+
+test("an own file that is a link, even a dangling one, refuses the sandbox", () => {
+  const ws = join(userHome, ".tropos", "workspace");
+  symlinkSync(join(fx, "nowhere"), join(ws, "USER.md"));
+  expect(() => bwrapArgs(paths(ws), ws)).toThrow(ConfinementError);
+  expect(() => bwrapArgs(paths(ws), ws)).toThrow(join(ws, "USER.md"));
+});

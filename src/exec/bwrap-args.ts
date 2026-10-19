@@ -67,6 +67,8 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   // USER.md or memory/ and plant text the chief later loads. Only where the workspace is writable (inside the project):
   // elsewhere it is a read-only bind and nothing can be created.
   for (const own of paths.ownFiles) {
+    // A link (dangling or not) can't be masked reliably; refuse, as the docker path does.
+    if (isLink(own)) throw new ConfinementError(`${own} is a link; the sandbox won't run until it is replaced by a real file or folder.`);
     if (isStatable(own)) args.push(...hide(own));
     else if (!exists(own) && isInside(own, project)) args.push(...protect(own, own.endsWith(".md") ? "file" : "dir"));
   }
@@ -122,6 +124,14 @@ function isStatable(path: string): boolean {
   try {
     statSync(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
   } catch {
     return false;
   }
