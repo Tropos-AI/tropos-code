@@ -220,6 +220,10 @@ describe("extensions in the runtime", () => {
     const memory = await rt.panel("memory");
     expect(memory.sections[0]!.items[0]!.label).toBe("Uses bun");
     expect(memory.sections[1]!.items).toEqual([]);
+    await ctx.ext.notes!.add("heartbeat", "Watch the nightly deploy");
+    const withHeartbeat = await rt.panel("memory");
+    expect(withHeartbeat.sections.map((s) => s.title!.replace(/ \[.*$/, ""))).toEqual(["agent notes", "user profile", "lessons", "heartbeat checks"]);
+    expect(withHeartbeat.sections[3]!.items[0]).toMatchObject({ key: "heartbeat:0", label: "Watch the nightly deploy" });
     await rm(join(ctx.home, "workspace", "skills"), { recursive: true });
     await rm(join(ctx.home, "workspace", "skills-learned"), { recursive: true });
     await withExt({ memory: false });

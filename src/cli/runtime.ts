@@ -563,7 +563,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
     case "memory": {
       if (!ext.notes) return { title: "Memory", sections: [], empty: "Memory is off. Turn it on in the dashboard's settings (tcode dashboard)." };
       const sections: PanelSection[] = [];
-      for (const target of ["memory", "user", "lessons"] as const) {
+      for (const target of ["memory", "user", "lessons", "heartbeat"] as const) {
         const entries = await ext.notes.entries(target);
         sections.push({
           title: `${notesLabel(target)} ${usageHeader(notesSize(entries), MEMORY_LIMITS[target])}`,
