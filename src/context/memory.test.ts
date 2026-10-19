@@ -196,3 +196,30 @@ describe("file safety", () => {
     expect(await loadMemory(repo, home)).toEqual([]);
   });
 });
+
+describe("workspace AGENTS.md", () => {
+  test("loads as the user's file, without its agent sections", async () => {
+    await writeFile(join(home, "TROPOS.md"), "user rules");
+    await mkdir(join(home, "workspace"));
+    await writeFile(join(home, "workspace", "AGENTS.md"), "# AGENTS.md\n\nrule A\n\n## Lessons\n- lesson B\n\n## Heartbeat\n- beat C\n");
+    const files = await loadMemory(repo, home);
+    expect(files[1]).toMatchObject({ path: join(home, "workspace", "AGENTS.md"), source: "user" });
+    expect(files[1]!.content).toContain("rule A");
+    expect(files[1]!.content).not.toContain("lesson B");
+    expect(files[1]!.content).not.toContain("beat C");
+  });
+
+  test("in the default workspace it is loaded once", async () => {
+    await mkdir(join(home, "workspace"));
+    await writeFile(join(home, "workspace", "AGENTS.md"), "rule A\n\n## Lessons\n- lesson B\n");
+    const files = await loadMemory(join(home, "workspace"), home);
+    expect(files.filter((f) => f.content.includes("rule A"))).toHaveLength(1);
+    expect(files.map((f) => f.content).join("")).not.toContain("lesson B");
+  });
+
+  test("an AGENTS.md of only agent sections adds nothing", async () => {
+    await mkdir(join(home, "workspace"));
+    await writeFile(join(home, "workspace", "AGENTS.md"), "## Lessons\n- lesson B\n");
+    expect(await loadMemory(repo, home)).toEqual([]);
+  });
+});

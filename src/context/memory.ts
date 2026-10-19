@@ -1,6 +1,8 @@
 import { constants, existsSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
+import { stripAgentSections } from "../memory/agents-file";
+import { workspaceFile } from "../paths";
 
 export interface MemoryFile {
   path: string;
@@ -154,9 +156,10 @@ const PROJECT_MEMORY_NAMES = ["TROPOS.md", "AGENTS.md", "CLAUDE.md"];
 export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[]> {
   const files: MemoryFile[] = [];
   const seen = new Set<string>();
-  const add = async (path: string, scope: string | null, source: MemoryFile["source"]) => {
-    const content = await readMemoryFile(path, scope);
-    if (content === null) return false;
+  const add = async (path: string, scope: string | null, source: MemoryFile["source"], transform?: (text: string) => string) => {
+    const read = await readMemoryFile(path, scope);
+    if (read === null) return false;
+    const content = transform ? transform(read).trim() : read;
     const key = (await canonical(path)) ?? path;
     if (seen.has(key)) return true;
     seen.add(key);
@@ -165,7 +168,11 @@ export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[
   };
 
   const homeRoot = await canonical(home);
-  if (homeRoot !== null) await add(join(home, "TROPOS.md"), homeRoot, "user");
+  if (homeRoot !== null) {
+    await add(join(home, "TROPOS.md"), homeRoot, "user");
+    // The agent keeps its Lessons and Heartbeat in this file; those sections reach the context through their own paths.
+    await add(workspaceFile(home, "AGENTS.md"), homeRoot, "user", stripAgentSections);
+  }
 
   const gitTop = gitRoot(cwd);
   const scope = gitTop === null ? null : await canonical(gitTop);

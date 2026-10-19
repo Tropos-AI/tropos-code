@@ -8,8 +8,11 @@ const ACTION = z.enum(["add", "replace", "remove"]);
 
 const schema = z.object({
   target: z
-    .enum(["memory", "user"])
-    .describe('"memory" for your own notes (project facts, conventions, lessons learned); "user" for facts about the user (preferences, role, habits).'),
+    .enum(["memory", "user", "lessons"])
+    .describe(
+      '"memory" for your own notes (project facts, conventions); "user" for facts about the user (preferences, role, habits); ' +
+        '"lessons" for how to work with this user that you learned the hard way (a correction, an approach that failed and the one that worked), one line each; kept in your workspace AGENTS.md.',
+    ),
   action: ACTION.optional().describe("A single change. Omit it when you pass operations."),
   content: z.string().optional().describe("The entry text for add and replace."),
   old_text: z.string().optional().describe("For replace and remove: a substring that occurs in exactly one existing entry."),
@@ -89,7 +92,8 @@ export function createMemoryTool(store: NotesStore): AnyTool {
       "Save durable facts for future sessions. Notes are loaded into the context of every new session (not this one). " +
       'target "memory" holds your notes (project conventions, environment quirks, lessons learned, ' +
       `up to ${MEMORY_LIMITS.memory.toLocaleString("en-US")} chars); target "user" holds the user profile (preferences, role, ` +
-      `communication style, up to ${MEMORY_LIMITS.user.toLocaleString("en-US")} chars). ` +
+      `communication style, up to ${MEMORY_LIMITS.user.toLocaleString("en-US")} chars); ` +
+      `target "lessons" holds how to work with this user (up to ${MEMORY_LIMITS.lessons.toLocaleString("en-US")} chars). ` +
       'Write entries as declarative facts, not commands: "User prefers concise answers" (good), not "Always answer concisely". ' +
       "Save only what will still matter next week; never save secrets, task progress, one-off errors or things the code already says. " +
       "How to do a recurring task is a procedure: put it in a skill (SkillManage), not here. " +

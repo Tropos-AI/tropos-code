@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { sectionEntries } from "./agents-file";
 import { Ledger } from "../learning/ledger";
 import { atomicWrite, MEMORY_LIMITS, neutraliseNoteTags, notesContext, NotesStore, notesSize, usageHeader } from "./notes";
 
@@ -88,7 +89,7 @@ test("entries tolerate CRLF and blank entries", async () => {
 test("usage header and size", () => {
   expect(usageHeader(1474, 2200)).toBe("[67% — 1,474/2,200 chars]");
   expect(notesSize(["ab", "c"])).toBe(6);
-  expect(MEMORY_LIMITS).toEqual({ memory: 2200, user: 1375 });
+  expect(MEMORY_LIMITS).toEqual({ memory: 2200, user: 1375, lessons: 2200 });
 });
 
 test("notesContext wraps both stores and neutralises tags", async () => {
@@ -209,4 +210,30 @@ test("a hand-edited USER.md over its cap loads head, tail and its policy lines",
   expect(ctx).toContain("ends here");
   expect(ctx).toContain("never deploy on Fridays");
   expect(ctx.length).toBeLessThan(MEMORY_LIMITS.user + 400);
+});
+
+test("lessons are items in AGENTS.md, budgeted at 2,200 chars", async () => {
+  await store.add("lessons", "run bun test before saying done");
+  expect(sectionEntries(await readFile(join(home, "workspace", "AGENTS.md"), "utf8"), "Lessons")).toEqual(["run bun test before saying done"]);
+  expect(store.path("lessons")).toBe(join(home, "workspace", "AGENTS.md"));
+  expect(await store.add("lessons", "x".repeat(2_300))).toMatchObject({ ok: false });
+  expect(await store.entries("lessons")).toEqual(["run bun test before saying done"]);
+  expect(await notesContext(store)).toContain('<notes source="lessons">');
+  expect(await notesContext(store, { targets: ["memory"] })).toBe("");
+  expect(MEMORY_LIMITS.lessons).toBe(2_200);
+});
+
+test("lessons keep the rest of a hand-edited AGENTS.md, and undo restores it", async () => {
+  const ledger = new Ledger(home);
+  const withLedger = new NotesStore(home, { ledger });
+  const mine = "# AGENTS.md\n\nBe brief.\n\n## Lessons\n- old\n\n## Heartbeat\n- check CI\n\n## Mine\nkeep\n";
+  await mkdir(join(home, "workspace"), { recursive: true });
+  await writeFile(join(home, "workspace", "AGENTS.md"), mine);
+  expect(await withLedger.replace("lessons", "old", "new")).toMatchObject({ ok: true });
+  const after = await readFile(join(home, "workspace", "AGENTS.md"), "utf8");
+  expect(after).toBe(mine.replace("- old", "- new"));
+  const [entry] = await ledger.list(1);
+  expect(entry).toMatchObject({ kind: "memory", path: join(home, "workspace", "AGENTS.md") });
+  await ledger.undo(entry!.id);
+  expect(await readFile(join(home, "workspace", "AGENTS.md"), "utf8")).toBe(mine);
 });

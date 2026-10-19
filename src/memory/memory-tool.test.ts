@@ -124,3 +124,9 @@ test("the description steers toward declarative facts, skills and batches", () =
   expect(description).toContain("SkillManage");
   expect(description).toContain("operations");
 });
+
+test("target lessons asks about workspace/AGENTS.md", () => {
+  const tool = createMemoryTool(store);
+  expect(tool.subject({ target: "lessons", action: "add", content: "x" }, "/")).toEqual({ paths: [join(home, "workspace", "AGENTS.md")] });
+  expect(tool.schema.safeParse({ target: "lessons", action: "add", content: "x" }).success).toBe(true);
+});

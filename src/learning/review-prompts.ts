@@ -29,6 +29,7 @@ const MEMORY_RULES =
   '(target "user") and facts about the environment, project conventions and lessons (target "memory"). ' +
   'Write facts, not commands ("The user prefers small commits", not "Always make small commits"), and never task logs ' +
   "or progress reports. Prefer replacing an outdated entry (action replace) over adding a near-duplicate. " +
+  'Lessons about how to work (corrections, what failed and what worked) go to Memory target "lessons". ' +
   "When a store is full, consolidate in one Memory call with operations: remove or merge entries and add the merged one. Never only remove.";
 
 const SKILL_RULES =

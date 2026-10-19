@@ -61,6 +61,9 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
   const parts = rel.split(sep);
   switch (kind) {
     case "memory":
+      // The lessons are items in the workspace AGENTS.md.
+      if (parts.length === 2 && parts[0] === "workspace" && parts[1] === "AGENTS.md") return true;
+    // falls through
     case "user":
       // LEGACY_LAYOUT: memories/ until the migration moves the notes into the workspace.
       return parts.length === 2 && (parts[0] === "memories" || parts[0] === "workspace") && (parts[1] === "MEMORY.md" || parts[1] === "USER.md");

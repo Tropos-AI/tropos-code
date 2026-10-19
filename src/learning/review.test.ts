@@ -324,6 +324,7 @@ describe("reviewToolGate", () => {
 
   test("the memory rules tell the review to replace and consolidate, never only remove", () => {
     expect(MEMORY_REVIEW_PROMPT).toContain("Never only remove");
+    expect(MEMORY_REVIEW_PROMPT).toContain('Memory target "lessons"');
   });
 
   test("an override runs under the same name, description and schema", async () => {

@@ -264,6 +264,10 @@ test("workspace skill files are learned paths; .archive is not", () => {
 test("workspace memory and identity files are learned paths", () => {
   expect(isLearnedPath(home, "user", join(home, "workspace", "USER.md"))).toBe(true);
   expect(isLearnedPath(home, "memory", join(home, "workspace", "MEMORY.md"))).toBe(true);
+  // Lessons live in the workspace AGENTS.md under the memory kind; the user kind never writes it.
+  expect(isLearnedPath(home, "memory", join(home, "workspace", "AGENTS.md"))).toBe(true);
+  expect(isLearnedPath(home, "user", join(home, "workspace", "AGENTS.md"))).toBe(false);
+  expect(isLearnedPath(home, "memory", join(home, "memories", "AGENTS.md"))).toBe(false);
   expect(isLearnedPath(home, "identity", join(home, "workspace", "SOUL.md"))).toBe(true);
   expect(isLearnedPath(home, "memory", join(home, "workspace", "README.md"))).toBe(false);
   expect(isLearnedPath(home, "identity", join(home, "workspace", "sub", "SOUL.md"))).toBe(false);

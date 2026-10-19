@@ -5,25 +5,26 @@ import { dirname } from "node:path";
 import { truncateMemoryText } from "../context/memory";
 import { neutraliseHarnessTags } from "../context/tags";
 import { resolveLayoutPath } from "../home/layout";
-import { workspaceDir } from "../paths";
+import { workspaceDir, workspaceFile } from "../paths";
 import type { Ledger } from "../learning/ledger";
 import { blockedPlaceholder, scanText } from "../learning/threats";
 import type { Actor } from "../tools/types";
+import { sectionEntries, withSectionEntries } from "./agents-file";
 
-export type NotesTarget = "memory" | "user";
+export type NotesTarget = "memory" | "user" | "lessons";
 
 /**
  * Character budgets per store. They are deliberately small: the notes ride in every session's first
  * message, and a hard cap forces the model to consolidate instead of hoarding.
  */
-export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 1375 };
+export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 1375, lessons: 2200 };
 
 /** Entries are kept apart by a lone "§" line so a file stays readable and hand-editable. */
 export const ENTRY_SEPARATOR = "\n§\n";
 
 const FILES = { memory: "MEMORY.md", user: "USER.md" } as const;
 
-const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile" };
+const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile", lessons: "lessons" };
 
 /** Notes can hold personal facts: the directory and files are owner-only. */
 const DIR_MODE = 0o700;
@@ -79,7 +80,8 @@ export async function atomicWrite(path: string, text: string): Promise<void> {
 }
 
 /**
- * The agent's persistent notes (MEMORY.md) and the user profile (USER.md) in the workspace (<home>/workspace).
+ * The agent's persistent notes (MEMORY.md), the user profile (USER.md) and the lessons (the Lessons section of
+ * AGENTS.md) in the workspace (<home>/workspace).
  * Every change re-reads the file inside a per-store lock, so parallel tool calls don't lose writes.
  * New entry text is threat-scanned (notes ride into every later session), and with a ledger every
  * change is recorded so the user can see and undo it.
@@ -100,12 +102,14 @@ export class NotesStore {
   }
 
   path(target: NotesTarget): string {
+    // Lessons are the "## Lessons" items of the workspace AGENTS.md, which has no legacy home.
+    if (target === "lessons") return workspaceFile(this.home, "AGENTS.md");
     return resolveLayoutPath(this.home, FILES[target]); // LEGACY_LAYOUT: memories/ until the migration moves it
   }
 
   async entries(target: NotesTarget): Promise<string[]> {
     const text = await this.readRaw(target);
-    return text === null ? [] : splitEntries(text);
+    return text === null ? [] : parseEntries(target, text);
   }
 
   /** The file's text, or null when it doesn't exist. */
@@ -162,7 +166,7 @@ export class NotesStore {
     const run = this.queue.then(async (): Promise<NotesResult> => {
       const path = this.path(target);
       const before = await this.readRaw(target);
-      const entries = before === null ? [] : splitEntries(before);
+      const entries = before === null ? [] : parseEntries(target, before);
       const next = edit(entries);
       if (typeof next === "string") return { ok: false, error: next, entries };
       const limit = MEMORY_LIMITS[target];
@@ -176,11 +180,11 @@ export class NotesStore {
           entries,
         };
       }
-      const after = next.length > 0 ? `${next.join(ENTRY_SEPARATOR)}\n` : "";
+      const after = target === "lessons" ? withSectionEntries(before, "Lessons", next) : next.length > 0 ? `${next.join(ENTRY_SEPARATOR)}\n` : "";
       // Recorded before the write: if the write fails, undo sees a mismatch and refuses.
       await this.ledger?.record({
         actor: actor ?? "agent",
-        kind: target === "memory" ? "memory" : "user",
+        kind: target === "user" ? "user" : "memory",
         path,
         action,
         summary,
@@ -194,6 +198,11 @@ export class NotesStore {
     this.queue = run.catch(() => {});
     return run;
   }
+}
+
+/** A store's entries: § -separated for the note files, the Lessons items for AGENTS.md. */
+function parseEntries(target: NotesTarget, text: string): string[] {
+  return target === "lessons" ? sectionEntries(text, "Lessons") : splitEntries(text);
 }
 
 function clip(text: string, max = 80): string {
@@ -248,7 +257,7 @@ export function neutraliseNoteTags(text: string): string {
   return neutraliseHarnessTags(text);
 }
 
-const SOURCES: Record<NotesTarget, string> = { memory: "agent", user: "user-profile" };
+const SOURCES: Record<NotesTarget, string> = { memory: "agent", user: "user-profile", lessons: "lessons" };
 
 /**
  * The notes blocks for a session's `<context>`; "" when both stores are empty. Entries that fail the
@@ -259,7 +268,7 @@ export async function notesContext(
   opts: { warn?: (message: string) => void; targets?: readonly NotesTarget[] } = {},
 ): Promise<string> {
   const parts: string[] = [];
-  for (const target of opts.targets ?? (["memory", "user"] as const)) {
+  for (const target of opts.targets ?? (["memory", "user", "lessons"] as const)) {
     const entries = await store.entries(target);
     if (entries.length === 0) continue;
     const header = usageHeader(notesSize(entries), MEMORY_LIMITS[target]);
