@@ -3,11 +3,14 @@ import { join } from "node:path";
 import { INTERRUPTED } from "../agent/agent";
 import { filterTools, HUB_ONLY_TOOLS, resolveAgentModel, runSubagent, subagentSystem, type SubagentDeps } from "../agent/subagent";
 import { isAnthropicModelId } from "../config/settings";
+import { agentLabel } from "../extensions/agents";
 import { loadSkills, skillListing, type Skill } from "../extensions/skills";
 import type { ExecBackend } from "../exec/backend";
 import type { Autonomy } from "../gateway/config";
 import type { SessionRole } from "../gateway/types";
 import { workspaceOwnPaths } from "../home/layout";
+import { canonicalStorePath } from "../learning/stores";
+import { savedNotice } from "../learning/saved-notice";
 import type { Ledger } from "../learning/ledger";
 import { SkillTracker } from "../learning/skill-tracker";
 import { createDailyNoteTool, DailyNotes, dailyNotesContext } from "../memory/daily";
@@ -77,6 +80,25 @@ export function execAsks(exec: ExecBackend | undefined, tools: AnyTool[]): Rule[
   if (exec && exec.kind !== "local") return [];
   const names = new Set(["Bash", ...tools.filter((t) => t.kind === "exec").map((t) => t.name)]);
   return [...names].map((n) => parseRule(n));
+}
+
+/**
+ * The specialist's permissions: the chat's, plus deny rules for what it must not touch, ask rules for an unconfined
+ * shell, and the cap on autonomy. Its saves to its own stores (inside its own folder, nowhere else) run without
+ * asking, as the owner's do: the save is announced, recorded in the ledger for undo and threat-scanned. Anything
+ * outside the folder still asks, and the chief's files stay denied.
+ */
+export function specialistPermissions(base: PermissionContext, spec: Specialist, deny: Rule[], ask: Rule[]): PermissionContext {
+  const own = canonicalStorePath(base.home, spec.dir);
+  return capAutonomy(
+    {
+      ...base,
+      role: "owner",
+      stores: own ? { paths: [own], askBeforeSaving: false } : undefined,
+      rules: { ...base.rules, deny: [...base.rules.deny, ...deny], ask: [...base.rules.ask, ...ask] },
+    },
+    spec.autonomy,
+  );
 }
 
 const ORDER: readonly Autonomy[] = ["ask", "balanced", "autonomous"];
@@ -170,10 +192,21 @@ export async function specialistKit(spec: Specialist, deps: SpecialistDeps, cwd:
       skills.splice(0, skills.length, ...(await loadAll()));
     },
   });
+  // Its saves run unasked, so each one is announced here (the tool results never reach the user).
+  const label = agentLabel(spec);
+  const announced = (t: AnyTool): AnyTool => ({
+    ...t,
+    run: async (input, ctx) => {
+      const out = await t.run(input, ctx);
+      const text = out.isError ? undefined : savedNotice(t.name, input);
+      if (text) deps.notice(`${text} (${label})`);
+      return out;
+    },
+  });
   const scoped = new Map<string, AnyTool>([
-    ["Memory", createMemoryTool(notes)],
-    ["DailyNote", createDailyNoteTool(journal)],
-    ["SkillManage", createSkillManageTool({ home: deps.home, dir: skillsDir, ledger: deps.ledger, tracker })],
+    ["Memory", announced(createMemoryTool(notes))],
+    ["DailyNote", announced(createDailyNoteTool(journal))],
+    ["SkillManage", announced(createSkillManageTool({ home: deps.home, dir: skillsDir, ledger: deps.ledger, tracker }))],
     ["Skill", skillTool],
   ]);
   const tools = filterTools(deps.tools, spec)
@@ -208,10 +241,7 @@ export async function runSpecialist(
     const rules = specialistDenyRules(deps.home, spec, others);
     const kit = await specialistKit(spec, deps, ctx.cwd());
     const asks = execAsks(ctx.exec, kit.tools);
-    const permissions = (): PermissionContext => {
-      const base = deps.permissions();
-      return capAutonomy({ ...base, rules: { ...base.rules, deny: [...base.rules.deny, ...rules], ask: [...base.rules.ask, ...asks] } }, spec.autonomy);
-    };
+    const permissions = (): PermissionContext => specialistPermissions(deps.permissions(), spec, rules, asks);
     let logged: Promise<void> = Promise.resolve();
     const out = await runSubagent(
       { ...spec, prompt: `${SPECIALIST_RULES}\n\n${spec.prompt.trim()}`, model: specialistModel(spec, deps.config().model) },

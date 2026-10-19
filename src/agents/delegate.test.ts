@@ -11,7 +11,7 @@ import { compileRules, decide, type PermissionContext } from "../permissions/eng
 import { agentsDir, journalDir, workspaceFile } from "../paths";
 import { defineTool, type AnyTool } from "../tools/types";
 import type { ExecBackend } from "../exec/backend";
-import { capAutonomy, execAsks, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
+import { capAutonomy, execAsks, specialistPermissions, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
 import { readRuns } from "./runs";
 import type { Specialist } from "./specialists";
 
@@ -220,4 +220,31 @@ test("execAsks: an unconfined shell always asks for a specialist, a confined or 
   }
   const mcp = { ...tool("mcp__x__run"), kind: "exec" as const } as AnyTool;
   expect(decide({ toolName: "mcp__x__run", kind: "exec", paths: [] }, pc(execAsks(undefined, [mcp]))).behavior).toBe("ask");
+});
+
+test("a specialist's saves inside its own folder run unasked; elsewhere they ask or are denied", async () => {
+  const kit = await specialistKit(spec, deps, "/repo");
+  const base: PermissionContext = { ...withRules([]), mode: "default" };
+  const pc = specialistPermissions(base, spec, specialistDenyRules(home, spec, []), []);
+  const req = (name: string, input: Record<string, unknown>) => {
+    const t = kit.tools.find((x) => x.name === name)!;
+    return { toolName: name, kind: t.kind ?? "edit", paths: t.subject(input as never, "/repo").paths };
+  };
+  expect(decide(req("Memory", { action: "add", target: "memory", content: "x" }), pc).behavior).toBe("allow");
+  expect(decide(req("SkillManage", { action: "create", name: "lint", content: "x" }), pc).behavior).toBe("allow");
+  expect(decide(req("DailyNote", { text: "x" }), pc).behavior).toBe("allow");
+  // The chief's file and another specialist's folder never save unasked.
+  expect(decide({ toolName: "Memory", kind: "edit", paths: [workspaceFile(home, "MEMORY.md")] }, pc).behavior).toBe("deny");
+  expect(decide({ toolName: "Memory", kind: "edit", paths: [join(home, "agents/other/MEMORY.md")] }, pc).behavior).not.toBe("allow");
+  // A save with one target outside the folder asks.
+  expect(decide({ toolName: "SkillManage", kind: "edit", paths: [join(spec.dir, "MEMORY.md"), join(home, "workspace", "skills-learned", "x")] }, pc).behavior).not.toBe("allow");
+});
+
+test("a specialist's save is announced with its label", async () => {
+  const notices: string[] = [];
+  const kit = await specialistKit({ ...spec, emoji: "🔍" }, { ...deps, notice: (t) => notices.push(t) }, "/repo");
+  await kit.tools.find((t) => t.name === "Memory")!.run({ action: "add", target: "memory", content: "PRs need a changelog line" }, ctx());
+  expect(notices).toEqual(["💡 Remembered: PRs need a changelog line (🔍 reviewer)"]);
+  await kit.tools.find((t) => t.name === "Memory")!.run({ action: "add", target: "user", content: "x" }, ctx());
+  expect(notices).toHaveLength(1);
 });
