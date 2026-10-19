@@ -1,7 +1,12 @@
 // src/suggest/signals.ts — what is worth suggesting to the owner right now, and the <suggestions> block that tells the
 // agent. Setup signals come from P4's reminders (src/onboard/reminders.ts), never from a second detection.
 import { readdir } from "node:fs/promises";
+import { join } from "node:path";
+import { neutraliseHarnessTags } from "../context/tags";
+import { gatewayDir } from "../gateway/config";
+import { untrustedJob } from "../gateway/cron/runner";
 import { CronStore } from "../gateway/cron/store";
+import { FilePairing } from "../gateway/pairing";
 import { REMINDER_TOPICS } from "../onboard/copy";
 import { makeOnboardDeps } from "../onboard/engine";
 import { readOnboardingFlags } from "../onboard/flags";
@@ -33,6 +38,13 @@ export interface Signal {
   text: string;
 }
 
+const FIELD_CHARS = 80;
+
+/** Text from a job or a command is data, not part of the instruction: tags broken, one line, short, quoted. */
+export function quoteField(text: string): string {
+  return JSON.stringify(neutraliseHarnessTags(text.replace(/\s+/g, " ").trim()).slice(0, FIELD_CHARS));
+}
+
 export function computeSignals(facts: SignalFacts, state: SuggestionState, now: number): Signal[] {
   const out: Signal[] = [];
   const quiet = (id: string): boolean => id in state.declined || now - (state.mentioned[id] ?? -Infinity) < REPEAT_AFTER_MS;
@@ -44,11 +56,11 @@ export function computeSignals(facts: SignalFacts, state: SuggestionState, now: 
   }
   for (const job of facts.failingJobs) {
     const id = `cron-failing:${job.id}`;
-    if (!quiet(id)) out.push({ id, text: `The scheduled job "${job.name}" failed on its last run (${job.error}). Offer to look at it.` });
+    if (!quiet(id)) out.push({ id, text: `The scheduled job ${quoteField(job.name)} failed on its last run (${quoteField(job.error)}). Offer to look at it.` });
   }
   for (const [project, t] of Object.entries(state.tests)) {
     const id = `tests-failing:${project}`;
-    if (!t.ok && !quiet(id)) out.push({ id, text: `The last run of \`${t.command}\` in project ${project} failed. Offer to look into it.` });
+    if (!t.ok && !quiet(id)) out.push({ id, text: `The last run of ${quoteField(t.command)} in project ${quoteField(project)} failed. Offer to look into it.` });
   }
   if (facts.journalDays >= ROUTINE_DAYS && facts.cronJobs === 0 && !quiet("routine")) {
     out.push({ id: "routine", text: `The owner has worked with you on ${facts.journalDays} of the last ${ROUTINE_WINDOW_DAYS} days and has no scheduled jobs. Offer to schedule a recurring task they keep doing by hand.` });
@@ -83,10 +95,13 @@ export async function gatherFacts(i: {
   const open = await openSkippedSteps(deps, serviceInstalled === undefined ? {} : { serviceInstalled }).catch(() => [] as OnboardStepId[]);
   const store = new CronStore(i.home);
   const jobs = store.list();
+  // A guest's job is the guest's text: its name and errors never reach the owner's context.
+  const o = new FilePairing({ path: join(gatewayDir(i.home), "pairing.json") }).ownerNow();
+  const ownerChat = o ? `${o.channel}:${o.senderId}` : undefined;
   return {
     setupOpen: open.filter((id) => (REMINDABLE as readonly string[]).includes(id) && !reminded.has(id)),
     failingJobs: jobs
-      .filter((j) => j.enabled && (j.lastStatus === "error" || j.lastStatus === "timeout"))
+      .filter((j) => j.enabled && !untrustedJob(j, ownerChat) && (j.lastStatus === "error" || j.lastStatus === "timeout"))
       .map((j) => ({ id: j.id, name: j.name, error: store.runs(j.id, 1).at(-1)?.error ?? j.lastStatus ?? "failed" })),
     journalDays: await countJournalDays(i.home, now),
     cronJobs: jobs.length,
