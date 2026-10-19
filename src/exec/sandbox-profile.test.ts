@@ -53,6 +53,31 @@ test("the default project's .env files are denied again after the carve-out that
   expect(again).toBeGreaterThan(profile.indexOf('(allow file-read* (subpath (param "C0"))'));
 });
 
+test("the read rules keep their order: .env denies, template reopens, secrets, carve-outs, .env denies again, the chief's files", () => {
+  const { profile } = sandboxProfile({ ...base, otherProjects: ["/w/other", "/u/.tropos/workspace"], otherProjectsShallow: ["/"] });
+  const lines = profile.split("\n");
+  const first = (match: (line: string) => boolean) => lines.findIndex(match);
+  const last = (match: (line: string) => boolean) => lines.findLastIndex(match);
+  const envDeny = (line: string) => line.startsWith("(deny file-read* (regex") && line.includes("[Ee][Nn][Vv]([Rr][Cc]");
+  const order = [
+    first(envDeny),
+    first((line) => line.startsWith("(allow file-read* (regex") && line.includes("[Ee][Xx][Aa][Mm][Pp][Ll][Ee]")),
+    first((line) => line.startsWith('(deny file-read* (subpath (param "R0"))')),
+    first((line) => line.startsWith('(allow file-read* (subpath (param "C0"))')),
+    last(envDeny),
+    last((line) => line.startsWith("(deny file-read* file-write*")),
+  ];
+  for (const i of order) expect(i).toBeGreaterThanOrEqual(0);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  expect(new Set(order).size).toBe(order.length);
+});
+
+test("a project holding a carve-out (here ~/.tropos around the workspace) has its .env files denied again after the carve-out", () => {
+  const { profile } = sandboxProfile({ ...base, otherProjects: ["/u/.tropos"] });
+  const carve = profile.indexOf('(allow file-read* (subpath (param "C0"))');
+  expect(profile.lastIndexOf('(deny file-read* (regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/(.*/)?\\.[Ee][Nn][Vv]')).toBeGreaterThan(carve);
+});
+
 test("a project at / gets a pattern that matches: its root isn't written as //", () => {
   const { profile } = sandboxProfile({ ...base, otherProjectsShallow: ["/"] });
   expect(profile).toContain('(deny file-read* (regex #"^/([^/]+/)?([^/]+/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$"))');

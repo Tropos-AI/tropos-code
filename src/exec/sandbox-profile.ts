@@ -3,7 +3,13 @@
 // The last matching rule wins, so the order matters (verified with /usr/bin/sandbox-exec on macOS 26):
 // everything allowed; host services denied (Unix sockets but DNS, the keychain); writes denied; writes reopened for
 // the project and temp; secrets write-denied; the per-sandbox cache contents reopened; then the protections, last
-// among the write rules so nothing can reopen them; then secret reads denied; then the workspace and cache readable; then other projects' .env files denied; then the chief's own files denied again.
+// among the write rules so nothing can reopen them. Reads, in this fixed order (a test asserts it):
+//   1. other projects' .env files denied, then their committed templates (and the session's own) reopened;
+//   2. secrets denied: after 1, so nothing 1 reopens inside a secret folder (~/.aws/.env.example) is readable;
+//   3. the carve-outs (the default project, the chats' worktrees, the per-sandbox cache) reopened: after 2, since they
+//      lie inside the denied ~/.tropos;
+//   4. the .env files of projects overlapping a carve-out denied again, since 3 reopened them; where linked .env files
+//      point denied; then the chief's own files denied, last, so nothing reopens them.
 // Protected names are also matched in any letter case, as a case-insensitive disk resolves them.
 // Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
 // the sandbox matches resolved paths.
@@ -65,9 +71,16 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     // The session's own .env files, when a project holding the home lies around it.
     ...(shallow.some((root) => isInside(paths.project, root)) ? rootRegexes([paths.project], `(.*/)?${envLeaf}$`, "allow") : []),
   ].map((r) => `(regex #"${r}")`);
-  // Roots inside a carve-out (the default project): the carve-out reopens them, so they are denied again after it.
-  const carvedRoots = roots.filter((root) => paths.readCarveOuts.some((dir) => isInside(root, dir)));
-  const envDeniesCarved = rootRegexes(carvedRoots, `(.*/)?${envLeaf}$`, "deny").map((r) => `(regex #"${r}")`);
+  // Roots that overlap a carve-out either way (the default project inside the workspace carve-out, a project holding
+  // it): the carve-out reopens their .env files, so they are denied again after it, then the session's own reopened.
+  const overlaps = (root: string) => paths.readCarveOuts.some((dir) => isInside(root, dir) || isInside(dir, root));
+  const carvedDeep = outermost(paths.otherProjects.filter(overlaps));
+  const carvedShallow = outermost(paths.otherProjectsShallow.filter(overlaps));
+  const envDeniesCarved = [
+    ...rootRegexes(carvedDeep, `(.*/)?${envLeaf}$`, "deny"),
+    ...rootRegexes(carvedShallow, `([^/]+/)?([^/]+/)?${envLeaf}$`, "deny"),
+  ].map((r) => `(regex #"${r}")`);
+  const ownReopenCarved = carvedShallow.some((root) => isInside(paths.project, root)) ? rootRegexes([paths.project], `(.*/)?${envLeaf}$`, "allow").map((r) => `(regex #"${r}")`) : [];
   // Concrete paths: where linked .env files point, and on a platform without patterns the files themselves.
   const envFiles = named("E", paths.otherProjectSecrets.filter(spellable));
   const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"${fitDeny(p, "(/.*)?$")}")`);
@@ -123,9 +136,11 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
-    // The default project is usually another project too: its .env files again, after the carve-out. Then where linked
-    // .env files point (a link may point at a template-named file).
+    // The default project is usually another project too: the .env files of projects overlapping a carve-out again,
+    // after it (and the session's own reopened again). Then where linked .env files point (a link may point at a
+    // template-named file).
     ...(envDeniesCarved.length > 0 ? [`(deny file-read* ${envDeniesCarved.join(" ")})`] : []),
+    ...(ownReopenCarved.length > 0 ? [`(allow file-read* ${ownReopenCarved.join(" ")})`] : []),
     ...(envPatterns.length > 0 ? [`(deny file-read* ${[...envFiles.map((p) => `(subpath ${p})`), ...envPatterns].join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
