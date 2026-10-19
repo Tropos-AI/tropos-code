@@ -639,6 +639,8 @@ export async function createRuntime(
      * MCP servers, language servers and search index under the others. Default true.
      */
     ownsExtensions?: boolean;
+    /** One-off lines `start` shows as info, e.g. that this repo was just added to the projects. */
+    startNotices?: string[];
   },
 ): Promise<Runtime> {
   let session = init.session;
@@ -785,6 +787,7 @@ export async function createRuntime(
     // Guests never reach specialists; ctx.ext.agents holds only the active, unpaused ones.
     directCall: (text) => (ctx.role === "guest" ? null : mentionCall(text, ctx.ext.agents.flatMap((a) => (isSpecialist(a) ? [a] : [])))),
     start: async (notice) => {
+      for (const text of init.startNotices ?? []) notice("info", text);
       pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
       // Archive learned skills nobody used for a month (at most once a week; never deletes).
       if (ctx.settings.learning.curator && (init.interactive ?? true)) {

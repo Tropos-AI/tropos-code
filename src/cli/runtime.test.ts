@@ -955,3 +955,11 @@ describe("learning and identity", () => {
     expect(closed).toBe(1);
   });
 });
+
+test("start shows the start notices as info", async () => {
+  const session = await SessionStore.create(ctx.home, { cwd: dir, model: "m", version: "v" });
+  const rt = await createRuntime(ctx, { session, history: [], mode: "default", modes: ["default"], theme: DARK, startNotices: ["Added this repo"] });
+  const seen: string[] = [];
+  await rt.start((level, text) => void seen.push(`${level}:${text}`));
+  expect(seen).toContain("info:Added this repo");
+});

@@ -1,11 +1,11 @@
 // src/gateway/projects.ts — the project registry (spec §2.4): the built-in `default` project plus the ones in gateway.json.
 import { existsSync } from "node:fs";
-import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { workspaceDir } from "../paths";
 import { resolveToolPath } from "../tools/paths";
-import { loadGatewayConfig, saveGatewayConfig, uniqueSlug } from "./config";
+import { loadGatewayConfig, newProjectsDirOf, saveGatewayConfig, slugify, uniqueSlug } from "./config";
 import { workspaceProblem } from "./policy";
 import { ChatRouter } from "./router";
 import { UserFacingError } from "./errors";
@@ -80,7 +80,8 @@ export function withTemporaryProject(source: ProjectSource, temporary: Project |
 async function hostGitInit(dir: string): Promise<void> {
   const git = Bun.which("git");
   if (!git) return;
-  const proc = Bun.spawn([git, "init", "-q"], { cwd: dir, stdout: "ignore", stderr: "ignore" });
+  // Hooks and fsmonitor off: a repo's own config must not run code when Tropos touches it.
+  const proc = Bun.spawn([git, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "init", "-q"], { cwd: dir, stdout: "ignore", stderr: "ignore" });
   const timer = setTimeout(() => proc.kill(), 10_000);
   await proc.exited;
   clearTimeout(timer);
@@ -142,8 +143,17 @@ export async function addProject(home: string, input: AddProjectInput, deps: Pro
   const config = await loadGatewayConfig(home);
   const name = input.name?.trim() || basename(resolved) || "project";
   const project: Project = { id: uniqueSlug(name, config.projects.map((p) => p.id)), name, path: resolved };
-  await saveGatewayConfig(home, { ...config, projects: [...config.projects, { id: project.id, name: project.name, path: project.path }] });
+  await saveGatewayConfig(home, {
+    ...config,
+    projects: [...config.projects, { id: project.id, name: project.name, path: project.path }],
+    // Adding it by hand undoes an earlier removal.
+    removedProjectPaths: config.removedProjectPaths.filter((p) => p !== resolved),
+  });
   return project;
+}
+
+async function realOr(path: string): Promise<string> {
+  return realpath(path).catch(() => path);
 }
 
 export async function removeProject(home: string, id: string): Promise<Project> {
@@ -154,6 +164,8 @@ export async function removeProject(home: string, id: string): Promise<Project> 
   await saveGatewayConfig(home, {
     ...config,
     projects: config.projects.filter((p) => p.id !== id),
+    // Remembered by real path so running `tcode` there doesn't add it back.
+    removedProjectPaths: [...new Set([...config.removedProjectPaths, await realOr(found.path)])],
     defaultProject: config.defaultProject === id ? DEFAULT_PROJECT_ID : config.defaultProject,
   });
   return { id: found.id, name: found.name, path: found.path };
@@ -170,4 +182,68 @@ export async function setDefaultProject(home: string, id: string): Promise<Proje
 /** The project a chat is working in right now. */
 export async function projectForChat(home: string, chatKey: string): Promise<Project> {
   return new ChatRouter({ home }).current(chatKey);
+}
+
+export async function renameProject(home: string, id: string, name: string): Promise<Project> {
+  const trimmed = name.trim();
+  if (trimmed.length < 1 || trimmed.length > 80) throw new ProjectError("A project name is 1 to 80 characters.");
+  if (id === DEFAULT_PROJECT_ID) throw new ProjectError("The default workspace is built in and can't be renamed.");
+  const config = await loadGatewayConfig(home);
+  const found = config.projects.find((p) => p.id === id);
+  if (!found) throw new ProjectError(`There is no project "${id}".`);
+  await saveGatewayConfig(home, { ...config, projects: config.projects.map((p) => (p.id === id ? { ...p, name: trimmed } : p)) });
+  return { id, name: trimmed, path: found.path };
+}
+
+/** A new folder under the new-projects directory (default ~/Projects) with `git init`, registered as a project. */
+export async function createProject(home: string, name: string, deps: ProjectDeps & { git?: (dir: string) => Promise<void> } = {}): Promise<Project> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new ProjectError("A project needs a name.");
+  const userHome = deps.userHome ?? homedir();
+  const folder = /^[\w][\w .-]{0,79}$/.test(trimmed) ? trimmed : slugify(trimmed);
+  const dir = join(newProjectsDirOf(await loadGatewayConfig(home), userHome), folder);
+  const existing = await readdir(dir).catch(() => null);
+  if (existing && existing.length > 0) throw new ProjectError(`${dir} already exists. Want me to add it as a project instead?`);
+  await mkdir(dir, { recursive: true });
+  try {
+    await (deps.git ?? hostGitInit)(dir);
+  } catch {
+    // No git: the project still works, just without version control.
+  }
+  return addProject(home, { path: dir, name: trimmed }, { ...deps, userHome });
+}
+
+/** The nearest folder at or above `dir` holding a `.git`, never `stopAt` itself or anything above it. */
+export async function findRepoRoot(dir: string, stopAt: string): Promise<string | undefined> {
+  let cur = dir;
+  while (cur !== stopAt) {
+    if (await stat(join(cur, ".git")).then(() => true, () => false)) return cur;
+    const up = dirname(cur);
+    if (up === cur) return undefined;
+    cur = up;
+  }
+  return undefined;
+}
+
+/**
+ * Running `tcode` in a git repo registers its root as a project, once. Returns the project only when it was just
+ * added; the home folder, the managed workspace, projects the owner removed and anything unfit are skipped.
+ * Never throws: starting `tcode` must not fail because of this.
+ */
+export async function autoRegisterProject(home: string, cwd: string, deps: { userHome?: string } = {}): Promise<Project | undefined> {
+  try {
+    const userHome = await realOr(deps.userHome ?? homedir());
+    const root = await findRepoRoot(await realpath(cwd), userHome);
+    if (!root) return undefined;
+    const real = await realpath(root);
+    if (workspaceProblem(real, home, userHome)) return undefined;
+    const realHome = await realOr(home);
+    if (real === realHome || real.startsWith(`${realHome}/`)) return undefined;
+    const config = await loadGatewayConfig(home);
+    if (config.removedProjectPaths.includes(real)) return undefined;
+    if ((await listProjects(home)).some((p) => p.path === real)) return undefined;
+    return await addProject(home, { path: real }, { reuse: true, userHome });
+  } catch {
+    return undefined;
+  }
 }

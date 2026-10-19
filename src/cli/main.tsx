@@ -12,6 +12,7 @@ import { resolveToolPath } from "../tools/paths";
 import { createTools } from "../tools/registry";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
+import { autoRegisterProject } from "../gateway/projects";
 import { layoutAtStart } from "../home/migrate";
 import { VERSION } from "../version";
 import { startNativeSession } from "../install/session";
@@ -371,7 +372,9 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       }
     }
 
+    const added = await autoRegisterProject(home, cwd);
     const runtime = await createRuntime(ctx, {
+      startNotices: added ? [`Added this repo to your projects as "${added.id}", so chats can work on it too. Don't want it there? Ask me to remove it.`] : undefined,
       session,
       history,
       mode,

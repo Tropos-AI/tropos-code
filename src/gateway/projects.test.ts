@@ -2,13 +2,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { makeRepo } from "../snapshots/test-repo";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { loadGatewayConfig, saveGatewayConfig } from "./config";
 import {
   ProjectError,
   addProject,
+  autoRegisterProject,
+  createProject,
+  renameProject,
   defaultProjectId,
+  defaultProjectPath,
   ensureDefaultProject,
   getProject,
   listProjects,
@@ -152,5 +157,47 @@ describe("projectForChat", () => {
     await new ChatRouter({ home }).select("telegram:1", "app");
     expect((await projectForChat(home, "telegram:1")).id).toBe("app");
     expect((await projectForChat(home, "telegram:2")).id).toBe("default");
+  });
+});
+
+describe("projects without setup", () => {
+  test("tcode in a repo subfolder registers the repo root once, named after its folder", async () => {
+    const repo = await makeRepo();
+    await mkdir(join(repo, "src"));
+    const added = await autoRegisterProject(home, join(repo, "src"), { userHome });
+    expect(added).toMatchObject({ path: repo, name: basename(repo) });
+    expect(await autoRegisterProject(home, repo, { userHome })).toBeUndefined();
+  });
+  test("a removed project is not re-added, even through a symlink; adding it by hand clears that", async () => {
+    const repo = await makeRepo();
+    const p = (await autoRegisterProject(home, repo, { userHome }))!;
+    await removeProject(home, p.id);
+    const link = join(await makeTmpDir(), "link");
+    await symlink(repo, link);
+    expect(await autoRegisterProject(home, link, { userHome })).toBeUndefined();
+    await addProject(home, { path: repo }, deps());
+    expect((await loadGatewayConfig(home)).removedProjectPaths).toEqual([]);
+  });
+  test("not a repo, the default workspace and the home folder are never registered", async () => {
+    expect(await autoRegisterProject(home, await makeTmpDir(), { userHome })).toBeUndefined();
+    await ensureDefaultProject(home, { git: async () => {} });
+    await mkdir(join(defaultProjectPath(home), ".git"), { recursive: true });
+    expect(await autoRegisterProject(home, defaultProjectPath(home), { userHome })).toBeUndefined();
+    await mkdir(join(userHome, ".git"));
+    expect(await autoRegisterProject(home, userHome, { userHome })).toBeUndefined();
+  });
+  test("createProject makes <newProjectsDir>/<name>, runs git init and registers it", async () => {
+    const inits: string[] = [];
+    const p = await createProject(home, "Space Game", { userHome, git: async (d) => void inits.push(d) });
+    expect(p).toMatchObject({ id: "space-game", name: "Space Game", path: join(userHome, "Projects", "Space Game") });
+    expect(inits).toEqual([p.path]);
+    await mkdir(join(userHome, "Projects", "Busy"), { recursive: true });
+    await writeFile(join(userHome, "Projects", "Busy", "x"), "");
+    await expect(createProject(home, "Busy", { userHome })).rejects.toThrow("already exists");
+  });
+  test("renameProject keeps the id", async () => {
+    const p = await addProject(home, { path: await makeRepo(), name: "old" }, deps());
+    expect(await renameProject(home, p.id, "  New name ")).toMatchObject({ id: p.id, name: "New name" });
+    await expect(renameProject(home, p.id, "  ")).rejects.toThrow();
   });
 });
