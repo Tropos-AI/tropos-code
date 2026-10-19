@@ -35,7 +35,9 @@ export class FakeTelegramServer {
   private waiters = new Set<Waiter>();
 
   constructor() {
-    this.server = Bun.serve({ port: 0, fetch: (req) => this.handle(req) });
+    // On 127.0.0.1, where baseUrl points. Without a hostname Bun listens on every address (IPv6 `*`), and on macOS a
+    // listener bound to 127.0.0.1 alone can take the same port number and answer this server's requests instead.
+    this.server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req) => this.handle(req) });
   }
 
   get baseUrl(): string {
