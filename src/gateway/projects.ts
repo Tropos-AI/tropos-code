@@ -16,6 +16,13 @@ export interface Project {
   path: string;
   /** The managed default project at ~/.tropos/workspace. */
   builtin?: boolean;
+  /** Guests may see and enter it (the built-in project always is). */
+  shared?: boolean;
+}
+
+/** What a guest may list and switch into: the default workspace and projects the owner shared. */
+export function guestVisible(p: Project): boolean {
+  return p.builtin === true || p.id === "default" || p.shared === true;
 }
 
 export const DEFAULT_PROJECT_ID = "default";
@@ -50,7 +57,7 @@ export function builtinProject(home: string): Project {
 /** The built-in project first, then the registered ones. Never creates anything. */
 export async function listProjects(home: string): Promise<Project[]> {
   const config = await loadGatewayConfig(home);
-  return [builtinProject(home), ...config.projects.filter((p) => p.id !== DEFAULT_PROJECT_ID).map((p): Project => ({ id: p.id, name: p.name, path: p.path }))];
+  return [builtinProject(home), ...config.projects.filter((p) => p.id !== DEFAULT_PROJECT_ID).map((p): Project => ({ id: p.id, name: p.name, path: p.path, ...(p.shared ? { shared: true } : {}) }))];
 }
 
 export async function getProject(home: string, id: string): Promise<Project | undefined> {
@@ -246,4 +253,14 @@ export async function autoRegisterProject(home: string, cwd: string, deps: { use
   } catch {
     return undefined;
   }
+}
+
+/** Lets guests into a project (or shuts them out again). Registering a project never shares it. */
+export async function setProjectShared(home: string, id: string, shared: boolean): Promise<Project> {
+  if (id === DEFAULT_PROJECT_ID) throw new ProjectError("The default workspace is always open to guests.");
+  const config = await loadGatewayConfig(home);
+  const found = config.projects.find((p) => p.id === id);
+  if (!found) throw new ProjectError(`There is no project "${id}".`);
+  await saveGatewayConfig(home, { ...config, projects: config.projects.map((p) => (p.id === id ? { ...p, shared: shared || undefined } : p)) });
+  return { id, name: found.name, path: found.path, ...(shared ? { shared } : {}) };
 }

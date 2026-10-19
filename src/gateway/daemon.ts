@@ -37,6 +37,7 @@ import {
   TEMPORARY_PROJECT_ID,
   ensureDefaultProject,
   fileProjectSource,
+  guestVisible,
   withTemporaryProject,
   type Project,
 } from "./projects";
@@ -186,11 +187,11 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       run.err(`tcode: gateway: ${problem}\n`);
       return 1;
     }
-    oneOff = { id: TEMPORARY_PROJECT_ID, name: basename(path) || "workspace", path };
+    oneOff = { id: TEMPORARY_PROJECT_ID, name: basename(path) || "workspace", path, shared: true };
     if (!existsSync(join(path, ".git"))) warnNoGit(run, path);
   }
   const source = withTemporaryProject(fileProjectSource(home), oneOff);
-  const router = new ChatRouter({ home, source });
+  const router = new ChatRouter({ home, source, isGuest: async (k) => (await chatRole(k, run.pairing)) === "guest" });
 
   // One context per project directory, built the first time something needs it: settings, skills, memory and MCP
   // servers are per project, and a broken settings file in one must not stop the others. A reload replaces them.
@@ -355,7 +356,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   };
 
   const sessions = new RoutedSessions(router, pool);
-  const chatProjects: ChatProjects = { current: (k) => router.current(k), list: () => source.list(), select: (k, id) => router.select(k, id) };
+  const chatProjects: ChatProjects = { current: (k) => router.current(k), list: (k) => router.list(k), select: (k, id) => router.select(k, id) };
   const chatAutonomy: ChatAutonomy = {
     current: async (k) => {
       const project = await router.current(k);
@@ -575,7 +576,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     deliver,
     openSession: async (target, opts) => {
       if (target.includes(":")) return sessions.open(target);
-      if (!(await source.get(target))) throw new UserFacingError(`There is no project "${target}".`);
+      const project = await source.get(target);
+      if (!project || (opts?.untrusted && !guestVisible(project))) throw new UserFacingError(`There is no project "${target}".`);
       // A guest's job gets a session of its own that runs (and is recorded) as a guest's.
       return pool.open(sessionKey(`project:${target}${opts?.untrusted ? ":guest" : ""}`, target));
     },

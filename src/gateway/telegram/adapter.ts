@@ -675,7 +675,7 @@ export class TelegramAdapter implements ChannelAdapter {
     const wanted = text.split(/\s+/)[1];
     try {
       if (wanted === undefined) {
-        const [projects, current] = await Promise.all([this.projects.list(), this.projects.current(key)]);
+        const [projects, current] = await Promise.all([this.projects.list(key), this.projects.current(key)]);
         await this.reply(chatId, projectListText(projects, current.id), projectKeyboard(projects, current.id));
         return;
       }

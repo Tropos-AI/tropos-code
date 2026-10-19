@@ -4,7 +4,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FakeSessions } from "../../test/helpers/telegram-fakes";
-import { addProject, setDefaultProject, removeProject } from "./projects";
+import { addProject, setDefaultProject, removeProject, setProjectShared } from "./projects";
 import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
 
 let dir: string;
@@ -70,5 +70,26 @@ describe("session keys", () => {
     expect([...pool.sessions.keys()]).toEqual(["telegram:1@default", "telegram:1@app"]);
     await sessions.close("telegram:1");
     expect([...pool.sessions.keys()]).toEqual(["telegram:1@default"]);
+  });
+});
+
+describe("guests and shared projects", () => {
+  const guestRouter = () => new ChatRouter({ home, isGuest: async (k) => k.startsWith("telegram:g") });
+  test("a guest sees and enters only the default workspace and shared projects; the owner sees all", async () => {
+    const router = guestRouter();
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["default"]);
+    expect((await router.list("telegram:1")).map((p) => p.id)).toEqual(["default", "app", "api"]);
+    await expect(router.select("telegram:g1", "app")).rejects.toThrow('There is no project "app"');
+    expect((await router.select("telegram:1", "app")).id).toBe("app");
+    await setProjectShared(home, "app", true);
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["default", "app"]);
+    expect((await router.select("telegram:g1", "app")).id).toBe("app");
+  });
+  test("a guest whose project stops being shared falls back to the default workspace", async () => {
+    await setProjectShared(home, "app", true);
+    const router = guestRouter();
+    await router.select("telegram:g1", "app");
+    await setProjectShared(home, "app", false);
+    expect((await router.current("telegram:g1")).id).toBe("default");
   });
 });

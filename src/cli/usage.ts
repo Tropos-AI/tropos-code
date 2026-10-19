@@ -123,6 +123,7 @@ export const PROJECTS_HELP = `Usage: tcode projects                       list t
        tcode projects add <path> [--name <name>]
        tcode projects remove <id>
        tcode projects default <id>             the project new chats start in
+       tcode projects share <id>               let guests see and enter it (unshare to undo)
 
 A project is a directory the gateway's chats can work in; each chat picks one with /project. The built-in project
 "default" (~/.tropos/workspace) always exists. A directory that holds your home folder or ~/.tropos can't be a project.

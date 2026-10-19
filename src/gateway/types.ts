@@ -85,7 +85,8 @@ export interface ChannelAdapter {
 /** What a channel needs to show and change the project a chat is working in. */
 export interface ChatProjects {
   current(chatKey: string): Promise<Project>;
-  list(): Promise<Project[]>;
+  /** The projects this chat may see (a guest only gets the shared ones). */
+  list(chatKey: string): Promise<Project[]>;
   /** Rejects with a user-facing error when the project doesn't exist. */
   select(chatKey: string, projectId: string): Promise<Project>;
 }

@@ -167,6 +167,8 @@ describe("projects without setup", () => {
     const added = await autoRegisterProject(home, join(repo, "src"), { userHome });
     expect(added).toMatchObject({ path: repo, name: basename(repo) });
     expect(await autoRegisterProject(home, repo, { userHome })).toBeUndefined();
+    expect(added!.shared).toBeUndefined();
+    expect((await listProjects(home)).find((p) => p.id === added!.id)?.shared).toBeUndefined();
   });
   test("a removed project is not re-added, even through a symlink; adding it by hand clears that", async () => {
     const repo = await makeRepo();

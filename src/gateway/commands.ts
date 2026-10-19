@@ -7,7 +7,7 @@ import { troposHome } from "../paths";
 import { programArguments, serviceEnv, serviceManager, type ServiceManager, type ServiceRunner } from "../service";
 import { gatewayDir, gatewayLogPath, loadGatewayConfig, telegramToken } from "./config";
 import { FilePairing } from "./pairing";
-import { addProject, defaultProjectId, ensureDefaultProject, listProjects, removeProject, setDefaultProject } from "./projects";
+import { addProject, defaultProjectId, ensureDefaultProject, listProjects, removeProject, setDefaultProject, setProjectShared } from "./projects";
 
 export interface GatewayCommandContext {
   out(text: string): void;
@@ -129,7 +129,7 @@ export async function runGatewayCommand(command: GatewayCommand, c: GatewayComma
       case "projects-list": {
         const projects = await listProjects(home);
         const defaultId = await defaultProjectId(home);
-        for (const p of projects) c.out(`${p.id === defaultId ? "*" : " "} ${p.id.padEnd(16)} ${p.name}  ${p.path}\n`);
+        for (const p of projects) c.out(`${p.id === defaultId ? "*" : " "} ${p.id.padEnd(16)} ${p.name}  ${p.path}${p.shared && !p.builtin ? "  (shared with guests)" : ""}\n`);
         c.out("* = where new chats start. Add one: tcode projects add <path>\n");
         return 0;
       }
@@ -141,6 +141,11 @@ export async function runGatewayCommand(command: GatewayCommand, c: GatewayComma
       case "projects-remove": {
         const project = await removeProject(home, command.id);
         c.out(`Removed project "${project.id}". Its files and past sessions are untouched.\n`);
+        return 0;
+      }
+      case "projects-share": {
+        const project = await setProjectShared(home, command.id, command.shared);
+        c.out(command.shared ? `Guests can now see and enter "${project.id}".\n` : `"${project.id}" is closed to guests again.\n`);
         return 0;
       }
       case "projects-default": {

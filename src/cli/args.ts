@@ -63,13 +63,14 @@ export type GatewayCommand =
   | { kind: "projects-add"; path: string; name?: string }
   | { kind: "projects-remove"; id: string }
   | { kind: "projects-default"; id: string }
+  | { kind: "projects-share"; id: string; shared: boolean }
   | { kind: "pairing-approve"; channel: string; code: string }
   | { kind: "pairing-list" }
   | { kind: "pairing-revoke"; channel: string; senderId: string }
   | { kind: "help"; command: "gateway" | "pairing" | "projects" };
 
 const GATEWAY_USAGE = "usage: tcode gateway [install [--workspace <dir>] | uninstall | start | stop | restart]";
-const PROJECTS_USAGE = "usage: tcode projects [list | add <path> [--name <name>] | remove <id> | default <id>]";
+const PROJECTS_USAGE = "usage: tcode projects [list | add <path> [--name <name>] | remove <id> | default <id> | share <id> | unshare <id>]";
 
 /** `tcode gateway install|uninstall|start|stop|restart`, `tcode projects …` and `tcode pairing …`; null for anything else. */
 export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
@@ -101,6 +102,7 @@ export function matchGatewayCommand(argv: string[]): GatewayCommand | null {
     if (sub === undefined || (sub === "list" && rest.length === 0)) return { kind: "projects-list" };
     if (sub === "remove" && rest.length === 1) return { kind: "projects-remove", id: rest[0]! };
     if (sub === "default" && rest.length === 1) return { kind: "projects-default", id: rest[0]! };
+    if ((sub === "share" || sub === "unshare") && rest.length === 1) return { kind: "projects-share", id: rest[0]!, shared: sub === "share" };
     if (sub === "add") {
       let path: string | undefined;
       let name: string | undefined;

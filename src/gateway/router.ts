@@ -2,7 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gatewayDir } from "./config";
-import { ProjectError, builtinProject, fileProjectSource, type Project, type ProjectSource } from "./projects";
+import { ProjectError, builtinProject, fileProjectSource, guestVisible, type Project, type ProjectSource } from "./projects";
 import type { ChatSession, SessionProvider } from "./types";
 
 /** The pool's key for a chat in a project: `telegram:123@my-app`. Each (chat, project) pair has its own session. */
@@ -20,6 +20,8 @@ export interface ChatRouterOptions {
   home: string;
   /** Where projects come from (default: the registry in gateway.json). */
   source?: ProjectSource;
+  /** True for a chat that runs as a guest: it only sees the default workspace and shared projects. */
+  isGuest?: (chatKey: string) => Promise<boolean>;
 }
 
 export class ChatRouter {
@@ -33,14 +35,20 @@ export class ChatRouter {
   }
 
   /** The chat's project: its own choice while that project still exists, else the default project. */
+  /** The projects this chat may see: all for the owner, the shared ones for a guest. */
+  async list(chatKey: string): Promise<Project[]> {
+    const projects = await this.source.list();
+    return (await this.opts.isGuest?.(chatKey)) ? projects.filter(guestVisible) : projects;
+  }
+
   async current(chatKey: string): Promise<Project> {
-    const [chosen, projects] = await Promise.all([this.read().then((m) => m[chatKey]), this.source.list()]);
+    const [chosen, projects] = await Promise.all([this.read().then((m) => m[chatKey]), this.list(chatKey)]);
     const byId = (id: string | undefined) => (id === undefined ? undefined : projects.find((p) => p.id === id));
     return byId(chosen) ?? byId(await this.source.defaultId()) ?? projects[0] ?? builtinProject(this.opts.home);
   }
 
   async select(chatKey: string, projectId: string): Promise<Project> {
-    const project = await this.source.get(projectId);
+    const project = (await this.list(chatKey)).find((p) => p.id === projectId);
     if (!project) throw new ProjectError(`There is no project "${projectId}".`);
     await this.write(chatKey, projectId);
     return project;

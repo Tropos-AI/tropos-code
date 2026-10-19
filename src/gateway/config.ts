@@ -25,6 +25,8 @@ const projectSchema = z.object({
   path: z.string().min(1),
   /** Overrides `chat.autonomy` for chats working in this project. */
   autonomy: z.enum(AUTONOMY_LEVELS).optional(),
+  /** Guests may see and enter this project. Off unless the owner shares it (`tcode projects share`). */
+  shared: z.boolean().optional(),
   /** Test commands the owner confirmed; the agent may run these unasked at `balanced`. */
   testCommands: z.array(z.string().min(1)).max(10).optional(),
 });

@@ -47,6 +47,8 @@ describe("tcode projects", () => {
     expect(parseInvocation(["projects", "add", "/w/app", "--name", "My App"])).toEqual(cmd({ kind: "projects-add", path: "/w/app", name: "My App" }));
     expect(parseInvocation(["projects", "add", "--name=X", "app"])).toEqual(cmd({ kind: "projects-add", path: "app", name: "X" }));
     expect(parseInvocation(["projects", "remove", "app"])).toEqual(cmd({ kind: "projects-remove", id: "app" }));
+    expect(parseInvocation(["projects", "share", "app"])).toEqual(cmd({ kind: "projects-share", id: "app", shared: true }));
+    expect(parseInvocation(["projects", "unshare", "app"])).toEqual(cmd({ kind: "projects-share", id: "app", shared: false }));
     expect(parseInvocation(["projects", "default", "app"])).toEqual(cmd({ kind: "projects-default", id: "app" }));
     expect(parseInvocation(["projects", "--help"])).toEqual(cmd({ kind: "help", command: "projects" }));
   });
