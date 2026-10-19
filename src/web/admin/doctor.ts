@@ -17,6 +17,8 @@ function toFinding(f: Finding): DoctorFinding {
   };
 }
 
+export const UNSAFE_FIX_REFUSED = "This fix isn't one I can apply from here; run `tcode doctor --fix` on the computer.";
+
 export function doctorHandlers(ctx: AdminContext, deps: HostDeps = {}): AdminHandlers {
   return {
     "doctor.run": async (params) => {
@@ -28,18 +30,25 @@ export function doctorHandlers(ctx: AdminContext, deps: HostDeps = {}): AdminHan
       const id = typeof params?.id === "string" ? params.id : "";
       if (!id) throw new AdminError("Say which finding to fix.");
       const attempted: Finding[] = [];
-      // The engine does the finding lookup and the fix; confirm limits it to the one finding, safe or not.
+      let refused = false;
+      // The engine does the finding lookup and the fix; confirm limits it to the one finding, safe or not (or, with
+      // safeOnly, safe only: the agent's TroposSetup never applies a fix that could lose data).
       const report = await runDoctor({
         ...doctorOptionsFor(ctx, deps),
         fix: true,
         confirm: async (f) => {
           if (f.id !== id) return false;
+          if (params?.safeOnly === true && f.safe !== true) {
+            refused = true;
+            return false;
+          }
           attempted.push(f);
           return true;
         },
       });
       const found = report.findings.find((f) => f.id === id);
       if (!found) throw new AdminError(`There is no finding "${id}" right now.`);
+      if (refused) return { ok: false, message: UNSAFE_FIX_REFUSED };
       if (!attempted.length) return { ok: false, message: "This finding has no automatic fix." };
       return { ok: found.fixed === true, message: scrub(found.fixMessage ?? (found.fixed ? "Fixed." : "The fix did not work.")) };
     },

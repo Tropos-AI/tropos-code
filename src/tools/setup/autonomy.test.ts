@@ -4,7 +4,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { loadGatewayConfig } from "../../gateway/config";
-import { lowerSetupAutonomy } from "./autonomy";
+import { AutonomyError, RAISE_REFUSED, UNCONFINED_CONSENT } from "../../gateway/autonomy";
+import { autonomyRefusal, lowerSetupAutonomy, raiseRefusal } from "./autonomy";
 import { SetupRefused } from "./matrix";
 
 let home: string;
@@ -37,4 +38,14 @@ test("an unknown project is refused instead of lowering the global level", async
   await writeGateway(home, { chat: { autonomy: "balanced", backend: "host" } });
   await expect(lowerSetupAutonomy(home, "ask", "nope")).rejects.toThrow('There is no project "nope"');
   expect((await loadGatewayConfig(home)).chat.autonomy).toBe("balanced");
+});
+
+test("each refusal says what it is really about: a raise points at the dashboard, a consent refusal names confinement", () => {
+  const config = { webPort: 4317 };
+  expect(autonomyRefusal(new AutonomyError(RAISE_REFUSED), config).message).toBe(raiseRefusal(config));
+  const consent = autonomyRefusal(new AutonomyError(UNCONFINED_CONSENT), config).message;
+  expect(consent).not.toContain("raise");
+  expect(consent).toContain("confined");
+  expect(consent).toContain("#/settings/autonomy");
+  expect(autonomyRefusal(new AutonomyError('No project "x".'), config).message).toBe('No project "x".');
 });

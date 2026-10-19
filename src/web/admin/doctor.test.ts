@@ -60,3 +60,12 @@ test("doctor.fix runs one finding's fix even when it is not safe", async () => {
   expect(await failure(admin, "doctor.fix", { id: "nope" })).toContain("nope");
   expect(await failure(admin, "doctor.fix", {})).toContain("which finding");
 });
+
+test("doctor.fix with safeOnly applies a safe fix and refuses any other, pointing at the computer", async () => {
+  const log: string[] = [];
+  const admin = adminWith(kit, doctorHandlers(kit.ctx, { checks: checks(log) }));
+  expect(await admin.handle("doctor.fix", { id: "t.risky", safeOnly: true })).toEqual({ ok: false, message: "This fix isn't one I can apply from here; run `tcode doctor --fix` on the computer." });
+  expect(log).toEqual([]);
+  expect(await admin.handle("doctor.fix", { id: "t.safe", safeOnly: true })).toEqual({ ok: true, message: "done safe" });
+  expect(log).toEqual(["safe"]);
+});

@@ -71,3 +71,17 @@ test("env names are quoted with anything invisible escaped", () => {
   expect(text).toContain('"A\\u202eB"=');
   expect(text).not.toContain("\u202e");
 });
+
+test("names, paths and ids in the preview are shown only when they hold no control, invisible or bidi character", () => {
+  const s = { settings: {}, gateway: { projects: [{ id: "app", name: "Ap‮p", path: "/w/app\u0007" }] } };
+  const add = describeSetupChange({ action: "project.add", path: "/w/evil‮txt.exe", name: "ok\nprojects: nothing" }, s).text;
+  expect(add).not.toContain("‮");
+  expect(add).not.toContain("\n projects: nothing");
+  expect(add).toContain("refused");
+  const rename = describeSetupChange({ action: "project.rename", project: "app", name: "New" }, s).text;
+  expect(rename).not.toContain("‮");
+  const remove = describeSetupChange({ action: "project.remove", project: "app" }, s).text;
+  expect(remove).not.toContain("\u0007");
+  // Letters beyond ASCII are names like any other.
+  expect(describeSetupChange({ action: "project.create", name: "Εργασία" }, s).text).toContain('"Εργασία"');
+});

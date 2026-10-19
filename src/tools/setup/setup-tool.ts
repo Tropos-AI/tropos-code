@@ -13,7 +13,7 @@ import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
 import { lowerSetupAutonomy } from "./autonomy";
 import { describeSetupChange, readSetupState } from "./describe";
-import { CHAT_DOCTOR_READ_ONLY, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, type SetupInput, type SetupWho } from "./matrix";
+import { CHAT_DOCTOR_READ_ONLY, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, setupTextProblem, type SetupInput, type SetupWho } from "./matrix";
 import type { SecretVault } from "./secrets";
 
 export interface SetupToolDeps {
@@ -134,10 +134,14 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
     return "Restarted the background service.";
   }
 
-  /** A pasted key: a ref is taken from the vault (once); a raw value (a format the vault didn't know) is used as is. */
-  function secretValue(value: string, taken: string[]): string {
+  /**
+   * A pasted key: a ref is taken from the vault (once). A raw value (a format the vault didn't know) is used as is at
+   * the computer; from a chat it is refused, since it has already gone through the transcript unsealed.
+   */
+  function secretValue(value: string, taken: string[], route?: string): string {
     if (!SECRET_REF.test(value)) {
       taken.push(value);
+      if (deps.who.origin === "channel" && route) refuse(`I didn't recognise that as a key, so it wasn't held back from the chat. Enter it in the dashboard instead: ${link(route)}`);
       return value;
     }
     const held = deps.secrets?.take(value);
@@ -253,7 +257,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
         }, noUndo);
       }
       case "telegram.connect": {
-        const token = secretValue(need(input.secret, "Paste the bot token from @BotFather, then ask me again."), taken);
+        const token = secretValue(need(input.secret, "Paste the bot token from @BotFather, then ask me again."), taken, "settings/channels");
         return changing(gatewayPaths("telegram"), input, ctx, "connect Telegram", async () => {
           const info = (await admin.handle("channels.telegram.set", { token })) as { bot?: { username?: string } };
           const bot = info?.bot?.username ? ` as @${info.bot.username}` : "";
@@ -268,7 +272,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       case "provider.connect": {
         const id = need(input.provider, "Say which provider the key is for.");
         const providers = deps.providers ?? refuse(`I can't connect a provider from here. Open ${link("settings/models")} to connect it.`);
-        const key = secretValue(need(input.secret, "Paste the API key, then ask me again."), taken);
+        const key = secretValue(need(input.secret, "Paste the API key, then ask me again."), taken, "settings/models");
         await providers.connect(id, key);
         let models: string[];
         try {
@@ -288,7 +292,8 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       }
       case "doctor.fix": {
         const id = need(input.finding, "Say which finding to fix (its id from doctor.run).");
-        const out = (await admin.handle("doctor.fix", { id })) as { ok: boolean; message: string };
+        // Safe fixes only: one that could lose data is run by the owner, `tcode doctor --fix`.
+        const out = (await admin.handle("doctor.fix", { id, safeOnly: true })) as { ok: boolean; message: string };
         const recorded = await noted(input, ctx, `doctor fix ${id}`, NO_UNDO);
         if (!out.ok) return refuse(`${out.message}${recorded}`);
         return `${out.message}${recorded}`;
@@ -332,6 +337,9 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
         const where = decision.reason === CHAT_DOCTOR_READ_ONLY ? ` ${link("status/health")}` : "";
         return { content: `${decision.reason}${where}`, isError: true };
       }
+      // What the approval showed must be what runs: text it had to refuse is refused here too.
+      const unshown = setupTextProblem(input);
+      if (unshown) return { content: unshown, isError: true };
       const taken: string[] = [];
       try {
         return done(await perform(input, ctx, taken));

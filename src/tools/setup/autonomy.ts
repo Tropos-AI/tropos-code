@@ -1,5 +1,5 @@
 // src/tools/setup/autonomy.ts — the setup tool's only way to touch autonomy: lowering it, built on P2's lowerAutonomy.
-import { AutonomyError, effectiveAutonomy, lowerAutonomy } from "../../gateway/autonomy";
+import { AutonomyError, effectiveAutonomy, lowerAutonomy, RAISE_REFUSED, UNCONFINED_CONSENT } from "../../gateway/autonomy";
 import { loadGatewayConfig, type Autonomy, type GatewayConfig } from "../../gateway/config";
 import { dashboardLink } from "../../gateway/dashboard-link";
 import { DEFAULT_PROJECT_ID, TEMPORARY_PROJECT_ID } from "../../gateway/projects";
@@ -10,6 +10,17 @@ const RANK: Record<Autonomy, number> = { ask: 0, balanced: 1, autonomous: 2 };
 /** What a refused raise says: where the owner raises it instead. */
 export function raiseRefusal(config: Pick<GatewayConfig, "webPort">): string {
   return `I can't raise autonomy from here. Open ${dashboardLink(config, "settings/autonomy")} to change it (Settings → Autonomy).`;
+}
+
+/** An autonomy refusal as the owner should hear it: a raise, a missing consent to run unconfined, or as it was said. */
+export function autonomyRefusal(e: AutonomyError, config: Pick<GatewayConfig, "webPort">): SetupRefused {
+  if (e.message === RAISE_REFUSED) return new SetupRefused(raiseRefusal(config));
+  if (e.message === UNCONFINED_CONSENT) {
+    return new SetupRefused(
+      `Commands can't be confined on this machine, so that level would let chat commands run unconfined as you, and that needs your consent at the computer. Open ${dashboardLink(config, "settings/autonomy")} (Settings → Autonomy).`,
+    );
+  }
+  return new SetupRefused(e.message);
 }
 
 /**
@@ -34,7 +45,7 @@ export async function lowerSetupAutonomy(home: string, to: Autonomy, projectId?:
     }
     return { before, after: out.level };
   } catch (e) {
-    if (e instanceof AutonomyError) throw new SetupRefused(raiseRefusal(config));
+    if (e instanceof AutonomyError) throw autonomyRefusal(e, config);
     throw e;
   }
 }

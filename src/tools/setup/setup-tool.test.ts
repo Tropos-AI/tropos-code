@@ -288,6 +288,36 @@ test("a raw token (a format the vault didn't know) is used but never repeated, e
   expect(JSON.stringify(out)).not.toContain(TOKEN);
 });
 
+test("from a chat, telegram.connect and provider.connect take only secret:<n> refs; a raw value is refused with the dashboard link", async () => {
+  const chat = createSetupTool(deps({ who: CHAT }));
+  const telegram = await chat.run({ action: "telegram.connect", secret: TOKEN }, makeToolContext());
+  expect(telegram.isError).toBe(true);
+  expect(text(telegram)).toContain("#/settings/channels");
+  const provider = await chat.run({ action: "provider.connect", provider: "mistral", secret: "Xq7Rk2Lm9Np4Tz8Bv3Cw6Hd1Jf5Gs0Ya-but-unsealed" }, makeToolContext());
+  expect(provider.isError).toBe(true);
+  expect(text(provider)).toContain("#/settings/models");
+  expect(JSON.stringify([telegram, provider])).not.toContain(TOKEN);
+  expect(calls).toEqual([]);
+  expect(providers.connected).toEqual([]);
+  // A ref still works from the chat.
+  expect((await chat.run({ action: "provider.connect", provider: "anthropic", secret: "secret:1" }, makeToolContext())).isError).toBeFalsy();
+});
+
+test("a project name, path or id the approval couldn't show faithfully is refused before anything runs", async () => {
+  for (const input of [
+    { action: "project.add" as const, path: "/w/evil\u202etxt" },
+    { action: "project.create" as const, name: "x\u200by" },
+    { action: "project.rename" as const, project: "app", name: "two\nlines" },
+    { action: "project.default" as const, project: "a\u0000b" },
+    { action: "model.set" as const, model: "m\u2028x" },
+  ]) {
+    const out = await tool.run(input, makeToolContext());
+    expect({ input, isError: out.isError }).toEqual({ input, isError: true });
+    expect(text(out)).toContain("can't show it to you for approval");
+  }
+  expect(calls).toEqual([]);
+});
+
 test("telegram.disconnect clears the token; in a chat the preview warns that the chat goes quiet", async () => {
   await tool.run({ action: "telegram.disconnect" }, makeToolContext());
   expect(calls).toContainEqual(["channels.telegram.clear", undefined]);
@@ -320,7 +350,8 @@ test("doctor.run never fixes; doctor.fix runs one finding locally", async () => 
   expect(String(report.content)).toContain("config.drift");
   expect(await ledger.list()).toEqual([]);
   await tool.run({ action: "doctor.fix", finding: "config.drift" }, makeToolContext());
-  expect(calls).toContainEqual(["doctor.fix", { id: "config.drift" }]);
+  // Only a safe fix: anything that could lose data is for `tcode doctor --fix` at the computer.
+  expect(calls).toContainEqual(["doctor.fix", { id: "config.drift", safeOnly: true }]);
   expect((await ledger.list(1))[0]!.noUndo).toBe("This can't be undone.");
 });
 

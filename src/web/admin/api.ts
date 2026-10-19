@@ -55,8 +55,8 @@ export interface DoctorReport {
 export interface DoctorAdmin {
   /** `fix` applies the safe fixes; `deep` adds checks that use the network. */
   "doctor.run": { params: { fix?: boolean; deep?: boolean; only?: string } | undefined; result: DoctorReport };
-  /** Applies the fix of one finding, whether or not it is "safe". */
-  "doctor.fix": { params: { id: string }; result: { ok: boolean; message: string } };
+  /** Applies the fix of one finding, whether or not it is "safe"; `safeOnly` refuses one that isn't. */
+  "doctor.fix": { params: { id: string; safeOnly?: boolean }; result: { ok: boolean; message: string } };
 }
 
 // ---------- config ----------

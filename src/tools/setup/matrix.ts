@@ -84,6 +84,35 @@ export function unshowable(text: string): string | undefined {
   return undefined;
 }
 
+// Names, paths and ids may be in any script (a project called "Εργασία"), but nothing that hides or reorders text.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/** Why a name, path or id can't be shown faithfully in the approval, or undefined. */
+export function unshowableText(text: string): string | undefined {
+  if (HIDDEN.test(text)) return "holds a line break, a control or invisible character";
+  if (text.length > MAX_SHOWN) return `is longer than ${MAX_SHOWN} characters`;
+  return undefined;
+}
+
+const TEXT_FIELDS = [
+  ["project", "The project id"],
+  ["name", "The name"],
+  ["path", "The folder"],
+  ["model", "The model"],
+  ["provider", "The provider"],
+  ["finding", "The finding id"],
+] as const;
+
+/** Why the request's own text can't be shown in the approval (and so is refused), or undefined. */
+export function setupTextProblem(input: Partial<Record<(typeof TEXT_FIELDS)[number][0], string>>): string | undefined {
+  for (const [field, what] of TEXT_FIELDS) {
+    const value = input[field];
+    const why = value === undefined ? undefined : unshowableText(value);
+    if (why) return `${what} ${why}, so I can't show it to you for approval. Make this change in the dashboard instead.`;
+  }
+  return undefined;
+}
+
 type ServerInput = { command?: string; args?: string[]; url?: string; env?: Record<string, string> };
 
 /**

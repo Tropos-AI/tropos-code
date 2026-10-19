@@ -17,6 +17,8 @@ export interface ProviderInfo {
   noKeyNote?: string;
   /** Where to create a key, shown in /providers. */
   keyURL: string | null;
+  /** How the provider's keys begin, so a key pasted into a chat is sealed (src/tools/setup/secrets.ts). */
+  keyPrefixes?: readonly string[];
   capabilities: ChatCapabilities;
   /** Options for api "responses". */
   responses?: ResponsesOptions;
@@ -53,6 +55,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyRequired: false,
     noKeyNote: "ANTHROPIC_API_KEY or `ant auth login`",
     keyURL: "https://platform.claude.com/settings/keys",
+    keyPrefixes: ["sk-ant-"],
     capabilities: { maxTokensParam: null, streamUsage: false },
   },
   {
@@ -64,6 +67,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["OPENAI_API_KEY"],
     keyRequired: true,
     keyURL: "https://platform.openai.com/api-keys",
+    keyPrefixes: ["sk-"],
     capabilities: { maxTokensParam: null, streamUsage: false },
     responses: { summaries: true, encryptedReasoning: true },
   },
@@ -76,6 +80,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["XAI_API_KEY"],
     keyRequired: true,
     keyURL: "https://console.x.ai",
+    keyPrefixes: ["xai-"],
     capabilities: { maxTokensParam: null, streamUsage: false },
     // Summaries and encrypted reasoning are OpenAI options this project hasn't verified on xAI.
     responses: { summaries: false, encryptedReasoning: false, efforts: ["low", "medium", "high", "xhigh"] },
@@ -88,6 +93,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["DEEPSEEK_API_KEY"],
     keyRequired: true,
     keyURL: "https://platform.deepseek.com/api_keys",
+    keyPrefixes: ["sk-"],
     // With tools present, earlier reasoning_content must be sent back or the request fails.
     capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content", effort: reasoningEffort(["low", "high", "max"]) },
   },
@@ -99,6 +105,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["OPENROUTER_API_KEY"],
     keyRequired: true,
     keyURL: "https://openrouter.ai/settings/keys",
+    keyPrefixes: ["sk-or-"],
     capabilities: {
       maxTokensParam: null,
       // Usage, including the USD cost, is always sent; stream_options is a no-op there.
@@ -115,6 +122,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["NVIDIA_API_KEY"],
     keyRequired: true,
     keyURL: "https://build.nvidia.com",
+    keyPrefixes: ["nvapi-"],
     // The catalog's default output limit is small; Kimi there needs its reasoning back during tool use.
     capabilities: { maxTokensParam: "max_tokens", maxTokens: 16_384, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content" },
   },
@@ -126,6 +134,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     keyRequired: true,
     keyURL: "https://aistudio.google.com/apikey",
+    keyPrefixes: ["AIza"],
     capabilities: { maxTokensParam: null, streamUsage: true, effort: reasoningEffort(["low", "medium", "high"]) },
   },
   {
@@ -136,6 +145,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["GROQ_API_KEY"],
     keyRequired: true,
     keyURL: "https://console.groq.com/keys",
+    keyPrefixes: ["gsk_"],
     capabilities: { maxTokensParam: null, streamUsage: true },
   },
   {
@@ -156,6 +166,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["TOGETHER_API_KEY"],
     keyRequired: true,
     keyURL: "https://api.together.ai/settings/api-keys",
+    keyPrefixes: ["tgp_"],
     capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true },
   },
   {
@@ -166,6 +177,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["FIREWORKS_API_KEY"],
     keyRequired: true,
     keyURL: "https://fireworks.ai/account/api-keys",
+    keyPrefixes: ["fw_"],
     capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content" },
   },
   {
@@ -176,6 +188,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["MOONSHOT_API_KEY"],
     keyRequired: true,
     keyURL: "https://platform.kimi.ai/console/api-keys",
+    keyPrefixes: ["sk-"],
     capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content", effort: reasoningEffort(["low", "high", "max"]) },
   },
   {
@@ -203,6 +216,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["DASHSCOPE_API_KEY"],
     keyRequired: true,
     keyURL: "https://modelstudio.console.alibabacloud.com",
+    keyPrefixes: ["sk-"],
     capabilities: { maxTokensParam: null, streamUsage: true },
   },
   {
@@ -213,6 +227,7 @@ export const PROVIDERS: ProviderInfo[] = [
     keyEnv: ["CEREBRAS_API_KEY"],
     keyRequired: true,
     keyURL: "https://cloud.cerebras.ai",
+    keyPrefixes: ["csk-"],
     capabilities: { maxTokensParam: null, streamUsage: true },
   },
   {

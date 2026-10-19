@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gatewayConfigPath } from "../../gateway/config";
 import type { PermissionPreview } from "../types";
-import { allowedEnvEntry, looksSecret, SECRET_REF, unshowable, type SetupInput } from "./matrix";
+import { allowedEnvEntry, looksSecret, SECRET_REF, unshowable, unshowableText, type SetupInput } from "./matrix";
 
 export type SetupState = { settings: Record<string, unknown>; gateway: Record<string, unknown> };
 
@@ -56,6 +56,13 @@ const shown = (text: string, render: (t: string) => string): string => {
   return why ? `(refused: it ${why})` : render(text);
 };
 
+/** A name, path or id (the request's, or one read from the config): as it is, or the reason it is refused. */
+const t = (value: unknown, fallback = "?"): string => {
+  const text = typeof value === "string" && value ? value : fallback;
+  const why = unshowableText(text);
+  return why ? `(refused: it ${why})` : text;
+};
+
 /** One shell word, quoted when it needs to be, so the approval shows the command that will run. */
 const word = (w: string): string => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
 
@@ -78,37 +85,37 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       lines.push(`Telegram: ${connected ? "connected" : "not connected"} → not connected (the bot token is removed)`);
       break;
     case "project.add":
-      lines.push(`projects: add ${input.path ?? "(no folder given)"}${input.name ? ` as "${input.name}"` : ""}`);
+      lines.push(`projects: add ${t(input.path, "(no folder given)")}${input.name ? ` as "${t(input.name)}"` : ""}`);
       break;
     case "project.create":
-      lines.push(`projects: create a folder "${input.name ?? ""}" in ${str(state.gateway.newProjectsDir, "~/Projects")}, run git init and add it as a project`);
+      lines.push(`projects: create a folder "${t(input.name, "")}" in ${t(state.gateway.newProjectsDir, "~/Projects")}, run git init and add it as a project`);
       break;
     case "project.rename": {
       const p = projectsOf(state).find((x) => x.id === input.project);
-      lines.push(arrow(`project ${input.project ?? "?"} name`, p ? str(p.name, "?") : "(unknown project)", input.name ?? "?"));
+      lines.push(arrow(`project ${t(input.project)} name`, p ? t(p.name) : "(unknown project)", t(input.name)));
       break;
     }
     case "project.remove": {
       const p = projectsOf(state).find((x) => x.id === input.project);
-      lines.push(`projects: remove ${input.project ?? "?"}${p ? ` (${str(p.path, "?")})` : ""}; the folder itself stays on disk`);
+      lines.push(`projects: remove ${t(input.project)}${p ? ` (${t(p.path)})` : ""}; the folder itself stays on disk`);
       break;
     }
     case "project.default":
-      lines.push(arrow("default project", str(state.gateway.defaultProject, "default"), input.project ?? "?"));
+      lines.push(arrow("default project", t(state.gateway.defaultProject, "default"), t(input.project)));
       break;
     case "model.set":
-      if (input.model !== undefined) lines.push(arrow("model", str(state.settings.model, "(default)"), input.model));
+      if (input.model !== undefined) lines.push(arrow("model", t(state.settings.model, "(default)"), t(input.model)));
       if (input.effort !== undefined) lines.push(arrow("effort", str(state.settings.effort, "(default)"), input.effort));
       if (!lines.length) lines.push("(nothing to change)");
       lines.push("New sessions use it; open conversations keep their model until /new.");
       break;
     case "provider.connect":
-      lines.push(`provider ${input.provider ?? "?"}: connect with the API key ${keyNote(input.secret)}`);
+      lines.push(`provider ${t(input.provider)}: connect with the API key ${keyNote(input.secret)}`);
       break;
     case "mcp.add": {
       const server = input.server ?? {};
       const exists = isObject(obj(state.settings.mcpServers)[input.name ?? ""]);
-      lines.push(`MCP server ${input.name ?? "?"}: ${exists ? "already exists (it is not replaced)" : "add"}`);
+      lines.push(`MCP server ${t(input.name)}: ${exists ? "already exists (it is not replaced)" : "add"}`);
       lines.push(`type: ${server.type ?? (server.url ? "http" : "stdio")}`);
       if (server.command) lines.push(`command: ${[server.command, ...(server.args ?? [])].map((w) => shown(w, word)).join(" ")}`);
       if (server.url) lines.push(`url: ${shown(server.url, (u) => u)}`);
@@ -120,7 +127,7 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
     case "mcp.enable":
     case "mcp.disable": {
       const current = obj(obj(state.settings.mcpServers)[input.name ?? ""]);
-      lines.push(arrow(`MCP server ${input.name ?? "?"}`, current.disabled === true ? "off" : "on", input.action === "mcp.enable" ? "on" : "off"));
+      lines.push(arrow(`MCP server ${t(input.name)}`, current.disabled === true ? "off" : "on", input.action === "mcp.enable" ? "on" : "off"));
       break;
     }
     case "proactive.set": {
@@ -139,12 +146,12 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       const to = input.level ?? "?";
       if (input.project) {
         const p = projectsOf(state).find((x) => x.id === input.project);
-        lines.push(arrow(`autonomy (${input.project})`, str(p?.autonomy, str(obj(state.gateway.chat).autonomy, "balanced")), to));
+        lines.push(arrow(`autonomy (${t(input.project)})`, str(p?.autonomy, str(obj(state.gateway.chat).autonomy, "balanced")), to));
       } else {
         lines.push(arrow("autonomy", str(obj(state.gateway.chat).autonomy, "balanced"), to));
         for (const p of projectsOf(state)) {
           const own = typeof p.autonomy === "string" ? p.autonomy : undefined;
-          if (own !== undefined && (RANK[own] ?? 0) > (RANK[to] ?? 0)) lines.push(`  ${String(p.id)}: ${own} → ${to}`);
+          if (own !== undefined && (RANK[own] ?? 0) > (RANK[to] ?? 0)) lines.push(`  ${t(p.id)}: ${own} → ${to}`);
         }
       }
       break;
@@ -153,7 +160,7 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       lines.push("Run the doctor's checks. Read-only: nothing is changed.");
       break;
     case "doctor.fix":
-      lines.push(`Apply the doctor's fix for ${input.finding ?? "?"}.`);
+      lines.push(`Apply the doctor's fix for ${t(input.finding)}.`);
       break;
     case "service.restart":
       lines.push("Restart the background service. Open chats pause for a few seconds.");
