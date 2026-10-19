@@ -167,6 +167,28 @@ describe("TelegramAdapter owner claim", () => {
     expect(pairing.challenges).toHaveLength(1);
   });
 
+  test("with no owner set, an already-approved sender who sends the secret is recorded, not handed to a session", async () => {
+    const claim = fakeClaim(true);
+    const { server, sessions } = await setup({ approved: true, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`, { from: { first_name: "Pan" } });
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toBe(CLAIM_REPLY);
+    expect(claim.added.map((c) => c.senderId)).toEqual([String(CHAT)]);
+    expect(sessions.sessions.size).toBe(0);
+  });
+
+  test("an approved sender's ordinary message during the window goes to their session; with an owner set the secret proves nothing", async () => {
+    const claim = fakeClaim(true);
+    const { server, pairing, session } = await setup({ approved: true, ownerClaim: claim });
+    server.pushMessage(CHAT, CHAT, "hello");
+    await server.waitFor(() => session()?.prompts.length === 1);
+    pairing.owners.add("telegram:7");
+    server.pushMessage(CHAT, CHAT, `/start ${NONCE}`);
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent.map((m) => m.text)).not.toContain(CLAIM_REPLY);
+    expect(claim.added).toEqual([]);
+  });
+
   test("with the claim closed, strangers get today's pairing code", async () => {
     const claim = fakeClaim(false);
     const { server, pairing } = await setup({ approved: false, ownerClaim: claim });

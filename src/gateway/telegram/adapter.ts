@@ -305,13 +305,16 @@ export class TelegramAdapter implements ChannelAdapter {
     if (msg.chat.type !== "private" && !this.allowGroups) return;
     if (!msg.from || msg.from.is_bot) return;
     const senderId = String(msg.from.id);
-    if (!(await this.pairing.isApproved(CHANNEL, senderId))) {
+    const approved = await this.pairing.isApproved(CHANNEL, senderId);
+    if (!approved) {
       // A stranger's photo or file is not worth a pairing code.
       if (msg.text === undefined) return;
       if (await this.recordClaim(msg)) return;
       await this.handleStranger(msg.chat.id, senderId);
       return;
     }
+    // Setup listens for the owner and there is none yet: someone approved earlier may be the one opening the link.
+    if (msg.text !== undefined && (await this.recordClaim(msg, async () => (await this.pairing.owner()) === null))) return;
     if (msg.text === undefined) {
       // One reply per chat per 10 s (an album is many messages), and none for a group's service messages.
       const now = Date.now();
@@ -365,8 +368,10 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** True when setup is listening and this private message was recorded as a candidate (and answered once per sender). */
-  private async recordClaim(msg: TgMessage): Promise<boolean> {
+  /** `eligible` is asked only while the window is open (an approved sender counts only while there is no owner). */
+  private async recordClaim(msg: TgMessage, eligible: () => Promise<boolean> = async () => true): Promise<boolean> {
     if (!this.ownerClaim || !(await this.ownerClaim.isOpen().catch(() => false))) return false;
+    if (!(await eligible().catch(() => false))) return false;
     const candidate = candidateFrom(msg, Date.now());
     if (!candidate) return false;
     // The store refuses a message dated before the window began: that sender is just a stranger.
