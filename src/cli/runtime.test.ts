@@ -205,8 +205,8 @@ describe("extensions in the runtime", () => {
     await withExt({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }] }, disabledPlugins: [] });
     const { runtime: rt } = await runtime();
     const skills = await rt.panel("skills");
-    expect(skills.sections[0]).toMatchObject({ title: "Yours (~/.tropos/skills)", items: [{ label: "deploy", hint: "Deploy", aside: "/deploy · you only" }] });
-    expect(skills.sections[1]).toMatchObject({ title: "Learned on its own (~/.tropos/skills-learned)", items: [{ label: "bun-release", hint: "Release a bun CLI" }] });
+    expect(skills.sections[0]).toMatchObject({ title: "Yours (~/.tropos/workspace/skills)", items: [{ label: "deploy", hint: "Deploy", aside: "/deploy · you only" }] });
+    expect(skills.sections[1]).toMatchObject({ title: "Learned on its own (~/.tropos/workspace/skills-learned)", items: [{ label: "bun-release", hint: "Release a bun CLI" }] });
     const agents = await rt.panel("agents");
     expect(agents.sections[0]!.title).toBe("Built-in");
     expect(agents.sections[0]!.items.map((i) => i.label)).toContain("🛠 general-purpose");
