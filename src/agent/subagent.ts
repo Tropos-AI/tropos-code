@@ -200,12 +200,14 @@ export async function runSubagent(
   }
   if (reason === "aborted") return finish({ content: INTERRUPTED, isError: true });
   const last = lastAssistantText(child);
-  const footer = `(${def.name} · ${toolUses} tool ${toolUses === 1 ? "use" : "uses"} · ${turns} ${turns === 1 ? "turn" : "turns"})`;
+  // A run on a model of its own names it, so the chief (and the user) can see which one did the work.
+  const ran = def.model ? ` · ${resolveAgentModel(def.model, deps.config().model)}` : "";
+  const footer = `(${def.name} · ${toolUses} tool ${toolUses === 1 ? "use" : "uses"} · ${turns} ${turns === 1 ? "turn" : "turns"}${ran})`;
   if (reason !== "end_turn" && reason !== "max_tokens") {
     const why = lastError ?? `it stopped early (${reason})`;
     return finish({ content: `The ${def.name} agent did not finish: ${why}${last ? `\n\nLast reply:\n${last}` : ""}\n\n${footer}`, isError: true, summary: `stopped: ${reason}` });
   }
-  return finish({ content: `${last || "(the agent returned no text)"}\n\n${footer}`, summary: `${toolUses} tool ${toolUses === 1 ? "use" : "uses"}` });
+  return finish({ content: `${last || "(the agent returned no text)"}\n\n${footer}`, summary: `${toolUses} tool ${toolUses === 1 ? "use" : "uses"}${ran}` });
 }
 
 function lastAssistantText(agent: Agent): string {

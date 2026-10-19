@@ -7,10 +7,14 @@ const schema = z.object({
   description: z.string().min(1).describe("A short (3-6 word) description of the task."),
   prompt: z.string().min(1).describe("The full task for the agent: what to do, the context it needs, and what to report back."),
   subagent_type: z.string().optional().describe("Which agent to use (default general-purpose)."),
+  model: z
+    .string()
+    .optional()
+    .describe("Optional model for this run: an alias (opus, sonnet, haiku), a full id such as claude-sonnet-5-5, or <provider>/<model>. Omit to use the agent's own model, else yours."),
 });
 
-/** `task` is the Agent call's `description`, for the run log. */
-export type RunSubagent = (def: SubagentDefinition, prompt: string, ctx: ToolContext, task: string) => Promise<ToolOutput>;
+/** `task` is the Agent call's `description`, for the run log; `model` is the call's choice of model, if any. */
+export type RunSubagent = (def: SubagentDefinition, prompt: string, ctx: ToolContext, task: string, model?: string) => Promise<ToolOutput>;
 
 function listing(agents: SubagentDefinition[]): string {
   return agents
@@ -39,13 +43,14 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent, 
       "The agent can't see this conversation: put everything it needs in the prompt, and say what to report back. " +
       "Its tool calls go through the same permission checks as yours. Its final message comes back as the result; relay what matters to the user.\n\n" +
       "When a specialist fits, delegate to it; when none does, do the work yourself. Every handoff states: the objective, the inputs (files, links, facts from this conversation), where results go, how to verify them, and the limits (what not to touch, what needs the user's approval). " +
-      "A report is a claim, not proof: check it against evidence (the diff, test output, the files) before telling the user. If it doesn't hold up, retry once with a clarified task, then tell the user what failed. Up to 4 specialists run at once.\n\n" +
+      "A report is a claim, not proof: check it against evidence (the diff, test output, the files) before telling the user. If it doesn't hold up, retry once with a clarified task, then tell the user what failed. Up to 4 specialists run at once. " +
+      "An agent runs on its own model when it has one, else on yours; pass model to pick a cheaper, faster or stronger one for this task, or the one the user asks for.\n\n" +
       `Available agents:\n${listing(initial)}`,
     schema,
     summarize: (input) => {
       const name = input.subagent_type ?? "general-purpose";
       const emoji = find(name)?.emoji;
-      return `${emoji ? `${emoji} ` : ""}${name}: ${input.description}`;
+      return `${emoji ? `${emoji} ` : ""}${name}: ${input.description}${input.model ? ` (${input.model})` : ""}`;
     },
     subject: (input) => ({ paths: [], target: input.subagent_type ?? "general-purpose" }),
     async run(input, ctx) {
@@ -56,7 +61,7 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent, 
         def = find(name);
       }
       if (!def) return { content: `Unknown agent "${name}". Available: ${agents.map((a) => a.name).join(", ")}.`, isError: true };
-      return run(def, input.prompt, ctx, input.description);
+      return run(def, input.prompt, ctx, input.description, input.model);
     },
   }) as AnyTool;
 }

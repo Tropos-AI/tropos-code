@@ -379,4 +379,44 @@ describe("specialists", () => {
     // The specialist's child never held the hub-only tools.
     expect(JSON.stringify(model.requests[0]!.tools)).not.toContain("AgentManage");
   });
+
+  test("the Agent call's model reaches a specialist and a plain agent; both are checked; AgentManage checks through the same deps", async () => {
+    await putSpecialist("reviewer", "reviews pull requests");
+    await put(join(home, "agents", "plain.md"), "---\nname: plain\ndescription: Plain\n---\nDo plain things.");
+    const ext = await load();
+    const model = new FakeModel([() => reply([textBlock("specialist report")]), () => reply([textBlock("plain report")])]);
+    const holder: { deps?: SpecialistDeps } = {};
+    const tools = sessionTools(createTools({ rgPath: null }), ext, { home, cwd, holder, sessionId: () => "s" });
+    const checked: string[] = [];
+    holder.deps = {
+      model,
+      tools,
+      system: "BASE",
+      config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd, home, allowedDirs: [cwd] }),
+      askPermission: async () => ({ kind: "deny" }),
+      contextText: async () => "<context/>",
+      home,
+      role: "owner",
+      ledger: ext.ledger,
+      skills: [],
+      specialistContext: async (extras) => extras.join("\n"),
+      learn: false,
+      notice: () => {},
+      background: () => {},
+      checkModel: async (id) => (checked.push(id), id.startsWith("openai/") ? "OpenAI isn't connected (no API key)." : null),
+    };
+    const agent = tools.find((t) => t.name === "Agent")!;
+    const ctx = makeToolContext({ root: cwd });
+    expect((await agent.run({ description: "check pr", prompt: "go", subagent_type: "reviewer", model: "haiku" }, ctx)).content).toContain("specialist report");
+    expect((await agent.run({ description: "plain job", prompt: "go", subagent_type: "plain", model: "sonnet" }, ctx)).content).toContain("plain report");
+    expect(model.requests.map((r) => r.model)).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5"]);
+    expect((await readRuns(home)).map((r) => [r.agent, r.model])).toEqual([["plain", "claude-sonnet-5-5"], ["reviewer", "claude-haiku-5-5"]]);
+    const refused = await agent.run({ description: "plain job", prompt: "go", subagent_type: "plain", model: "openai/gpt-5.5" }, ctx);
+    expect(refused).toMatchObject({ isError: true, content: expect.stringContaining("OpenAI isn't connected") });
+    expect(model.requests).toHaveLength(2);
+    const manage = tools.find((t) => t.name === "AgentManage")!;
+    expect(await manage.run({ action: "update", name: "reviewer", model: "openai/gpt-5.5" }, ctx)).toMatchObject({ isError: true });
+    expect(checked).toEqual(["claude-haiku-5-5", "claude-sonnet-5-5", "openai/gpt-5.5", "openai/gpt-5.5"]);
+  });
 });

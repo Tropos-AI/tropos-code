@@ -120,6 +120,7 @@ describe("extensions through the compiled binary", () => {
     expect(child.system).toContain("# Agent: scout");
     const agentResult = r.requests[3]!.body.messages.at(-1).content[0];
     expect(agentResult.content).toContain("Notes say friday.");
-    expect(agentResult.content).toContain("(scout · 1 tool use · 2 turns)");
+    // The footer names the model the subagent ran on.
+    expect(agentResult.content).toContain("(scout · 1 tool use · 2 turns · claude-opus-5-5)");
   });
 });

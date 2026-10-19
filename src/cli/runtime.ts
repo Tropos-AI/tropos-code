@@ -1,5 +1,6 @@
 import { mentionCall } from "../agents/mention";
 import { isSpecialist } from "../agents/specialists";
+import { modelProblem } from "../providers/model-check";
 import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -302,6 +303,8 @@ export function makeAgent(
       const p = work.catch(() => {}).finally(() => set.delete(p));
       set.add(p);
     },
+    // A model picked for a helper must name a provider the router knows and has a key for.
+    checkModel: async (model) => modelProblem(model, await ctx.providers.status()),
   };
   const storeInputs = new Map<string, unknown>();
 

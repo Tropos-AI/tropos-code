@@ -81,6 +81,14 @@ test("bad input is an AdminError", async () => {
   await expect(h()["agents.setPaused"]!({ id: "nobody", paused: true })).rejects.toBeInstanceOf(AdminError);
 });
 
+test("a model typed on the page is checked against the providers before it is saved", async () => {
+  await make();
+  await expect(h()["agents.update"]!({ id: "reviewer", revision: 1, changes: { model: "deepseek/deepseek-chat" } })).rejects.toThrow("DeepSeek isn't connected");
+  await expect(h()["agents.update"]!({ id: "reviewer", revision: 1, changes: { model: "nope/x" } })).rejects.toBeInstanceOf(AdminError);
+  expect((await h()["agents.update"]!({ id: "reviewer", revision: 1, changes: { model: "sonnet" } })).specialists[0]).toMatchObject({ revision: 2, model: "sonnet" });
+  expect((await h()["agents.update"]!({ id: "reviewer", revision: 2, changes: { model: null } })).specialists[0]!.model).toBeUndefined();
+});
+
 test("the dispatcher exposes all six", () => {
   expect(createAdmin(kit.ctx).methods().filter((m) => m.startsWith("agents."))).toHaveLength(6);
 });

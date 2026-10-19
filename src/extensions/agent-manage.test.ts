@@ -153,3 +153,28 @@ test("the permission preview shows the whole new file, every tool when none are 
   expect(agentPreview({ action: "archive", name: "ana" }, "/p/ana/AGENT.md")).toEqual({ header: "/p/ana/AGENT.md", text: "Archive specialist ana. It can be restored from the Agents page." });
   expect(agentPreview({ action: "delete", name: "ana" }, "/p/ana.md")).toEqual({ header: "/p/ana.md", text: "Delete agent ana." });
 });
+
+test("a model asked for by name is checked before it is saved; inherit clears it", async () => {
+  const checked: string[] = [];
+  const checkModel = async (id: string) => (checked.push(id), id.startsWith("openai/") ? "OpenAI isn't connected (no API key)." : null);
+  const tool = createAgentManageTool({ home, checkModel });
+  await tool.run(GEORGE, ctx());
+  // Aliases are checked as the model they stand for, and saved as written.
+  expect(checked).toEqual(["claude-sonnet-5-5"]);
+  const refused = await tool.run({ action: "update", name: "george", model: "openai/gpt-5.5" }, ctx());
+  expect(refused).toEqual({ content: "Not saved: openai/gpt-5.5 can't be used: OpenAI isn't connected (no API key).", isError: true });
+  expect((await loadSpecialists(home))[0]).toMatchObject({ revision: 1, model: "sonnet" });
+  expect((await tool.run({ action: "update", name: "george", model: "deepseek/deepseek-chat" }, ctx())).isError).toBeUndefined();
+  expect((await loadSpecialists(home))[0]).toMatchObject({ revision: 2, model: "deepseek/deepseek-chat" });
+  // "inherit" goes back to the session's model.
+  expect((await tool.run({ action: "update", name: "george", model: "inherit" }, ctx())).isError).toBeUndefined();
+  expect((await loadSpecialists(home))[0]!.model).toBeUndefined();
+  expect(checked).not.toContain("inherit");
+  // A plain single-file agent is checked too.
+  await writeFile(join(home, "agents", "plain.md"), renderAgentFile("plain", { description: "d", prompt: "p" }));
+  expect(await tool.run({ action: "update", name: "plain", model: "openai/gpt-5.5" }, ctx())).toMatchObject({ isError: true });
+  expect(await readFile(join(home, "agents", "plain.md"), "utf8")).not.toContain("gpt-5.5");
+  // A new specialist with an unusable model is never created.
+  expect(await tool.run({ ...GEORGE, name: "ada", model: "openai/gpt-5.5" }, ctx())).toMatchObject({ isError: true });
+  expect(existsSync(join(home, "agents", "ada"))).toBe(false);
+});
