@@ -11,6 +11,7 @@ import { devicesHandlers } from "./devices";
 import { doctorHandlers } from "./doctor";
 import { extensionsHandlers } from "./extensions";
 import { logsHandlers } from "./logs";
+import { memoryHandlers } from "./memory";
 import { onboardHandlers } from "./onboard";
 import { pairingHandlers } from "./pairing";
 import { proactiveHandlers } from "./proactive";
@@ -50,6 +51,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...remoteHandlers(ctx),
     ...agentsHandlers(ctx),
     ...proactiveHandlers(ctx),
+    ...memoryHandlers(ctx),
     ...extra,
   };
   return {

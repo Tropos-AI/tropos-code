@@ -28,6 +28,8 @@ export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 
 /** Entries are kept apart by a lone "§" line so a file stays readable and hand-editable. */
 export const ENTRY_SEPARATOR = "\n§\n";
 
+export const STALE_NOTE = "This note changed since the page loaded. Reload and try again.";
+
 const FILES = { memory: "MEMORY.md", user: "USER.md" } as const;
 
 const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile", lessons: "lessons", heartbeat: "heartbeat checks" };
@@ -152,6 +154,23 @@ export class NotesStore {
     return this.change(target, "remove", `remove: ${clip(oldText)}`, actor, (entries) =>
       applyOp(entries, { action: "remove", old_text: oldText }, target),
     );
+  }
+
+  /**
+   * The dashboard's edit: the entry at `index` becomes `content`, or goes away when `content` is null. `expected` is the
+   * text the page showed; a note that changed since is refused, so a stale page never overwrites a newer note.
+   */
+  editAt(target: NotesTarget, index: number, expected: string, content: string | null, actor: Actor): Promise<NotesResult> {
+    const summary = content === null ? `remove: ${clip(expected)}` : `replace: ${clip(content)}`;
+    return this.change(target, content === null ? "remove" : "replace", summary, actor, (entries) => {
+      if (entries[index] !== expected) return STALE_NOTE;
+      if (content === null) return entries.filter((_, i) => i !== index);
+      const entry = content.trim();
+      const invalid = checkEntry(entry);
+      if (invalid) return invalid;
+      if (entries.some((e, i) => i !== index && e === entry)) return `That exact entry is already in the ${LABELS[target]}.`;
+      return entries.map((e, i) => (i === index ? entry : e));
+    });
   }
 
   /**

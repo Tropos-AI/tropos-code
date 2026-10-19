@@ -286,3 +286,23 @@ test("a heartbeat change is a memory entry in the ledger and undoes", async () =
   await ledger.undo(entry!.id);
   expect(await withLedger.entries("heartbeat")).toEqual([]);
 });
+
+test("editAt changes one entry, refuses a stale one, and null deletes", async () => {
+  const ledger = new Ledger(home);
+  const s = new NotesStore(home, { ledger });
+  await s.add("memory", "Use bun");
+  await s.add("memory", "Use bun test");
+  expect((await s.editAt("memory", 0, "Use bun", "Use bun, never npm", "user")) as { entries: string[] }).toMatchObject({ ok: true, entries: ["Use bun, never npm", "Use bun test"] });
+  expect(await s.editAt("memory", 0, "Use bun", "x", "user")).toMatchObject({ ok: false, error: "This note changed since the page loaded. Reload and try again." });
+  expect(await s.editAt("memory", 9, "Use bun", "x", "user")).toMatchObject({ ok: false, error: "This note changed since the page loaded. Reload and try again." });
+  expect(await s.editAt("memory", 0, "Use bun, never npm", "Use bun test", "user")).toMatchObject({ ok: false });
+  expect(await s.editAt("memory", 0, "Use bun, never npm", "  ", "user")).toMatchObject({ ok: false });
+  expect((await s.editAt("memory", 1, "Use bun test", null, "user")).entries).toEqual(["Use bun, never npm"]);
+  expect((await ledger.list(1))[0]).toMatchObject({ actor: "user", kind: "memory" });
+});
+
+test("editAt works on the AGENTS.md sections too", async () => {
+  await store.add("heartbeat", "Watch the deploy");
+  expect((await store.editAt("heartbeat", 0, "Watch the deploy", "Watch the nightly deploy", "user")).entries).toEqual(["Watch the nightly deploy"]);
+  expect(await store.entries("heartbeat")).toEqual(["Watch the nightly deploy"]);
+});

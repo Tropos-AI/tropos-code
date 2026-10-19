@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { PanelData } from "@core/ui/runtime";
 
 import { mountPage, stubMatchMedia } from "@/components/pages/page-test-kit";
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { screen, cleanup, fireEvent, within, act } = await import("@testing-library/react");
+const { screen, cleanup, fireEvent, waitFor, within, act } = await import("@testing-library/react");
 const { MemoryPage, parseUsage } = await import("@/app/pages/MemoryPage");
 
 const MEMORY: PanelData = {
@@ -126,5 +127,39 @@ describe("MemoryPage", () => {
     expect(within(card).getByText("skill: SkillManage patch bun-testing")).toBeTruthy();
     expect((button as HTMLButtonElement).disabled).toBe(false);
     expect(store.getState().toasts.find((t) => t.title === "Could not undo")?.description).toContain("changed since");
+  });
+
+  test("edit a note, then delete one after confirming", async () => {
+    const { socket } = await mountAdminPage(MemoryPage, { "memory.edit": () => ({ ok: true }), "memory.delete": () => ({ ok: true }) }, { panel: panels(MEMORY) });
+    fireEvent.click((await screen.findAllByRole("button", { name: "Edit note" }))[0]!);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Use bun, always" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(socket.adminCalls).toContainEqual({ method: "memory.edit", params: { target: "memory", index: 0, expected: "Use bun, never npm.", content: "Use bun, always" } }));
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete note" })[1]!);
+    expect(await screen.findByText("Delete this note?")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "memory.delete", params: { target: "memory", index: 1, expected: "Release checklist:\n1. typecheck\n2. tag and push" } }));
+    // Both cards reload afterwards.
+    await waitFor(() => expect(socket.callsOf("panel").filter((c) => c.params === "learned").length).toBeGreaterThan(1));
+  });
+
+  test("a refused edit keeps the editor open and shows why; Cancel closes it", async () => {
+    await mountAdminPage(
+      MemoryPage,
+      {
+        "memory.edit": () => {
+          throw new Error("This note changed since the page loaded. Reload and try again.");
+        },
+      },
+      { panel: panels(MEMORY) },
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: "Edit note" }))[0]!);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Use pnpm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("changed since the page loaded");
+    expect(screen.getByRole("textbox")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import { useId, useState } from "react";
 import { AnimatePresence, m } from "motion/react";
 
 import type { PanelData, PanelItem, PanelSection } from "@core/ui/runtime";
+import type { MemoryTarget } from "@core/web/admin/api";
 
 import { PageFrame } from "@/app/layout/PageFrame";
 import { CopyIconButton } from "@/components/pages/copy-chip";
@@ -13,13 +14,14 @@ import { PanelEmpty } from "@/components/pages/panel-empty";
 import { SectionCard } from "@/components/pages/panel-parts";
 import { ResourceView } from "@/components/pages/resource-view";
 import { useExpanded } from "@/components/pages/use-expanded";
-import { usePanel } from "@/components/pages/use-rpc-resource";
+import { usePanel, type Resource } from "@/components/pages/use-rpc-resource";
+import { ConfirmDialog, Notice, TextArea, useAction } from "@/components/setup/admin-ui";
 import { ProgressBar, type ProgressTone } from "@/components/interior/progress-bar";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/components/ui/button";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { CELL, CROSSFADE, INSTANT } from "@/lib/springs";
-import { errorMessage, useAppStore } from "@/lib/store";
+import { errorMessage, useAdmin, useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export interface NotesUsage {
@@ -42,6 +44,8 @@ export function parseUsage(title: string | undefined): NotesUsage | { name: stri
 const STORES: Record<string, { title: string; icon: IconName; about: string }> = {
   "agent notes": { title: "Agent notes", icon: "brain", about: "What the agent has learned about your work: conventions, decisions, gotchas." },
   "user profile": { title: "User profile", icon: "user", about: "What it knows about you: preferences and habits." },
+  lessons: { title: "Lessons", icon: "book-open", about: "What the agent was taught the hard way, so it does not repeat it." },
+  "heartbeat checks": { title: "Heartbeat checks", icon: "activity", about: "What the agent looks over in the background and tells you about when it matters." },
 };
 
 function storeInfo(name: string): { title: string; icon: IconName; about?: string } {
@@ -54,7 +58,12 @@ function meterTone(ratio: number): ProgressTone {
   return ratio >= 0.95 ? "error" : ratio >= 0.8 ? "warn" : "accent";
 }
 
-function NoteRow({ item, open, onToggle }: { item: PanelItem; open: boolean; onToggle: () => void }) {
+interface NoteActions {
+  onEdit: () => void;
+  onDelete: () => void;
+}
+
+function NoteRow({ item, open, onToggle, actions }: { item: PanelItem; open: boolean; onToggle: () => void; actions?: NoteActions }) {
   const reduced = usePrefersReducedMotion();
   const restId = useId();
   const lines = item.detail && item.detail.length > 0 ? item.detail : [item.label];
@@ -101,13 +110,73 @@ function NoteRow({ item, open, onToggle }: { item: PanelItem; open: boolean; onT
             </button>
           ) : null}
         </div>
+        {actions ? (
+          <div className="-mr-1 flex shrink-0 items-start gap-0.5">
+            <IconButton icon="pencil" label="Edit note" onClick={actions.onEdit} />
+            <IconButton icon="trash-2" label="Delete note" onClick={actions.onDelete} className="hover:text-error" />
+          </div>
+        ) : null}
       </figure>
     </m.li>
   );
 }
 
-function NotesCard({ section, index }: { section: PanelSection; index: number }) {
+/** The note's text in a box, with Save and Cancel; a refusal (the note changed meanwhile) stays visible. */
+function NoteEditor({ item, onDone, onSave }: { item: PanelItem; onDone: () => void; onSave: (text: string) => Promise<boolean> }) {
+  const [text, setText] = useState(noteText(item));
+  const action = useAction();
+  const save = async () => {
+    const ok = await action.run(() => onSave(text));
+    if (ok) onDone();
+  };
+  return (
+    <li className="flex flex-col gap-3 bg-paper-2/50 px-4 py-3 sm:px-5">
+      <TextArea label="Note text" value={text} onChange={setText} rows={Math.min(10, Math.max(3, text.split("\n").length + 1))} />
+      {action.error ? <Notice tone="error">{action.error}</Notice> : null}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="sm" onClick={onDone} disabled={action.pending}>
+          Cancel
+        </Button>
+        <Button size="sm" icon="check" onClick={() => void save()} disabled={action.pending || text.trim() === "" || text === noteText(item)}>
+          Save
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/** What the page showed for a note, which is what the server compares against. */
+const noteText = (item: PanelItem): string => (item.detail && item.detail.length > 0 ? item.detail.join("\n") : item.label);
+
+function targetAndIndex(key: string): { target: MemoryTarget; index: number } | null {
+  const [target, index] = key.split(":");
+  if (target !== "memory" && target !== "user" && target !== "lessons" && target !== "heartbeat") return null;
+  const n = Number(index);
+  return Number.isInteger(n) ? { target, index: n } : null;
+}
+
+function NotesCard({ section, index, onChanged }: { section: PanelSection; index: number; onChanged: () => void }) {
   const expanded = useExpanded();
+  const admin = useAdmin();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<PanelItem | null>(null);
+  const remove = useAction();
+  const edit = async (item: PanelItem, content: string): Promise<boolean> => {
+    const at = targetAndIndex(item.key);
+    if (!at) throw new Error("That note can't be edited here.");
+    await admin("memory.edit", { ...at, expected: noteText(item), content });
+    onChanged();
+    return true;
+  };
+  const confirmDelete = async () => {
+    const at = deleting && targetAndIndex(deleting.key);
+    if (!deleting || !at) return;
+    const done = await remove.run(() => admin("memory.delete", { ...at, expected: noteText(deleting) }));
+    if (done) {
+      setDeleting(null);
+      onChanged();
+    }
+  };
   const usage = parseUsage(section.title);
   const info = storeInfo(usage.name);
   const metered = "limit" in usage;
@@ -135,14 +204,34 @@ function NotesCard({ section, index }: { section: PanelSection; index: number })
       ) : (
         section.items.map((item) => {
           const key = `${index}:${item.key}`;
-          return <NoteRow key={key} item={item} open={expanded.isOpen(key)} onToggle={() => expanded.toggle(key)} />;
+          if (editing === item.key) return <NoteEditor key={key} item={item} onDone={() => setEditing(null)} onSave={(text) => edit(item, text)} />;
+          const actions = targetAndIndex(item.key)
+            ? {
+                onEdit: () => setEditing(item.key),
+                onDelete: () => {
+                  remove.clear();
+                  setDeleting(item);
+                },
+              }
+            : undefined;
+          return <NoteRow key={key} item={item} open={expanded.isOpen(key)} onToggle={() => expanded.toggle(key)} actions={actions} />;
         })
       )}
+      <ConfirmDialog
+        open={deleting !== null}
+        title="Delete this note?"
+        description={deleting ? <q className="break-words">{deleting.label}</q> : null}
+        confirmLabel="Delete"
+        pending={remove.pending}
+        error={remove.error}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </SectionCard>
   );
 }
 
-function MemoryList({ data }: { data: PanelData }) {
+function MemoryList({ data, onChanged }: { data: PanelData; onChanged: () => void }) {
   if (data.sections.length === 0) return <PanelEmpty icon="brain" text={data.empty ?? "No notes yet."} />;
   return (
     <>
@@ -156,7 +245,7 @@ function MemoryList({ data }: { data: PanelData }) {
       ) : null}
       <div className="grid gap-6">
         {data.sections.map((section, index) => (
-          <NotesCard key={`${index}:${section.title ?? ""}`} section={section} index={index} />
+          <NotesCard key={`${index}:${section.title ?? ""}`} section={section} index={index} onChanged={onChanged} />
         ))}
       </div>
     </>
@@ -203,9 +292,8 @@ function LearnedRow({ item, busy, onUndo }: { item: PanelItem; busy: boolean; on
 }
 
 /** The learning ledger (rpc("panel", "learned")): what the agent and its background review changed, with undo. */
-function LearnedCard({ onChanged }: { onChanged: () => void }) {
+function LearnedCard({ resource, onChanged }: { resource: Resource<PanelData>; onChanged: () => void }) {
   const store = useAppStore();
-  const resource = usePanel("learned");
   const [busy, setBusy] = useState(false);
   const items = resource.data?.sections.flatMap((s) => s.items) ?? [];
   const undo = async (item: PanelItem) => {
@@ -243,6 +331,7 @@ function LearnedCard({ onChanged }: { onChanged: () => void }) {
 
 export function MemoryPage() {
   const resource = usePanel("memory");
+  const learned = usePanel("learned");
   const notes = resource.data?.sections.reduce((n, s) => n + s.items.length, 0);
   return (
     <PageFrame
@@ -252,9 +341,17 @@ export function MemoryPage() {
       actions={<PageActions resource={resource} summary={notes ? `${notes} ${notes === 1 ? "note" : "notes"}` : undefined} noun="memory" />}
     >
       <ResourceView resource={resource} noun="memory">
-        {(data) => <MemoryList data={data} />}
+        {(data) => (
+          <MemoryList
+            data={data}
+            onChanged={() => {
+              resource.refresh();
+              learned.refresh();
+            }}
+          />
+        )}
       </ResourceView>
-      <LearnedCard onChanged={resource.refresh} />
+      <LearnedCard resource={learned} onChanged={resource.refresh} />
     </PageFrame>
   );
 }

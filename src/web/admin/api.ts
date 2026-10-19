@@ -177,6 +177,16 @@ export type ProactivePatch = {
   newProjectsDir?: string | null;
 };
 
+// ---------- memory notes ----------
+
+export type MemoryTarget = "memory" | "user" | "lessons" | "heartbeat";
+
+export interface MemoryAdmin {
+  /** `expected` is the text the page showed; a note that changed since is refused. */
+  "memory.edit": { params: { target: MemoryTarget; index: number; expected: string; content: string }; result: { ok: true } };
+  "memory.delete": { params: { target: MemoryTarget; index: number; expected: string }; result: { ok: true } };
+}
+
 export interface ProactiveAdmin {
   "proactive.get": { params: undefined; result: ProactiveView };
   "proactive.set": { params: ProactivePatch; result: ProactiveView };
@@ -566,7 +576,8 @@ export type AdminMap = StatusAdmin &
   DevicesAdmin &
   RemoteAdmin &
   AgentsAdmin &
-  ProactiveAdmin;
+  ProactiveAdmin &
+  MemoryAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -629,6 +640,8 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "mcp.setEnabled",
   "proactive.get",
   "proactive.set",
+  "memory.edit",
+  "memory.delete",
   "mcp.test",
   "plugins.setEnabled",
   "onboard.state",
