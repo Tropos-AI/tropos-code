@@ -24,9 +24,11 @@ export const suggestionTool = (home: string): AnyTool => createSuggestionTool(ne
  */
 export function withSuggestions(ctx: AppContext, o: { userHome: string; projectId: string; testCommands: string[] }): AppContext {
   const own = suggestionContext({ home: ctx.home, env: ctx.env, serviceInstalled: probeFor(o.userHome) });
+  // Read now: a caller that assigns the result back onto ctx would otherwise make contextBlocks call itself forever.
+  const earlier = ctx.contextBlocks;
   return {
     ...ctx,
-    contextBlocks: async () => [...(await own()), ...((await ctx.contextBlocks?.()) ?? [])],
+    contextBlocks: async () => [...(await own()), ...((await earlier?.()) ?? [])],
     testWatch: createTestWatcher(new SuggestionStore(ctx.home), o.projectId, o.testCommands),
   };
 }
