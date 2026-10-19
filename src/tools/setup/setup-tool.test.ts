@@ -179,32 +179,48 @@ test("an unknown or expired ref in an MCP env asks for the key again and writes 
   expect(calls).toEqual([]);
 });
 
-test("mcp.add refuses loader and interpreter variables and points to Settings → Extensions", async () => {
-  const names = ["NODE_OPTIONS", "NODE_PATH", "npm_config_userconfig", "NPM_CONFIG_PREFIX", "BUN_INSTALL", "DENO_DIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-    "PATH", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "BASH_ENV", "ENV", "ZDOTDIR", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL"];
+test("mcp.add refuses loader and interpreter variables (and every other non-key entry) and points to Settings → Extensions", async () => {
+  const names = ["NODE_OPTIONS", "NODE_PATH", "npm_config_userconfig", "BUN_INSTALL", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "PATH", "PYTHONPATH", "PERL5OPT", "RUBYOPT",
+    "JAVA_TOOL_OPTIONS", "BASH_ENV", "ENV", "ZDOTDIR", "GIT_SSH_COMMAND", "LOG_LEVEL", "SSL_CERT_FILE", "HOME"];
   for (const name of names) {
     const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { [name]: "--require=/tmp/x.js" } } }, makeToolContext());
     expect(out.isError).toBe(true);
     expect(text(out)).toContain(name);
-    expect(text(out)).toContain("Settings → Extensions");
+    expect(text(out)).toContain("Add servers that need other environment settings from Settings → Extensions.");
   }
+  // A loader variable is refused even when its value is a vault ref.
+  const ref = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { NODE_OPTIONS: "secret:1" } } }, makeToolContext());
+  expect(text(ref)).toContain("Add servers that need other environment settings from Settings → Extensions.");
   expect(calls).toEqual([]);
   expect(vault.peek("secret:1")).toBeDefined();
 });
 
-test("mcp.add refuses what the approval couldn't show whole: long or multi-line values, commands and args, and bad names", async () => {
+test("mcp.add refuses a raw key in the env: keys come as secret:<n> refs", async () => {
+  for (const env of [{ API_KEY: KEY }, { GITHUB_TOKEN: "plain-value-123" }, { API: KEY }]) {
+    const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env } }, makeToolContext());
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain("secret:<n>");
+    expect(JSON.stringify(out)).not.toContain(KEY);
+  }
+  expect(calls).toEqual([]);
+});
+
+test("mcp.add refuses what the approval couldn't show whole: long, multi-line, invisible or non-ASCII commands, args and URLs, and env entries that aren't vault keys", async () => {
   const long = "x".repeat(201);
   const cases = [
-    { server: { command: "node", env: { BLOB: long } }, says: "longer than 200 characters" },
-    { server: { command: "node", env: { NOTE: "ok\nNODE_OPTIONS=--require=/tmp/x.js" } }, says: "control character" },
-    { server: { command: "node", env: { NOTE: "a\u202eb" } }, says: "control character" },
-    { server: { command: `node\rcurl evil`, env: {} }, says: "The command" },
+    { server: { command: `node\rcurl evil` }, says: "The command" },
+    { server: { command: "nоde" }, says: "The command" }, // a Cyrillic o
     { server: { command: "node", args: ["ok", long] }, says: "Argument 2" },
     { server: { command: "node", args: ["a\nb"] }, says: "Argument 1" },
+    { server: { command: "node", args: ["a\u200bb"] }, says: "Argument 1" },
+    { server: { command: "node", args: ["a\u2028b"] }, says: "Argument 1" },
+    { server: { command: "node", args: ["a\u202eb"] }, says: "Argument 1" },
     { server: { type: "http" as const, url: `https://x/${long}` }, says: "The URL" },
-    { server: { command: "node", env: { "BAD NAME": "1" } }, says: "valid environment variable name" },
-    { server: { command: "node", env: { "1X": "1" } }, says: "valid environment variable name" },
-    { server: { command: "node", env: { "A\nB": "1" } }, says: "valid environment variable name" },
+    { server: { command: "node", env: { BLOB_TOKEN: long } }, says: "other environment settings" },
+    { server: { command: "node", env: { NOTE_TOKEN: "secret:1\nNODE_OPTIONS=x" } }, says: "other environment settings" },
+    { server: { command: "node", env: { "BAD NAME_TOKEN": "secret:1" } }, says: "other environment settings" },
+    { server: { command: "node", env: { "1X_TOKEN": "secret:1" } }, says: "other environment settings" },
+    { server: { command: "node", env: { github_token: "secret:1" } }, says: "other environment settings" },
   ];
   for (const c of cases) {
     const out = await tool.run({ action: "mcp.add", name: "x", server: c.server }, makeToolContext());
@@ -214,19 +230,9 @@ test("mcp.add refuses what the approval couldn't show whole: long or multi-line 
   expect(calls).toEqual([]);
 });
 
-test("mcp.add refuses a raw key in the env: keys come as secret:<n> refs", async () => {
-  for (const env of [{ API: KEY }, { GITHUB_TOKEN: "plain-value-123" }]) {
-    const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env } }, makeToolContext());
-    expect(out.isError).toBe(true);
-    expect(text(out)).toContain("secret:<n>");
-    expect(JSON.stringify(out)).not.toContain(KEY);
-  }
-  expect(calls).toEqual([]);
-});
-
-test("mcp.add writes an ordinary env value as given", async () => {
-  await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { LOG_LEVEL: "debug" } } }, makeToolContext());
-  expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).mcpServers.x.env).toEqual({ LOG_LEVEL: "debug" });
+test("mcp.add writes an allowed key from the vault and no other env", async () => {
+  await tool.run({ action: "mcp.add", name: "x", server: { command: "node", args: ["server.js"], env: { SERVICE_API_KEY: "secret:1" } } }, makeToolContext());
+  expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).mcpServers.x).toEqual({ type: "stdio", command: "node", args: ["server.js"], env: { SERVICE_API_KEY: KEY } });
 });
 
 test("mcp.disable and proactive.set go through the admin and are recorded", async () => {

@@ -49,8 +49,8 @@ test("readSetupState reads both files and treats an unreadable one as empty", as
 test("every env value that is not a key is shown in full and JSON-quoted, so a loader variable can't hide in the approval", () => {
   const s = { settings: {}, gateway: {} };
   const text = describeSetupChange({ action: "mcp.add", name: "x", server: { command: "node", env: { NODE_OPTIONS: "--require=/tmp/x.js", LOG_LEVEL: "debug" } } }, s).text;
-  expect(text).toContain('"NODE_OPTIONS"="--require=/tmp/x.js"');
-  expect(text).toContain('"LOG_LEVEL"="debug"');
+  expect(text).toContain('"NODE_OPTIONS"="--require=/tmp/x.js" (refused: set it in Settings → Extensions)');
+  expect(text).toContain('"LOG_LEVEL"="debug" (refused');
   expect(text).not.toContain("(hidden)");
 });
 
@@ -63,5 +63,11 @@ test("nothing is ever cut: a value too long or with a line break is shown as ref
   expect(text).not.toContain("rm -rf");
   expect(text).not.toContain("PATH=/tmp");
   expect(text.match(/\(refused: it is longer than 200 characters\)/g)).toHaveLength(2);
-  expect(text.match(/\(refused: it holds a line break or another control character\)/g)).toHaveLength(2);
+  expect(text.match(/\(refused: it holds a line break, a control or invisible character, or a non-ASCII character\)/g)).toHaveLength(2);
+});
+
+test("env names are quoted with anything invisible escaped", () => {
+  const text = describeSetupChange({ action: "mcp.add", name: "x", server: { command: "node", env: { "A\u202eB": "secret:1" } } }, { settings: {}, gateway: {} }).text;
+  expect(text).toContain('"A\\u202eB"=');
+  expect(text).not.toContain("\u202e");
 });
