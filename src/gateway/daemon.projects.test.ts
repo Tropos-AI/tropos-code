@@ -319,7 +319,7 @@ describe("chat roles reach the session", () => {
 
   test("the reaper closes a revoked owner's chat without the final review", async () => {
     const answer = (t: string): Step => () => reply([textBlock(t)]);
-    const gw = startGateway([answer("a"), answer("b"), answer("NOTHING")]);
+    const gw = startGateway([answer("a"), answer("b"), answer("NOTHING")], [], { seams: { reapEveryMs: 100 } });
     await server.waitFor(() => server.commands.length > 0);
     await pairChat();
     server.pushMessage(CHAT, CHAT, "one");
@@ -328,12 +328,12 @@ describe("chat roles reach the session", () => {
     await server.waitFor(() => server.textsTo(CHAT).includes("b"));
     // Two turns: a final review would be due if the session closed normally.
     expect(await main(["pairing", "revoke", "telegram", String(CHAT)], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
-    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"), 8_000);
+    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"));
     // The close awaited the session's shutdown, where a final review would have run.
     expect(gw.model.requests).toHaveLength(2);
     gw.stop();
     expect(await gw.done).toBe(0);
-  }, 15_000);
+  });
 });
 
 describe("scheduling from chats", () => {
@@ -741,10 +741,10 @@ describe("reload", () => {
 });
 
 describe("revocation", () => {
-  test("a message queued when its sender is revoked never runs", async () => {
+  test("a message queued when its sender is revoked never runs, even once they are approved again before it would have", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const gw = startGateway([async () => (await gate, reply([textBlock("first answer")])), () => reply([textBlock("welcome back")])]);
+    const gw = startGateway([async () => (await gate, reply([textBlock("first answer")])), () => reply([textBlock("welcome back")])], [], { seams: { reapEveryMs: 100 } });
     await server.waitFor(() => server.commands.length > 0);
     await pairChat(); // update 100
     server.pushMessage(CHAT, CHAT, "first question"); // update 101
@@ -753,28 +753,27 @@ describe("revocation", () => {
     await server.waitFor(() => Math.max(...server.getUpdatesOffsets) >= 103);
 
     expect(await main(["pairing", "revoke", "telegram", String(CHAT)], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
-    // The reaper (every 5 s) closes the running session.
-    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"), 8_000);
+    await server.waitFor(() => gw.err.join("").includes("revoked sender: closed 1 session(s)"));
     const sent = server.sent.length;
-    release();
-    // Approved again, the chat's next message is the sentinel: one chat's turns run in order, so a queued text that
-    // survived the revocation would take the model's next turn before it.
+    // Approved again while the revoked turn still runs, so the queued text would run next if it had been kept.
     server.pushMessage(CHAT, CHAT, "may I come back?");
     const challenge = await server.waitFor(() => server.sent.slice(sent).find((m) => m.chatId === CHAT && m.text.includes("approve telegram")));
     const code = /approve telegram ([A-Z0-9]{8})/.exec(challenge.text)![1]!;
     expect(await main(["pairing", "approve", "telegram", code], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
+    release();
     server.pushMessage(CHAT, CHAT, "back again");
     await server.waitFor(() => gw.model.requests.length === 2);
     const second = JSON.stringify(gw.model.requests[1]!.messages);
     expect(second).toContain("back again");
     expect(second).not.toContain("queued question");
+    await server.waitFor(() => server.textsTo(CHAT).includes("welcome back"));
     // The revoked chat wasn't answered in between, and nothing went wrong.
     expect(server.textsTo(CHAT).join("\n")).not.toContain("first answer");
-    expect(server.sent.slice(sent).map((m) => m.text).join("\n")).not.toContain("went wrong");
+    expect(server.sent.slice(sent).map((m) => m.text).join("\n")).not.toMatch(/went wrong|doesn't exist/);
 
     gw.stop();
     expect(await gw.done).toBe(0);
-  }, 15_000);
+  });
 });
 
 describe("autonomy in chats and scheduled runs", () => {

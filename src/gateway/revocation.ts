@@ -20,6 +20,12 @@ export interface ReapOptions {
   cron: Pick<CronStore, "list" | "setEnabled">;
   /** Where a key that couldn't be checked is reported; the pass goes on with the others. */
   log?: (message: string) => void;
+  /**
+   * Called with the chat before its session closes, to drop what was queued behind the running turn: checked only when
+   * it would run, a revoked sender's message would run after all if they were approved again by then, and a demoted
+   * owner's was written as the owner. (A revoke that lands between the two checks below also reads as a demotion.)
+   */
+  forgetChat?: (chatKey: string) => void;
 }
 
 /** Returns what it stopped, for logging. */
@@ -29,13 +35,15 @@ export async function reapRevoked(o: ReapOptions): Promise<{ sessions: string[];
   // One key that can't be checked must not keep the others (still revoked) running until the next pass.
   const failed = (what: string, e: unknown) => o.log?.(`couldn't check ${what}: ${e instanceof Error ? e.message : String(e)}`);
   for (const key of o.sessionKeys()) {
-    const sender = privateTelegramSender(parseSessionKey(key)?.chatKey ?? "");
+    const chatKey = parseSessionKey(key)?.chatKey ?? "";
+    const sender = privateTelegramSender(chatKey);
     if (sender === undefined) continue;
     try {
       const revoked = !(await o.isApproved("telegram", sender));
       // An owner session carries the owner's privileges; once the owner is changed it must not outlive the change.
       const demoted = !revoked && o.roleOf(key) === "owner" && !(await o.isOwner("telegram", sender));
       if (!revoked && !demoted) continue;
+      o.forgetChat?.(chatKey);
       await o.closeSession(key, { finalReview: false });
       sessions.push(key);
     } catch (e) {

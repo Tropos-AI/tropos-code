@@ -282,6 +282,12 @@ export class TelegramAdapter implements ChannelAdapter {
     this.opening.clear();
   }
 
+  /** Drops a chat and what it queued (the gateway's reaper, before it closes the chat's session). */
+  forget(chatKey: string): void {
+    const chat = this.chats.get(chatKey);
+    if (chat) this.dropChat(chat);
+  }
+
   /** Sends text to `telegram:<chat id>`, split to Telegram's message size. */
   async deliver(chatKey: string, text: string): Promise<void> {
     const id = /^telegram:(-?\d{1,20})$/.exec(chatKey)?.[1];
@@ -894,7 +900,9 @@ export class TelegramAdapter implements ChannelAdapter {
     chat.queue.length = 0;
     for (const ask of chat.asks.values()) clearTimeout(ask.timer);
     chat.detach();
-    if (this.chats.get(key) === chat) this.chats.delete(key);
+    // A chat forgotten earlier comes by again when its last turn ends: the chat and opening there now are a newer one's.
+    if (this.chats.get(key) !== chat) return;
+    this.chats.delete(key);
     this.opening.delete(key);
   }
 
