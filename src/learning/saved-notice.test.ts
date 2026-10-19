@@ -11,8 +11,11 @@ test("each store tool's save reads as one short line", () => {
   expect(savedNotice("SkillManage", { action: "patch", name: "release-bun" })).toBe("🛠 Skill updated: release-bun");
   expect(savedNotice("SkillManage", { action: "write_file", name: "release-bun" })).toBe("🛠 Skill updated: release-bun");
   expect(savedNotice("SkillManage", { action: "delete", name: "release-bun" })).toBe("🛠 Skill deleted: release-bun");
-  expect(savedNotice("AgentManage", { action: "create", name: "george" })).toBe("🧩 Agent created: george");
-  expect(savedNotice("AgentManage", { action: "update", name: "george" })).toBe("🧩 Agent updated: george");
+  expect(savedNotice("AgentManage", { action: "create", name: "reviewer", emoji: "🔍", description: "reviews pull requests" })).toBe("🧩 New specialist: 🔍 reviewer — reviews pull requests");
+  expect(savedNotice("AgentManage", { action: "create", name: "reviewer", description: "reviews pull requests" })).toBe("🧩 New specialist: reviewer — reviews pull requests");
+  expect(savedNotice("AgentManage", { action: "update", name: "george", emoji: "🔬" })).toBe("🧩 Specialist updated: 🔬 george");
+  expect(savedNotice("AgentManage", { action: "update", name: "george" })).toBe("🧩 Specialist updated: george");
+  expect(savedNotice("AgentManage", { action: "archive", name: "reviewer" })).toBe("🧩 Specialist archived: reviewer");
   expect(savedNotice("AgentManage", { action: "delete", name: "george" })).toBe("🧩 Agent deleted: george");
   expect(savedNotice("Identity", { action: "set", name: "Nova" })).toBe("🪪 Identity updated");
   expect(savedNotice("Identity", { action: "soul", soul: "x" })).toBe("🪪 SOUL.md updated");

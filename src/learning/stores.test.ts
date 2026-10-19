@@ -1,6 +1,6 @@
 // src/learning/stores.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, readFile, symlink } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { makeToolContext } from "../../test/helpers/tool-context";
@@ -82,10 +82,11 @@ test("every delete-like action of every store tool is destructive (keeps asking)
     },
     "AgentManage.delete": async () => {
       const agents = tool("AgentManage");
-      const input = { action: "create", name: "helper", description: "Helps", prompt: "Help out." };
-      expect(agents.subject({ ...input, action: "delete" }, dir).destructive).toBeFalsy();
-      await agents.run(input, ctx);
-      const path = agents.subject(input, dir).paths[0]!;
+      // Delete is for single-file agents (specialists are archived, never deleted); create now makes specialists.
+      const path = join(home, "agents", "helper.md");
+      await mkdir(join(home, "agents"), { recursive: true });
+      await writeFile(path, '---\nname: helper\ndescription: "Helps"\n---\n\nHelp out.\n');
+      expect(agents.subject({ action: "delete", name: "helper" }, dir).destructive).toBeFalsy();
       const before = await readFile(path, "utf8");
       expect((await agents.run({ action: "delete", name: "helper" }, ctx)).isError).toBeFalsy();
       expect(await readFile(path, "utf8").catch(() => null)).toBeNull();

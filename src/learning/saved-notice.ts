@@ -22,8 +22,11 @@ export function savedNotice(tool: string, input: unknown): string | undefined {
       return clip(`🛠 Skill ${verb}: ${str(i.name)}`);
     }
     case "AgentManage": {
-      const verb = i.action === "create" ? "created" : i.action === "delete" ? "deleted" : "updated";
-      return clip(`🧩 Agent ${verb}: ${str(i.name)}`);
+      const name = `${str(i.emoji) ? `${str(i.emoji)} ` : ""}${str(i.name)}`;
+      if (i.action === "create") return clip(`🧩 New specialist: ${name}${str(i.description) ? ` — ${str(i.description)}` : ""}`);
+      if (i.action === "archive") return clip(`🧩 Specialist archived: ${str(i.name)}`);
+      if (i.action === "delete") return clip(`🧩 Agent deleted: ${str(i.name)}`);
+      return clip(`🧩 Specialist updated: ${name}`);
     }
     case "Identity":
       return i.action === "set" ? "🪪 Identity updated" : i.action === "soul" ? "🪪 SOUL.md updated" : undefined;
