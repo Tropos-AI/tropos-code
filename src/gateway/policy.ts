@@ -36,9 +36,10 @@ export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner"
 
 /**
  * Tools whose effects leave the sandbox. They always ask in a chat, even when the user's own settings
- * allow them elsewhere: an ask rule outranks an allow rule in the permission engine.
+ * allow them elsewhere: an ask rule outranks an allow rule in the permission engine. TroposSetup changes Tropos itself
+ * (channels, projects, keys, MCP commands), so no autonomy level lets it run unasked.
  */
-const ALWAYS_ASK = ["mcp__*"];
+const ALWAYS_ASK = ["mcp__*", "TroposSetup"];
 
 /**
  * The context for one chat's session: the gateway's workspace context, narrowed. It never widens anything:

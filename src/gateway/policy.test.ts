@@ -92,6 +92,13 @@ describe("channelContext", () => {
     expect(decide({ toolName: "mcp__gh__list", kind: "exec", paths: [] }, permission).behavior).toBe("ask");
   });
 
+  test("a chat always asks before TroposSetup, even at autonomous with an allow rule for it", () => {
+    const ctx = channelContext(base(), exec, { role: "owner", autonomy: () => ({ level: "autonomous", testCommands: [] }) });
+    const permission = { ...permissionContext(ctx, "default"), home: "/h" };
+    const allowed = { ...permission, rules: { ...permission.rules, allow: compileRules({ allow: ["TroposSetup"], ask: [], deny: [] }).rules.allow } };
+    expect(decide({ toolName: "TroposSetup", kind: "exec", paths: [], target: "setup:model.set" }, allowed).behavior).toBe("ask");
+  });
+
   test("the autonomy policy reaches the permission context and stays live", () => {
     let level: Autonomy = "balanced";
     const ctx = channelContext(base(), exec, { role: "owner", autonomy: () => ({ level, testCommands: [] }) });
