@@ -70,6 +70,11 @@ test("the read rules keep their order: .env denies, template reopens, secrets, c
   for (const i of order) expect(i).toBeGreaterThanOrEqual(0);
   expect(order).toEqual([...order].sort((a, b) => a - b));
   expect(new Set(order).size).toBe(order.length);
+  // The secrets once more after every .env allow (all but ~/.tropos, which holds the carve-outs), and no read allow after.
+  const finalSecrets = last((line) => line.startsWith('(deny file-read* (subpath (param "R0")) (subpath (param "R2"))'));
+  expect(finalSecrets).toBeGreaterThan(order[4]!);
+  expect(lines[finalSecrets]).not.toContain('(param "R1")');
+  expect(lines.slice(finalSecrets + 1).filter((line) => line.startsWith("(allow file-read*"))).toEqual([]);
 });
 
 test("a project holding a carve-out (here ~/.tropos around the workspace) has its .env files denied again after the carve-out", () => {

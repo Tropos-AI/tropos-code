@@ -8,8 +8,11 @@
 //   2. secrets denied: after 1, so nothing 1 reopens inside a secret folder (~/.aws/.env.example) is readable;
 //   3. the carve-outs (the default project, the chats' worktrees, the per-sandbox cache) reopened: after 2, since they
 //      lie inside the denied ~/.tropos;
-//   4. the .env files of projects overlapping a carve-out denied again, since 3 reopened them; where linked .env files
-//      point denied; then the chief's own files denied, last, so nothing reopens them.
+//   4. the .env files of projects overlapping a carve-out denied again, since 3 reopened them (the session's own
+//      reopened again);
+//   5. the secrets denied once more (all but ~/.tropos, which holds the carve-outs), so no .env allow reopens one;
+//   6. where linked .env files point denied; then the chief's own files denied, last, so nothing reopens them.
+// No read allow comes after 5.
 // Protected names are also matched in any letter case, as a case-insensitive disk resolves them.
 // Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
 // the sandbox matches resolved paths.
@@ -81,6 +84,9 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     ...rootRegexes(carvedShallow, `([^/]+/)?([^/]+/)?${envLeaf}$`, "deny"),
   ].map((r) => `(regex #"${r}")`);
   const ownReopenCarved = carvedShallow.some((root) => isInside(paths.project, root)) ? rootRegexes([paths.project], `(.*/)?${envLeaf}$`, "allow").map((r) => `(regex #"${r}")`) : [];
+  // The secrets once more, last among the read rules, after every .env allow: all but the ones holding a carve-out
+  // (~/.tropos), which can't be denied again without denying the carve-out; reads inside those reach only it.
+  const finalSecrets = paths.deniedReads.flatMap((p, i) => (paths.readCarveOuts.some((dir) => isInside(dir, p)) ? [] : [{ param: secrets[i]!, path: p }]));
   // Concrete paths: where linked .env files point, and on a platform without patterns the files themselves.
   const envFiles = named("E", paths.otherProjectSecrets.filter(spellable));
   const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"${fitDeny(p, "(/.*)?$")}")`);
@@ -141,6 +147,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     // template-named file).
     ...(envDeniesCarved.length > 0 ? [`(deny file-read* ${envDeniesCarved.join(" ")})`] : []),
     ...(ownReopenCarved.length > 0 ? [`(allow file-read* ${ownReopenCarved.join(" ")})`] : []),
+    ...(finalSecrets.length > 0 ? [`(deny file-read* ${finalSecrets.map((s) => `(subpath ${s.param})`).join(" ")} ${finalSecrets.map((s) => anyCaseSubpath(s.path)).join(" ")})`] : []),
     ...(envPatterns.length > 0 ? [`(deny file-read* ${[...envFiles.map((p) => `(subpath ${p})`), ...envPatterns].join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
