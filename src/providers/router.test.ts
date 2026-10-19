@@ -120,7 +120,15 @@ describe("ProviderRouter", () => {
 
   test("an endpoint the owner added can speak the Anthropic or the Responses API, at its own address", async () => {
     const urls: string[] = [];
-    const fetchImpl = (async (input: RequestInfo | URL) => (urls.push(String(input)), sse("ok"))) as unknown as typeof fetch;
+    const auth: (string | null)[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input));
+      auth.push(new Headers(init?.headers).get("authorization"));
+      return sse("ok");
+    }) as unknown as typeof fetch;
+    // The owner's Anthropic token in the shell must never reach an endpoint they added.
+    const saved = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.ANTHROPIC_AUTH_TOKEN = "owner-anthropic-token";
     const router = new ProviderRouter({
       home: dir,
       env: { GW_API_KEY: "k" },
@@ -128,8 +136,11 @@ describe("ProviderRouter", () => {
       fetch: fetchImpl,
     });
     await router.send(req("gw/claude-x"), handlers, signal()).catch(() => undefined);
+    if (saved === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+    else process.env.ANTHROPIC_AUTH_TOKEN = saved;
     await router.send(req("resp/model-y"), handlers, signal()).catch(() => undefined);
     expect(urls[0]).toStartWith("https://gw.example/v1/messages");
+    expect(auth[0]).toBeNull();
     expect(urls[1]).toBe("https://resp.example/v1/responses");
     const status = await router.status();
     expect(status.find((s) => s.info.id === "gw")).toMatchObject({ info: { api: "anthropic", name: "Gateway" }, custom: true, baseURL: "https://gw.example" });

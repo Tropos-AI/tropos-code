@@ -42,6 +42,14 @@ export function allProviders(settings: Record<string, ProviderSetting>): Provide
   return [...PROVIDERS, ...custom];
 }
 
+/**
+ * An added endpoint gets its own key and nothing else: without an explicit authToken the SDK would read
+ * ANTHROPIC_AUTH_TOKEN from the environment and send the owner's Anthropic credential to that address.
+ */
+function customAnthropicAuth(key: string | null): { apiKey: string; authToken: null } {
+  return { apiKey: key ?? "none", authToken: null };
+}
+
 export class ProviderRouter implements Model {
   private readonly providers: ProviderInfo[];
   private anthropicModel: { key: string | undefined; model: Model } | null = null;
@@ -114,7 +122,7 @@ export class ProviderRouter implements Model {
   /** An Anthropic-compatible endpoint the owner added: the Anthropic SDK at its base URL, with its own key. */
   private async customAnthropic(info: ProviderInfo): Promise<Model> {
     const key = await this.key(info);
-    const client = new Anthropic({ maxRetries: 0, baseURL: this.baseURL(info), apiKey: key ?? "none", ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}) });
+    const client = new Anthropic({ ...customAnthropicAuth(key), maxRetries: 0, baseURL: this.baseURL(info), ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}) });
     return new AnthropicModel(client);
   }
 
@@ -143,7 +151,7 @@ export class ProviderRouter implements Model {
       const key = await this.key(info);
       const client = this.builtin(info)
         ? new Anthropic({ maxRetries: 1, ...(key ? { apiKey: key } : {}) })
-        : new Anthropic({ maxRetries: 1, baseURL: this.baseURL(info), apiKey: key ?? "none" });
+        : new Anthropic({ ...customAnthropicAuth(key), maxRetries: 1, baseURL: this.baseURL(info) });
       const ids: string[] = [];
       for await (const m of client.models.list({}, { signal })) ids.push(m.id);
       return ids.sort();
