@@ -159,6 +159,8 @@ export type ServerMessage =
 export const WS_PATH = "/ws";
 /** The close code of a socket whose device was logged out: the browser forgets its key and shows the login screen. */
 export const AUTH_CLOSE_CODE = 4401;
+/** The close code of a socket that didn't log in in time: the browser reconnects silently, the login screen stays as it is. */
+export const LOGIN_TIMEOUT_CLOSE_CODE = 4408;
 /** The localStorage entry that holds this browser's device key. */
 export const DEVICE_KEY_STORAGE = "tropos.deviceKey";
 export const DEFAULT_PORT = 4317;

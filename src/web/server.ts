@@ -7,7 +7,7 @@ import { localDashboardUrl } from "./links";
 import type { LoginCodes } from "./login-codes";
 import { PortInUseError } from "./port";
 import type { ChatHost } from "./project-hosts";
-import { AUTH_CLOSE_CODE, WS_PATH, type ClientMessage, type ServerMessage } from "./protocol";
+import { AUTH_CLOSE_CODE, LOGIN_TIMEOUT_CLOSE_CODE, WS_PATH, type ClientMessage, type ServerMessage } from "./protocol";
 import type { AdminCaller } from "./admin/context";
 import { MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TEXT_ATTACHMENT_BYTES, MAX_TEXT_ATTACHMENTS } from "../attachments/attachments";
 
@@ -31,7 +31,7 @@ export interface WebServerOptions {
   dev?: boolean;
   /** `host[:port]` of this Mac's tailnet name while phone access is on, else null; asked on every request. */
   remoteHost?: () => string | null;
-  /** How long a socket may take to log in; default 20 s. */
+  /** How long a socket may take to log in; default LOGIN_DEADLINE_MS (60 s). */
   loginDeadlineMs?: number;
 }
 
@@ -51,10 +51,10 @@ export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export const MAX_AUTHED_MESSAGE_BYTES = Math.ceil(((MAX_IMAGES * MAX_IMAGE_BYTES + MAX_TEXT_ATTACHMENTS * MAX_TEXT_ATTACHMENT_BYTES) * 4) / 3) + MAX_MESSAGE_BYTES;
 /** Sockets that may wait to log in at once; more upgrades are refused. Each could send a large frame before Bun drops it. */
 export const MAX_PENDING_SOCKETS = 16;
-/** WebSocket close code for a socket that broke the rules (a big frame, too many wrong keys, too slow to log in). */
+/** WebSocket close code for a socket that broke the rules (a big frame, too many wrong keys); a slow login gets LOGIN_TIMEOUT_CLOSE_CODE. */
 export const POLICY_VIOLATION = 1008;
 /** How long a socket may take to log in before it is closed. */
-const LOGIN_DEADLINE_MS = 20_000;
+export const LOGIN_DEADLINE_MS = 60_000;
 /** Wrong keys or codes one socket may send; the last closes it (codes stay rate-limited by LoginCodes as well). */
 export const MAX_FAILED_LOGINS = 3;
 
@@ -219,10 +219,10 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
   };
 
   /** Closes a socket that broke the rules for one that hasn't logged in; its place is free at once. */
-  const refuse = (ws: Socket, reason: string) => {
+  const refuse = (ws: Socket, reason: string, code = POLICY_VIOLATION) => {
     if (ws.data.closed) return;
     logOut(ws);
-    ws.close(POLICY_VIOLATION, reason);
+    ws.close(code, reason);
   };
 
   /** A wrong key or code: after a few on one socket it is closed, so it can't keep a place guessing. */
@@ -284,7 +284,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
           ws.data.send = (message: ServerMessage) => ws.send(JSON.stringify(message));
           // A socket that never logs in would hold its place for good, and enough of them would lock the owner out.
           ws.data.deadline = setTimeout(() => {
-            if (ws.data.deviceId === undefined) refuse(ws, "Log in timed out");
+            if (ws.data.deviceId === undefined) refuse(ws, "Log in timed out", LOGIN_TIMEOUT_CLOSE_CODE);
           }, loginDeadlineMs);
         },
         message(ws, raw) {

@@ -11,8 +11,8 @@ import { assetsFromDir } from "./assets";
 import type { DeviceStore } from "./devices";
 import { WebHost } from "./host";
 import type { LoginCodes } from "./login-codes";
-import type { ServerMessage } from "./protocol";
-import { MAX_AUTHED_MESSAGE_BYTES, MAX_FAILED_LOGINS, MAX_MESSAGE_BYTES, MAX_PENDING_SOCKETS, POLICY_VIOLATION, parseClientMessage, startWebServer, type RunningWebServer } from "./server";
+import { LOGIN_TIMEOUT_CLOSE_CODE, type ServerMessage } from "./protocol";
+import { LOGIN_DEADLINE_MS, MAX_AUTHED_MESSAGE_BYTES, MAX_FAILED_LOGINS, MAX_MESSAGE_BYTES, MAX_PENDING_SOCKETS, POLICY_VIOLATION, parseClientMessage, startWebServer, type RunningWebServer } from "./server";
 
 let dir: string;
 let server: RunningWebServer | null = null;
@@ -89,10 +89,16 @@ describe("sockets that never log in", () => {
     const { base } = await start({ loginDeadlineMs: 100 });
     const idle = Array.from({ length: MAX_PENDING_SOCKETS }, () => track(rawSocket(base)));
     await Promise.all(idle.map((s) => s.opened));
-    expect(await Promise.all(idle.map((s) => s.closed))).toEqual(idle.map(() => POLICY_VIOLATION));
+    // Its own code, so the browser reconnects silently instead of showing "reconnecting".
+    expect(await Promise.all(idle.map((s) => s.closed))).toEqual(idle.map(() => LOGIN_TIMEOUT_CLOSE_CODE));
     await new Promise((r) => setTimeout(r, 20));
     const s = track(rawSocket(base));
     await s.opened;
+  });
+
+  test("the deadline is a minute", () => {
+    expect(LOGIN_DEADLINE_MS).toBe(60_000);
+    expect(LOGIN_TIMEOUT_CLOSE_CODE).toBe(4408);
   });
 
   test("a socket that logs in in time is not closed by the deadline", async () => {
