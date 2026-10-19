@@ -9,7 +9,8 @@ const schema = z.object({
   subagent_type: z.string().optional().describe("Which agent to use (default general-purpose)."),
 });
 
-export type RunSubagent = (def: SubagentDefinition, prompt: string, ctx: ToolContext) => Promise<ToolOutput>;
+/** `task` is the Agent call's `description`, for the run log. */
+export type RunSubagent = (def: SubagentDefinition, prompt: string, ctx: ToolContext, task: string) => Promise<ToolOutput>;
 
 function listing(agents: SubagentDefinition[]): string {
   return agents
@@ -37,6 +38,8 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent, 
       "research whose details you don't need to keep, or independent pieces of work that can run in parallel (several Agent calls in one response run concurrently). " +
       "The agent can't see this conversation: put everything it needs in the prompt, and say what to report back. " +
       "Its tool calls go through the same permission checks as yours. Its final message comes back as the result; relay what matters to the user.\n\n" +
+      "When a specialist fits, delegate to it; when none does, do the work yourself. Every handoff states: the objective, the inputs (files, links, facts from this conversation), where results go, how to verify them, and the limits (what not to touch, what needs the user's approval). " +
+      "A report is a claim, not proof: check it against evidence (the diff, test output, the files) before telling the user. If it doesn't hold up, retry once with a clarified task, then tell the user what failed. Up to 4 specialists run at once.\n\n" +
       `Available agents:\n${listing(initial)}`,
     schema,
     summarize: (input) => {
@@ -53,7 +56,7 @@ export function createAgentTool(agents: SubagentDefinition[], run: RunSubagent, 
         def = find(name);
       }
       if (!def) return { content: `Unknown agent "${name}". Available: ${agents.map((a) => a.name).join(", ")}.`, isError: true };
-      return run(def, input.prompt, ctx);
+      return run(def, input.prompt, ctx, input.description);
     },
   }) as AnyTool;
 }

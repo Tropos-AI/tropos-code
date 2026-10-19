@@ -25,7 +25,7 @@ import { renderSkill, skillListing } from "../extensions/skills";
 import type { HookRunner } from "../hooks/runner";
 import { MEMORY_LIMITS, notesLabel, notesSize, usageHeader } from "../memory/notes";
 import { harnessNonce, nonceBlock } from "../context/tags";
-import { isInside } from "../paths";
+import { isInside, workspaceDir } from "../paths";
 import { decide, type AutonomyPolicy, type PermissionContext, type PermissionRules } from "../permissions/engine";
 import { parseRule } from "../permissions/rules";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
@@ -203,7 +203,8 @@ export function makeAgent(
         home: ctx.home,
         scope,
         bootstrap: opts.interactive,
-        ...(scope === "main" ? { reminder: await setupReminder() } : {}),
+        // Guests can't use specialists, so they don't hear of them.
+        ...(scope === "main" ? { reminder: await setupReminder(), specialists: ctx.role !== "guest" } : {}),
       })),
       nonceBlock(nonce()),
     ]);
@@ -220,28 +221,6 @@ export function makeAgent(
   // Only project files: Memory and SkillManage also edit (under ~/.tropos), and no formatter should touch those.
   const afterWrite = (paths: string[], signal: AbortSignal) =>
     postWrite(ctx.ext, opts.toolContext.readState, paths.filter((p) => ctx.allowedDirs.some((dir) => isInside(p, dir))), signal);
-  ctx.subagents.deps = {
-    model: ctx.model,
-    tools: ctx.tools,
-    system: SYSTEM_PROMPT,
-    config,
-    // Without the role and stores: a subagent's saves to Tropos's stores ask through the shared queue, because
-    // its tool results never reach the user as a learned notice.
-    permissions: () => {
-      const { role: _role, stores: _stores, ...rest } = permissions();
-      return rest;
-    },
-    askPermission,
-    contextText: contextFor("subagent"),
-    nonce,
-    onAllowAlways,
-    recordCost: (cost) => agent?.addCost(cost),
-    openTranscript: (name) =>
-      SessionStore.createSubagent(ctx.home, { cwd: ctx.cwd, parentId: opts.session().id, agent: name, model: config().model, version: ctx.version, role: ctx.role }),
-    hooks: opts.hooks,
-    beforeChange,
-    postWrite: afterWrite,
-  };
   // The background review (Hermes' learning loop): interactive sessions only, never print mode.
   // The review writes skills to its own folder (workspace/skills-learned), never over the user's.
   const learnedSkills = createSkillManageTool({ home: ctx.home, dir: resolveLayoutPath(ctx.home, "skills-learned"), ledger: ctx.ext.ledger, tracker: ctx.ext.reviewTracker });
@@ -272,6 +251,47 @@ export function makeAgent(
       })
     : undefined;
   if (learning) opts.onLearning?.(learning);
+  ctx.subagents.deps = {
+    model: ctx.model,
+    tools: ctx.tools,
+    system: SYSTEM_PROMPT,
+    config,
+    // Without the role and stores: a subagent's saves to Tropos's stores ask through the shared queue, because
+    // its tool results never reach the user as a learned notice.
+    permissions: () => {
+      const { role: _role, stores: _stores, ...rest } = permissions();
+      return rest;
+    },
+    askPermission,
+    contextText: contextFor("subagent"),
+    nonce,
+    onAllowAlways,
+    recordCost: (cost) => agent?.addCost(cost),
+    openTranscript: (name) =>
+      SessionStore.createSubagent(ctx.home, { cwd: ctx.cwd, parentId: opts.session().id, agent: name, model: config().model, version: ctx.version, role: ctx.role }),
+    hooks: opts.hooks,
+    beforeChange,
+    postWrite: afterWrite,
+    home: ctx.home,
+    role: ctx.role,
+    ledger: ctx.ext.ledger,
+    skills: ctx.ext.skills,
+    // A specialist sees project memory files but never the chief's own (they live in the workspace).
+    specialistContext: async (extras) =>
+      buildContextText(
+        (await loadMemory(ctx.cwd, ctx.home)).filter((f) => !isInside(f.path, workspaceDir(ctx.home))),
+        await environmentBlock(ctx.cwd, { shell: ctx.shell }),
+        [...extras, nonceBlock(nonce())],
+      ),
+    learn: learning !== undefined,
+    notice: (text) => opts.ui.emit({ type: "notice", level: "info", text, learned: true }),
+    // Awaited at shutdown, so a specialist's last review isn't cut off.
+    background: (work) => {
+      const set = (ctx.subagents.background ??= new Set());
+      const p = work.catch(() => {}).finally(() => set.delete(p));
+      set.add(p);
+    },
+  };
   const storeInputs = new Map<string, unknown>();
 
   agent = new Agent(
@@ -455,9 +475,9 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
       return {
         title: "Agents",
         subtitle: `${plural(ext.agents.length, "agent")} the Agent tool can start`,
-        sections: (["builtin", "user", "project", "plugin"] as const)
+        sections: (["builtin", "specialist", "user", "project", "plugin"] as const)
           .map((source) => ({
-            title: { builtin: "Built-in", user: "Yours (~/.tropos/agents)", project: "This project", plugin: "Plugins" }[source],
+            title: { builtin: "Built-in", specialist: "Specialists (~/.tropos/agents)", user: "Yours (~/.tropos/agents)", project: "This project", plugin: "Plugins" }[source],
             items: ext.agents
               .filter((a) => a.source === source)
               .map((a) => ({
@@ -784,6 +804,7 @@ export async function createRuntime(
         clearTimeout(timer);
       }
       await savingCounters;
+      await Promise.allSettled([...(ctx.subagents.background ?? [])]);
       await sessionEnd(hooks, "exit");
       if (init.ownsExtensions === false) return;
       ctx.ext.searchIndex?.close();

@@ -64,3 +64,15 @@ test("an agent created mid-session is found after a reload; the description keep
   expect(await tool.run({ description: "d", prompt: "x", subagent_type: "nobody" }, ctx)).toMatchObject({ isError: true });
   expect(reloads).toBe(2);
 });
+
+test("the description carries the handoff guidance, and run passes the call's description as the task", async () => {
+  const tasks: string[] = [];
+  const tool = createAgentTool(agents, async (_def, _prompt, _ctx, task) => {
+    tasks.push(task);
+    return { content: "x" };
+  });
+  expect(tool.description).toContain("Every handoff states: the objective, the inputs");
+  expect(tool.description).toContain("Up to 4 specialists run at once.");
+  await tool.run({ description: "review the PR", prompt: "p" }, makeToolContext());
+  expect(tasks).toEqual(["review the PR"]);
+});

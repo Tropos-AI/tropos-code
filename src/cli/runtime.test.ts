@@ -16,6 +16,7 @@ import { compileRules } from "../permissions/engine";
 import { projectDir, SessionStore } from "../session/store";
 import { createTools } from "../tools/registry";
 import { DARK } from "../ui/theme";
+import { renderSpecialistFile } from "../agents/specialists";
 import { ModelPrefs } from "../config/model-prefs";
 import { loadExtensions, sessionTools } from "./extensions";
 import { troposStorePaths } from "../learning/stores";
@@ -561,6 +562,35 @@ describe("learning and identity", () => {
     const main = JSON.stringify(model.requests[0]!.messages[0]);
     expect(main).toContain("Prefers bun");
     expect(main).toContain("Nova");
+  });
+
+  test("the chief's first context lists the specialists, except for guests; the deps are for specialists", async () => {
+    const model = await setup([text("a"), text("b")]);
+    await mkdir(join(ctx.home, "agents", "reviewer"), { recursive: true });
+    await writeFile(
+      join(ctx.home, "agents", "reviewer", "AGENT.md"),
+      renderSpecialistFile({ name: "reviewer", description: "reviews pull requests", prompt: "## Purpose\nx", emoji: "🔍", createdBy: "user", createdAt: 1, revision: 1 }),
+    );
+    await ctx.ext.reloadAgents();
+    const exec = {} as Parameters<typeof channelContext>[1];
+    await (await agentFor({ ctx: channelContext(ctx, exec, { role: "owner" }) })).agent.run("hi", signal());
+    await (await agentFor({ ctx: channelContext(ctx, exec, { role: "guest" }) })).agent.run("hi", signal());
+    expect(JSON.stringify(model.requests[0]!.messages[0])).toContain("<specialists>");
+    expect(JSON.stringify(model.requests[1]!.messages[0])).not.toContain("<specialists>");
+    expect(ctx.subagents.deps).toMatchObject({ home: ctx.home, role: "guest" });
+  });
+
+  test("the agents panel lists specialists in their own section", async () => {
+    await mkdir(join(ctx.home, "agents", "reviewer"), { recursive: true });
+    await writeFile(
+      join(ctx.home, "agents", "reviewer", "AGENT.md"),
+      renderSpecialistFile({ name: "reviewer", description: "reviews pull requests", prompt: "## Purpose\nx", emoji: "🔍", createdBy: "user", createdAt: 1, revision: 1 }),
+    );
+    await setup();
+    const { runtime: rt } = await runtime();
+    const sections = (await rt.panel("agents")).sections;
+    expect(sections.map((x) => x.title)).toEqual(["Built-in", "Specialists (~/.tropos/agents)"]);
+    expect(sections[1]!.items.map((i) => i.key)).toEqual(["reviewer"]);
   });
 
   test("guest chats and scheduled runs get none of the owner's notes or journal; the owner's chat does", async () => {

@@ -1,10 +1,13 @@
 // src/cli/extensions.ts
 import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { runSubagent, type SubagentDeps } from "../agent/subagent";
+import { runSubagent } from "../agent/subagent";
+import { isSpecialist, loadAllAgents, specialistRoster } from "../agents/specialists";
+import { runSpecialist, SpecialistSlots, type SpecialistDeps } from "../agents/delegate";
+import { recordRun } from "../agents/runs";
 import { HOOK_EVENTS, type HooksSetting, type Settings } from "../config/settings";
 import { createAgentManageTool } from "../extensions/agent-manage";
-import { loadAgents, type AgentDefinition } from "../extensions/agents";
+import { type AgentDefinition } from "../extensions/agents";
 import { loadCommands, type CustomCommand } from "../extensions/commands";
 import { loadPlugins, pluginRoots, type LoadedPlugin } from "../extensions/plugins";
 import { loadSkills, type Skill } from "../extensions/skills";
@@ -95,7 +98,7 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     const [commands, skills, agents] = await Promise.all([
       loadCommands(dirs("commands"), RESERVED_COMMANDS),
       loadSkills(dirs("skills")),
-      loadAgents(dirs("agents")),
+      loadAllAgents(dirs("agents"), home),
     ]);
     // A skill named like a built-in or a custom command can still be loaded by the model, just not typed.
     const commandNames = new Set([...RESERVED_COMMANDS, ...commands.commands.map((c) => c.name)]);
@@ -151,7 +154,7 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     agentList.splice(0, agentList.length, ...fresh.agents);
   };
   const reloadAgents = async () => {
-    const fresh = await loadAgents(dirs("agents"));
+    const fresh = await loadAllAgents(dirs("agents"), home);
     agentList.splice(0, agentList.length, ...fresh.agents);
   };
 
@@ -188,7 +191,9 @@ export function createHookRunner(
 
 /** Where the Agent tool finds the running session's model, prompts and permissions; set by makeAgent. */
 export interface SubagentHolder {
-  deps?: SubagentDeps;
+  deps?: SpecialistDeps;
+  /** Specialist work that outlives its run (their own learning reviews); the runtime awaits it at shutdown. */
+  background?: Set<Promise<void>>;
 }
 
 /**
@@ -203,11 +208,30 @@ export function sessionTools(
   const tools: AnyTool[] = [...base, webFetchTool as AnyTool];
   // Always present: a skill written later in the session can still be loaded (the tool reloads on an unknown name).
   tools.push(createSkillTool(ext.skills, { home: opts.home, tracker: ext.tracker, reviewTracker: ext.reviewTracker, reload: ext.reload }));
+  // One set of slots per session: the cap of parallel specialists counts across all Agent calls.
+  const slots = new SpecialistSlots();
   tools.push(
-    createAgentTool(ext.agents, (def, prompt, ctx) => {
+    createAgentTool(ext.agents, (def, prompt, ctx, task) => {
       const deps = opts.holder.deps;
       if (!deps) return Promise.resolve({ content: "Subagents aren't available yet in this session.", isError: true });
-      return runSubagent(def, prompt, deps, ctx);
+      if (isSpecialist(def)) return runSpecialist(def, prompt, task, deps, ctx, slots);
+      let logged: Promise<void> = Promise.resolve();
+      return runSubagent(def, prompt, deps, ctx, (run) => {
+        logged = recordRun(opts.home, {
+          ts: new Date().toISOString(),
+          agent: def.name,
+          specialist: false,
+          task,
+          ok: run.ok,
+          result: run.report,
+          durationMs: run.durationMs,
+          ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
+          cwd: ctx.cwd(),
+        }).catch(() => {});
+      }).then(async (out) => {
+        await logged;
+        return out;
+      });
     }, ext.reloadAgents),
   );
   if (ext.notes) tools.push(createMemoryTool(ext.notes));
@@ -235,7 +259,7 @@ export function sessionTools(
 export async function contextExtras(
   ext: Extensions,
   listing: (skills: Skill[]) => string,
-  opts: { home: string; scope: "main" | "subagent"; bootstrap?: boolean; reminder?: string },
+  opts: { home: string; scope: "main" | "subagent"; bootstrap?: boolean; reminder?: string; specialists?: boolean },
 ): Promise<string[]> {
   const skills = listing(ext.skills);
   if (opts.scope === "subagent") {
@@ -248,6 +272,7 @@ export async function contextExtras(
   return [
     identity,
     bootstrap,
+    ...(opts.specialists ? [specialistRoster(ext.agents)] : []),
     skills,
     ext.notes ? await notesContext(ext.notes).catch(() => "") : "",
     ext.daily ? await dailyNotesContext(ext.daily).catch(() => "") : "",

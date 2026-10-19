@@ -1,6 +1,6 @@
 // src/cli/extensions.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
@@ -9,6 +9,11 @@ import { BOOTSTRAP_TEXT } from "../context/identity";
 import { skillListing } from "../extensions/skills";
 import { ReadState } from "../tools/read-state";
 import { createTools } from "../tools/registry";
+import { FakeModel, reply, textBlock } from "../../test/helpers/fake-model";
+import { compileRules } from "../permissions/engine";
+import { readRuns } from "../agents/runs";
+import { renderSpecialistFile } from "../agents/specialists";
+import type { SpecialistDeps } from "../agents/delegate";
 import { contextExtras, createHookRunner, extraCommands, isCodeConfig, loadExtensions, postWrite, sessionTools, type Extensions } from "./extensions";
 
 let dir: string;
@@ -314,4 +319,72 @@ test("context extras: the setup reminder is appended last, only when there is on
   expect(extras.at(-1)).toBe("<setup-reminder>x</setup-reminder>");
   expect(await contextExtras(ext, () => "", { home, scope: "main" })).toHaveLength(5);
   expect(await contextExtras(ext, () => "", { home, scope: "main", reminder: "" })).toHaveLength(5);
+});
+
+async function putSpecialist(id: string, description: string, emoji = "🔍") {
+  await put(
+    join(home, "agents", id, "AGENT.md"),
+    renderSpecialistFile({ name: id, description, prompt: "## Purpose\nDo it.", emoji, createdBy: "user", createdAt: 1, revision: 1 }),
+  );
+}
+
+describe("specialists", () => {
+  test("loadExtensions lists them; reloadAgents picks up a new one and drops an archived one", async () => {
+    await putSpecialist("reviewer", "reviews pull requests");
+    const ext = await load();
+    expect(ext.agents.find((a) => a.name === "reviewer")).toMatchObject({ source: "specialist" });
+    await putSpecialist("scribe", "writes docs", "✍");
+    await ext.reloadAgents();
+    expect(ext.agents.map((a) => a.name)).toEqual(expect.arrayContaining(["reviewer", "scribe"]));
+    await mkdir(join(home, "agents", ".archive"), { recursive: true });
+    await rename(join(home, "agents", "scribe"), join(home, "agents", ".archive", "scribe-2026-10-01"));
+    await ext.reloadAgents();
+    expect(ext.agents.some((a) => a.name === "scribe")).toBe(false);
+    await ext.reload();
+    expect(ext.agents.some((a) => a.name === "reviewer")).toBe(true);
+  });
+
+  test("main context carries the roster only when asked", async () => {
+    await putSpecialist("reviewer", "reviews pull requests");
+    const ext = await load();
+    const on = (await contextExtras(ext, () => "", { home, scope: "main", specialists: true })).join("\n");
+    expect(on).toContain("<specialists>");
+    expect(on).toContain("- 🔍 reviewer: reviews pull requests");
+    const off = (await contextExtras(ext, () => "", { home, scope: "main", specialists: false })).join("\n");
+    expect(off).not.toContain("<specialists>");
+  });
+
+  test("the Agent tool sends a specialist through runSpecialist and a plain agent through runSubagent, both logged", async () => {
+    await putSpecialist("reviewer", "reviews pull requests");
+    await put(join(home, "agents", "plain.md"), "---\nname: plain\ndescription: Plain\n---\nDo plain things.");
+    const ext = await load();
+    const model = new FakeModel([() => reply([textBlock("specialist report")]), () => reply([textBlock("plain report")])]);
+    const holder: { deps?: SpecialistDeps } = {};
+    const withDeps = sessionTools(createTools({ rgPath: null }), ext, { home, cwd, holder, sessionId: () => "s" });
+    holder.deps = {
+      model,
+      tools: withDeps,
+      system: "BASE",
+      config: () => ({ model: "claude-opus-5-5", effort: "high", refusalFallback: true }),
+      permissions: () => ({ mode: "default", rules: compileRules({ allow: [], ask: [], deny: [] }).rules, cwd, home, allowedDirs: [cwd] }),
+      askPermission: async () => ({ kind: "deny" }),
+      contextText: async () => "<context/>",
+      home,
+      role: "owner",
+      ledger: ext.ledger,
+      skills: [],
+      specialistContext: async (extras) => extras.join("\n"),
+      learn: false,
+      notice: () => {},
+      background: () => {},
+    };
+    const agent = withDeps.find((t) => t.name === "Agent")!;
+    const ctx = makeToolContext({ root: cwd });
+    expect((await agent.run({ description: "check pr", prompt: "go", subagent_type: "reviewer" }, ctx)).content).toContain("specialist report");
+    expect((await agent.run({ description: "plain job", prompt: "go", subagent_type: "plain" }, ctx)).content).toContain("plain report");
+    const runs = await readRuns(home);
+    expect(runs.map((r) => [r.agent, r.specialist, r.task])).toEqual([["plain", false, "plain job"], ["reviewer", true, "check pr"]]);
+    // The specialist's child never held the hub-only tools.
+    expect(JSON.stringify(model.requests[0]!.tools)).not.toContain("AgentManage");
+  });
 });

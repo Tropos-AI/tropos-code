@@ -114,6 +114,11 @@ test("the system prompt names the workspace files", () => {
 test("the system prompt says it is Tropos Code and where its own agents, skills and commands live", () => {
   expect(SYSTEM_PROMPT).toContain("You are Tropos Code (the `tcode` command), not Claude Code");
   expect(SYSTEM_PROMPT).toContain("agents/<name>.md");
-  expect(SYSTEM_PROMPT).toContain("create it with AgentManage");
+  expect(SYSTEM_PROMPT).toContain("create a specialist with AgentManage");
   expect(SYSTEM_PROMPT).toContain("Never write to ~/.claude for Tropos.");
+});
+
+test("the prompt tells the chief about specialists", () => {
+  expect(SYSTEM_PROMPT).toContain("<specialists>");
+  expect(SYSTEM_PROMPT).toContain("~/.tropos/agents/<name>/");
 });
