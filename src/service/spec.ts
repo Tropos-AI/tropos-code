@@ -1,5 +1,6 @@
 // src/service/spec.ts — what both service managers are told to run.
 import { basename } from "node:path";
+import { nativeVersionOf, realOrSelf, resolveLayout } from "../install/layout";
 
 /** Service managers give jobs a bare PATH; Docker lives in one of these. */
 const SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -8,9 +9,20 @@ const SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/
  * The command the service runs. A compiled `tcode` is its own executable; run from source, the executable is bun and
  * the script has to come with it.
  */
-export function programArguments(execPath: string, scriptPath: string | undefined): string[] {
+export function programArguments(execPath: string, scriptPath: string | undefined, env: NodeJS.ProcessEnv = process.env): string[] {
   const runtime = basename(execPath).toLowerCase();
-  return runtime === "bun" || runtime === "node" ? [execPath, scriptPath ?? "", "gateway"].filter(Boolean) : [execPath, "gateway"];
+  if (runtime === "bun" || runtime === "node") return [execPath, scriptPath ?? "", "gateway"].filter(Boolean);
+  return [stableCommand(execPath, env), "gateway"];
+}
+
+/**
+ * An installed version runs as ~/.local/share/tropos/versions/<v>; the service is pointed at the ~/.local/bin/tcode
+ * link to it instead, which every update moves, so a restart after an update runs the new version, not the old one.
+ */
+function stableCommand(execPath: string, env: NodeJS.ProcessEnv): string {
+  const layout = resolveLayout(env);
+  if (!nativeVersionOf(layout, execPath)) return execPath;
+  return realOrSelf(layout.binLink) === realOrSelf(execPath) ? layout.binLink : execPath;
 }
 
 /** The environment a service gets: its own PATH and HOME, and TROPOS_HOME when the owner moved it. Never a secret. */

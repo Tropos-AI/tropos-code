@@ -58,15 +58,15 @@ describe("serviceManager", () => {
 describe("launchd manager", () => {
   const make = (answers: Parameters<typeof fakeRunner>[0] = {}) => {
     const f = fakeRunner(answers);
-    return { ...f, m: serviceManager({ platform: "darwin", userHome, uid: 501, run: f.run }) };
+    return { ...f, m: serviceManager({ platform: "darwin", userHome, uid: 501, run: f.run, sleep: async () => {} }) };
   };
 
   test("install writes the plist and bootstraps it; uninstall boots it out and removes it", async () => {
-    const { m, calls } = make();
+    const { m, calls } = make({ "launchctl print": { code: 113 } });
     const { unitPath: path } = await m.install(spec());
     expect(path).toBe(plistPath(userHome));
     expect(await readFile(path, "utf8")).toContain("<string>/bin/tcode</string>");
-    expect(calls).toEqual(["launchctl bootout gui/501/com.troposlabs.gateway", `launchctl bootstrap gui/501 ${path}`]);
+    expect(calls).toEqual(["launchctl bootout gui/501/com.troposlabs.gateway", "launchctl print gui/501/com.troposlabs.gateway", `launchctl bootstrap gui/501 ${path}`]);
     expect(await m.uninstall()).toEqual({ removed: true });
     expect(existsSync(path)).toBe(false);
     expect(await m.uninstall()).toEqual({ removed: false });
@@ -81,7 +81,25 @@ describe("launchd manager", () => {
     expect(calls).toEqual(["launchctl print gui/501/com.troposlabs.gateway", "launchctl kickstart -k gui/501/com.troposlabs.gateway"]);
     calls.length = 0;
     await m.stop();
-    expect(calls).toEqual(["launchctl bootout gui/501/com.troposlabs.gateway"]);
+    expect(calls[0]).toBe("launchctl bootout gui/501/com.troposlabs.gateway");
+  });
+
+  test("reinstalling a running service waits for launchd to unload it before loading it again", async () => {
+    // bootout returns while the job is still going away; a bootstrap then fails with 5 and leaves nothing loaded.
+    let gone = false;
+    const { m, calls } = make({
+      "launchctl bootout": () => ({ code: 0 }),
+      "launchctl print": (n) => ((gone = n > 2) ? { code: 113 } : { output: "pid = 77" }),
+      "launchctl bootstrap": () => (gone ? { code: 0 } : { code: 5, output: "Bootstrap failed: 5: Input/output error" }),
+    });
+    await m.install(spec());
+    expect(calls.map((c) => c.split(" ")[1])).toEqual(["bootout", "print", "print", "print", "bootstrap"]);
+  });
+
+  test("a bootstrap that fails once while launchd settles is tried again", async () => {
+    const { m, calls } = make({ "launchctl print": { code: 113 }, "launchctl bootstrap": (n) => (n === 1 ? { code: 5, output: "Input/output error" } : { code: 0 }) });
+    await m.install(spec());
+    expect(calls.filter((c) => c.includes("bootstrap"))).toHaveLength(2);
   });
 
   test("start after a stop bootstraps again, then kicks it", async () => {
@@ -94,6 +112,13 @@ describe("launchd manager", () => {
 
   test("start before install says to install", async () => {
     await expect(make().m.start()).rejects.toThrow(/tcode gateway install/);
+  });
+
+  test("under sudo it refuses and says to run it as yourself", async () => {
+    const f = fakeRunner();
+    const m = serviceManager({ platform: "darwin", userHome, uid: 0, run: f.run, sleep: async () => {} });
+    await expect(m.install(spec())).rejects.toThrow(/without sudo/);
+    expect(f.calls).toEqual([]);
   });
 
   test("a failed bootstrap is an error with launchctl's words", async () => {

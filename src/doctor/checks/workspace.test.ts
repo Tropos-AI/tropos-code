@@ -50,3 +50,11 @@ test("the built-in default project may not exist yet", async () => {
   const runner = fakeRunner({ listProjects: async () => [{ id: "default", name: "default", path, builtin: true }] });
   expect((await runOne(fx, workspaceCheck, { runner })).findings[0]!.level).toBe("ok");
 });
+
+test("the built-in managed workspace lives in the data directory by design and is not an error", async () => {
+  fx = await makeFixture();
+  const path = join(fx.home, "workspace");
+  await mkdir(join(path, ".git"), { recursive: true });
+  const runner = fakeRunner({ listProjects: async () => [{ id: "default", name: "default", path, builtin: true }] });
+  expect((await runOne(fx, workspaceCheck, { runner })).findings[0]!.level).toBe("ok");
+});

@@ -86,9 +86,33 @@ export interface LaunchdDeps {
   userHome: string;
   uid: number;
   launchctl?: Launchctl;
+  /** Test seam for the waits around bootout/bootstrap. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const domain = (uid: number) => `gui/${uid}`;
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const UNLOAD_POLLS = 50; // × 100 ms
+const BOOTSTRAP_TRIES = 5;
+
+/**
+ * Boots the job out and waits until launchd has let go of it: bootout returns before that, and a bootstrap that comes
+ * too soon fails with "5: Input/output error", leaving nothing loaded.
+ */
+async function bootoutAndWait(launchctl: Launchctl, target: string, sleep: (ms: number) => Promise<void>): Promise<void> {
+  if ((await launchctl(["bootout", target])).code !== 0) return; // it wasn't loaded
+  for (let i = 0; i < UNLOAD_POLLS && (await launchctl(["print", target])).code === 0; i++) await sleep(100);
+}
+
+/** Loads the plist, trying again a few times while launchd is still unloading an earlier copy. */
+async function bootstrap(launchctl: Launchctl, uid: number, path: string, sleep: (ms: number) => Promise<void>): Promise<void> {
+  for (let i = 1; ; i++) {
+    const res = await launchctl(["bootstrap", domain(uid), path]);
+    if (res.code === 0) return;
+    if (i >= BOOTSTRAP_TRIES) throw new LaunchdError(`launchctl bootstrap failed: ${res.output || `exit ${res.code}`}`);
+    await sleep(500);
+  }
+}
 
 export class LaunchdError extends ServiceError {}
 
@@ -101,6 +125,8 @@ function requireMac(platform: NodeJS.Platform | undefined): void {
 /** Writes the plist and loads it (replacing a loaded one). */
 export async function installAgent(o: PlistOptions, deps: LaunchdDeps): Promise<{ plist: string }> {
   requireMac(deps.platform);
+  // Under sudo the job would go to root's domain, which can't hold a login agent ("125: Domain does not support…").
+  if (deps.uid === 0) throw new LaunchdError("Run it without sudo: the gateway runs as you, at your login. Try: tcode gateway install");
   const launchctl = deps.launchctl ?? runLaunchctl;
   const label = o.label ?? LAUNCHD_LABEL;
   const path = plistPath(deps.userHome, label);
@@ -108,9 +134,9 @@ export async function installAgent(o: PlistOptions, deps: LaunchdDeps): Promise<
   await mkdir(dirname(o.logPath), { recursive: true, mode: 0o700 });
   await writeFile(path, renderPlist(o), { mode: 0o644 });
   // A previous copy may be loaded or not; both are fine.
-  await launchctl(["bootout", `${domain(deps.uid)}/${label}`]);
-  const loaded = await launchctl(["bootstrap", domain(deps.uid), path]);
-  if (loaded.code !== 0) throw new LaunchdError(`launchctl bootstrap failed: ${loaded.output || `exit ${loaded.code}`}`);
+  const sleep = deps.sleep ?? realSleep;
+  await bootoutAndWait(launchctl, `${domain(deps.uid)}/${label}`, sleep);
+  await bootstrap(launchctl, deps.uid, path, sleep);
   return { plist: path };
 }
 
@@ -142,7 +168,8 @@ export async function agentStatus(deps: LaunchdDeps, label = LAUNCHD_LABEL): Pro
 /** The ServiceManager over launchd. */
 export function launchdManager(deps: ServiceDeps): ServiceManager {
   const launchctl: Launchctl = (args) => (deps.run ?? runCommand)(["launchctl", ...args]);
-  const d: LaunchdDeps = { platform: deps.platform, userHome: deps.userHome, uid: deps.uid, launchctl };
+  const sleep = deps.sleep ?? realSleep;
+  const d: LaunchdDeps = { platform: deps.platform, userHome: deps.userHome, uid: deps.uid, launchctl, sleep };
   const target = `${domain(deps.uid)}/${LAUNCHD_LABEL}`;
   const path = plistPath(deps.userHome);
 
@@ -150,8 +177,7 @@ export function launchdManager(deps: ServiceDeps): ServiceManager {
   const ensureLoaded = async (): Promise<void> => {
     if (!existsSync(path)) throw new LaunchdError("The gateway service isn't installed. Run: tcode gateway install");
     if ((await agentStatus(d)).loaded) return;
-    const res = await launchctl(["bootstrap", domain(deps.uid), path]);
-    if (res.code !== 0) throw new LaunchdError(`launchctl bootstrap failed: ${res.output || `exit ${res.code}`}`);
+    await bootstrap(launchctl, deps.uid, path, sleep);
   };
 
   return {
@@ -170,7 +196,7 @@ export function launchdManager(deps: ServiceDeps): ServiceManager {
     async stop() {
       requireMac(deps.platform);
       // bootout, not kill: KeepAlive would start it again. The plist stays, so `start` and the next login load it.
-      await launchctl(["bootout", target]);
+      await bootoutAndWait(launchctl, target, sleep);
     },
     async restart() {
       requireMac(deps.platform);

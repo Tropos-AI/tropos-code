@@ -18,7 +18,7 @@ export const securityWorkspaceCheck: Check = {
       const id = `security.workspace.${p.id}`;
       if (!existsSync(p.path)) continue; // the workspace check reports a missing directory
       const problems: Finding[] = [];
-      const bad = workspaceProblem(p.path, env.home, env.userHome);
+      const bad = p.builtin ? undefined : workspaceProblem(p.path, env.home, env.userHome);
       if (bad) problems.push(finding(id, "error", `Project ${p.id}: ${bad}`, { detail: "A chat could read your credentials or Tropos's own settings." }));
       if (env.platform !== "win32" && (statSync(p.path).mode & 0o002) !== 0) {
         problems.push(finding(`${id}.writable`, "warn", `Project ${p.id}: ${p.path} is writable by every user`, { detail: `Fix: chmod o-w ${p.path}` }));

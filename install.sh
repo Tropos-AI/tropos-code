@@ -728,8 +728,10 @@ NOTE_EOF
       if [ "$run_status" -ne 0 ]; then warn "tcode doctor --fix exited with $run_status; run \"tcode doctor\" to see what needs attention (details: ${log_file:-not logged})"; else done_step "Checked your setup"; fi
       if [ "$restart_gateway" = yes ]; then
         step "Starting the gateway service..."
-        run_cmd "gateway start" "$tcode_bin" gateway start </dev/null
-        if [ "$run_status" -ne 0 ]; then warn "tcode gateway start exited with $run_status; start it with \"tcode gateway start\""; else done_step "Started the gateway service"; fi
+        # install, not start: it rewrites the service to run ~/.local/bin/tcode, so this version is what starts (older
+        # installs pointed the service at the previous version's file).
+        run_cmd "gateway install" "$tcode_bin" gateway install </dev/null
+        if [ "$run_status" -ne 0 ]; then warn "tcode gateway install exited with $run_status; start it with \"tcode gateway install\""; else done_step "Started the gateway service"; fi
       fi
     else
       warn "$(show_path "$tcode_bin") is missing after the install; skipping the post-upgrade checks"
@@ -791,7 +793,7 @@ NOTE_EOF
   if [ "$onboarded" = no ]; then note "  tcode onboard           finish the guided setup"; fi
   note "  tcode                   start a session"
   note "  tcode doctor            check your setup"
-  note "  tcode gateway install   keep the gateway running in the background"
+  if ! gateway_installed; then note "  tcode gateway install   keep the gateway running in the background"; fi
   note "  tcode uninstall         remove Tropos Code"
   note "Docs: $DOCS_URL"
   if [ "$fresh" = yes ] && [ "$onboarded" = no ]; then outro "Run: tcode onboard"; else outro "Done"; fi

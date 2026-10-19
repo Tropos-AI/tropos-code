@@ -30,11 +30,17 @@ async function run(command: GatewayCommand, over: Partial<GatewayCommandContext>
   const out: string[] = [];
   const err: string[] = [];
   const calls: string[][] = [];
+  let loaded = true;
   const run: (command: string[]) => Promise<RunResult> = async (command) => {
     // Nothing real runs: launchctl, systemctl and loginctl are all this fake.
     const [tool, ...args] = command;
     calls.push(tool === "launchctl" ? args : command);
-    if (tool === "launchctl") return { code: 0, output: args[0] === "print" ? "pid = 77" : "" };
+    if (tool === "launchctl") {
+      if (args[0] === "bootout") loaded = false;
+      if (args[0] === "bootstrap") loaded = true;
+      if (args[0] === "print") return loaded ? { code: 0, output: "pid = 77" } : { code: 113, output: "" };
+      return { code: 0, output: "" };
+    }
     if (command[2] === "is-active") return { code: 0, output: "active" };
     if (command[2] === "show") return { code: 0, output: "MainPID=99" };
     return { code: 0, output: "" };
@@ -88,7 +94,7 @@ describe("gateway install / status / uninstall", () => {
     const plist = await Bun.file(plistPath(userHome)).text();
     expect(plist).toContain("<string>/bin/tcode</string>\n    <string>gateway</string>");
     expect(plist).toContain(`<key>WorkingDirectory</key>\n  <string>${home}</string>`);
-    expect(res.calls.map((c) => c[0])).toEqual(["bootout", "bootstrap"]);
+    expect(res.calls.map((c) => c[0])).toEqual(["bootout", "print", "bootstrap"]);
     expect(res.out).toContain("No Telegram bot yet: ask me to connect Telegram (paste the token from @BotFather), or open http://127.0.0.1:4317/#/settings.");
     expect(res.out).toContain("Running tcode in a git repo adds it; or ask me to add one.");
     expect(res.out).not.toContain("tcode projects add");

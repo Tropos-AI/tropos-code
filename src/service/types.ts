@@ -22,6 +22,8 @@ export interface ServiceDeps {
   /** The login name, for the lingering hint (systemd). */
   user?: string;
   run?: ServiceRunner;
+  /** Test seam for the waits while launchd loads and unloads the job. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface ServiceStatus {

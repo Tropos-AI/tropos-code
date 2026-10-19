@@ -63,15 +63,20 @@ describe("install, status, uninstall", () => {
     fn.calls = calls;
     return fn;
   };
-  const deps = (launchctl: Launchctl) => ({ platform: "darwin" as const, userHome, uid: 501, launchctl });
+  const deps = (launchctl: Launchctl) => ({ platform: "darwin" as const, userHome, uid: 501, launchctl, sleep: async () => {} });
 
   test("install writes the plist, replaces a loaded copy and bootstraps it", async () => {
-    const launchctl = recorder();
+    const calls: string[][] = [];
+    const launchctl: Launchctl = async (args) => {
+      calls.push(args);
+      return args[0] === "print" ? { code: 113, output: "" } : { code: 0, output: "" };
+    };
     const { plist } = await installAgent(options(), deps(launchctl));
     expect(plist).toBe(plistPath(userHome));
     expect(readFileSync(plist, "utf8")).toContain("ProgramArguments");
-    expect(launchctl.calls).toEqual([
+    expect(calls).toEqual([
       ["bootout", `gui/501/${LAUNCHD_LABEL}`],
+      ["print", `gui/501/${LAUNCHD_LABEL}`],
       ["bootstrap", "gui/501", plist],
     ]);
   });

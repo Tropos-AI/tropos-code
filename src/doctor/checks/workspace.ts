@@ -23,7 +23,7 @@ export const workspaceCheck: Check = {
         out.push(finding(id, "error", `Project ${p.id}: ${p.path} does not exist`));
         continue;
       }
-      const problem = workspaceProblem(p.path, env.home, env.userHome);
+      const problem = p.builtin ? undefined : workspaceProblem(p.path, env.home, env.userHome);
       if (problem) {
         out.push(finding(id, "error", `Project ${p.id}: ${problem}`));
       } else if (!existsSync(join(p.path, ".git"))) {

@@ -457,8 +457,10 @@ describe("upgrade", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Upgraded 1.0.0 -> 1.1.0");
     // Stopped first: doctor --fix may move the home's layout, which a running gateway must not see half done.
-    expect((await calls(sb)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway start"]);
+    expect((await calls(sb)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway install"]);
     expect(r.stdout).not.toContain("Run: tcode onboard");
+    // It is installed already: the summary doesn't send the owner to install it again.
+    expect(r.stdout).not.toContain("tcode gateway install   keep");
   });
 
   test("without a gateway service there is no restart; systemd units count as installed", async () => {
@@ -472,7 +474,7 @@ describe("upgrade", () => {
     await mkdir(join(b.home, ".config/systemd/user"), { recursive: true });
     await writeFile(join(b.home, ".config/systemd/user/tropos-gateway.service"), "[Service]\n");
     expect((await b.run(["1.1.0"])).code).toBe(0);
-    expect((await calls(b)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway start"]);
+    expect((await calls(b)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway install"]);
   });
 
   test("failures of doctor and the restart only warn", async () => {
@@ -484,7 +486,7 @@ describe("upgrade", () => {
     expect(r.code).toBe(0);
     expect(r.stderr).toContain("tcode doctor --fix exited with 1");
     expect(r.stderr).toContain("tcode gateway stop exited with 1");
-    expect(r.stderr).toContain("tcode gateway start exited with 1");
+    expect(r.stderr).toContain("tcode gateway install exited with 1");
     expect(r.stdout).toContain("Upgraded 1.0.0 -> 1.1.0");
   });
 
