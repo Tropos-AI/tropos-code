@@ -32,7 +32,7 @@ tcode cron add --name "PR summary" --schedule "every weekday at 09:00" \
 | `every weekday at 9:30`, `every weekend at 10am` | Monday to Friday, or Saturday and Sunday |
 | `every monday at 8:00` | That day of the week |
 | `in 20m` | Once, 20 minutes from now |
-| `at 2026-10-20T10:00` | Once, at that date and time |
+| `at 2030-01-31T10:00` | Once, at that date and time |
 | `0 9 * * 1-5` | A 5-field cron expression (minute, hour, day of month, month, day of week) |
 
 Times without a zone are in this computer's time zone, or the one given with `--tz` (for example `--tz Europe/Athens`).

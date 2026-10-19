@@ -20,7 +20,7 @@ it isn't installed, it offers to install it.
 | `--print-url` | Prints the one-time login link instead of opening it (works once, for 2 minutes) |
 | `--no-open` | Only prints where the dashboard is |
 
-(`tcode web` still works and prints "tcode web is now tcode dashboard.")
+(`tcode web`, the former name, still works and points you to `tcode dashboard`.)
 
 ## Logging in
 

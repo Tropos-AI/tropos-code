@@ -10,7 +10,7 @@ keeping it up to date is in [Updates and rollback](updates.md).
 ```sh
 curl -fsSL https://troposlabs.com/install.sh | sh
 curl -fsSL https://troposlabs.com/install.sh | sh -s -- stable
-curl -fsSL https://troposlabs.com/install.sh | sh -s -- 0.3.0
+curl -fsSL https://troposlabs.com/install.sh | sh -s -- X.Y.Z    # a specific release
 ```
 
 Needs `curl` or `wget`, `sha256sum` or `shasum`, and `ssh-keygen` from OpenSSH 8.1 or newer
@@ -83,7 +83,7 @@ installed if any check fails.
 ### Verify the installer before running it
 
 ```sh
-v=0.3.0
+v=X.Y.Z   # the release to install: https://github.com/Tropos-AI/tropos-code/releases
 curl -fsSLO "https://troposlabs.com/releases/$v/install.sh"
 curl -fsSLO "https://troposlabs.com/releases/$v/install.sh.sig"
 printf 'tropos-release %s\n' "<the `ssh-ed25519 <base64>` part of the key line in release/allowed_signers>" > allowed_signers
@@ -120,7 +120,7 @@ update controls and rolling back: [Updates and rollback](updates.md).
 ## Files
 
 `~/.local/share/tropos/versions/<version>` (binaries), `~/.local/share/tropos/manifests/` (signed
-manifests), `~/.local/state/tropos/` (state, locks, `update.log`, `install.log`), `~/.local/bin/tcode` (symlink) and `~/.local/bin/tropos` (the command's name before 0.3.0, a symlink to `tcode`; an install from before 0.3.0 gains `tcode` the first time the new version runs).
+manifests), `~/.local/state/tropos/` (state, locks, `update.log`, `install.log`), `~/.local/bin/tcode` (symlink) and `~/.local/bin/tropos` (the command's former name, kept as a symlink to `tcode`).
 `XDG_DATA_HOME` and `XDG_STATE_HOME` are honoured when absolute.
 
 Uninstall: `tcode uninstall` (see `tcode uninstall --help` for scopes, `--dry-run` and `--yes`). It removes the PATH block the installer added. `~/.tropos` holds your settings, saved provider keys, memory and sessions; it is kept unless you choose to remove it. Without a working `tcode`, by hand: `rm -rf ~/.local/share/tropos ~/.local/state/tropos ~/.local/bin/tcode ~/.local/bin/tropos` (use the `tropos` directories under `$XDG_DATA_HOME` and `$XDG_STATE_HOME` instead when those are set) and delete the block between the `# >>> tropos installer >>>` markers from your shell startup files.

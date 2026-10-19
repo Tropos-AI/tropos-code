@@ -123,7 +123,7 @@ if it isn't installed. See [Dashboard](dashboard.md).
 | `--print-url` | Print the one-time login link instead of opening it (works once, for 2 minutes) |
 | `--no-open` | Only print where the dashboard is |
 
-`tcode web` still works and says it is now `tcode dashboard`.
+`tcode web`, the former name, still works and points you to `tcode dashboard`.
 
 ## tcode status
 
@@ -211,7 +211,7 @@ tcode cron <command>
 | Command | Does |
 |---|---|
 | `list [--json]` | Show the scheduled jobs |
-| `add --name <n> --schedule "<when>" --prompt "<text>" [--project <id>] [--deliver <chat\|none>] [--tz <zone>] [--allow "<rule>"]...` | Add a job. `<when>` is `"every 30m"`, `"every day at 09:00"`, `"in 20m"`, `"at 2026-10-20T10:00"` or a cron expression. `--project` defaults to `default`, `--deliver` to `none` |
+| `add --name <n> --schedule "<when>" --prompt "<text>" [--project <id>] [--deliver <chat\|none>] [--tz <zone>] [--allow "<rule>"]...` | Add a job. `<when>` is `"every 30m"`, `"every day at 09:00"`, `"in 20m"`, `"at 2030-01-31T10:00"` or a cron expression. `--project` defaults to `default`, `--deliver` to `none` |
 | `rm <id>` | Delete a job |
 | `enable <id>`, `disable <id>` | Turn a job on or off |
 | `run <id>` | Make a job due now; the gateway runs it at its next tick |

@@ -14,3 +14,7 @@ web/dist
 web/e2e/out/
 test-results/
 playwright-report/
+
+# Local tool state and eval output
+.serena/
+eval/results/

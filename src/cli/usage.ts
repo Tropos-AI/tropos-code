@@ -17,7 +17,8 @@ Everyday:
   tcode cron list|add|rm|run|runs  scheduled jobs, delivered to your chat
 
 Setup and care:
-  tcode onboard                    guided setup: provider key, model, Telegram, sandbox, run at login
+  tcode onboard                    guided setup: provider key, model, name, projects, autonomy, Telegram,
+                                   phone, run at login
   tcode doctor [--fix] [--lint]    check the install, settings, keys, Docker and the gateway; repair what is safe
   tcode config get|set|unset|show|validate
                                    read and change settings.json and gateway.json safely
@@ -85,6 +86,7 @@ dashboard: tcode dashboard). Never installs an older version.
 A running background service is restarted so it runs the new version.
 
 Options:
+  --version <v>  install that release instead (the same as: tcode install <v>)
   -h, --help     show this help
 `;
 

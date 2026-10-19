@@ -69,11 +69,7 @@ TROPOS_HOME=/tmp/tropos-dev bun run dev -- dashboard --code   # a code to log in
 | `src/web/` | The dashboard server, login, and the admin handlers (`src/web/admin/`) |
 | `web/` | The dashboard's React app |
 | `test/` | End-to-end and installer tests, shared helpers |
-| `docs/` | User documentation; design specs in `docs/superpowers/specs/` |
-
-The design of the whole program, and the evidence on how Claude Code is built that it follows, are in
-`docs/superpowers/specs/2026-10-12-tropos-code-design.md`; later specs in the same folder cover the gateway, the
-control plane, setup and autonomy, learning and the dashboard.
+| `docs/` | User documentation, one topic per page |
 
 ## Making a change
 

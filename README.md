@@ -147,7 +147,7 @@ A terminal session runs on its own; the dashboard, Telegram and scheduled jobs a
 background service. In each, a UI-free agent loop streams the model's answer, validates each tool call, checks it against the permission engine
 (or, in a chat, the autonomy level), runs read-only tools in parallel and edits and commands in order, and sends the
 results back until the model is done. Sessions are append-only JSONL under `~/.tropos/projects/`; long sessions on
-Anthropic models use server-side compaction. The design is in `docs/superpowers/specs/`.
+Anthropic models use server-side compaction.
 
 <br>
 

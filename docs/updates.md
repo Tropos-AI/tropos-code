@@ -60,8 +60,8 @@ The background updater's output goes to `update.log`: `tcode logs update`.
 
 ```bash
 tcode update                    # the newest release of your channel (tcode upgrade is the same)
-tcode update --version 0.5.2    # a specific release
-tcode install 0.5.2             # the same; also: tcode install stable | latest
+tcode update --version X.Y.Z    # a specific release
+tcode install X.Y.Z             # the same; also: tcode install stable | latest
 ```
 
 After moving to a newer version, `tcode update` restarts a running background service so it runs the new version
