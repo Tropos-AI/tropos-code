@@ -18,8 +18,26 @@ const base: ConfinementPaths = {
   readCarveOuts: ["/u/.tropos/workspace", "/u/.tropos/worktrees"],
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
   instructionFiles: [],
+  otherProjectSecrets: [],
   platform: "darwin",
 };
+
+test("the .env files of other projects are read-denied after the carve-outs, and before the chief's own files", () => {
+  const { profile, params } = sandboxProfile({ ...base, otherProjectSecrets: ["/u/.tropos/workspace/.env", "/w/other/.env"] });
+  const carve = profile.indexOf('(allow file-read* (subpath (param "C0"))');
+  const deny = profile.indexOf('(deny file-read* (literal (param "E0")) (literal (param "E1"))');
+  expect(carve).toBeGreaterThan(0);
+  expect(deny).toBeGreaterThan(carve);
+  expect(deny).toBeLessThan(profile.indexOf("(deny file-read* file-write* (regex"));
+  expect(params).toContainEqual(["E0", "/u/.tropos/workspace/.env"]);
+  expect(params).toContainEqual(["E1", "/w/other/.env"]);
+  expect(ruleWith(profile, '(deny file-read* (literal (param "E0"))')).toContain('(regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/\\.[Ee][Nn][Vv]$")');
+});
+
+test("another project's .env whose path the profile can't express is left out instead of refusing every session", () => {
+  const { params } = sandboxProfile({ ...base, otherProjectSecrets: ['/w/odd"name/.env', "/w/Straße/.env", "/w/ok/.env"] });
+  expect(params.filter(([k]) => k.startsWith("E")).map(([, v]) => v)).toEqual(["/w/ok/.env"]);
+});
 
 const ruleWith = (profile: string, head: string) => {
   const line = profile.split("\n").find((l) => l.startsWith(head));

@@ -81,6 +81,15 @@ test("the project is bound after the secrets are hidden and the cache is rebound
   expect(args.slice(-2)).toEqual(["--chdir", cwd]);
 });
 
+test("the .env files of other projects are hidden after the workspace carve-out and the project bind could reopen them", () => {
+  const env = join(userHome, ".tropos", "workspace", ".env");
+  writeFileSync(env, "SECRET=1");
+  const args = bwrapArgs({ ...paths(), otherProjectSecrets: [env] }, project);
+  const hidden = at(args, ...nullFile(env));
+  expect(hidden).toBeGreaterThan(at(args, ...ro(join(userHome, ".tropos", "workspace"))));
+  expect(hidden).toBeGreaterThan(at(args, "--bind", project, project));
+});
+
 test("existing protected paths are bound read-only onto themselves, so they stay readable", () => {
   const args = bwrapArgs(paths(), project);
   const gitBind = at(args, "--bind", join(project, ".git"), join(project, ".git"));

@@ -1,6 +1,6 @@
 // src/exec/confinement-paths.ts — the paths a confined chat command may write, must not touch, and must not read.
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
@@ -19,6 +19,7 @@ export const SECRET_PATHS: readonly string[] = [
   ".config/gh",
   ".docker/config.json",
   ".netrc",
+  ".pgpass",
   ".git-credentials",
   ".config/git/credentials",
   ".npmrc",
@@ -29,9 +30,28 @@ export const SECRET_PATHS: readonly string[] = [
   ".password-store",
   ".cargo/credentials",
   ".cargo/credentials.toml",
+  ".vault-token",
+  ".terraform.d",
+  ".config/op",
+  // Other coding agents: their sign-ins and past sessions.
   ".claude",
+  ".codex",
+  ".gemini",
   ".local/share/keyrings",
   "Library/Keychains",
+  // Shell and REPL histories: commands typed with a token or password in them.
+  ".zsh_history",
+  ".zsh_sessions",
+  ".bash_history",
+  ".bash_sessions",
+  ".history",
+  ".local/share/fish/fish_history",
+  ".python_history",
+  ".node_repl_history",
+  ".psql_history",
+  ".mysql_history",
+  ".sqlite_history",
+  ".lesshst",
   // Browser profiles: cookies and saved passwords.
   "Library/Application Support/Google/Chrome",
   "Library/Application Support/Chromium",
@@ -104,11 +124,72 @@ export interface ConfinementPaths {
    * owner's sessions there load. Read-only, and a missing one can't be created. Empty for the owner.
    */
   instructionFiles: string[];
+  /**
+   * The `.env` files of the owner's other projects (see otherProjectSecrets): unreadable. Denied after the read
+   * carve-outs, since the default project, inside one, is usually one of those projects.
+   */
+  otherProjectSecrets: string[];
   platform: NodeJS.Platform;
 }
 
+/** `.env`, `.env.local`, `.env.production` …, and direnv's `.envrc`. */
+const ENV_FILE = /^\.env(\..+)?$|^\.envrc$/;
+/** How far below a project's root its `.env` files are looked for: `apps/web/.env` is found. */
+const ENV_SCAN_DEPTH = 2;
+/** Entries looked at across all other projects before the search stops; what it found so far is still denied. */
+const ENV_SCAN_ENTRIES = 20_000;
+const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", ".venv", "venv", "vendor", "target"]);
+
+/**
+ * The `.env` files in the owner's other projects (a project inside the session's own is part of it, and the session's
+ * project is never searched, even when it lies inside another one). Real paths: a linked `.env` is denied where it
+ * points. Found when the confinement is built, so a file created later in another project isn't covered until the
+ * next session.
+ */
+function otherProjectSecrets(project: string, others: readonly string[]): string[] {
+  const found: string[] = [];
+  let budget = ENV_SCAN_ENTRIES;
+  const visit = (dir: string, depth: number): void => {
+    if (dir === project || isInside(dir, project)) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (--budget < 0) return;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name)) visit(path, depth + 1);
+      } else if (ENV_FILE.test(entry.name) && (entry.isFile() || (entry.isSymbolicLink() && isFile(path)))) {
+        found.push(real(path));
+      }
+    }
+  };
+  for (const other of others) visit(real(other), 0);
+  return unique(found).filter((path) => !isInside(path, project));
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** All paths are real paths: the macOS sandbox matches the resolved path, so `/tmp/x` in a profile never matches. */
-export function confinementPaths(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv; platform?: NodeJS.Platform; protectInstructions?: boolean }): ConfinementPaths {
+export function confinementPaths(opts: {
+  project: string;
+  home: string;
+  userHome: string;
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  protectInstructions?: boolean;
+  /** The owner's other projects (the registered ones and the built-in workspaces); the session's own may be among them. */
+  otherProjects?: readonly string[];
+}): ConfinementPaths {
   const platform = opts.platform ?? process.platform;
   const userHome = real(opts.userHome);
   const project = real(opts.project);
@@ -138,6 +219,7 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
+    otherProjectSecrets: otherProjectSecrets(project, opts.otherProjects ?? []),
     platform,
   };
   // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.

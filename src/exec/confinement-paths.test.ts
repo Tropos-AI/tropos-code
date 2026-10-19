@@ -24,6 +24,43 @@ test("the secrets list holds every path the spec names", () => {
   for (const p of [".npm", ".bun/install/cache", ".cache/pip", "Library/Caches/Homebrew", "go/pkg/mod"]) expect(CACHE_PATHS).toContain(p);
 });
 
+test("shell histories, other agents' and tools' tokens and the usual credential files are secrets too", () => {
+  const histories = [".zsh_history", ".zsh_sessions", ".bash_history", ".bash_sessions", ".history", ".local/share/fish/fish_history", ".python_history", ".node_repl_history", ".psql_history", ".mysql_history", ".sqlite_history", ".lesshst"];
+  const tokens = [".vault-token", ".terraform.d", ".config/op", ".codex", ".gemini", ".config/gcloud", ".azure", ".kube", ".docker/config.json"];
+  const credentials = [".netrc", ".pgpass", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml", ".config/gh", "Library/Keychains"];
+  for (const p of [...histories, ...tokens, ...credentials]) expect(SECRET_PATHS).toContain(p);
+  expect(new Set(SECRET_PATHS).size).toBe(SECRET_PATHS.length);
+});
+
+test("the .env files of the owner's other projects are denied; the session's own project and projects inside it are left alone", () => {
+  const proj = mk("proj");
+  writeFileSync(join(proj, ".env"), "OWN=1");
+  const inner = mk("proj", "packages", "lib");
+  writeFileSync(join(inner, ".env"), "INNER=1");
+  const other = mk("other");
+  for (const name of [".env", ".env.local", ".envrc", "README.md", ".environment"]) writeFileSync(join(other, name), "x");
+  writeFileSync(join(mk("other", "apps", "web"), ".env.production"), "x");
+  writeFileSync(join(mk("other", "node_modules", "pkg"), ".env"), "x");
+  writeFileSync(join(mk("other", ".git"), ".env"), "x");
+  // A Python virtualenv is often called .env: a folder, nothing secret in it.
+  mk("venvy", ".env", "bin");
+  symlinkSync(other, join(fx, "otherlink"));
+  const paths = confinementPaths({
+    project: proj,
+    home: join(fx, "h", ".tropos"),
+    userHome: mk("h"),
+    env: { TMPDIR: mk("tmp") },
+    platform: "linux",
+    otherProjects: [proj, inner, join(fx, "otherlink"), join(fx, "venvy"), join(fx, "missing")],
+  });
+  expect([...paths.otherProjectSecrets].sort()).toEqual([join(other, ".env"), join(other, ".env.local"), join(other, ".envrc"), join(other, "apps", "web", ".env.production")].sort());
+});
+
+test("without other projects nothing extra is denied", () => {
+  const paths = confinementPaths({ project: mk("proj"), home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
+  expect(paths.otherProjectSecrets).toEqual([]);
+});
+
 test("paths are real paths; Tropos's home is denied and its workspace carved out; caches and temp are writable", () => {
   mk("home", ".ssh");
   mk("home", ".tropos", "workspace");

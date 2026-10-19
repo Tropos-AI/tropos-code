@@ -3,7 +3,7 @@
 // The last matching rule wins, so the order matters (verified with /usr/bin/sandbox-exec on macOS 26):
 // everything allowed; host services denied (Unix sockets but DNS, the keychain); writes denied; writes reopened for
 // the project and temp; secrets write-denied; the per-sandbox cache contents reopened; then the protections, last
-// among the write rules so nothing can reopen them; then secret reads denied; then the workspace and cache readable; then the chief's own files denied again.
+// among the write rules so nothing can reopen them; then secret reads denied; then the workspace and cache readable; then other projects' .env files denied; then the chief's own files denied again.
 // Protected names are also matched in any letter case, as a case-insensitive disk resolves them.
 // Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
 // the sandbox matches resolved paths.
@@ -41,6 +41,10 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   params.push(["CD0", paths.cacheDir]);
   const ownFiles = named("O", paths.ownFiles);
   const instructionFiles = named("I", paths.instructionFiles);
+  // Found by a search of the owner's other projects: one the profile can't express is left out rather than refusing
+  // every session over another project's file name.
+  const otherSecrets = paths.otherProjectSecrets.filter((p) => !p.includes('"') && !lengthChangingLetter(p));
+  const envFiles = named("E", otherSecrets);
 
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
@@ -89,6 +93,8 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
+    // Other projects' .env files, after the carve-out: the default project is usually one of them.
+    ...(envFiles.length > 0 ? [`(deny file-read* ${envFiles.map((p) => `(literal ${p})`).join(" ")} ${otherSecrets.map((p) => `(regex #"^${anyCase(p)}$")`).join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
       ? [
