@@ -6,7 +6,7 @@ import type { HelloInfo, ServerMessage, SessionState } from "@core/web/protocol"
 import { appReducer, initialAppState, isBusy, MAX_TOASTS, nextQueued, type AppAction, type AppState } from "@/lib/app-state";
 
 const HELLO: HelloInfo = {
-  version: "0.5.2",
+  version: "0.5.3",
   cwd: "/repo",
   sessionId: "s1",
   modes: ["default", "acceptEdits", "plan"],

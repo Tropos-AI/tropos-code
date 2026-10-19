@@ -11,9 +11,9 @@ const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-l
 const { StatusPage, groupByArea } = await import("@/app/pages/StatusPage");
 
 const STATUS: StatusSnapshot = {
-  version: "0.5.2",
+  version: "0.5.3",
   channel: "latest",
-  updateAvailable: "0.5.2",
+  updateAvailable: "0.5.3",
   service: { manager: "launchd", installed: true, running: true, pid: 321 },
   gateway: { running: true, pid: 322, startedAt: "2026-10-15T08:00:00Z", telegram: true, webPort: 4317 },
   providers: [
@@ -52,8 +52,8 @@ describe("StatusPage", () => {
   test("shows the overview cards and the findings grouped by area", async () => {
     stubMatchMedia();
     await mountAdmin(StatusPage, { "status.get": () => STATUS, "doctor.run": () => REPORT });
-    await screen.findByText("v0.5.2");
-    expect(screen.getByText("Update available: v0.5.2")).toBeTruthy();
+    await screen.findByText("v0.5.3");
+    expect(screen.getByText("Update available: v0.5.3")).toBeTruthy();
     expect(screen.getByText("pid 321", { exact: false })).toBeTruthy();
     expect(screen.getByText("1 of 2")).toBeTruthy();
     expect(screen.getByText("Docker daemon is not running")).toBeTruthy();
@@ -117,7 +117,7 @@ describe("StatusPage", () => {
     expect(screen.getByText("Couldn't load status")).toBeTruthy();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("v0.5.2");
+    await screen.findByText("v0.5.3");
   });
 });
 

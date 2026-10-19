@@ -19,10 +19,10 @@ const brandLink = () => screen.getByRole("link", { name: "Tropos Code" });
 
 describe("Brand", () => {
   test("the logo without a background and the version chip; no name beside it", () => {
-    render(createElement(Brand, { version: "0.5.2" }));
+    render(createElement(Brand, { version: "0.5.3" }));
     const link = brandLink();
     expect(link.querySelector("img")!.getAttribute("src")).toBe("/brand/favicon-192.png");
-    expect(link.textContent).toBe("v0.5.2");
+    expect(link.textContent).toBe("v0.5.3");
     expect(link.getAttribute("aria-label")).toBe("Tropos Code");
     expect(link.getAttribute("href")).toBe("#/chat");
   });
@@ -34,9 +34,9 @@ describe("Brand", () => {
   });
 
   test("demo shows a badge instead of the version", () => {
-    render(createElement(Brand, { version: "0.5.2", demo: true }));
+    render(createElement(Brand, { version: "0.5.3", demo: true }));
     expect(screen.getByText("demo")).toBeTruthy();
-    expect(screen.queryByText("v0.5.2")).toBeNull();
+    expect(screen.queryByText("v0.5.3")).toBeNull();
   });
 });
 
@@ -59,17 +59,17 @@ describe("SidebarContent", () => {
 
   test("the brand is the logo and the version, never the agent's name from hello or a later state", async () => {
     const { socket } = await mount({}, {}, { name: "Nova", emoji: "🦊" });
-    expect(brandLink().textContent).toBe("v0.5.2");
+    expect(brandLink().textContent).toBe("v0.5.3");
     await act(async () => {
       socket.deliver({ t: "state", state: { ...TEST_STATE, identity: { name: "Bob", emoji: "🔧" } } });
     });
-    expect(brandLink().textContent).toBe("v0.5.2");
+    expect(brandLink().textContent).toBe("v0.5.3");
     expect(brandLink().getAttribute("aria-label")).toBe("Tropos Code");
   });
 
   test("without an identity the brand is the same; showBrand=false hides it", async () => {
     await mount();
-    expect(brandLink().textContent).toBe("v0.5.2");
+    expect(brandLink().textContent).toBe("v0.5.3");
     cleanup();
     await mount({ showBrand: false });
     expect(screen.queryByRole("link", { name: /Tropos Code/ })).toBeNull();
