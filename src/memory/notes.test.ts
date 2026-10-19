@@ -89,7 +89,7 @@ test("entries tolerate CRLF and blank entries", async () => {
 test("usage header and size", () => {
   expect(usageHeader(1474, 2200)).toBe("[67% — 1,474/2,200 chars]");
   expect(notesSize(["ab", "c"])).toBe(6);
-  expect(MEMORY_LIMITS).toEqual({ memory: 2200, user: 1375, lessons: 2200 });
+  expect(MEMORY_LIMITS).toEqual({ memory: 2200, user: 1375, lessons: 2200, heartbeat: 2200 });
 });
 
 test("notesContext wraps both stores and neutralises tags", async () => {
@@ -262,4 +262,27 @@ test("notesContext lists only the allowed targets", async () => {
   const text = await notesContext(own);
   expect(text).toContain("own note");
   expect(text).not.toContain("private profile");
+});
+
+test("heartbeat items are under ## Heartbeat in workspace/AGENTS.md, budgeted at 2,200 chars, beside the lessons", async () => {
+  await store.add("lessons", "be brief");
+  await store.add("heartbeat", "check the nightly deploy");
+  const text = await readFile(join(home, "workspace", "AGENTS.md"), "utf8");
+  expect(sectionEntries(text, "Heartbeat")).toEqual(["check the nightly deploy"]);
+  expect(sectionEntries(text, "Lessons")).toEqual(["be brief"]);
+  expect(store.path("heartbeat")).toBe(join(home, "workspace", "AGENTS.md"));
+  expect(await store.add("heartbeat", "x".repeat(2_300))).toMatchObject({ ok: false });
+  expect(await store.entries("heartbeat")).toEqual(["check the nightly deploy"]);
+  expect(await notesContext(store)).toContain('<notes source="heartbeat">');
+  expect(MEMORY_LIMITS.heartbeat).toBe(2_200);
+});
+
+test("a heartbeat change is a memory entry in the ledger and undoes", async () => {
+  const ledger = new Ledger(home);
+  const withLedger = new NotesStore(home, { ledger });
+  await withLedger.add("heartbeat", "check CI");
+  const [entry] = await ledger.list(1);
+  expect(entry).toMatchObject({ kind: "memory", path: join(home, "workspace", "AGENTS.md") });
+  await ledger.undo(entry!.id);
+  expect(await withLedger.entries("heartbeat")).toEqual([]);
 });

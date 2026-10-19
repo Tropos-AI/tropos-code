@@ -131,6 +131,13 @@ test("target lessons asks about workspace/AGENTS.md", () => {
   expect(tool.schema.safeParse({ target: "lessons", action: "add", content: "x" }).success).toBe(true);
 });
 
+test("target heartbeat asks about workspace/AGENTS.md and is described", () => {
+  const tool = createMemoryTool(store);
+  expect(tool.subject({ target: "heartbeat", action: "add", content: "x" }, "/")).toEqual({ paths: [join(home, "workspace", "AGENTS.md")] });
+  expect(tool.schema.safeParse({ target: "heartbeat", action: "add", content: "x" }).success).toBe(true);
+  expect(tool.description).toContain('target "heartbeat"');
+});
+
 test("a store limited to memory refuses the other targets and writes nothing", async () => {
   const dir = join(home, "agents", "reviewer");
   const own = new NotesStore(home, { dir, targets: ["memory"] });

@@ -5,7 +5,8 @@ import { permissionContext } from "../cli/runtime";
 import type { Autonomy } from "./config";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
-import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
+import { HEARTBEAT_CHAT_KEY } from "./heartbeat";
+import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, heartbeatContext, workspaceProblem } from "./policy";
 
 const exec = { kind: "docker" } as ExecBackend;
 
@@ -175,5 +176,27 @@ describe("chatRole", () => {
     expect(await chatRole("telegram:7", pairing)).toBe("owner");
     expect(await chatRole("telegram:8", pairing)).toBe("guest");
     expect(await chatRole("telegram:-1007", pairing)).toBe("guest");
+  });
+});
+
+describe("heartbeat", () => {
+  const tool = (name: string, kind: string) => ({ name, kind }) as never;
+  test("the heartbeat session has read tools only and is a scheduled session", () => {
+    const ctx = heartbeatContext({
+      ...base(),
+      tools: [tool("Read", "read"), tool("Bash", "exec"), tool("Edit", "edit"), tool("TroposSetup", "exec"), tool("mcp__x__y", "")],
+      role: "owner",
+      contextBlocks: async () => ["<suggestions>x</suggestions>"],
+      testWatch: { observe: () => {} },
+    });
+    expect(ctx.tools.map((t) => t.name)).toEqual(["Read"]);
+    expect(ctx.role).toBe("scheduled");
+    expect(ctx.contextBlocks).toBeUndefined();
+    expect(ctx.testWatch).toBeUndefined();
+    expect(ctx.settings.learning).toMatchObject({ review: false, curator: false });
+  });
+
+  test("the heartbeat key is a scheduled role, whoever the owner is", async () => {
+    expect(await chatRole(HEARTBEAT_CHAT_KEY, { isOwner: async () => true })).toBe("scheduled");
   });
 });

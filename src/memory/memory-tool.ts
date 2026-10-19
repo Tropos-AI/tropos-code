@@ -8,10 +8,11 @@ const ACTION = z.enum(["add", "replace", "remove"]);
 
 const schema = z.object({
   target: z
-    .enum(["memory", "user", "lessons"])
+    .enum(["memory", "user", "lessons", "heartbeat"])
     .describe(
       '"memory" for your own notes (project facts, conventions); "user" for facts about the user (preferences, role, habits); ' +
-        '"lessons" for how to work with this user that you learned the hard way (a correction, an approach that failed and the one that worked), one line each; kept in your workspace AGENTS.md.',
+        '"lessons" for how to work with this user that you learned the hard way (a correction, an approach that failed and the one that worked), one line each; kept in your workspace AGENTS.md.' +
+        ' "heartbeat" for what the owner wants checked in the background (a job, a deploy, a deadline), one line each; kept in your workspace AGENTS.md.',
     ),
   action: ACTION.optional().describe("A single change. Omit it when you pass operations."),
   content: z.string().optional().describe("The entry text for add and replace."),
@@ -93,7 +94,8 @@ export function createMemoryTool(store: NotesStore): AnyTool {
       'target "memory" holds your notes (project conventions, environment quirks, lessons learned, ' +
       `up to ${MEMORY_LIMITS.memory.toLocaleString("en-US")} chars); target "user" holds the user profile (preferences, role, ` +
       `communication style, up to ${MEMORY_LIMITS.user.toLocaleString("en-US")} chars); ` +
-      `target "lessons" holds how to work with this user (up to ${MEMORY_LIMITS.lessons.toLocaleString("en-US")} chars). ` +
+      `target "lessons" holds how to work with this user (up to ${MEMORY_LIMITS.lessons.toLocaleString("en-US")} chars); ` +
+      `target "heartbeat" holds what to check in the background (up to ${MEMORY_LIMITS.heartbeat.toLocaleString("en-US")} chars). ` +
       'Write entries as declarative facts, not commands: "User prefers concise answers" (good), not "Always answer concisely". ' +
       "Save only what will still matter next week; never save secrets, task progress, one-off errors or things the code already says. " +
       "How to do a recurring task is a procedure: put it in a skill (SkillManage), not here. " +

@@ -11,22 +11,26 @@ import { blockedPlaceholder, scanText } from "../learning/threats";
 import type { Actor } from "../tools/types";
 import { sectionEntries, withSectionEntries } from "./agents-file";
 
-export type NotesTarget = "memory" | "user" | "lessons";
+export type NotesTarget = "memory" | "user" | "lessons" | "heartbeat";
 
-const ALL_TARGETS: readonly NotesTarget[] = ["memory", "user", "lessons"];
+const ALL_TARGETS: readonly NotesTarget[] = ["memory", "user", "lessons", "heartbeat"];
+
+/** Targets kept as items of a `## <section>` in the workspace AGENTS.md rather than in a file of their own. */
+const SECTIONS = { lessons: "Lessons", heartbeat: "Heartbeat" } as const;
+const sectionOf = (target: NotesTarget): "Lessons" | "Heartbeat" | undefined => (target === "lessons" || target === "heartbeat" ? SECTIONS[target] : undefined);
 
 /**
  * Character budgets per store. They are deliberately small: the notes ride in every session's first
  * message, and a hard cap forces the model to consolidate instead of hoarding.
  */
-export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 1375, lessons: 2200 };
+export const MEMORY_LIMITS: Record<NotesTarget, number> = { memory: 2200, user: 1375, lessons: 2200, heartbeat: 2200 };
 
 /** Entries are kept apart by a lone "§" line so a file stays readable and hand-editable. */
 export const ENTRY_SEPARATOR = "\n§\n";
 
 const FILES = { memory: "MEMORY.md", user: "USER.md" } as const;
 
-const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile", lessons: "lessons" };
+const LABELS: Record<NotesTarget, string> = { memory: "agent notes", user: "user profile", lessons: "lessons", heartbeat: "heartbeat checks" };
 
 /** Notes can hold personal facts: the directory and files are owner-only. */
 const DIR_MODE = 0o700;
@@ -113,10 +117,10 @@ export class NotesStore {
   }
 
   path(target: NotesTarget): string {
-    if (this.folder !== undefined) return join(this.folder, target === "lessons" ? "AGENTS.md" : FILES[target]);
+    if (this.folder !== undefined) return join(this.folder, sectionOf(target) ? "AGENTS.md" : FILES[target as "memory" | "user"]);
     // Lessons are the "## Lessons" items of the workspace AGENTS.md, which has no legacy home.
-    if (target === "lessons") return workspaceFile(this.home, "AGENTS.md");
-    return resolveLayoutPath(this.home, FILES[target]); // LEGACY_LAYOUT: memories/ until the migration moves it
+    if (sectionOf(target)) return workspaceFile(this.home, "AGENTS.md");
+    return resolveLayoutPath(this.home, FILES[target as "memory" | "user"]); // LEGACY_LAYOUT: memories/ until the migration moves it
   }
 
   async entries(target: NotesTarget): Promise<string[]> {
@@ -192,7 +196,8 @@ export class NotesStore {
           entries,
         };
       }
-      const after = target === "lessons" ? withSectionEntries(before, "Lessons", next) : next.length > 0 ? `${next.join(ENTRY_SEPARATOR)}\n` : "";
+      const section = sectionOf(target);
+      const after = section ? withSectionEntries(before, section, next) : next.length > 0 ? `${next.join(ENTRY_SEPARATOR)}\n` : "";
       // Recorded before the write: if the write fails, undo sees a mismatch and refuses.
       await this.ledger?.record({
         actor: actor ?? "agent",
@@ -214,7 +219,8 @@ export class NotesStore {
 
 /** A store's entries: § -separated for the note files, the Lessons items for AGENTS.md. */
 function parseEntries(target: NotesTarget, text: string): string[] {
-  return target === "lessons" ? sectionEntries(text, "Lessons") : splitEntries(text);
+  const section = sectionOf(target);
+  return section ? sectionEntries(text, section) : splitEntries(text);
 }
 
 function clip(text: string, max = 80): string {
@@ -269,7 +275,7 @@ export function neutraliseNoteTags(text: string): string {
   return neutraliseHarnessTags(text);
 }
 
-const SOURCES: Record<NotesTarget, string> = { memory: "agent", user: "user-profile", lessons: "lessons" };
+const SOURCES: Record<NotesTarget, string> = { memory: "agent", user: "user-profile", lessons: "lessons", heartbeat: "heartbeat" };
 
 /**
  * The notes blocks for a session's `<context>`; "" when both stores are empty. Entries that fail the

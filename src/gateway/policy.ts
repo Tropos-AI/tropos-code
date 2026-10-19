@@ -8,7 +8,9 @@ import { STORE_TOOLS } from "../learning/stores";
 import { compileRules, type AutonomyPolicy } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
+import { HEARTBEAT_CHAT_KEY } from "./heartbeat";
 import { privateTelegramSender } from "./revocation";
+import { toolKind } from "../tools/types";
 import type { Pairing, SessionRole } from "./types";
 
 /** The only modes a chat can be in: never `bypass`, and nothing that silently accepts edits. */
@@ -29,6 +31,8 @@ const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["SessionSearch", ...STORE
 /** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups and guests' jobs included). */
 export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner">): Promise<SessionRole> {
   // project:<id>:guest runs a job made in a guest's chat: its text is a guest's (src/gateway/cron/runner.ts).
+  // The heartbeat is a scheduled run: it never takes the owner's rights, whoever the owner is.
+  if (chatKey === HEARTBEAT_CHAT_KEY) return "scheduled";
   if (chatKey.startsWith("project:")) return chatKey.endsWith(":guest") ? "guest" : "scheduled";
   const sender = privateTelegramSender(chatKey);
   return sender !== undefined && (await pairing.isOwner("telegram", sender)) ? "owner" : "guest";
@@ -110,4 +114,18 @@ export function workspaceProblem(workspace: string, troposHome: string, userHome
   if (dir !== worktrees && isInside(dir, worktrees)) return undefined;
   if (isInside(dir, real(troposHome))) return `${workspace} is inside Tropos's data directory; pick a project directory`;
   return undefined;
+}
+
+/**
+ * The heartbeat's session: read tools only (it can look, never run a command or write a file), a scheduled run with
+ * no learning, and none of the owner's suggestion or test-watching extras.
+ */
+export function heartbeatContext(base: AppContext): AppContext {
+  const { contextBlocks: _blocks, testWatch: _watch, ...rest } = base;
+  return {
+    ...rest,
+    role: "scheduled",
+    tools: base.tools.filter((t) => toolKind(t) === "read"),
+    settings: { ...base.settings, learning: { ...base.settings.learning, review: false, curator: false } },
+  };
 }

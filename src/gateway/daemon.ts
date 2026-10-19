@@ -48,7 +48,8 @@ import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { ownerCronTool } from "../tools/cron/owner-cron";
 import { ownerChatKey } from "./pairing";
-import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, workspaceProblem } from "./policy";
+import { CHANNEL_MODES, channelContext, chatRole, gatewayHosted, heartbeatContext, workspaceProblem } from "./policy";
+import { createHeartbeatService, HEARTBEAT_CHAT_KEY } from "./heartbeat";
 import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
 import { AdminError } from "../web/admin/context";
@@ -335,7 +336,13 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       autonomy: () => ({ level: sessionAutonomy({ config: live, projectId, role, confined }), testCommands: pinnedTestCommands(live, projectId) }),
     });
     // The owner's chats hear suggestions too (the terminal's reminders never reached them); a guest's never do.
-    const sessionCtx = role === "owner" ? withSuggestions(channel, { userHome, projectId, testCommands: pinnedTestCommands(live, projectId) }) : channel;
+    // The heartbeat reads and nothing else; it is never a guest and has no session tools.
+    const sessionCtx =
+      role === "owner"
+        ? withSuggestions(channel, { userHome, projectId, testCommands: pinnedTestCommands(live, projectId) })
+        : parseSessionKey(key)?.chatKey === HEARTBEAT_CHAT_KEY
+          ? heartbeatContext(channel)
+          : channel;
     roles.set(key, role);
     const chatKey = parseSessionKey(key)?.chatKey;
     sessionCtx.tools = chatSessionTools(sessionCtx.tools, {
@@ -651,7 +658,13 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let stopReaper = (): void => {};
   try {
     for (const adapter of adapters) await adapter.start();
-    for (const service of [cron, createCuratorService({ log: (m) => run.err(`gateway: curator: ${m}\n`) }), ...(run.services ?? [])]) {
+    const heartbeat = createHeartbeatService({
+      openSession: () => pool.open(sessionKey(HEARTBEAT_CHAT_KEY, DEFAULT_PROJECT_ID)),
+      owner: () => run.pairing.owner(),
+      telegramConnected: () => adapters.some((a) => a.name === "telegram"),
+      log: (m) => run.err(`gateway: heartbeat: ${m}\n`),
+    });
+    for (const service of [cron, createCuratorService({ log: (m) => run.err(`gateway: curator: ${m}\n`) }), heartbeat, ...(run.services ?? [])]) {
       try {
         await service.start(serviceDeps);
         startedServices.push(service);
