@@ -20,6 +20,17 @@ export const SETUP_ACTIONS = [
   "mcp.add",
   "mcp.enable",
   "mcp.disable",
+  "mcp.edit",
+  "mcp.remove",
+  "mcp.list",
+  "mcp.test",
+  "plugin.install",
+  "plugin.enable",
+  "plugin.disable",
+  "plugin.remove",
+  "plugin.list",
+  "skill.install",
+  "download",
   "proactive.set",
   "autonomy.lower",
   "doctor.run",
@@ -28,6 +39,11 @@ export const SETUP_ACTIONS = [
   "tropos.update",
 ] as const;
 export type SetupAction = (typeof SETUP_ACTIONS)[number];
+
+/** Actions that delete or replace something the ledger can't bring back: they ask every time (src/permissions/engine.ts). */
+export function isDestructive(input: { action: SetupAction; overwrite?: boolean }): boolean {
+  return input.action === "mcp.remove" || input.action === "plugin.remove" || (input.action === "download" && input.overwrite === true);
+}
 
 /** Who is asking: their role, and whether they sit at the computer (terminal, dashboard) or in a chat. */
 export interface SetupWho {
@@ -103,11 +119,21 @@ const TEXT_FIELDS = [
   ["finding", "The finding id"],
 ] as const;
 
+/** What is fetched: URLs and folders in a repository are shown in plain ASCII, like a command. */
+const FETCH_FIELDS = [
+  ["source", "The source"],
+  ["subdir", "The folder in the repository"],
+  ["url", "The URL"],
+] as const;
+
+type TextInput = Partial<Record<(typeof TEXT_FIELDS)[number][0] | (typeof FETCH_FIELDS)[number][0], string>>;
+
 /** Why the request's own text can't be shown in the approval (and so is refused), or undefined. */
-export function setupTextProblem(input: Partial<Record<(typeof TEXT_FIELDS)[number][0], string>>): string | undefined {
-  for (const [field, what] of TEXT_FIELDS) {
+export function setupTextProblem(input: TextInput): string | undefined {
+  const checks = [...TEXT_FIELDS.map(([f, w]) => [f, w, unshowableText] as const), ...FETCH_FIELDS.map(([f, w]) => [f, w, unshowable] as const)];
+  for (const [field, what, check] of checks) {
     const value = input[field];
-    const why = value === undefined ? undefined : unshowableText(value);
+    const why = value === undefined ? undefined : check(value);
     if (why) return `${what} ${why}, so I can't show it to you for approval. Make this change in the dashboard instead.`;
   }
   return undefined;
@@ -132,6 +158,32 @@ export function mcpServerProblem(server: ServerInput, extensions: string): strin
   return undefined;
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * A configured server with `change` applied (mcp.edit): the fields given replace the old ones, env keys are added or
+ * replaced (the rest are kept), and moving to a URL drops the command (and the reverse). `env` holds the resolved keys.
+ */
+export function editedServer(current: Record<string, unknown>, change: ServerInput & { type?: "stdio" | "http" | "sse" }, env: Record<string, string> = {}): Record<string, unknown> {
+  const disabled = current.disabled === true ? { disabled: true } : {};
+  if (change.url !== undefined || change.type === "http" || change.type === "sse") {
+    const wasRemote = typeof current.url === "string";
+    const type = change.type && change.type !== "stdio" ? change.type : wasRemote && current.type === "sse" ? "sse" : "http";
+    return { type, url: change.url ?? current.url, ...(wasRemote && isObject(current.headers) ? { headers: current.headers } : {}), ...disabled };
+  }
+  const wasLocal = typeof current.command === "string";
+  const merged = { ...(wasLocal && isObject(current.env) ? current.env : {}), ...env };
+  const args = change.args ?? (wasLocal ? current.args : undefined);
+  return {
+    ...(wasLocal && current.type === "stdio" ? { type: "stdio" } : {}),
+    command: change.command ?? (wasLocal ? current.command : undefined),
+    ...(args !== undefined ? { args } : {}),
+    ...(Object.keys(merged).length ? { env: merged } : {}),
+    ...(wasLocal && typeof current.cwd === "string" ? { cwd: current.cwd } : {}),
+    ...disabled,
+  };
+}
+
 const serverSchema = z.object({
   type: z.enum(["stdio", "http", "sse"]).optional(),
   command: z.string().optional(),
@@ -144,13 +196,23 @@ const serverSchema = z.object({
 export const setupInputSchema = z.object({
   action: z.enum(SETUP_ACTIONS),
   project: z.string().optional().describe("A project id: project.rename, project.remove, project.default, autonomy.lower (one project)."),
-  name: z.string().optional().describe("project.create / project.add / project.rename: the project's name. mcp.*: the server's name."),
-  path: z.string().optional().describe("project.add: the folder to register."),
+  name: z
+    .string()
+    .optional()
+    .describe("project.create / project.add / project.rename: the project's name. mcp.*: the server's name. plugin.*: the plugin's name (plugin.install: which plugin of a marketplace repository). skill.install: the skill's name, when it should differ."),
+  path: z.string().optional().describe("project.add: the folder to register. download: where to save the file, relative to the project (default: the URL's file name)."),
   model: z.string().optional().describe('model.set: e.g. "anthropic/claude-opus-5-5".'),
   effort: z.enum(EFFORTS).optional().describe("model.set: the reasoning effort."),
   provider: z.string().optional().describe('provider.connect: the provider id, e.g. "anthropic", "openai".'),
   secret: z.string().optional().describe("telegram.connect / provider.connect: the secret:<n> ref of the key the user pasted. Never the key itself."),
-  server: serverSchema.optional().describe("mcp.add: the server to add."),
+  server: serverSchema.optional().describe("mcp.add: the server to add. mcp.edit: only what changes (command, args, url, or env keys to add or replace)."),
+  source: z
+    .string()
+    .optional()
+    .describe("plugin.install / skill.install: an https git URL, a GitHub folder or file link, a SKILL.md URL (skill.install), or a folder on this computer."),
+  subdir: z.string().optional().describe("plugin.install / skill.install: the folder inside the repository that holds it."),
+  url: z.string().optional().describe("download: the https URL of the file."),
+  overwrite: z.boolean().optional().describe("download: replace a file already at the path. Only when the user asked for that."),
   enabled: z.boolean().optional().describe("proactive.set: messages I start myself on or off."),
   activeHours: z.object({ start: z.string(), end: z.string() }).optional().describe('proactive.set: e.g. {"start":"09:00","end":"21:00"}; quiet outside.'),
   everyHours: z.number().optional().describe("proactive.set: how often I check whether something is worth a message."),

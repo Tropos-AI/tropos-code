@@ -281,6 +281,9 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   // Ahead of every allow path (rules, accept-edits, autonomy): a broad `Edit(**)` never approves these silently.
   if (own) return { behavior: "ask", reason: `Tropos's own file: ${own}` };
   if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
+  // Removing an MCP server or a plugin, or replacing a file: no allow rule or autonomy level does that unasked, and no
+  // "don't ask again" rule is offered for it.
+  if (req.destructive && req.kind === "exec") return { behavior: "ask", reason: "This can't be undone." };
   // Asking hooks still turn this allow into a prompt (src/agent/agent.ts).
   if (ownerStoreSave && !ctx.stores!.askBeforeSaving) return { behavior: "allow" };
   if (autonomyAllows(req, ctx)) return { behavior: "allow" };

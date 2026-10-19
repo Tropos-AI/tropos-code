@@ -1,5 +1,6 @@
 // src/extensions/plugins.ts
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { HOOK_EVENTS, hooksSchema, mcpServerSchema, type HooksSetting, type McpServerSetting } from "../config/settings";
@@ -18,7 +19,7 @@ export interface LoadedPlugin {
 }
 
 /** Manifest locations, first found wins: Tropos's own, Claude Code's, then a bare plugin.json. */
-const MANIFESTS = [join(".tropos-plugin", "plugin.json"), join(".claude-plugin", "plugin.json"), "plugin.json"];
+export const MANIFESTS = [join(".tropos-plugin", "plugin.json"), join(".claude-plugin", "plugin.json"), "plugin.json"];
 
 const PLUGIN_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
@@ -37,11 +38,14 @@ function isMissing(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** Parsed JSON, null when the file is absent; throws with a readable message otherwise. */
-async function readJson(path: string): Promise<unknown> {
+/**
+ * Parsed JSON, null when the file is absent; throws with a readable message otherwise. Synchronous (the files are small)
+ * so a permission preview of a plugin reads it exactly as the loader does.
+ */
+function readJson(path: string): unknown {
   let text: string;
   try {
-    text = await readFile(path, "utf8");
+    text = readFileSync(path, "utf8");
   } catch (err) {
     if (isMissing(err)) return null;
     throw err;
@@ -61,11 +65,11 @@ function fillRoot(text: string, root: string): string {
   return text.replace(/\$\{(?:TROPOS|CLAUDE)_PLUGIN_ROOT\}/g, () => root);
 }
 
-async function loadHooks(name: string, root: string, warnings: string[]): Promise<HooksSetting> {
+function loadHooks(name: string, root: string, warnings: string[]): HooksSetting {
   const path = join(root, "hooks", "hooks.json");
   let raw: unknown;
   try {
-    raw = await readJson(path);
+    raw = readJson(path);
   } catch (err) {
     warnings.push(`Plugin ${name}: cannot read hooks/hooks.json: ${errorText(err)}`);
     return {};
@@ -104,10 +108,10 @@ function fillServerRoot(server: McpServerSetting, root: string): McpServerSettin
   };
 }
 
-async function loadMcpServers(name: string, root: string, warnings: string[]): Promise<Record<string, McpServerSetting>> {
+function loadMcpServers(name: string, root: string, warnings: string[]): Record<string, McpServerSetting> {
   let raw: unknown;
   try {
-    raw = await readJson(join(root, ".mcp.json"));
+    raw = readJson(join(root, ".mcp.json"));
   } catch (err) {
     warnings.push(`Plugin ${name}: cannot read .mcp.json: ${errorText(err)}`);
     return {};
@@ -138,12 +142,48 @@ async function loadMcpServers(name: string, root: string, warnings: string[]): P
 }
 
 /** Reads the first manifest found; null when the plugin has none. */
-async function readManifest(root: string): Promise<{ path: string; data: unknown } | null> {
+function readManifest(root: string): { path: string; data: unknown } | null {
   for (const rel of MANIFESTS) {
-    const data = await readJson(join(root, rel));
+    const data = readJson(join(root, rel));
     if (data !== null) return { path: rel, data };
   }
   return null;
+}
+
+export type PluginRead = { ok: true; plugin: LoadedPlugin; manifest: string | null; warnings: string[] } | { ok: false; reason: string };
+
+/**
+ * One plugin folder, read as loadPlugins reads it: the manifest, and when `enabled(name)` its hooks and MCP servers.
+ * `entry` (the folder's name) is the plugin's name when the manifest has none. A bad manifest or name means the plugin
+ * isn't loaded at all; a problem in its hooks or servers is a warning.
+ */
+export function readPlugin(root: string, entry: string, enabled: (name: string) => boolean): PluginRead {
+  let manifest: z.infer<typeof manifestSchema> = {};
+  let found: { path: string; data: unknown } | null;
+  try {
+    found = readManifest(root);
+    if (found) {
+      const parsed = manifestSchema.safeParse(found.data);
+      if (!parsed.success) return { ok: false, reason: `${found.path}: ${issues(parsed.error)}` };
+      manifest = parsed.data;
+    }
+  } catch (err) {
+    return { ok: false, reason: `bad manifest: ${errorText(err)}` };
+  }
+  const name = manifest.name ?? entry;
+  if (!PLUGIN_NAME.test(name)) return { ok: false, reason: 'plugin names are kebab-case (set "name" in its plugin.json)' };
+  const on = enabled(name);
+  const warnings: string[] = [];
+  const plugin: LoadedPlugin = {
+    name,
+    root,
+    version: manifest.version,
+    description: manifest.description,
+    hooks: on ? loadHooks(name, root, warnings) : {},
+    mcpServers: on ? loadMcpServers(name, root, warnings) : {},
+    enabled: on,
+  };
+  return { ok: true, plugin, manifest: found?.path ?? null, warnings };
 }
 
 /**
@@ -172,40 +212,17 @@ export async function loadPlugins(home: string, disabled: string[]): Promise<{ p
     } catch {
       continue; // a dangling symlink
     }
-    let manifest: z.infer<typeof manifestSchema> = {};
-    try {
-      const found = await readManifest(root);
-      if (found) {
-        const parsed = manifestSchema.safeParse(found.data);
-        if (!parsed.success) {
-          warnings.push(`Skipped plugin ${entry}: ${found.path}: ${issues(parsed.error)}`);
-          continue;
-        }
-        manifest = parsed.data;
-      }
-    } catch (err) {
-      warnings.push(`Skipped plugin ${entry}: bad manifest: ${errorText(err)}`);
+    const read = readPlugin(root, entry, (name) => !off.has(name));
+    if (!read.ok) {
+      warnings.push(`Skipped plugin ${entry}: ${read.reason}`);
       continue;
     }
-    const name = manifest.name ?? entry;
-    if (!PLUGIN_NAME.test(name)) {
-      warnings.push(`Skipped plugin ${entry}: plugin names are kebab-case (set "name" in its plugin.json)`);
+    if (plugins.some((p) => p.name === read.plugin.name)) {
+      warnings.push(`Skipped plugin ${entry}: another plugin is already named ${read.plugin.name}`);
       continue;
     }
-    if (plugins.some((p) => p.name === name)) {
-      warnings.push(`Skipped plugin ${entry}: another plugin is already named ${name}`);
-      continue;
-    }
-    const enabled = !off.has(name);
-    plugins.push({
-      name,
-      root,
-      version: manifest.version,
-      description: manifest.description,
-      hooks: enabled ? await loadHooks(name, root, warnings) : {},
-      mcpServers: enabled ? await loadMcpServers(name, root, warnings) : {},
-      enabled,
-    });
+    warnings.push(...read.warnings);
+    plugins.push(read.plugin);
   }
   return { plugins, warnings };
 }

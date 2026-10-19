@@ -1,12 +1,17 @@
 // src/tools/setup/describe.ts — the permission preview of a setup change: exactly what changes, as "before → after".
 // It never shows a secret: keys are named by their secret:<n> ref, anything else in an MCP env is hidden.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { gatewayConfigPath } from "../../gateway/config";
+import { resolveLayoutPath } from "../../home/layout";
 import type { PermissionPreview } from "../types";
-import { allowedEnvEntry, looksSecret, SECRET_REF, unshowable, unshowableText, type SetupInput } from "./matrix";
+import { downloadName, downloadUrlProblem, MAX_DOWNLOAD_BYTES } from "./download";
+import { allowedEnvEntry, editedServer, looksSecret, SECRET_REF, unshowable, unshowableText, type SetupInput } from "./matrix";
+import { findPlugin, pluginRuns } from "./plugin-install";
+import { parseSource } from "./sources";
 
-export type SetupState = { settings: Record<string, unknown>; gateway: Record<string, unknown> };
+/** The config files as they are; `home` (the Tropos home) lets a plugin's or skill's preview read what is installed. */
+export type SetupState = { settings: Record<string, unknown>; gateway: Record<string, unknown>; home?: string };
 
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -73,6 +78,28 @@ function proactiveOn(s: SetupState): boolean {
   return typeof obj(s.gateway.telegram).botToken === "string";
 }
 
+/** A configured MCP server as the approval shows what it runs: its command line, or its URL. */
+function serverLine(s: Json): string {
+  if (typeof s.url === "string") return shown(s.url, (u) => u);
+  const words = [s.command, ...(Array.isArray(s.args) ? s.args : [])].filter((w): w is string => typeof w === "string");
+  return words.length ? words.map((w) => shown(w, word)).join(" ") : "(no command)";
+}
+
+/** What is fetched for an install, exactly: a clone (with its branch and folder), a file, or a local folder. */
+function fetchLine(source: string | undefined, subdir: string | undefined): string {
+  if (source === undefined) return "source: (none given)";
+  const why = unshowable(source) ?? (subdir === undefined ? undefined : unshowable(subdir));
+  if (why) return `source: (refused: it ${why})`;
+  const from = parseSource(source, subdir);
+  if ("problem" in from) return `source: (refused: ${from.problem})`;
+  if (from.kind === "file") return `fetch: ${from.url}`;
+  if (from.kind === "local") return `copy the folder: ${t(from.path)}${subdir ? `, folder ${subdir}` : ""} (links inside are refused)`;
+  return `clone (shallow, no git hooks run): ${from.url}${from.ref ? `, branch ${from.ref}` : ""}${from.subdir ? `, folder ${from.subdir}` : ""}`;
+}
+
+const disabledPlugins = (s: SetupState): string[] => (Array.isArray(s.settings.disabledPlugins) ? s.settings.disabledPlugins.filter((x): x is string => typeof x === "string") : []);
+const mb = (n: number): string => `${Math.round(n / 1024 / 1024)} MB`;
+
 export function describeSetupChange(input: SetupInput, state: SetupState): PermissionPreview {
   const header = `TroposSetup: ${input.action}`;
   const lines: string[] = [];
@@ -128,6 +155,91 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
     case "mcp.disable": {
       const current = obj(obj(state.settings.mcpServers)[input.name ?? ""]);
       lines.push(arrow(`MCP server ${t(input.name)}`, current.disabled === true ? "off" : "on", input.action === "mcp.enable" ? "on" : "off"));
+      break;
+    }
+    case "mcp.edit": {
+      const current = obj(state.settings.mcpServers)[input.name ?? ""];
+      if (!isObject(current)) {
+        lines.push(`(no MCP server named ${t(input.name)})`);
+        break;
+      }
+      const change = input.server ?? {};
+      const next = editedServer(current, change, change.env);
+      const label = typeof next.url === "string" ? "url" : "command";
+      lines.push(`MCP server ${t(input.name)}`);
+      lines.push(`${label}: ${serverLine(current)} → ${serverLine(next)}`);
+      const added = Object.entries(change.env ?? {});
+      if (added.length) lines.push(`env: ${added.map(([k, v]) => `${quoted(k)}=${envValue(k, v)}`).join(", ")}`);
+      const kept = Object.keys(obj(current.env)).filter((k) => !(k in (change.env ?? {})));
+      if (kept.length && label === "command") lines.push(`kept: ${kept.map((k) => t(k)).join(", ")} (values not shown)`);
+      if (label === "command") lines.push("The command runs on this computer, as you, whenever a session starts.");
+      break;
+    }
+    case "mcp.remove": {
+      const current = obj(state.settings.mcpServers)[input.name ?? ""];
+      lines.push(isObject(current) ? `MCP server ${t(input.name)}: remove (${serverLine(current)})` : `(no MCP server named ${t(input.name)})`);
+      lines.push("New sessions no longer start it.");
+      break;
+    }
+    case "mcp.test": {
+      const current = obj(state.settings.mcpServers)[input.name ?? ""];
+      lines.push(isObject(current) ? `Start the MCP server ${t(input.name)} once to list its tools, then stop it: ${serverLine(current)}` : `(no MCP server named ${t(input.name)})`);
+      break;
+    }
+    case "mcp.list":
+      lines.push("List the MCP servers and whether they are connected. Read-only: nothing is changed.");
+      break;
+    case "plugin.install":
+      lines.push(fetchLine(input.source, input.subdir));
+      if (input.name) lines.push(`which: the plugin ${t(input.name)} from that marketplace (when the repository is one)`);
+      lines.push(`into: ${join(state.home ?? "~/.tropos", "plugins")}/<its name>`);
+      lines.push("Nothing from it runs now. If it has hooks or MCP servers it is installed switched off: turning it on is a separate approval that lists exactly what it runs.");
+      break;
+    case "plugin.enable":
+    case "plugin.disable": {
+      const plugin = state.home && input.name ? findPlugin(state.home, input.name) : undefined;
+      if (!plugin) {
+        lines.push(`(no plugin named ${t(input.name)})`);
+        break;
+      }
+      const on = !disabledPlugins(state).includes(plugin.name);
+      lines.push(arrow(`plugin ${plugin.name}`, on ? "on" : "off", input.action === "plugin.enable" ? "on" : "off"));
+      lines.push(`its folder: ${t(plugin.root)}`);
+      if (input.action === "plugin.disable") {
+        lines.push("New sessions don't load its commands, skills, agents, hooks or MCP servers.");
+        break;
+      }
+      const runs = pluginRuns(plugin);
+      if (!runs.length) lines.push("It runs no programs: it adds commands, skills or agents.");
+      else {
+        lines.push("When on, it runs on this computer, as you:");
+        for (const r of runs) lines.push(`- ${t(r.what)}: ${shown(r.text, (x) => x)}`);
+      }
+      break;
+    }
+    case "plugin.remove": {
+      const plugin = state.home && input.name ? findPlugin(state.home, input.name) : undefined;
+      lines.push(plugin ? `Delete the plugin ${plugin.name} and its folder ${t(plugin.root)}. This can't be undone.` : `(no plugin named ${t(input.name)})`);
+      break;
+    }
+    case "plugin.list":
+      lines.push("List the installed plugins and whether they are on. Read-only: nothing is changed.");
+      break;
+    case "skill.install": {
+      lines.push(fetchLine(input.source, input.subdir));
+      const dir = state.home ? resolveLayoutPath(state.home, "skills") : "your skills folder";
+      lines.push(`into: ${t(dir)}/${input.name ? t(input.name) : "<the skill's name>"}`);
+      lines.push("Every file is checked for injected instructions, secret leaks, fetch-and-run lines and hidden characters first. A skill is text your sessions follow; nothing in it runs now.");
+      break;
+    }
+    case "download": {
+      const url = input.url;
+      const problem = url === undefined ? "no URL given" : (unshowable(url) && `it ${unshowable(url)}`) || downloadUrlProblem(url);
+      lines.push(problem ? `download: (refused: ${problem})` : `download: ${url}`);
+      const path = input.path ?? (url ? downloadName(url) : "?");
+      lines.push(`save as: ${t(path)}${isAbsolute(path) ? "" : " (in this project's folder)"}`);
+      lines.push(input.overwrite ? `It replaces the file at ${t(path)} if there is one.` : "It never replaces a file that is already there.");
+      lines.push(`At most ${mb(MAX_DOWNLOAD_BYTES)}; you get its size and sha256. Nothing in it runs.`);
       break;
     }
     case "proactive.set": {
