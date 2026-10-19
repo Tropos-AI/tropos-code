@@ -45,7 +45,7 @@ const Row = memo(function Row({ item, gap, leads, streaming, animateTodos, cwd }
   if (item.kind === "user") {
     return (
       <li className={gap}>
-        <MessageUser text={item.text} />
+        <MessageUser text={item.text} attachments={item.attachments} />
       </li>
     );
   }

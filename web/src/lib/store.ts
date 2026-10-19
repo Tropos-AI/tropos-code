@@ -3,6 +3,7 @@
 import { createContext, createElement, useCallback, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 import type { PermissionAnswer, TurnEndReason } from "@core/agent/events";
+import type { Attachment } from "@core/attachments/attachments";
 import type { AdminMethod, AdminResult } from "@core/web/admin/api";
 import type { HelloInfo, RpcMethod, SessionState } from "@core/web/protocol";
 import type { Transcript } from "@core/ui/transcript";
@@ -10,6 +11,7 @@ import { BUSY_ERROR } from "@core/web/protocol";
 import { parseCommand } from "@core/ui/commands";
 
 import { appReducer, initialAppState, isBusy, nextQueued, type AppAction, type AppState, type ConnectionState, type PendingAsk, type QueuedMessage, type Toast, type ToastTone } from "@/lib/app-state";
+import { toPromptAttachment } from "@/lib/attachments";
 import { RpcError, TcodeClient, type AdminArgs, type RpcArgs, type RpcResult } from "@/lib/client";
 import type { Credentials } from "@/lib/credentials";
 import { createDemoSocket, DEMO_QUEUED } from "@/lib/demo";
@@ -42,9 +44,9 @@ export interface AppStore {
    * Runs typed input that becomes a turn: a plain prompt, a prompt command (/init, /learn) or a custom command or skill
    * (expanded by the server first). Anything else is the caller's to handle. A busy refusal puts it back in the queue.
    */
-  runInput(text: string): Promise<void>;
-  /** Queues typed input to run when the agent is free. */
-  enqueue(text: string): void;
+  runInput(text: string, attachments?: Attachment[]): Promise<void>;
+  /** Queues typed input (and what was attached to it) to run when the agent is free. */
+  enqueue(text: string, attachments?: Attachment[]): void;
   dequeue(id: number): void;
   clearQueue(): void;
   setQueuePaused(paused: boolean): void;
@@ -102,10 +104,16 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
 
   type Sent = TurnEndReason | typeof BUSY_ERROR | null;
 
-  const runPrompt = async (text: string, opts: { display?: string; model?: string }): Promise<Sent> => {
-    dispatch({ type: "prompt_sent", text: opts.display ?? text, now: now() });
+  const runPrompt = async (text: string, opts: { display?: string; model?: string; attachments?: Attachment[] }): Promise<Sent> => {
+    const attachments = opts.attachments ?? [];
+    dispatch({ type: "prompt_sent", text: opts.display ?? text, ...(attachments.length > 0 ? { attachments } : {}), now: now() });
     const itemId = state.transcript.done.at(-1)?.id;
-    const params = { text, ...(opts.display !== undefined ? { display: opts.display } : {}), ...(opts.model !== undefined ? { model: opts.model } : {}) };
+    const params = {
+      text,
+      ...(opts.display !== undefined ? { display: opts.display } : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(attachments.length > 0 ? { attachments: attachments.map(toPromptAttachment) } : {}),
+    };
     try {
       return await client.rpc("prompt", params);
     } catch (error) {
@@ -119,22 +127,25 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
     }
   };
 
-  const runInput = async (text: string): Promise<void> => {
+  const runInput = async (text: string, attachments: Attachment[] = []): Promise<void> => {
     const trimmed = text.trim();
-    if (!trimmed || state.sending) return;
-    const command = parseCommand(trimmed, state.hello?.commands ?? []);
+    if ((!trimmed && attachments.length === 0) || state.sending) return;
+    // Images alone are a plain message; attachments ride along with whatever becomes a turn.
+    const command = trimmed ? parseCommand(trimmed, state.hello?.commands ?? []) : ({ kind: "none" } as const);
+    const attached = attachments.length > 0 ? { attachments } : {};
     dispatch({ type: "sending", sending: true });
     interrupted = false;
     let result: Sent = null;
     try {
-      if (command.kind === "none") result = await runPrompt(trimmed, {});
-      else if (command.kind === "prompt") result = await runPrompt(command.text, { display: trimmed });
+      if (command.kind === "none") result = await runPrompt(trimmed, attached);
+      else if (command.kind === "prompt") result = await runPrompt(command.text, { display: trimmed, ...attached });
       else if (command.kind === "custom") {
         // One request: the server expands the command and runs it in the same busy period.
-        dispatch({ type: "prompt_sent", text: trimmed, now: now() });
+        dispatch({ type: "prompt_sent", text: trimmed, ...attached, now: now() });
         const itemId = state.transcript.done.at(-1)?.id;
         try {
-          result = await client.rpc("prompt", { text: "", display: trimmed, command: { name: command.name, args: command.args } });
+          const wire = attachments.length > 0 ? { attachments: attachments.map(toPromptAttachment) } : {};
+          result = await client.rpc("prompt", { text: "", display: trimmed, command: { name: command.name, args: command.args }, ...wire });
         } catch (error) {
           const message = errorMessage(error);
           if (itemId) dispatch({ type: "prompt_unsent", itemId });
@@ -145,7 +156,7 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
       }
     } finally {
       // Another tab started a turn first: keep the message, at the head of the queue, for when it is free.
-      if (result === BUSY_ERROR) dispatch({ type: "queue_add", text: trimmed, front: true });
+      if (result === BUSY_ERROR) dispatch({ type: "queue_add", text: trimmed, ...(attachments.length > 0 ? { attachments } : {}), front: true });
       dispatch({ type: "sending", sending: false });
     }
   };
@@ -157,7 +168,7 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
     const next = nextQueued(state);
     if (!next) return;
     dispatch({ type: "queue_remove", id: next.id });
-    void runInput(next.text);
+    void runInput(next.text, next.attachments);
   };
   listeners.add(() => {
     if (drainScheduled || !nextQueued(state)) return;
@@ -191,7 +202,7 @@ export function createAppStore(options: CreateAppStoreOptions = {}): AppStore {
       }
     },
     runInput,
-    enqueue: (text) => dispatch({ type: "queue_add", text }),
+    enqueue: (text, attachments) => dispatch({ type: "queue_add", text, ...(attachments?.length ? { attachments } : {}) }),
     dequeue: (id) => dispatch({ type: "queue_remove", id }),
     clearQueue: () => dispatch({ type: "queue_clear" }),
     setQueuePaused: (paused) => dispatch({ type: "queue_pause", paused }),

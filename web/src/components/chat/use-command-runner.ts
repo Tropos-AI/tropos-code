@@ -3,6 +3,7 @@
 // commands (/clear, /resume, /undo, /redo) wait for the turn and say so.
 import { useCallback } from "react";
 
+import type { Attachment } from "@core/attachments/attachments";
 import { BLOCKED_WHILE_BUSY, parseCommand, type CommandResult } from "@core/ui/commands";
 import type { UndoResult } from "@core/web/protocol";
 
@@ -45,12 +46,12 @@ async function attempt(store: AppStore, title: string, work: () => Promise<void>
 }
 
 /** Runs one parsed command now. */
-async function execute(store: AppStore, command: CommandResult, typed: string): Promise<void> {
+async function execute(store: AppStore, command: CommandResult, typed: string, attachments: Attachment[]): Promise<void> {
   switch (command.kind) {
     case "none":
     case "prompt":
     case "custom":
-      return store.runInput(typed);
+      return store.runInput(typed, attachments);
     case "help":
       return ui.openPanel("help");
     case "cost":
@@ -102,35 +103,41 @@ async function execute(store: AppStore, command: CommandResult, typed: string): 
 }
 
 /**
- * Returns `run(text)` for the composer. While the agent is busy (or the connection is down), turn input queues; panels
- * still open; session commands are refused with a hint.
+ * Returns `run(text, attachments)` for the composer. While the agent is busy (or the connection is down), turn input
+ * queues; panels still open; session commands are refused with a hint. Attachments go with input that becomes a turn;
+ * returns false when the input was refused, so the composer keeps what was typed and attached.
  */
-export function useCommandRunner(): (text: string) => void {
+export function useCommandRunner(): (text: string, attachments?: Attachment[]) => boolean {
   const store = useAppStore();
   return useCallback(
-    (text: string) => {
+    (text: string, attachments: Attachment[] = []) => {
       const typed = text.trim();
-      if (!typed) return;
+      if (!typed && attachments.length === 0) return false;
       const state = store.getState();
-      const command = parseCommand(typed, state.hello?.commands ?? []);
+      const command: CommandResult = typed ? parseCommand(typed, state.hello?.commands ?? []) : { kind: "none" };
+      if (attachments.length > 0 && !isTurnInput(command)) {
+        store.toast({ tone: "warn", title: "Attachments go with a message", description: "Send the command on its own, or write a message to go with them." });
+        return false;
+      }
       const waiting = isBusy(state) || state.connection.status !== "open" || !state.session;
       if (waiting && !runsImmediately(command)) {
         if (isTurnInput(command)) {
-          store.enqueue(typed);
-          return;
+          store.enqueue(typed, attachments);
+          return true;
         }
         const name = typed.slice(1).split(/\s+/)[0]!.toLowerCase();
         if (state.connection.status !== "open") {
           store.toast({ tone: "warn", title: `/${name} needs the connection`, description: "It will work again once tcode is reachable." });
-          return;
+          return true;
         }
         if (BLOCKED_WHILE_BUSY.has(name)) {
           store.toast({ tone: "warn", title: `/${name} has to wait for the turn to finish`, description: "Press Esc to interrupt." });
-          return;
+          return true;
         }
       }
       if (isTurnInput(command)) store.setQueuePaused(false);
-      void execute(store, command, typed);
+      void execute(store, command, typed, attachments);
+      return true;
     },
     [store],
   );
