@@ -1,5 +1,6 @@
 // src/extensions/agents.ts
-import { join } from "node:path";
+import { stat } from "node:fs/promises";
+import { join, sep } from "node:path";
 import { isAnthropicModelId } from "../config/settings";
 import { isEmojiLike } from "../context/identity";
 import { errorText } from "../error-text";
@@ -18,7 +19,7 @@ export interface AgentDefinition {
   maxTurns?: number;
   /** The agent's instructions, appended to the system prompt as `# Agent: <name>`. */
   prompt: string;
-  source: ExtensionSource | "builtin";
+  source: ExtensionSource | "builtin" | "specialist";
   path?: string;
   /** One emoji shown beside the name in the UI (frontmatter `emoji`). */
   emoji?: string;
@@ -93,8 +94,19 @@ export async function loadAgents(dirs: ExtensionDir[]): Promise<{ agents: AgentD
   const warnings: string[] = [];
   const loaded = new Map<string, AgentDefinition>();
   for (const dir of dirs) {
+    // A folder holding AGENT.md is a specialist: its revisions and skills are not plain agents.
+    const specialistFolders = new Map<string, boolean>();
     for (const rel of await listMarkdown(dir.dir, warnings)) {
       const path = join(dir.dir, rel);
+      const top = rel.split(sep)[0]!;
+      if (dir.source === "user" && top !== rel) {
+        let isSpecialist = specialistFolders.get(top);
+        if (isSpecialist === undefined) {
+          isSpecialist = await stat(join(dir.dir, top, "AGENT.md")).then(() => true, () => false);
+          specialistFolders.set(top, isSpecialist);
+        }
+        if (isSpecialist) continue;
+      }
       if (!(await staysInProject(dir, path))) {
         warnings.push(`Skipped agent file ${path}: it links outside the project`);
         continue;

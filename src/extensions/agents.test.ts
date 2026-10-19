@@ -103,3 +103,14 @@ test("built-ins carry an emoji and agents may set one in frontmatter", async () 
     'Agent word ignores emoji "robot": it must be a single emoji',
   ]);
 });
+
+test("specialist folders in the user agents dir are not plain agents", async () => {
+  const named = (n: string) => `---\nname: ${n}\ndescription: d\n---\nbody`;
+  await put("u/reviewer/AGENT.md", named("reviewer"));
+  await put("u/reviewer/revisions/1.md", named("rev-one"));
+  await put("u/reviewer/skills/x/SKILL.md", named("skill-x"));
+  await put("u/plain.md", named("plain"));
+  const { agents, warnings } = await loadAgents([{ dir: join(dir, "u"), source: "user" }]);
+  expect(warnings).toEqual([]);
+  expect(agents.map((a) => a.name)).toEqual([...BUILTIN_AGENTS.map((a) => a.name), "plain"]);
+});

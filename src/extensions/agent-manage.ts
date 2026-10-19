@@ -2,21 +2,18 @@
 import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { isEmojiLike } from "../context/identity";
 import { errorText } from "../error-text";
 import type { Ledger } from "../learning/ledger";
-import { scanText } from "../learning/threats";
 import { agentsDir, isInside } from "../paths";
 import { makeDiff } from "../tools/diff";
 import { writeFileNoFollow } from "../tools/file-guard";
 import { resolveToolPath } from "../tools/paths";
 import { defineTool, type AnyTool, type ToolOutput } from "../tools/types";
+import { fieldsProblem } from "../agents/specialists";
 import { BUILTIN_AGENTS } from "./agents";
 import { fmList, fmString, parseFrontmatter } from "./frontmatter";
 
 const NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const MAX_PROMPT_CHARS = 20_000;
-const MAX_DESCRIPTION_CHARS = 500;
 
 const schema = z.object({
   action: z.enum(["create", "update", "delete"]),
@@ -61,21 +58,6 @@ function parseAgentFile(text: string): Partial<Fields> {
     model: fmString(data, "model"),
     emoji: fmString(data, "emoji"),
   };
-}
-
-/** Why the fields can't be saved, or undefined. */
-function problem(f: Partial<Fields>): string | undefined {
-  if (!f.description?.trim()) return "description is required: one line saying what the agent does and when to use it.";
-  if (/[\r\n]/.test(f.description)) return "description must be a single line.";
-  if (f.description.length > MAX_DESCRIPTION_CHARS) return `description is over ${MAX_DESCRIPTION_CHARS} chars.`;
-  if (!f.prompt?.trim()) return "prompt is required: the agent's instructions.";
-  if (f.prompt.length > MAX_PROMPT_CHARS) return `prompt is over ${MAX_PROMPT_CHARS.toLocaleString("en-US")} chars.`;
-  if (f.emoji !== undefined && !isEmojiLike(f.emoji)) return "emoji must be a single emoji.";
-  if (f.model !== undefined && !/^[\w./:-]{1,100}$/.test(f.model)) return "model must be a model id such as claude-sonnet-5-5, or an alias (opus, sonnet, haiku).";
-  if (f.tools?.some((t) => !/^[\w*:().-]{1,100}$/.test(t))) return "tools must be tool names such as Read, Grep or mcp__github__*.";
-  const scan = scanText([f.description, f.prompt].join("\n"));
-  if (!scan.ok) return `Not saved: ${scan.reason}.`;
-  return undefined;
 }
 
 /**
@@ -158,7 +140,7 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
           ...Object.fromEntries(Object.entries({ description: input.description, prompt: input.prompt, tools: input.tools, model: input.model, emoji: input.emoji }).filter(([, v]) => v !== undefined)),
         };
         if (fields.emoji !== undefined) fields.emoji = fields.emoji.trim();
-        const why = problem(fields);
+        const why = fieldsProblem(fields);
         if (why) return fail(why);
         const after = renderAgentFile(input.name, fields as Fields);
         await mkdir(root(), { recursive: true, mode: 0o700 });
