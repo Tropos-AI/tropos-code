@@ -22,14 +22,18 @@ Each release's notes on GitHub are its section of this file.
 
 - No stale "Updated to" notice after a newer manual install; `tcode gateway` says when there is nothing to start.
 - The help for `tcode gateway`, `tcode install`, `tcode update` and `tcode onboard` describes what the commands do.
+- Stopping a command or background job on macOS no longer leaves behind a child it was starting at that moment.
 
 ### Security
 
-- File tools re-check, after opening, that the file they opened is inside the project, so a folder swapped for a
-  link mid-call can't send a guest's read or write outside it. Leftover guest processes are stopped after each
-  command.
-- Chat commands confined on macOS and Linux can no longer read shell histories or the credentials of other common
-  tools; `tcode doctor` explains what the `autonomous` level allows.
+- Read, Write, Edit, Grep and downloads check the file again once it is open: if a folder on its way was swapped for
+  a link in the meantime, nothing is read or written. Nothing is truncated before that check, and missing folders are
+  created one at a time.
+- A guest's Docker container stops whatever a command left running as soon as it ends, and the guest's commands and
+  the file tools take turns.
+- Confined chat commands can no longer read shell and REPL histories, other coding agents' folders, Vault, Terraform
+  and 1Password CLI credentials, or the `.env` files of your other projects.
+- `tcode doctor` notes what the Autonomous level allows: network access and reads outside the secret list.
 
 ## [0.5.2] - 2026-10-19
 

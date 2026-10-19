@@ -109,8 +109,9 @@ tcode status                                        # what is running, and wheth
   the [autonomy level](docs/autonomy-and-sandbox.md) decides what runs unasked; MCP tools and changes to Tropos's
   own setup always ask, and a chat can lower its level but never raise it.
 - **A chat's commands are confined.** They run in the project's directory under `sandbox-exec` (macOS) or `bwrap`
-  (Linux): writes only to the project and temp folders, no reads of `~/.ssh`, `~/.aws`, keychains, browser profiles
-  or `~/.tropos`, and only an allowlisted environment, so tokens your shell exports never reach them.
+  (Linux): writes only to the project and temp folders, no reads of `~/.ssh`, `~/.aws`, keychains, browser profiles,
+  shell histories, your other projects' `.env` files or `~/.tropos`, and only an allowlisted environment, so tokens
+  your shell exports never reach them.
 - **Nobody is in by default.** An unknown Telegram sender gets a one-time code that you approve on this computer.
   Guests work in their own folder, and their commands run only in Docker.
 - **Secrets stay out of the conversation.** A key pasted into a chat is sealed before the model, the transcript or the
