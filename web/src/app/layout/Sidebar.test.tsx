@@ -19,12 +19,12 @@ const brandLink = () => screen.getByRole("link", { name: /Tropos Code/ });
 
 describe("Brand", () => {
   test("with a named identity: emoji and name, then a small Tropos Code line", () => {
-    render(createElement(Brand, { version: "0.4.1", identity: { name: "Nova", emoji: "🦊" } }));
+    render(createElement(Brand, { version: "0.5.0", identity: { name: "Nova", emoji: "🦊" } }));
     const link = brandLink();
     expect(link.textContent).toContain("🦊 Nova");
     expect(screen.getByText("Tropos Code").className).toContain("text-[11px]");
     expect(link.getAttribute("href")).toBe("#/chat");
-    expect(screen.getByText("v0.4.1")).toBeTruthy();
+    expect(screen.getByText("v0.5.0")).toBeTruthy();
   });
 
   test("a name without an emoji shows the bare name", () => {
@@ -45,9 +45,9 @@ describe("Brand", () => {
   });
 
   test("demo shows a badge instead of the version", () => {
-    render(createElement(Brand, { version: "0.4.1", demo: true }));
+    render(createElement(Brand, { version: "0.5.0", demo: true }));
     expect(screen.getByText("demo")).toBeTruthy();
-    expect(screen.queryByText("v0.4.1")).toBeNull();
+    expect(screen.queryByText("v0.5.0")).toBeNull();
   });
 });
 
@@ -71,7 +71,7 @@ describe("SidebarContent", () => {
   test("the brand shows the agent's identity from hello", async () => {
     await mount({}, {}, { name: "Nova", emoji: "🦊" });
     expect(brandLink().textContent).toContain("🦊 Nova");
-    expect(screen.getByText("v0.4.1")).toBeTruthy();
+    expect(screen.getByText("v0.5.0")).toBeTruthy();
   });
 
   test("a name saved mid-session arrives with the next state and replaces the one from hello", async () => {

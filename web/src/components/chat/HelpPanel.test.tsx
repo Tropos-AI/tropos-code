@@ -20,7 +20,7 @@ const CUSTOM: ExtraCommand[] = [
   { name: "frontend-design", description: "(skill) Distinctive UI" },
 ];
 
-async function open({ commands = CUSTOM, version }: { commands?: ExtraCommand[]; version?: string } = { version: "0.4.1" }) {
+async function open({ commands = CUSTOM, version }: { commands?: ExtraCommand[]; version?: string } = { version: "0.5.0" }) {
   let closed = 0;
   render(withProviders(connectedStore().store, createElement(HelpPanel, { open: true, onClose: () => closed++, version, commands })));
   await screen.findByRole("dialog", { name: "Help" });
@@ -44,7 +44,7 @@ describe("HelpPanel", () => {
     for (const name of ["General", "Commands", "Custom", "Shortcuts"]) expect(screen.getByRole("tab", { name })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
     expect(panel().textContent).toContain("Tropos Code reads, edits and runs code");
-    expect(panel().textContent).toContain("tcode v0.4.1");
+    expect(panel().textContent).toContain("tcode v0.5.0");
   });
 
   test("leaves the version out when it is unknown", async () => {
@@ -71,7 +71,7 @@ describe("HelpPanel", () => {
   });
 
   test("Custom explains how to add commands when there are none", async () => {
-    const { tab } = await open({ commands: [], version: "0.4.1" });
+    const { tab } = await open({ commands: [], version: "0.5.0" });
     await tab("Custom");
     expect(panel().textContent).toContain("No custom commands or skills yet.");
     expect(panel().textContent).toContain(".tropos/skills/name/SKILL.md");

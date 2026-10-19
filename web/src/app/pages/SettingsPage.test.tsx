@@ -210,7 +210,7 @@ describe("Settings › Models & keys and About", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "Service & updates" }));
     expect(window.location.hash).toBe("#/settings/service");
     const panel = await screen.findByRole("tabpanel");
-    expect(panel.textContent).toContain("0.4.1");
+    expect(panel.textContent).toContain("0.5.0");
     expect(panel.textContent).toContain("/repo");
     expect(panel.textContent).toContain("6f1c2d9a-4b7e-4e21-9c3a-1d2e3f4a5b6c");
     for (const label of ["Copy the version", "Copy the working directory", "Copy the session id"]) {
@@ -224,7 +224,7 @@ describe("Settings › Models & keys and About", () => {
 // ---------- the five tabs (what the old System, Config and Channels pages became) ----------
 
 
-const UPDATE: UpdateStatus = { current: "0.4.1", channel: "latest", latest: "0.5.0", available: true, checkedAt: "2026-10-14T10:00:00Z", autoUpdates: false };
+const UPDATE: UpdateStatus = { current: "0.5.0", channel: "latest", latest: "0.6.0", available: true, checkedAt: "2026-10-14T10:00:00Z", autoUpdates: false };
 const BACKUP: BackupInfo = { name: "tropos-2026-10-14.tar.gz", path: "/b/x", size: 2_500_000, createdAt: "2026-10-14T10:00:00Z", secrets: false, sessions: true };
 
 function handlers(over: AdminHandlers = {}): AdminHandlers {
@@ -287,7 +287,7 @@ describe("Settings › Service & updates › service", () => {
     await mountSettingsTab("service", handlers({ "service.status": () => { throw new Error("Not available in the demo."); } }));
     await screen.findByText("Couldn't load the service status");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(await screen.findByText("v0.4.1")).toBeTruthy();
+    expect(await screen.findByText("v0.5.0")).toBeTruthy();
   });
 });
 
@@ -306,12 +306,12 @@ describe("Settings › Advanced › sandbox", () => {
 describe("Settings › Service & updates › updates", () => {
   test("shows current vs latest; Update now confirms, runs and explains the restart", async () => {
     stubMatchMedia();
-    const { socket } = await mountSettingsTab("service", handlers({ "update.run": () => ({ ok: true, from: "0.4.1", to: "0.5.0", message: "Updated 0.4.1 to 0.5.0." }) }));
+    const { socket } = await mountSettingsTab("service", handlers({ "update.run": () => ({ ok: true, from: "0.5.0", to: "0.6.0", message: "Updated 0.5.0 to 0.6.0." }) }));
     await screen.findByText("Update available");
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
     expect(socket.adminOf("update.run").length).toBe(0);
     fireEvent.click(screen.getByRole("button", { name: "Install update" }));
-    await screen.findByText(/Updated 0\.4\.1 to 0\.5\.0\./);
+    await screen.findByText(/Updated 0\.5\.0 to 0\.6\.0\./);
     expect(screen.getByText(/runs after you restart the gateway/)).toBeTruthy();
     expect(socket.adminOf("update.run").length).toBe(1);
   });
@@ -322,7 +322,7 @@ describe("Settings › Service & updates › updates", () => {
       handlers({
         "update.setChannel": (p) => ({ ...UPDATE, channel: (p as { channel: "latest" | "stable" }).channel }),
         "update.setAuto": (p) => ({ ...UPDATE, autoUpdates: (p as { enabled: boolean }).enabled }),
-        "update.check": () => ({ ...UPDATE, available: false, latest: "0.4.1" }),
+        "update.check": () => ({ ...UPDATE, available: false, latest: "0.5.0" }),
       }),
     );
     const select = (await screen.findByLabelText("Release channel")) as HTMLSelectElement;

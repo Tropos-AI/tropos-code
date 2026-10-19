@@ -11,7 +11,7 @@ const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-l
 const { StatusPage, groupByArea } = await import("@/app/pages/StatusPage");
 
 const STATUS: StatusSnapshot = {
-  version: "0.4.1",
+  version: "0.5.0",
   channel: "latest",
   updateAvailable: "0.5.0",
   service: { manager: "launchd", installed: true, running: true, pid: 321 },
@@ -52,7 +52,7 @@ describe("StatusPage", () => {
   test("shows the overview cards and the findings grouped by area", async () => {
     stubMatchMedia();
     await mountAdmin(StatusPage, { "status.get": () => STATUS, "doctor.run": () => REPORT });
-    await screen.findByText("v0.4.1");
+    await screen.findByText("v0.5.0");
     expect(screen.getByText("Update available: v0.5.0")).toBeTruthy();
     expect(screen.getByText("pid 321", { exact: false })).toBeTruthy();
     expect(screen.getByText("1 of 2")).toBeTruthy();
@@ -117,7 +117,7 @@ describe("StatusPage", () => {
     expect(screen.getByText("Couldn't load status")).toBeTruthy();
     fail = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("v0.4.1");
+    await screen.findByText("v0.5.0");
   });
 });
 
