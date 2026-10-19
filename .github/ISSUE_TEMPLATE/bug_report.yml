@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Tropos Code doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems go through [private reporting](https://github.com/Tropos-AI/tropos-code/security/advisories/new), never here.**
+        Remove API keys, bot tokens and personal data from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. tcode onboard
+        2. …
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      multiple: true
+      options: [Terminal, Dashboard, Telegram, Phone, Scheduled job, Installer or updates, Other]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `tcode --version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15 arm64, Ubuntu 24.04 x64, Alpine 3.22 …
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Status and doctor output
+      description: The relevant part of `tcode status --json` and `tcode doctor --json`, with anything private removed.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines of `tcode logs gateway` or `tcode logs update`, if any.
+      render: text

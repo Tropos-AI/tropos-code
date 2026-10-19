@@ -68,9 +68,9 @@ const MAIN_GUARD = { "[": true, echo: true, exit: true } as const;
 const ALLOW: Record<string, Record<string, true | RegExp[]>> = {
   "release.yml:prepare": {
     ...MAIN_GUARD,
-    bun: [/^bun install --frozen-lockfile$/, /^bun scripts\/release\/check-provenance\.ts --out release-inputs\.zip >> Q$/, /^bun scripts\/release\/check-provenance\.ts --verify-inputs inputs$/, /^bun -e Q$/],
+    bun: [/^bun install --frozen-lockfile$/, /^bun scripts\/release\/check-provenance\.ts --out release-inputs\.zip >> Q$/, /^bun scripts\/release\/check-provenance\.ts --verify-inputs inputs$/, /^bun -e Q$/, /^bun scripts\/release\/notes\.ts Q notes\/release-notes\.md$/],
     sudo: [/^sudo apt-get install -y zstd unzip$/],
-    mkdir: [/^mkdir (inputs|assets)$/],
+    mkdir: [/^mkdir (inputs|assets|notes)$/],
     unzip: [/^unzip -Z1 release-inputs\.zip >zip-names$/, /^unzip -Z release-inputs\.zip >zip-listing$/, /^unzip -q release-inputs\.zip -d inputs$/],
     read: true,
     case: true,

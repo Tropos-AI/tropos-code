@@ -1,0 +1,22 @@
+name: Feature request
+description: Something you'd like Tropos Code to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to get done
+      description: The task or problem, in your own words. What do you do today instead?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: Optional. Tropos aims to work without editing files, so say how you'd like to ask for it or turn it on.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      multiple: true
+      options: [Terminal, Dashboard, Telegram, Phone, Scheduled jobs, Agents and specialists, Memory and skills, Providers and models, Other]

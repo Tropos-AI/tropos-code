@@ -4,6 +4,7 @@ Thanks for helping. This page covers setting up a development copy, the layout o
 good change looks like. For how releases are cut and signed, see the maintainers' section of
 [docs/install.md](docs/install.md#for-maintainers). Security problems are reported privately, as described in
 [SECURITY.md](SECURITY.md), never in a public issue or pull request.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up
 
@@ -94,6 +95,8 @@ TROPOS_HOME=/tmp/tropos-dev bun run dev -- dashboard --code   # a code to log in
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org): `feat(gateway): …`,
   `fix(web): …`, `docs: …`, `test: …`. Say what changed for the user, and why.
 - One logical change per commit; don't mix refactoring with behaviour changes.
+- Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything users will notice; a release's
+  notes on GitHub are its section of that file.
 - Pull requests target `main` and need a review before they merge. Describe what changed, how you tested it, and any
   security or migration impact.
 

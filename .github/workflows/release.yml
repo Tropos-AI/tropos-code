@@ -93,6 +93,17 @@ jobs:
           name: release-assets
           path: assets/
           if-no-files-found: error
+      - name: Release notes from main's CHANGELOG.md
+        env:
+          VERSION: ${{ steps.prov.outputs.version }}
+        run: |
+          mkdir notes
+          bun scripts/release/notes.ts "$VERSION" notes/release-notes.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-notes
+          path: notes/release-notes.md
+          if-no-files-found: error
 
   sign:
     needs: prepare
@@ -158,6 +169,10 @@ jobs:
         with:
           name: signatures
           path: assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-notes
+          path: notes
       - name: Create or complete the draft
         run: |
           # Only gh's own "release not found" means there is no release yet; any other failure
@@ -170,7 +185,7 @@ jobs:
             state=missing
           fi
           if [ "$state" = missing ]; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --title "$TAG" --notes "Verify with the key fingerprint in the README; see docs/install.md." assets/*
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --title "$TAG" --notes-file notes/release-notes.md assets/*
           elif [ "$state" = true ]; then
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber assets/*
           elif [ "$state" = false ]; then

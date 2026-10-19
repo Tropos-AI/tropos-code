@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Tropos-AI/tropos-code/security/advisories/new
+    about: Privately, so the maintainers can fix it before it is public.
+  - name: Documentation
+    url: https://github.com/Tropos-AI/tropos-code/blob/main/docs/README.md
+    about: Install, setup, Telegram, the dashboard, troubleshooting and the FAQ.
