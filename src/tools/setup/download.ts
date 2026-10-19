@@ -85,6 +85,7 @@ export async function download(req: DownloadRequest, place: DownloadPlace, opts:
   const maxBytes = opts.maxBytes ?? MAX_DOWNLOAD_BYTES;
   const tooBig = () => new Refused(`${req.url} is bigger than ${maxBytes >= 1024 * 1024 ? mb(maxBytes) : `${maxBytes} bytes`}; nothing was saved.`);
   // Every hop, the first URL included, is looked up before it is fetched (and before anything touches the disk).
+  // Residual: fetch resolves the name again, so DNS rebinding between the check and the fetch isn't stopped here; the owner approves each URL.
   const guarded = guardedFetch(opts.fetch ?? fetch, opts.resolve);
   const first = await hostProblem(new URL(req.url), opts.resolve);
   if (first) throw new Refused(first);

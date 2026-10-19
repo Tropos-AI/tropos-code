@@ -83,19 +83,29 @@ export class HostRefused extends Error {}
  * resolve. A file:// URL is a path the owner gave on this computer: nothing to look up.
  */
 export async function hostProblem(url: URL, resolve: Resolve = systemResolve): Promise<string | undefined> {
-  if (url.protocol === "file:") return undefined;
+  const vetted = await vetHost(url, resolve);
+  return "problem" in vetted ? vetted.problem : undefined;
+}
+
+/**
+ * hostProblem's check, also returning the addresses a name was found at once they all passed (none for a literal
+ * address or a file:// URL), so a caller can pin its connection to them.
+ */
+export async function vetHost(url: URL, resolve: Resolve = systemResolve): Promise<{ problem: string } | { addresses: string[] }> {
+  if (url.protocol === "file:") return { addresses: [] };
   const literal = privateHostProblem(url);
-  if (literal) return literal;
+  if (literal) return { problem: literal };
   const host = url.hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.+$/, "");
-  if (isIP(host)) return undefined;
+  if (isIP(host)) return { addresses: [] };
   let addresses: string[];
   try {
     addresses = await resolve(host);
   } catch {
-    return `I couldn't find the host ${host}.`;
+    return { problem: `I couldn't find the host ${host}.` };
   }
-  if (!addresses.length) return `I couldn't find the host ${host}.`;
-  return addresses.some((a) => (isIP(a) === 6 ? ipv6Private(a) : isIP(a) === 4 && ipv4Private(a))) ? PRIVATE_HOST : undefined;
+  if (!addresses.length) return { problem: `I couldn't find the host ${host}.` };
+  const bad = addresses.some((a) => (isIP(a) === 6 ? ipv6Private(a) : isIP(a) !== 4 || ipv4Private(a)));
+  return bad ? { problem: PRIVATE_HOST } : { addresses };
 }
 
 /** A fetch that refuses every hop (the first URL and each redirect it is handed) to a private host, name looked up first. */

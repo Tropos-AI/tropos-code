@@ -3,7 +3,8 @@
 // LFS filter, no transport but https and file, and symlinks land as plain files so a repo can't point outside itself.
 // The host is looked up first and git follows no redirect, so it only ever talks to the public host the owner approved.
 import { rm } from "node:fs/promises";
-import { cloneUrlProblem, hostProblem, type Resolve } from "./sources";
+import { isIP } from "node:net";
+import { cloneUrlProblem, vetHost, type Resolve } from "./sources";
 
 export interface CloneOptions {
   /** The environment git runs with; the process's by default. Tests point HOME at a fixture config. */
@@ -44,20 +45,37 @@ function cloneEnv(base: NodeJS.ProcessEnv): Record<string, string> {
   return env;
 }
 
+/** True when this git has http.curloptResolve (git 2.37 and later). */
+async function supportsCurlResolve(git: string, env: Record<string, string>): Promise<boolean> {
+  try {
+    const proc = Bun.spawn([git, "--version"], { env, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 10_000 });
+    const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const m = /(\d+)\.(\d+)/.exec(out);
+    return !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 37));
+  } catch {
+    return false;
+  }
+}
+
 /** `git clone --depth 1` of `url` into `dest` (which must not exist). Throws a readable Error; a failure leaves no `dest`. */
 export async function shallowClone(url: string, dest: string, opts: CloneOptions = {}): Promise<void> {
   const problem = cloneUrlProblem(url);
   if (problem) throw new Error(problem);
   if (opts.ref !== undefined && (!REF.test(opts.ref) || opts.ref.startsWith("-") || opts.ref.includes(".."))) throw new Error(`${opts.ref.slice(0, 60)} isn't a branch or tag name I can use.`);
-  const hostRefused = await hostProblem(new URL(url), opts.resolve);
-  if (hostRefused) throw new Error(hostRefused);
+  const u = new URL(url);
+  const vetted = await vetHost(u, opts.resolve);
+  if ("problem" in vetted) throw new Error(vetted.problem);
   const git = Bun.which("git", { PATH: opts.env?.PATH ?? process.env.PATH ?? "" });
   if (!git) throw new Error("git isn't installed on this computer, so I can't clone a repository.");
-  const args = [git, ...CLONE_FLAGS, "clone", "--depth", "1", "--no-recurse-submodules", "--quiet", ...(opts.ref ? ["--branch", opts.ref] : []), "--", url, dest];
+  const env = cloneEnv(opts.env ?? process.env);
+  // git looks the name up again itself: pinned, it can only reach the addresses just checked (DNS rebinding). A git
+  // without http.curloptResolve (before 2.37) clones unpinned, as before.
+  const pin = vetted.addresses.length && (await supportsCurlResolve(git, env)) ? ["-c", `http.curloptResolve=${u.hostname}:${u.port || "443"}:${vetted.addresses.map((a) => (isIP(a) === 6 ? `[${a}]` : a)).join(",")}`] : [];
+  const args = [git, ...CLONE_FLAGS, ...pin, "clone", "--depth", "1", "--no-recurse-submodules", "--quiet", ...(opts.ref ? ["--branch", opts.ref] : []), "--", url, dest];
   let code: number;
   let stderr: string;
   try {
-    const proc = Bun.spawn(args, { env: cloneEnv(opts.env ?? process.env), stdin: "ignore", stdout: "ignore", stderr: "pipe", timeout: opts.timeoutMs ?? CLONE_TIMEOUT_MS });
+    const proc = Bun.spawn(args, { env, stdin: "ignore", stdout: "ignore", stderr: "pipe", timeout: opts.timeoutMs ?? CLONE_TIMEOUT_MS });
     [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
   } catch (e) {
     [stderr, code] = [e instanceof Error ? e.message : String(e), 1];
