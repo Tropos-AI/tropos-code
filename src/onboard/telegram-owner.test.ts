@@ -7,7 +7,7 @@ import { OwnerClaimStore, type OwnerCandidateView } from "../gateway/owner-claim
 import { FilePairing } from "../gateway/pairing";
 import { OnboardError } from "./engine";
 import { testDeps } from "./testing";
-import { BotBusyError, OWNER_GREETING, confirmOwner, describeCandidate, describeCandidates, nextOwnerCandidate, telegramListenMode } from "./telegram-owner";
+import { BotBusyError, OWNER_GREETING, confirmOwner, describeCandidate, describeCandidates, nextOwnerCandidate, telegramListenMode, type NextOwnerOptions } from "./telegram-owner";
 
 let home: string;
 let server: FakeTelegramServer;
@@ -25,12 +25,26 @@ const addAs = async (store: OwnerClaimStore, c: OwnerCandidateView) => store.add
 /** The secret of the window the poller opened. */
 const nonceNow = async () => (await new OwnerClaimStore(home).nonce())!;
 const deps = () => testDeps(home, { telegramBaseUrl: server.baseUrl });
+/**
+ * Starts listening. `ready` resolves with the window's secret once the window is open and, in direct mode, once what
+ * was already waiting has been read (the poll after it has begun), so a message pushed then is a new one: one pushed
+ * while the backlog read is still being answered would be part of the backlog. A fixed sleep raced both on a busy machine.
+ */
+const listen = (d: ReturnType<typeof deps>, token: string, opts: Omit<NextOwnerOptions, "onWindow">) => {
+  let opened!: (nonce: string) => void;
+  const window = new Promise<string>((resolve) => (opened = resolve));
+  const pending = nextOwnerCandidate(d, token, { ...opts, onWindow: (w) => opened(w.nonce) });
+  const ready = window.then(async (nonce) => {
+    if (opts.mode === "direct") await server.waitFor(() => server.getUpdatesOffsets.length >= 2);
+    return nonce;
+  });
+  return { pending, ready };
+};
 
 describe("nextOwnerCandidate", () => {
   test("direct: the first private human sender who writes after listening starts, with names; excluded ids skipped; acknowledged", async () => {
-    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000), exclude: new Set(["9"]) });
-    await Bun.sleep(50);
-    const n = await nonceNow();
+    const { pending, ready } = listen(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000), exclude: new Set(["9"]) });
+    const n = await ready;
     server.pushMessage(-100, 5, `/start ${n}`, { chatType: "group" });
     server.pushMessage(42, 9, `/start ${n}`);
     server.pushMessage(42, 7, `/start ${n}`, { from: { first_name: "Panagiotis", username: "pk" } });
@@ -41,16 +55,14 @@ describe("nextOwnerCandidate", () => {
   test("direct: messages already waiting when listening starts are dropped, not offered", async () => {
     server.pushMessage(42, 3, "from yesterday", { date: Math.floor(Date.now() / 1000) - 3600 });
     server.pushMessage(42, 4, "waiting, fresh date but before we listened");
-    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
-    await Bun.sleep(100);
-    server.pushMessage(42, 7, `/start ${await nonceNow()}`);
+    const { pending, ready } = listen(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    server.pushMessage(42, 7, `/start ${await ready}`);
     expect((await pending)?.senderId).toBe("7");
   });
 
   test("direct: a late-delivered message dated before the window is skipped", async () => {
-    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
-    await Bun.sleep(50);
-    const n = await nonceNow();
+    const { pending, ready } = listen(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    const n = await ready;
     server.pushMessage(42, 3, `/start ${n}`, { date: Math.floor(Date.now() / 1000) - 3600 });
     server.pushMessage(42, 7, `/start ${n}`);
     const c = await pending;
@@ -59,9 +71,8 @@ describe("nextOwnerCandidate", () => {
   });
 
   test("direct: a private message without the secret is ignored; the link's secret is offered to the caller", async () => {
-    let seen = "";
-    const pending = nextOwnerCandidate(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000), onWindow: (w) => (seen = w.nonce) });
-    await Bun.sleep(50);
+    const { pending, ready } = listen(deps(), server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    const seen = await ready;
     server.pushMessage(42, 4, "hello bot");
     server.pushMessage(42, 5, "/start wrong");
     server.pushMessage(42, 7, `/start ${seen}`);
@@ -82,8 +93,8 @@ describe("nextOwnerCandidate", () => {
   });
 
   test("gateway: opens the claim and returns what the gateway recorded; null on timeout", async () => {
-    const pending = nextOwnerCandidate(deps(), "1:x", { mode: "gateway", signal: AbortSignal.timeout(2_000), pollMs: 5 });
-    await Bun.sleep(20);
+    const { pending, ready } = listen(deps(), "1:x", { mode: "gateway", signal: AbortSignal.timeout(2_000), pollMs: 5 });
+    await ready;
     await addAs(new OwnerClaimStore(home), cand("7"));
     expect((await pending)?.senderId).toBe("7");
     expect(await nextOwnerCandidate(deps(), "1:x", { mode: "gateway", signal: AbortSignal.timeout(30), pollMs: 5, exclude: new Set(["7"]) })).toBeNull();
@@ -127,9 +138,8 @@ describe("confirmOwner", () => {
 describe("direct mode confirmation", () => {
   test("a sender caught by direct polling can be confirmed", async () => {
     const d = deps();
-    const pending = nextOwnerCandidate(d, server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
-    await Bun.sleep(50);
-    server.pushMessage(42, 7, `/start ${await nonceNow()}`);
+    const { pending, ready } = listen(d, server.token, { mode: "direct", signal: AbortSignal.timeout(5_000) });
+    server.pushMessage(42, 7, `/start ${await ready}`);
     await confirmOwner(d, server.token, (await pending)!);
     expect(await new FilePairing({ path: join(home, "gateway", "pairing.json") }).owner()).toEqual({ channel: "telegram", senderId: "7" });
   });
