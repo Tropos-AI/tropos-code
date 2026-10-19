@@ -26,9 +26,11 @@ test("the secrets list holds every known secret path", () => {
 
 test("shell histories, other agents' and tools' tokens and the usual credential files are secrets too", () => {
   const histories = [".zsh_history", ".zsh_sessions", ".bash_history", ".bash_sessions", ".history", ".local/share/fish/fish_history", ".python_history", ".node_repl_history", ".psql_history", ".mysql_history", ".sqlite_history", ".lesshst"];
-  const tokens = [".vault-token", ".terraform.d", ".config/op", ".codex", ".gemini", ".config/gcloud", ".azure", ".kube", ".docker/config.json"];
+  const tokens = [".vault-token", ".terraform.d/credentials.tfrc.json", ".config/op", ".codex", ".gemini", ".config/gcloud", ".azure", ".kube", ".docker/config.json"];
   const credentials = [".netrc", ".pgpass", ".npmrc", ".pypirc", ".cargo/credentials", ".cargo/credentials.toml", ".config/gh", "Library/Keychains"];
   for (const p of [...histories, ...tokens, ...credentials]) expect(SECRET_PATHS).toContain(p);
+  // Only Terraform's credentials: the rest of ~/.terraform.d is its plugin cache, which a build in the sandbox reads.
+  expect(SECRET_PATHS).not.toContain(".terraform.d");
   expect(new Set(SECRET_PATHS).size).toBe(SECRET_PATHS.length);
 });
 
@@ -78,17 +80,16 @@ test("each project gets its own search: one too big to search doesn't leave the 
   expect(withOthers(mk("proj"), [big, small]).otherProjectSecrets).toEqual([big, join(small, ".env")]);
 });
 
-test("a project too big to search that holds the session's project is denied around it, never the session's project itself", () => {
-  const big = mk("big");
-  crowd("big", "libs");
-  writeFileSync(join(big, "README.md"), "x");
-  const proj = mk("big", "apps", "app");
-  mk("big", "apps", "other-app");
-  const denied = withOthers(proj, [big]).otherProjectSecrets;
-  expect([...denied].sort()).toEqual([join(big, "README.md"), join(big, "apps", "other-app"), join(big, "libs")].sort());
+test("a registered project that holds the session's project (a monorepo root), or the home folder, is not another project", () => {
+  const mono = mk("h", "mono");
+  writeFileSync(join(mono, ".env"), "x");
+  const proj = mk("h", "mono", "packages", "app");
+  const paths = withOthers(proj, [mono, join(fx, "h")]);
+  expect(paths.otherProjects).toEqual([]);
+  expect(paths.otherProjectSecrets).toEqual([]);
 });
 
-test("a project denied whole still has its linked .env files and its links into the home folder denied where they point", () => {
+test("a project denied whole still has its linked .env files denied where they point, but not other links", () => {
   const big = mk("big");
   crowd("big", "libs");
   const stash = mk("h", "stash");
@@ -96,14 +97,28 @@ test("a project denied whole still has its linked .env files and its links into 
   symlinkSync(join(stash, "app.env"), join(big, ".env"));
   writeFileSync(join(mk("h", "deep"), "db.env"), "x");
   symlinkSync(join(fx, "h", "deep", "db.env"), join(mk("big", "apps", "web"), ".env.local"));
-  const shared = mk("h", "shared-secrets");
-  symlinkSync(shared, join(big, "shared"));
-  // A link to a system folder (a toolchain, say) stays readable: no owner secrets there, and denying it breaks builds.
-  symlinkSync("/usr/bin", join(big, "tools"));
-  // A link to the home folder itself holds the session's project: never denied.
-  symlinkSync(join(fx, "h"), join(big, "home"));
+  // Toolchains a project links to (~/.local/bin, a pyenv) stay readable: denying them breaks builds.
+  symlinkSync(mk("h", ".local", "bin"), join(big, "tools"));
   const denied = withOthers(mk("h", "proj"), [big]).otherProjectSecrets;
-  expect([...denied].sort()).toEqual([big, join(stash, "app.env"), join(fx, "h", "deep", "db.env"), shared].sort());
+  expect([...denied].sort()).toEqual([big, join(stash, "app.env"), join(fx, "h", "deep", "db.env")].sort());
+});
+
+test("committed templates (.env.example, .env.sample, .env.template) are not secrets", () => {
+  const other = mk("other");
+  for (const name of [".env", ".env.example", ".env.sample", ".env.Template"]) writeFileSync(join(other, name), "x");
+  expect(withOthers(mk("proj"), [other]).otherProjectSecrets).toEqual([join(other, ".env")]);
+});
+
+test("on macOS the other projects are left to a pattern: only where linked .env files point is listed", () => {
+  const other = mk("other");
+  writeFileSync(join(other, ".env"), "x");
+  writeFileSync(join(mk("h", "stash"), "app.env"), "x");
+  symlinkSync(join(fx, "h", "stash", "app.env"), join(other, ".env.local"));
+  const big = mk("big");
+  crowd("big", "libs");
+  const paths = confinementPaths({ project: mk("proj"), home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "darwin", otherProjects: [other, big] });
+  expect(paths.otherProjects).toEqual([other, big]);
+  expect(paths.otherProjectSecrets).toEqual([join(fx, "h", "stash", "app.env")]);
 });
 
 test("without other projects nothing extra is denied", () => {

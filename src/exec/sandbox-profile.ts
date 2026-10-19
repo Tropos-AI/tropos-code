@@ -41,12 +41,24 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   params.push(["CD0", paths.cacheDir]);
   const ownFiles = named("O", paths.ownFiles);
   const instructionFiles = named("I", paths.instructionFiles);
-  // Found by a search of the owner's other projects. One the profile can't spell (a `"`, a letter like ß) is still
-  // denied, by a regex alone with a short wildcard for that letter, rather than refusing every session over another
-  // project's file name; the wildcard may deny a few more of that project's files, never fewer.
+  // The owner's other projects: one pattern for all their roots denies their .env files at any depth, ones created
+  // later included, and keeps the profile small (the sandbox compiles it again for every command, so a rule per file
+  // made each command slower with every file). Committed templates stay readable. A path the profile can't spell (a
+  // `"`, a letter like ß) gets a short wildcard for that letter, rather than refusing every session over another
+  // project's name; the wildcard may deny a few more files, never fewer.
   const spellable = (p: string) => !p.includes('"') && !lengthChangingLetter(p);
+  const spelled = (p: string) => (spellable(p) ? anyCase(p) : looseAnyCase(p));
+  const envLeaf = `\\.${anyCase("env")}(${anyCase("rc")}|\\.[^/]+)?`;
+  const envTemplate = `\\.${anyCase("env")}\\.(${anyCase("example")}|${anyCase("sample")}|${anyCase("template")})`;
+  // A project inside another one is covered by it, which also keeps any root from being a prefix of another.
+  const roots = paths.otherProjects.filter((root) => !paths.otherProjects.some((other) => other !== root && isInside(root, other)));
+  // Never inside a denied secret (the guest workspace inside ~/.tropos): the allow would reopen a file there.
+  const templateRoots = roots.filter((root) => !paths.deniedReads.some((secret) => isInside(root, secret)));
+  const envRoots = rootRegexes(roots, `(.*/)?${envLeaf}$`).map((r) => `(regex #"${r}")`);
+  const envTemplates = rootRegexes(templateRoots, `(.*/)?${envTemplate}$`).map((r) => `(regex #"${r}")`);
+  // Concrete paths: where linked .env files point, and on a platform without patterns the files themselves.
   const envFiles = named("E", paths.otherProjectSecrets.filter(spellable));
-  const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"^${spellable(p) ? anyCase(p) : looseAnyCase(p)}(/.*)?$")`);
+  const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"${fitRegex(p, spelled(p), "(/.*)?$")}")`);
 
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
@@ -95,7 +107,10 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
-    // Other projects' .env files (or whole projects), after the carve-out: the default project is usually one of them.
+    // Other projects' .env files, after the carve-out: the default project is usually one of them. Then their templates
+    // reopened, then the targets of linked .env files denied again (a link may point at a template-named file).
+    ...(envRoots.length > 0 ? [`(deny file-read* ${envRoots.join(" ")})`] : []),
+    ...(envTemplates.length > 0 ? [`(allow file-read* ${envTemplates.join(" ")})`] : []),
     ...(envPatterns.length > 0 ? [`(deny file-read* ${[...envFiles.map((p) => `(subpath ${p})`), ...envPatterns].join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
@@ -144,6 +159,88 @@ function anyCaseForm(path: string): string {
     else out += /^[A-Za-z]$/.test(ch) ? `[${ch.toUpperCase()}${ch.toLowerCase()}]` : `(${forms.join("|")})`;
   }
   return out;
+}
+
+/** sandbox-exec refuses a string of 1024 characters or more (verified with /usr/bin/sandbox-exec on macOS 26). */
+const MAX_REGEX = 1000;
+
+/**
+ * `^<path><rest>` within MAX_REGEX: the path in any case (`spelled`) when that fits, else in its own letter case only,
+ * else its start followed by anything, which denies more, never less.
+ */
+function fitRegex(path: string, spelled: string, rest: string): string {
+  if (spelled.length + rest.length + 1 <= MAX_REGEX) return `^${spelled}${rest}`;
+  const exact = [...path].map((ch) => (ch === '"' ? "." : escapeRegex(ch))).join("");
+  if (exact.length + rest.length + 1 <= MAX_REGEX) return `^${exact}${rest}`;
+  let cut = "";
+  for (const ch of path) {
+    const next = cut + (ch === '"' ? "." : escapeRegex(ch));
+    if (next.length + rest.length + 4 > MAX_REGEX) break;
+    cut = next;
+  }
+  return `^${cut}.*${rest}`;
+}
+
+/**
+ * Regexes `^<root>/<rest>` for all the roots, as few as fit MAX_REGEX each: roots go into one alternation (sharing
+ * their prefixes) until the next would make it too long. Each root must lie in no other.
+ */
+function rootRegexes(roots: readonly string[], rest: string): string[] {
+  const out: string[] = [];
+  let chunk: string[][] = [];
+  let trie: Trie = new Map();
+  const render = () => `^${renderTrie(trie)}${rest}`;
+  for (const root of [...roots].sort()) {
+    const forms = caseTokens(`${root}/`);
+    for (const tokens of forms) insertTokens(trie, tokens);
+    if (render().length <= MAX_REGEX) {
+      chunk.push(...forms);
+      continue;
+    }
+    // Too long with this root: close the chunk without it, and start the next one with it.
+    if (chunk.length > 0) {
+      trie = new Map();
+      for (const tokens of chunk) insertTokens(trie, tokens);
+      out.push(render());
+    }
+    trie = new Map();
+    for (const tokens of forms) insertTokens(trie, tokens);
+    chunk = forms;
+    if (render().length > MAX_REGEX) {
+      out.push(fitRegex(`${root}/`, renderTrie(trie), rest));
+      chunk = [];
+      trie = new Map();
+    }
+  }
+  if (chunk.length > 0) out.push(render());
+  return out;
+}
+
+/** A trie of regex tokens: one per character of a path, in any letter case. */
+type Trie = Map<string, Trie>;
+
+/**
+ * A path's characters as regex tokens in any letter case, once per spelling (NFC and NFD, when they differ). A letter
+ * the profile can't spell becomes the same short wildcard as in looseAnyCase.
+ */
+function caseTokens(path: string): string[][] {
+  const forms = [...new Set([path.normalize("NFC"), path.normalize("NFD")])];
+  return forms.map((form) => [...form].map((ch) => (ch === '"' || lengthChangingLetter(ch) ? "[^/][^/]?[^/]?" : anyCaseForm(ch))));
+}
+
+function insertTokens(trie: Trie, tokens: readonly string[]): void {
+  let node = trie;
+  for (const token of tokens) {
+    let next = node.get(token);
+    if (!next) node.set(token, (next = new Map()));
+    node = next;
+  }
+}
+
+/** The trie as one alternation: the prefix the paths share is spelled out once. The paths must not be prefixes of one another. */
+function renderTrie(node: Trie): string {
+  const branches = [...node].map(([token, next]) => token + renderTrie(next));
+  return branches.length <= 1 ? (branches[0] ?? "") : `(${branches.join("|")})`;
 }
 
 /** anyCase for a path it can't spell: each `"` and each letter whose case changes its length becomes a short wildcard. */

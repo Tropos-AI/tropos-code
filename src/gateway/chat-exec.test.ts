@@ -128,10 +128,16 @@ test.skipIf(!canConfine)("host with confinement: the .env files of the owner's o
   const withOther = gatewayConfigSchema.parse({ chat: { backend: "host" }, projects: [{ id: "other", name: "Other", path: other }, { id: "app", name: "App", path: workspace }] });
   const got = await chatBackend(input({ config: withOther, role: "owner" }));
   const realDir = realpathSync(dir);
-  const denied = (got.backend as unknown as { paths: { otherProjectSecrets: string[] } }).paths.otherProjectSecrets.map((p) => p.slice(realDir.length));
-  // The default project (the chief's workspace) counts as another project too.
-  expect(denied.sort()).toEqual(["/home/.tropos/workspace/.env", "/other/.env"]);
+  const others = (b: ExecBackend) => (b as unknown as { paths: { otherProjects: string[] } }).paths.otherProjects.map((p) => p.slice(realDir.length));
+  // The managed workspaces (the chief's, the guests') count as other projects too.
+  expect(others(got.backend)).toEqual(["/other", "/home/.tropos/workspace", "/home/.tropos/guest-workspace"]);
   await got.backend.close();
+  // A chat in a worktree of the app works on the app: its .env isn't another project's.
+  const tree = join(home, "worktrees", "app-1", "task");
+  mkdirSync(tree, { recursive: true });
+  const inTree = await chatBackend(input({ config: withOther, role: "owner", workspace: tree, project: workspace }));
+  expect(others(inTree.backend)).toEqual(["/other", "/home/.tropos/workspace", "/home/.tropos/guest-workspace"]);
+  await inTree.backend.close();
 });
 
 test.skipIf(!canConfine)("host: a project that can't be confined fails closed with the reason", async () => {

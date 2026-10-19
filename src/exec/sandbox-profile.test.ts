@@ -18,6 +18,7 @@ const base: ConfinementPaths = {
   readCarveOuts: ["/u/.tropos/workspace", "/u/.tropos/worktrees"],
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
   instructionFiles: [],
+  otherProjects: [],
   otherProjectSecrets: [],
   platform: "darwin",
 };
@@ -32,6 +33,38 @@ test("other projects' .env files (or whole folders) are read-denied after the ca
   expect(params).toContainEqual(["E0", "/u/.tropos/workspace/.env"]);
   expect(params).toContainEqual(["E1", "/w/other"]);
   expect(ruleWith(profile, '(deny file-read* (subpath (param "E0"))')).toContain('(regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr](/.*)?$")');
+});
+
+test("one pattern per other project denies its .env files at any depth and reopens its templates", () => {
+  const { profile, params } = sandboxProfile({ ...base, otherProjects: ["/w/other"] });
+  const deny = ruleWith(profile, '(deny file-read* (regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/');
+  expect(deny).toBe('(deny file-read* (regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/(.*/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$"))');
+  const allow = profile.indexOf('(allow file-read* (regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/(.*/)?\\.[Ee][Nn][Vv]\\.([Ee][Xx][Aa][Mm][Pp][Ll][Ee]|[Ss][Aa][Mm][Pp][Ll][Ee]|[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])$"))');
+  expect(allow).toBeGreaterThan(profile.indexOf(deny));
+  expect(profile.indexOf(deny)).toBeGreaterThan(profile.indexOf('(allow file-read* (subpath (param "C0"))'));
+  expect(params.some(([k]) => k.startsWith("E"))).toBe(false);
+});
+
+test("a project inside a denied secret (the guest workspace in ~/.tropos) gets no template allow that would reopen it", () => {
+  const { profile } = sandboxProfile({ ...base, otherProjects: ["/u/.tropos/guest-workspace"] });
+  expect(profile).toContain("[Gg][Uu][Ee][Ss][Tt]-[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/(.*/)?\\.[Ee][Nn][Vv]([Rr][Cc]");
+  expect(profile).not.toContain("[Gg][Uu][Ee][Ss][Tt]-[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/(.*/)?\\.[Ee][Nn][Vv]\\.([Ee][Xx]");
+});
+
+test("thousands of other projects keep the profile small, and no regex reaches the sandbox's 1,024-character limit", () => {
+  const otherProjects = Array.from({ length: 3_200 }, (_, i) => `/Users/someone/Projects/client-work/project-${i}`);
+  const { profile, params } = sandboxProfile({ ...base, otherProjects });
+  const empty = sandboxProfile(base).profile;
+  expect(profile.length - empty.length).toBeLessThan(40_000);
+  expect(params.some(([k]) => k.startsWith("E"))).toBe(false);
+  for (const [, regex] of profile.matchAll(/#"([^"]*)"/g)) expect(regex!.length).toBeLessThan(1_024);
+});
+
+test("a project path too long to spell in every case is still denied, in its own case", () => {
+  const long = `/w/${"deeply-nested-folder/".repeat(20)}other`;
+  const { profile } = sandboxProfile({ ...base, otherProjects: [long], otherProjectSecrets: [`${long}-secrets/app.env`] });
+  expect(profile).toContain(`(regex #"^/w/deeply-nested-folder/`);
+  for (const [, regex] of profile.matchAll(/#"([^"]*)"/g)) expect(regex!.length).toBeLessThan(1_024);
 });
 
 test("another project's .env whose path the profile can't spell is still denied, by a pattern that stands in for the odd letter", () => {
