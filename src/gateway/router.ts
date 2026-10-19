@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gatewayDir } from "./config";
 import { ProjectError, builtinProject, fileProjectSource, guestProject, guestVisible, GUEST_PROJECT_ID, type Project, type ProjectSource } from "./projects";
-import type { ChatSession, SessionProvider } from "./types";
+import type { ChatSession, SessionProvider, SessionRole } from "./types";
 
 /** The pool's key for a chat in a project: `telegram:123@my-app`. Each (chat, project) pair has its own session. */
 export function sessionKey(chatKey: string, projectId: string): string {
@@ -14,6 +14,16 @@ export function sessionKey(chatKey: string, projectId: string): string {
 export function parseSessionKey(key: string): { chatKey: string; projectId: string } | undefined {
   const at = key.lastIndexOf("@");
   return at <= 0 || at === key.length - 1 ? undefined : { chatKey: key.slice(0, at), projectId: key.slice(at + 1) };
+}
+
+const CHAT_KINDS: Record<string, string> = { telegram: "Telegram", project: "Scheduled", heartbeat: "Heartbeat" };
+
+/** Where a session's conversation happens, as the dashboard's Agents page names it: the kind of chat, never its id. */
+export function chatLabel(key: string, role: SessionRole): string {
+  const kind = parseSessionKey(key)?.chatKey.split(":")[0];
+  if (!kind) return "Chat";
+  const name = CHAT_KINDS[kind] ?? `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  return role === "guest" ? `${name} (guest)` : name;
 }
 
 export interface ChatRouterOptions {

@@ -1,6 +1,7 @@
 // src/web/server.ts — the dashboard's local HTTP + WebSocket server. The app shell is public; a socket gets nothing
 // until its first message proves a device key (or logs in with a one-time key or a 6-digit code).
 import type { ServerWebSocket } from "bun";
+import { agentActivity, type AgentActivity } from "../agents/activity";
 import { contentType, type AssetMap } from "./assets";
 import { cleanDeviceName, type Device, type DeviceStore } from "./devices";
 import { localDashboardUrl } from "./links";
@@ -30,6 +31,8 @@ export interface WebServerOptions {
   dev?: boolean;
   /** `host[:port]` of this Mac's tailnet name while phone access is on, else null; asked on every request. */
   remoteHost?: () => string | null;
+  /** The agents' live activity every logged-in tab follows; the process's feed by default. */
+  activity?: AgentActivity;
 }
 
 export interface RunningWebServer {
@@ -136,10 +139,19 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
   /** Sockets that logged in, for recheckDevices. */
   const authed = new Set<Socket>();
 
+  const activity = opts.activity ?? agentActivity;
   const attach = (ws: Socket, deviceId: string) => {
     ws.data.deviceId = deviceId;
     authed.add(ws);
-    ws.data.detach = opts.host.attach(ws.data.send!);
+    const send = ws.data.send!;
+    const detachHost = opts.host.attach(send);
+    // Every chat's agents, not only this tab's project: the Agents page shows the whole process (Telegram chats too).
+    send({ t: "agents", activity: activity.snapshot() });
+    const unfollow = activity.subscribe((event) => send({ t: "agent", event }));
+    ws.data.detach = () => {
+      unfollow();
+      detachHost();
+    };
   };
 
   /** The first message: a device key, or a one-time key / code that creates a device. Keys are never logged. */

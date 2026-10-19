@@ -12,6 +12,7 @@ import { agentsDir, journalDir, workspaceFile } from "../paths";
 import { defineTool, type AnyTool } from "../tools/types";
 import type { ExecBackend } from "../exec/backend";
 import { capAutonomy, execAsks, specialistPermissions, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
+import { AgentActivity, type ActivityEvent } from "./activity";
 import { readRuns } from "./runs";
 import type { Specialist } from "./specialists";
 
@@ -174,6 +175,47 @@ test("runSpecialist returns the report, records the run, and a guest gets nothin
   const guest = await runSpecialist(spec, "x", "x", { ...deps, role: "guest" }, ctx(), new SpecialistSlots());
   expect(guest).toEqual({ content: "Specialists aren't available in this chat.", isError: true });
   expect((await runSpecialist(spec, "x", "x", { ...deps, role: "scheduled", model: new FakeModel([() => reply([textBlock("ok")])]) }, ctx(), new SpecialistSlots())).isError).toBeUndefined();
+});
+
+test("a run reports its start, tool, approval wait and end to the activity feed, with its session and model", async () => {
+  const activity = new AgentActivity({ intervalMs: 0 });
+  const seen: ActivityEvent[] = [];
+  activity.subscribe((e) => seen.push(e));
+  const model = new FakeModel([
+    () => reply([textBlock("Reading it"), toolUseBlock("t1", "Bash", { command: "secret-token-in-input" })], "tool_use"),
+    () => reply([textBlock("LGTM, no issues.\nMore detail")]),
+  ]);
+  const asked: string[] = [];
+  const d: SpecialistDeps = {
+    ...makeDeps(model),
+    activity,
+    sessionId: () => "s1",
+    askPermission: async (prompt) => {
+      asked.push(prompt.toolName);
+      expect(activity.snapshot().running[0]!.state).toBe("waiting");
+      return { kind: "allow" };
+    },
+  };
+  const out = await runSpecialist({ ...spec, model: "haiku" }, "review PR 12 please", "review PR 12", d, ctx(), new SpecialistSlots());
+  expect(out.isError).toBeUndefined();
+  expect(asked).toEqual(["Bash"]);
+  expect(seen[0]).toMatchObject({ type: "start", run: { kind: "specialist", agent: "reviewer", model: "claude-haiku-5-5", task: "review PR 12", session: { id: "s1" } } });
+  const deltas = seen.filter((e) => e.type === "delta");
+  expect(deltas).toContainEqual(expect.objectContaining({ text: "Reading it" }));
+  expect(deltas.some((e) => e.type === "delta" && e.tool?.startsWith("Bash"))).toBe(true);
+  expect(deltas).toContainEqual(expect.objectContaining({ state: "waiting" }));
+  expect(deltas).toContainEqual(expect.objectContaining({ state: "working" }));
+  expect(seen.at(-1)).toMatchObject({ type: "end", run: { agent: "reviewer", ok: true, result: "LGTM, no issues." } });
+  // Never the full tool input.
+  expect(JSON.stringify(seen)).not.toContain("secret-token-in-input");
+  expect(activity.snapshot().running).toEqual([]);
+});
+
+test("a run that fails still ends on the activity feed", async () => {
+  const activity = new AgentActivity({ intervalMs: 0 });
+  const failed = await runSpecialist(spec, "bad", "bad", { ...makeDeps(new FakeModel([() => reply([textBlock("x")], "refusal")])), activity }, ctx(), new SpecialistSlots());
+  expect(failed.isError).toBe(true);
+  expect(activity.snapshot()).toMatchObject({ running: [], last: [{ agent: "reviewer", ok: false }] });
 });
 
 test("the run uses the specialist's model, context and tools, and its deny rules stop reads of the chief's files", async () => {

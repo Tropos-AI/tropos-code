@@ -285,6 +285,7 @@ export function makeAgent(
     postWrite: afterWrite,
     home: ctx.home,
     role: ctx.role,
+    sessionId: () => opts.session().id,
     ledger: ctx.ext.ledger,
     skills: ctx.ext.skills,
     // A specialist sees project memory files but never the chief's own (they live in the workspace).

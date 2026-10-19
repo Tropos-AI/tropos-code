@@ -1,5 +1,6 @@
 // src/web/protocol.ts — messages between the dashboard server and the browser app. No Node imports: the client imports this too.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
+import type { ActivityEvent, ActivitySnapshot } from "../agents/activity";
 import type { Effort, Mode } from "../config/constants";
 import type { MessageParam } from "../session/store";
 import type { ExtraCommand, ListTopic } from "../ui/commands";
@@ -148,6 +149,9 @@ export type ServerMessage =
   | { t: "state"; state: SessionState }
   | { t: "ask"; id: number; prompt: PermissionPrompt }
   | { t: "ask_closed"; id: number }
+  /** What every agent in the process is doing (the chief in each chat, its specialists): on login, then each change. */
+  | { t: "agents"; activity: ActivitySnapshot }
+  | { t: "agent"; event: ActivityEvent }
   | { t: "rpc_result"; id: number; ok: true; result: unknown }
   | { t: "rpc_result"; id: number; ok: false; error: string }
   | { t: "admin_result"; id: number; ok: true; result: unknown }

@@ -1,7 +1,8 @@
 // src/web/host.ts — one tcode session served to every browser tab: runs turns, relays the agent's events,
 // and routes permission prompts to whichever tab answers first.
 import type { Agent } from "../agent/agent";
-import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "../agent/events";
+import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
+import { agentActivity, follow, type ActivityRun, type AgentActivity } from "../agents/activity";
 import { contextWindow } from "../api/pricing";
 import { EFFORTS, MODES, type Effort, type Mode } from "../config/constants";
 import { errorText } from "../error-text";
@@ -29,6 +30,23 @@ export class RpcError extends Error {}
  */
 let nextAsk = 1;
 
+export interface WebHostOptions {
+  /** Where this conversation happens, as the Agents page names it ("Dashboard", "Telegram"). */
+  chat?: string;
+  /** Where its turns' live activity goes; the process's feed by default. */
+  activity?: AgentActivity;
+}
+
+/** A turn that didn't answer, in one line for the Agents page. */
+const ENDED: Record<Exclude<TurnEndReason, "end_turn" | "max_tokens">, string> = {
+  aborted: "Interrupted.",
+  refusal: "The model declined.",
+  max_turns: "Stopped at the turn limit.",
+  context_exceeded: "The conversation no longer fits the model.",
+  error: "Stopped by an error.",
+  blocked: "Blocked by a hook.",
+};
+
 export class WebHost {
   private readonly clients = new Set<Send>();
   private readonly asks = new Map<number, OpenAsk>();
@@ -42,8 +60,17 @@ export class WebHost {
   private closed = false;
   /** A runtime swap in progress: a prompt sent meanwhile waits for it instead of failing as busy. */
   private swapping: Promise<void> | undefined;
+  private readonly chat: string;
+  private readonly activity: AgentActivity;
+  /** The running turn's live activity, and the text of its latest reply. */
+  private live: { run: ActivityRun; reply: string } | undefined;
 
-  constructor(private runtime: Runtime) {
+  constructor(
+    private runtime: Runtime,
+    opts: WebHostOptions = {},
+  ) {
+    this.chat = opts.chat ?? "Dashboard";
+    this.activity = opts.activity ?? agentActivity;
     this.agent = runtime.newAgent(this.ui);
   }
 
@@ -56,10 +83,12 @@ export class WebHost {
         const id = nextAsk++;
         const close = (answer: PermissionAnswer) => {
           if (!this.asks.delete(id)) return;
+          this.live?.run.waiting(this.asks.size > 0);
           this.broadcast({ t: "ask_closed", id });
           resolve(answer);
         };
         this.asks.set(id, { prompt, resolve: close });
+        this.live?.run.waiting(true);
         signal.addEventListener("abort", () => close({ kind: "deny" }), { once: true });
         this.broadcast({ t: "ask", id, prompt });
       }),
@@ -166,6 +195,13 @@ export class WebHost {
   }
 
   private onEvent(event: AgentEvent): void {
+    if (this.live) {
+      follow(this.live.run, event);
+      if (event.type === "assistant") {
+        const text = event.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n").trim();
+        if (text) this.live.reply = text;
+      }
+    }
     if (event.type === "usage") {
       this.usage = { contextTokens: event.contextTokens, totalCostUsd: event.totalCostUsd };
       this.broadcast({ t: "event", event });
@@ -253,10 +289,18 @@ export class WebHost {
             // The terminal's ↑ history includes what was sent from the browser.
             r.recordInput(display);
             r.setTurnModel(model);
+            // The dashboard's Agents page shows this turn while it runs, wherever the chat is.
+            const live = { run: this.activity.start({ kind: "chief", agent: r.identity().name || "Tropos", model: model ?? r.state().model, sessionId: r.sessionId(), chat: this.chat }), reply: "" };
+            this.live = live;
+            let ended = { ok: false, result: ENDED.error };
             try {
               const direct = command ? null : (r.directCall?.(text) ?? null);
-              return direct ? await this.agent.runDirect(text, direct.call, direct.reply, signal) : await this.agent.run(text, signal);
+              const reason = direct ? await this.agent.runDirect(text, direct.call, direct.reply, signal) : await this.agent.run(text, signal);
+              ended = reason === "end_turn" || reason === "max_tokens" ? { ok: true, result: live.reply || "Done." } : { ok: false, result: ENDED[reason] };
+              return reason;
             } finally {
+              this.live = undefined;
+              live.run.end(ended.ok, ended.result);
               r.setTurnModel(undefined);
               this.turns++;
             }

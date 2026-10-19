@@ -8,7 +8,7 @@ import type { PermissionContext } from "../permissions/engine";
 import { MemoryTodoStore } from "../tools/todo/todo";
 import type { AnyTool, ToolContext, ToolOutput } from "../tools/types";
 import { Agent, INTERRUPTED, type AgentHooks } from "./agent";
-import type { PermissionAnswer, PermissionPrompt } from "./events";
+import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "./events";
 
 /** What a subagent needs from its definition (extensions/agents.ts AgentDefinition satisfies this). */
 export interface SubagentDefinition {
@@ -43,6 +43,8 @@ export interface SubagentDeps {
   hooks?: AgentHooks;
   beforeChange?(): Promise<void>;
   postWrite?(paths: string[], signal: AbortSignal): Promise<string | null>;
+  /** Sees every event of the child (a specialist's live activity); must not throw. */
+  onEvent?(event: AgentEvent): void;
 }
 
 export const DEFAULT_SUBAGENT_TURNS = 50;
@@ -166,6 +168,7 @@ export async function runSubagent(
     beforeChange: deps.beforeChange,
     postWrite: deps.postWrite,
     emit: (event) => {
+      deps.onEvent?.(event);
       if (event.type === "tool_start") ctx.progress?.(`${event.name} ${event.summary}`.trim());
       else if (event.type === "tool_end") toolUses++;
       else if (event.type === "assistant") turns++;

@@ -677,6 +677,18 @@ describe("learning and identity", () => {
     expect((await metaOf(join(subDir, file!))).role).toBe("guest");
   });
 
+  test("a specialist's live activity names the session it runs in, after /clear too", async () => {
+    await setup([text("a")]);
+    const { runtime: rt } = await runtime();
+    rt.newAgent({ emit: () => {}, askPermission: allow });
+    expect(ctx.subagents.deps!.sessionId!()).toBe(rt.sessionId());
+    const before = rt.sessionId();
+    await rt.clear();
+    rt.newAgent({ emit: () => {}, askPermission: allow });
+    expect(ctx.subagents.deps!.sessionId!()).not.toBe(before);
+    expect(ctx.subagents.deps!.sessionId!()).toBe(rt.sessionId());
+  });
+
   test("an Identity save tells the runtime to refresh the header identity", async () => {
     await mkdir(ctx.home, { recursive: true });
     await writeFile(join(ctx.home, "IDENTITY.md"), "- Name: Nova\n");

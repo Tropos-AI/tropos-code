@@ -1,6 +1,7 @@
 // src/web/host.test.ts
 import { describe, expect, test } from "bun:test";
-import { reply, textBlock } from "../../test/helpers/fake-model";
+import { reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
+import { AgentActivity, type ActivityEvent } from "../agents/activity";
 import { fakeRuntime } from "../../test/helpers/fake-runtime";
 import type { ProviderStatus } from "../providers/router";
 import { WebHost } from "./host";
@@ -311,5 +312,53 @@ describe("@specialist messages", () => {
     expect(runtime.history().at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "🐚 shell:\nran ls" }] });
     await host.call("prompt", { text: "thanks" });
     expect(runtime.model.requests).toHaveLength(1);
+  });
+});
+
+describe("live activity", () => {
+  function live(steps: Parameters<typeof fakeRuntime>[0], over: Parameters<typeof fakeRuntime>[1] = {}, chat?: string) {
+    const activity = new AgentActivity({ intervalMs: 0 });
+    const events: ActivityEvent[] = [];
+    activity.subscribe((e) => events.push(e));
+    const host = new WebHost(fakeRuntime(steps, over), { activity, ...(chat ? { chat } : {}) });
+    return { activity, events, host };
+  }
+
+  test("a turn is the chief's run: its model and chat, what it writes and calls, a wait for approval, then its first line", async () => {
+    const { activity, events, host } = live(
+      [() => reply([textBlock("Let me look"), toolUseBlock("t1", "Shell", { command: "ls -la" })], "tool_use"), () => reply([textBlock("All good.\nDetails")])],
+      { identity: () => ({ name: "Ada" }) },
+      "Telegram",
+    );
+    let waitingSeen = false;
+    host.attach((m) => {
+      if (m.t !== "ask") return;
+      waitingSeen = activity.snapshot().running[0]?.state === "waiting";
+      void host.handle({ t: "permission", id: m.id, answer: { kind: "allow" } }, () => {});
+    });
+    await host.call("prompt", { text: "check", model: "claude-sonnet-5-5" });
+    expect(events[0]).toMatchObject({ type: "start", run: { kind: "chief", agent: "Ada", model: "claude-sonnet-5-5", session: { id: "fake-session", chat: "Telegram" } } });
+    const deltas = events.filter((e) => e.type === "delta");
+    expect(deltas).toContainEqual(expect.objectContaining({ text: "Let me look" }));
+    expect(deltas).toContainEqual(expect.objectContaining({ tool: "Shell: ls -la" }));
+    expect(waitingSeen).toBe(true);
+    expect(deltas).toContainEqual(expect.objectContaining({ state: "working" }));
+    expect(events.at(-1)).toMatchObject({ type: "end", run: { kind: "chief", agent: "Ada", ok: true, result: "All good." } });
+    expect(activity.snapshot().running).toEqual([]);
+  });
+
+  test("an interrupted turn ends its run too; the chat defaults to the dashboard and the name to Tropos", async () => {
+    const { activity, host } = live([
+      async (_req, _h, signal) => {
+        void host.call("interrupt", undefined);
+        expect(signal.aborted).toBe(true);
+        throw new DOMException("aborted", "AbortError");
+      },
+    ]);
+    await host.call("prompt", { text: "go" });
+    expect(activity.snapshot()).toMatchObject({ running: [], last: [{ kind: "chief", agent: "Tropos", ok: false, result: "Interrupted.", session: { chat: "Dashboard" } }] });
+    // A command that fails to expand never ran: no run.
+    await expect(host.call("prompt", { text: "", command: { name: "nope", args: "" } })).rejects.toThrow();
+    expect(activity.snapshot().last).toHaveLength(1);
   });
 });
