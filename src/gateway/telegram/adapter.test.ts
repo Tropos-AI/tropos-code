@@ -1110,6 +1110,42 @@ describe("TelegramAdapter", () => {
   });
 });
 
+describe("TelegramAdapter turn wrap-up", () => {
+  test("a message that arrives while a turn wraps up waits for it, so its turn can't run beside the wrap-up", async () => {
+    const { projects } = fakeProjects();
+    const lookup = projects.current;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let holdNext = false;
+    // Armed by the first turn as it ends: the wrap-up's look for a project move is held there.
+    projects.current = async (k) => {
+      if (holdNext) {
+        holdNext = false;
+        await held;
+      }
+      return lookup(k);
+    };
+    const { server, sessions } = await setup({ projects });
+    const session = new FakeSession(`telegram:${CHAT}`);
+    sessions.sessions.set(session.key, session);
+    session.onPrompt = async (text, s) => {
+      s.emit(assistantEvent(`echo: ${text}`));
+      s.emit({ type: "turn_end", reason: "end_turn" });
+      if (text === "one") holdNext = true;
+      return "end_turn";
+    };
+    server.pushMessage(CHAT, CHAT, "one");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: one") && !holdNext);
+    server.pushMessage(CHAT, CHAT, "two");
+    await server.waitFor(() => server.allHandled());
+    await Bun.sleep(100);
+    expect(session.prompts).toEqual(["one"]);
+    release();
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: two"));
+    expect(session.prompts).toEqual(["one", "two"]);
+  });
+});
+
 describe("TelegramAdapter worktree buttons", () => {
   const summary: WorktreeSummary = { branch: "tropos/t1", changedFiles: 2, commitsAhead: 0, canPr: true };
   const BUTTONS = "Changes on tropos/t1: 2 files changed.";
