@@ -68,13 +68,13 @@ Memory:   ~/.tropos/TROPOS.md, TROPOS.md (or AGENTS.md, CLAUDE.md) in the repo, 
 
 export const INSTALL_HELP = `Usage: tcode install [stable|latest|<version>] [--force]
 
-Installs a Tropos Code release and makes it the active tropos. Without a target, installs latest.
+Installs a Tropos Code release and makes it the active version. Without a target, installs latest.
 This is a one-time install: background updates keep following "autoUpdatesChannel" in
 ~/.tropos/settings.json.
 
 Options:
       --force    re-verify and re-activate even if the version is already installed, and replace
-                 a ~/.local/bin/tropos that Tropos did not create
+                 a ~/.local/bin/tcode that Tropos did not create
   -h, --help     show this help
 `;
 
@@ -103,13 +103,15 @@ export const GATEWAY_HELP = `Usage: tcode gateway [--workspace <dir>] [--no-web]
        (state and logs: tcode status, tcode logs)
 
 Runs Tropos as a long-lived process that owns agent sessions. A message from Telegram opens a session in the
-chat's project (/project in the chat switches it); its commands run in a Docker container that sees only that
-directory (no home, no credentials, no network unless you allow it), and every edit or command asks you first, as
-buttons in the chat. Nobody can talk to it until you approve them: tcode pairing approve telegram <code>.
-Nothing needs a workspace: until you add projects (tcode projects add <path>) chats work in ~/.tropos/workspace.
+chat's project (/project in the chat switches it). Its commands run on this computer inside the OS sandbox
+(sandbox-exec on macOS, bwrap on Linux): they write only to the project and read none of your secrets. What runs
+without asking follows the autonomy level (default balanced: edits and read-only commands and your tests run,
+anything else asks, as buttons in the chat); chat.backend docker in gateway.json runs them in Docker instead, and
+guests' commands always run in Docker. Nobody can talk to it until you approve them: tcode pairing approve telegram
+<code>. Nothing needs a workspace: until you add projects (tcode projects add <path>) chats work in ~/.tropos/workspace.
 
 Setup: create a bot with @BotFather, then connect it in the dashboard (tcode dashboard) or ask me
-to connect it, and make sure Docker is running.
+to connect it.
 
 Options:
       --workspace <dir>   work in this directory for this run only (install: add it as a project and make it the default)

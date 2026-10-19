@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GATEWAY_HELP, UPDATE_HELP, USAGE } from "./usage";
+import { GATEWAY_HELP, INSTALL_HELP, UPDATE_HELP, USAGE } from "./usage";
 
 test("update help says a running background service is restarted onto the new version", () => {
   expect(UPDATE_HELP).toContain("A running background service is restarted so it runs the new version.");
@@ -26,4 +26,20 @@ test("gateway help no longer lists status or logs, and documents --dev", () => {
   expect(GATEWAY_HELP).not.toContain("tcode gateway status");
   expect(GATEWAY_HELP).not.toContain("tcode gateway logs");
   expect(GATEWAY_HELP).toContain("--dev");
+});
+
+test("gateway help describes the real defaults: the OS sandbox and the autonomy level, Docker only for guests", () => {
+  expect(GATEWAY_HELP).not.toContain("Docker container that sees only");
+  expect(GATEWAY_HELP).not.toContain("every edit or command asks you first");
+  expect(GATEWAY_HELP).not.toContain("make sure Docker is running");
+  expect(GATEWAY_HELP).toContain("sandbox-exec");
+  expect(GATEWAY_HELP).toContain("bwrap");
+  expect(GATEWAY_HELP).toContain("balanced");
+  expect(GATEWAY_HELP).toContain("guests");
+});
+
+test("install help names the command link the installer manages, ~/.local/bin/tcode", () => {
+  expect(INSTALL_HELP).toContain("~/.local/bin/tcode");
+  expect(INSTALL_HELP).not.toContain("~/.local/bin/tropos");
+  expect(INSTALL_HELP).not.toContain("active tropos");
 });
