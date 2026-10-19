@@ -2,7 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { PermissionAnswer, TurnEndReason } from "../agent/events";
-import { BUSY_ERROR, type ServerMessage } from "../web/protocol";
+import { BUSY_ERROR, type RpcMap, type ServerMessage } from "../web/protocol";
 import { RpcError, type WebHost } from "../web/host";
 import { UnknownCommandError, UserFacingError } from "./errors";
 import type { ChatSession, ChatSink, SessionProvider } from "./types";
@@ -227,7 +227,7 @@ export class SessionPool implements SessionProvider {
     const touch = (entry: Entry) => {
       entry.lastActive = this.now();
     };
-    const turn = async (params: { text: string; command?: { name: string; args: string } }): Promise<TurnEndReason> => {
+    const turn = async (params: RpcMap["prompt"]["params"]): Promise<TurnEndReason> => {
       chat.waiting++;
       let entry: Entry;
       try {
@@ -252,7 +252,16 @@ export class SessionPool implements SessionProvider {
     };
     return {
       key,
-      prompt: (text) => turn({ text }),
+      prompt: async (text, attachments) => {
+        if (!attachments?.length) return turn({ text });
+        try {
+          return await turn({ text, attachments });
+        } catch (e) {
+          // A refused attachment (too big, not an image) is for the person at the chat; "busy" stays as is.
+          if (e instanceof RpcError && e.message !== BUSY_ERROR) throw new UserFacingError(e.message);
+          throw e;
+        }
+      },
       command: async (name, args) => {
         try {
           return await turn({ text: "", command: { name, args } });

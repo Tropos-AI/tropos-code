@@ -42,8 +42,10 @@ export interface RunningWebServer {
 }
 
 const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"];
-/** Largest message a tab may send: prompts are text, never files. */
+/** Largest message a socket may send before it has logged in: keys and codes are short. */
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+/** Largest message a logged-in tab may send: a prompt with 8 images of 5 MB and 8 text files of 1 MB, in base64. */
+const MAX_AUTHED_MESSAGE_BYTES = 80 * 1024 * 1024;
 
 const CSP = [
   "default-src 'self'",
@@ -77,8 +79,8 @@ const MAX_SECRET_LENGTH = 128;
 const MAX_NAME_LENGTH = 200;
 
 /** Parses and shape-checks one message from a tab; anything else is dropped. */
-export function parseClientMessage(raw: string | Buffer): ClientMessage | null {
-  if (raw.length > MAX_MESSAGE_BYTES) return null;
+export function parseClientMessage(raw: string | Buffer, opts: { authed?: boolean } = {}): ClientMessage | null {
+  if (raw.length > (opts.authed ? MAX_AUTHED_MESSAGE_BYTES : MAX_MESSAGE_BYTES)) return null;
   let value: unknown;
   try {
     value = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8"));
@@ -226,13 +228,13 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
         return respond("Not found", { status: 404 });
       },
       websocket: {
-        maxPayloadLength: MAX_MESSAGE_BYTES,
+        maxPayloadLength: MAX_AUTHED_MESSAGE_BYTES,
         open(ws) {
           // Not attached yet: the tab gets nothing until it logs in.
           ws.data.send = (message: ServerMessage) => ws.send(JSON.stringify(message));
         },
         message(ws, raw) {
-          const message = parseClientMessage(raw as string | Buffer);
+          const message = parseClientMessage(raw as string | Buffer, { authed: ws.data.deviceId !== undefined });
           if (!message || !ws.data.send || ws.data.closed) return;
           if (message.t === "auth" || message.t === "login") {
             ws.data.pending = ws.data.pending.then(() => authenticate(ws, message)).catch(() => {});
