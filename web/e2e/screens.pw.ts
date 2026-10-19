@@ -54,7 +54,7 @@ for (const scheme of SCHEMES)
         if (name === "phone") await expect(page.getByText(/mac\.tail1234\.ts\.net/).first()).toBeVisible();
         if (name === "settings") await expect(page.getByText("Safari on iPhone").first()).toBeVisible();
         if (name === "agents" || name === "agents-open") {
-          await expect(page.getByRole("heading", { name: "Tropos" })).toBeVisible();
+          await expect(page.getByRole("heading", { name: "Tropos", exact: true })).toBeVisible();
           await expect(page.getByRole("button", { name: "Pause reviewer" })).toBeVisible();
           if (name === "agents-open") await page.getByRole("button", { name: "reviewer", exact: true }).click();
           if (name === "agents-open") await expect(page.getByText("Revision 1").first()).toBeVisible();
