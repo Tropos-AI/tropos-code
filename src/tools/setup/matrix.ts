@@ -51,10 +51,17 @@ export function setupDecision(action: SetupAction, who: SetupWho): { ok: true } 
   return { ok: true };
 }
 
-// Variables that make the server's interpreter or loader run other code (or read config from elsewhere). An approval
-// prompt in a chat is too easy to wave through for these: such a server is added in Settings → Extensions.
-const LOADER_VARIABLES: ReadonlySet<string> = new Set(["NODE_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH", "PATH", "PYTHONPATH", "PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "BASH_ENV", "ENV", "ZDOTDIR"]);
-const LOADER_PREFIXES = ["DYLD_", "GIT_"];
+// Variables that make the server's interpreter or loader run other code, or read config from elsewhere. Deny by
+// default for whole families: an approval prompt in a chat is too easy to wave through for these, so such a server is
+// added in Settings → Extensions.
+const LOADER_PREFIXES = ["NODE_", "NPM_CONFIG_", "BUN_", "DENO_", "LD_", "DYLD_", "PYTHON", "PERL", "RUBY", "JAVA_", "_JAVA_", "JDK_JAVA_", "GIT_"];
+const LOADER_VARIABLES: ReadonlySet<string> = new Set(["PATH", "BASH_ENV", "ENV", "ZDOTDIR", "SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND", "IFS", "CLASSPATH", "RUBYLIB", "GEM_PATH", "GEM_HOME"]);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The longest command, argument, URL or env value the approval shows; anything longer is refused, never cut. */
+export const MAX_SHOWN = 200;
+// Line breaks, other control characters and bidi overrides could make the approval show something else than runs.
+const UNSHOWABLE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 export function isLoaderVariable(name: string): boolean {
   const upper = name.toUpperCase();
@@ -71,13 +78,36 @@ export function looksSecret(name: string, value: string): boolean {
   return !SECRET_REF.test(value) && (SECRET_NAME.test(name) || SECRET_SHAPE.test(value) || findSecrets(value).length > 0);
 }
 
-/** Why the tool won't add a server with this env, or undefined. `extensions` is the dashboard link to send the owner to. */
-export function mcpEnvProblem(env: Record<string, string>, extensions: string): string | undefined {
-  const loaders = Object.keys(env).filter(isLoaderVariable);
-  if (loaders.length) {
-    return `I won't set ${loaders.join(", ")} for an MCP server from here: they change what the server's program loads and runs. Add such a server in Settings → Extensions instead: ${extensions}`;
+/** Why a text can't be shown faithfully in the approval, or undefined. */
+export function unshowable(text: string): string | undefined {
+  if (UNSHOWABLE.test(text)) return "holds a line break or another control character";
+  if (text.length > MAX_SHOWN) return `is longer than ${MAX_SHOWN} characters`;
+  return undefined;
+}
+
+type ServerInput = { command?: string; args?: string[]; url?: string; env?: Record<string, string> };
+
+/**
+ * Why the tool won't add this server, or undefined: everything that will run must be shown in the approval exactly as
+ * it is, loader variables are for the dashboard, and keys come from the vault. `extensions` is the dashboard link.
+ */
+export function mcpServerProblem(server: ServerInput, extensions: string): string | undefined {
+  const parts: [string, string | undefined][] = [["The command", server.command], ...(server.args ?? []).map((a, i): [string, string] => [`Argument ${i + 1}`, a]), ["The URL", server.url]];
+  for (const [what, text] of parts) {
+    const why = text === undefined ? undefined : unshowable(text);
+    if (why) return `${what} ${why}, so I can't show it to you for approval. Add this server in Settings → Extensions instead: ${extensions}`;
   }
-  const raw = Object.entries(env).filter(([k, v]) => looksSecret(k, v)).map(([k]) => k);
+  const env = Object.entries(server.env ?? {});
+  for (const [name, value] of env) {
+    if (!ENV_NAME.test(name)) return `${JSON.stringify(name)} isn't a valid environment variable name (letters, digits and _, not starting with a digit).`;
+    const why = unshowable(value);
+    if (why) return `The value of ${name} ${why}, so I can't show it to you for approval. Add this server in Settings → Extensions instead: ${extensions}`;
+  }
+  const loaders = env.map(([k]) => k).filter(isLoaderVariable);
+  if (loaders.length) {
+    return `I won't set ${loaders.join(", ")} for an MCP server from here: such variables change what the server's program loads and runs. Add such a server in Settings → Extensions instead: ${extensions}`;
+  }
+  const raw = env.filter(([k, v]) => looksSecret(k, v)).map(([k]) => k);
   if (raw.length) return `${raw.join(", ")} looks like a key. Paste the key in this chat on its own so I can hold it, then use its secret:<n> ref.`;
   return undefined;
 }

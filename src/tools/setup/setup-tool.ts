@@ -13,7 +13,7 @@ import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
 import { lowerSetupAutonomy } from "./autonomy";
 import { describeSetupChange, readSetupState } from "./describe";
-import { CHAT_DOCTOR_READ_ONLY, mcpEnvProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, type SetupInput, type SetupWho } from "./matrix";
+import { CHAT_DOCTOR_READ_ONLY, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, type SetupInput, type SetupWho } from "./matrix";
 import type { SecretVault } from "./secrets";
 
 export interface SetupToolDeps {
@@ -210,7 +210,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       case "mcp.add": {
         const name = need(input.name, "Give the MCP server a name.");
         const server = need(input.server, "Describe the server: a command (and args) or a URL.");
-        const problem = mcpEnvProblem(server.env ?? {}, link("extensions/mcp"));
+        const problem = mcpServerProblem(server, link("extensions/mcp"));
         if (problem) refuse(problem);
         // Every ref must still be held before one is taken: a half-resolved env would lose the others.
         const env = Object.entries(server.env ?? {});

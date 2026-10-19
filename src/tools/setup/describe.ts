@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gatewayConfigPath } from "../../gateway/config";
 import type { PermissionPreview } from "../types";
-import { looksSecret, SECRET_REF, type SetupInput } from "./matrix";
+import { looksSecret, SECRET_REF, unshowable, type SetupInput } from "./matrix";
 
 export type SetupState = { settings: Record<string, unknown>; gateway: Record<string, unknown> };
 
@@ -35,14 +35,23 @@ const arrow = (label: string, before: unknown, after: unknown): string => `${lab
 /** A key the request carries: its ref, or that one was pasted (a raw value is never repeated). */
 const keyNote = (secret: string | undefined): string => (secret === undefined ? "(no key given)" : SECRET_REF.test(secret) ? `(${secret}, not shown)` : "(pasted key, not shown)");
 
-const MAX_SHOWN = 200;
-
-/** An env value as the approval shows it: a ref by name, a raw key never, anything else in full (very long ones cut). */
+/**
+ * An env value as the approval shows it: a ref by name, a raw key never, anything else in full and JSON-quoted. Never
+ * cut: a value that can't be shown whole is refused when the tool runs, and the preview says so.
+ */
 function envValue(name: string, value: string): string {
   if (SECRET_REF.test(value)) return `(${value})`;
+  const why = unshowable(value);
+  if (why) return `(refused: it ${why})`;
   if (looksSecret(name, value)) return "(a pasted key: refused, it must be a secret:<n> ref)";
-  return value.length > MAX_SHOWN ? `${value.slice(0, MAX_SHOWN)}…` : value;
+  return JSON.stringify(value);
 }
+
+/** Something that will run, as the approval shows it: whole, or the reason it is refused. */
+const shown = (text: string, render: (t: string) => string): string => {
+  const why = unshowable(text);
+  return why ? `(refused: it ${why})` : render(text);
+};
 
 /** One shell word, quoted when it needs to be, so the approval shows the command that will run. */
 const word = (w: string): string => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
@@ -98,10 +107,10 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       const exists = isObject(obj(state.settings.mcpServers)[input.name ?? ""]);
       lines.push(`MCP server ${input.name ?? "?"}: ${exists ? "already exists (it is not replaced)" : "add"}`);
       lines.push(`type: ${server.type ?? (server.url ? "http" : "stdio")}`);
-      if (server.command) lines.push(`command: ${[server.command, ...(server.args ?? [])].map(word).join(" ")}`);
-      if (server.url) lines.push(`url: ${server.url}`);
+      if (server.command) lines.push(`command: ${[server.command, ...(server.args ?? [])].map((w) => shown(w, word)).join(" ")}`);
+      if (server.url) lines.push(`url: ${shown(server.url, (u) => u)}`);
       const env = Object.entries(server.env ?? {});
-      if (env.length) lines.push(`env: ${env.map(([k, v]) => `${k}=${envValue(k, v)}`).join(", ")}`);
+      if (env.length) lines.push(`env: ${env.map(([k, v]) => `${JSON.stringify(k)}=${envValue(k, v)}`).join(", ")}`);
       if (server.command) lines.push("The command runs on this computer, as you, whenever a session starts.");
       break;
     }

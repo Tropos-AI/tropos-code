@@ -180,7 +180,9 @@ test("an unknown or expired ref in an MCP env asks for the key again and writes 
 });
 
 test("mcp.add refuses loader and interpreter variables and points to Settings â†’ Extensions", async () => {
-  for (const name of ["NODE_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "PATH", "PYTHONPATH", "PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "BASH_ENV", "ENV", "ZDOTDIR", "GIT_SSH_COMMAND"]) {
+  const names = ["NODE_OPTIONS", "NODE_PATH", "npm_config_userconfig", "NPM_CONFIG_PREFIX", "BUN_INSTALL", "DENO_DIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+    "PATH", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PERL5OPT", "PERL5LIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "BASH_ENV", "ENV", "ZDOTDIR", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL"];
+  for (const name of names) {
     const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { [name]: "--require=/tmp/x.js" } } }, makeToolContext());
     expect(out.isError).toBe(true);
     expect(text(out)).toContain(name);
@@ -188,6 +190,28 @@ test("mcp.add refuses loader and interpreter variables and points to Settings â†
   }
   expect(calls).toEqual([]);
   expect(vault.peek("secret:1")).toBeDefined();
+});
+
+test("mcp.add refuses what the approval couldn't show whole: long or multi-line values, commands and args, and bad names", async () => {
+  const long = "x".repeat(201);
+  const cases = [
+    { server: { command: "node", env: { BLOB: long } }, says: "longer than 200 characters" },
+    { server: { command: "node", env: { NOTE: "ok\nNODE_OPTIONS=--require=/tmp/x.js" } }, says: "control character" },
+    { server: { command: "node", env: { NOTE: "a\u202eb" } }, says: "control character" },
+    { server: { command: `node\rcurl evil`, env: {} }, says: "The command" },
+    { server: { command: "node", args: ["ok", long] }, says: "Argument 2" },
+    { server: { command: "node", args: ["a\nb"] }, says: "Argument 1" },
+    { server: { type: "http" as const, url: `https://x/${long}` }, says: "The URL" },
+    { server: { command: "node", env: { "BAD NAME": "1" } }, says: "valid environment variable name" },
+    { server: { command: "node", env: { "1X": "1" } }, says: "valid environment variable name" },
+    { server: { command: "node", env: { "A\nB": "1" } }, says: "valid environment variable name" },
+  ];
+  for (const c of cases) {
+    const out = await tool.run({ action: "mcp.add", name: "x", server: c.server }, makeToolContext());
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain(c.says);
+  }
+  expect(calls).toEqual([]);
 });
 
 test("mcp.add refuses a raw key in the env: keys come as secret:<n> refs", async () => {
