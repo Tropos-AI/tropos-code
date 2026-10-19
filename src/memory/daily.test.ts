@@ -108,7 +108,7 @@ test("parseJournal round-trips formatJournalEntry, multi-line bodies and ~ paths
   ];
   const text = `# 2026-10-16\n\nstray text\n\n${entries.map(formatJournalEntry).join("")}`;
   expect(parseJournal(text)).toEqual(entries.map((e) => ({ ...e, key: projectKey(e.path) })));
-  expect(formatJournalEntry(entries[1]!)).toStartWith(home ? "## site (~/code/site)\n- no time" : "## site (");
+  expect(formatJournalEntry(entries[1]!)).toStartWith(home ? "## site (~/code/site) <!-- project:" : "## site (");
 });
 
 test("append writes timestamped, indented entries to an owner-only file", async () => {
