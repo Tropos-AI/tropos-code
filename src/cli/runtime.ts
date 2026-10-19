@@ -464,7 +464,8 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         ext.skills
           .filter((s) => (source === "plugin" ? s.source === "plugin" : s.source === source))
           .map((s) => ({
-            key: s.name,
+            // The source is part of the key: the dashboard edits "user" and "learned" skills by it.
+            key: `${s.source}:${s.name}`,
             label: s.name,
             hint: firstLine(s.description),
             aside: [s.userInvocable ? `/${s.name}` : "", s.modelInvocable ? "" : "you only"].filter(Boolean).join(" · ") || undefined,

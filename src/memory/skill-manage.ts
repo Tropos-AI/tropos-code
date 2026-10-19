@@ -31,7 +31,8 @@ const schema = z.object({
   file_content: z.string().optional().describe("write_file: the file's full contents."),
 });
 
-type Input = z.infer<typeof schema>;
+export type SkillManageInput = z.infer<typeof schema>;
+type Input = SkillManageInput;
 
 class SkillError extends Error {}
 
@@ -241,6 +242,42 @@ export function skillPreview(input: Input, dir: string): { header: string; text:
 }
 
 /**
+ * What the tool does for one call, usable without a model: the dashboard edits and deletes skills through it as "user", so
+ * the same checks (frontmatter, threat scan, size, symlinks) and the same ledger entries apply.
+ * `approvedPaths`, when given, are the paths the permission prompt showed; a call that lands elsewhere is refused.
+ */
+export async function manageSkill(opts: SkillManageOptions, input: SkillManageInput, actor: Actor, approvedPaths?: readonly string[]): Promise<ToolOutput> {
+  let at: Layout;
+  try {
+    at = layout(skillsBase(opts), input);
+  } catch (error) {
+    return fail(`Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);
+  }
+  if (approvedPaths !== undefined && !approvedPaths.includes(at.target)) {
+    return fail(`${at.target} changed after it was approved; nothing was written. Try again.`);
+  }
+  const env: Env = { opts, actor };
+  try {
+    if ((input.action === "patch" || input.action === "write_file") && opts.tracker && !opts.tracker.hasViewed(input.name)) {
+      await requireSkill(input, at);
+      return fail(`Load skill ${input.name} with the Skill tool before changing it: ${input.action} needs its current instructions in this conversation.`);
+    }
+    switch (input.action) {
+      case "create":
+        return await create(input, at, env);
+      case "patch":
+        return await patch(input, at, env);
+      case "write_file":
+        return await writeFileAction(input, at, env);
+      case "delete":
+        return await remove(input, at, env);
+    }
+  } catch (error) {
+    return fail(error instanceof SkillError ? error.message : `Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);
+  }
+}
+
+/**
  * SkillManage: lets the model write its own skills under <home>/skills, the procedures it learned and
  * wants to reuse. Kind "edit"; the paths are outside the project, so the permission engine always asks.
  */
@@ -270,37 +307,6 @@ export function createSkillManageTool(opts: SkillManageOptions): AnyTool {
         return { paths: [join(skillsBase(opts), input.name)], ...destructive };
       }
     },
-    async run(input, ctx) {
-      let at: Layout;
-      try {
-        at = layout(skillsBase(opts), input);
-      } catch (error) {
-        return fail(`Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);
-      }
-      if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(at.target)) {
-        return fail(`${at.target} changed after it was approved; nothing was written. Try again.`);
-      }
-      const env: Env = { opts, actor: ctx.actor ?? "agent" };
-      try {
-        if ((input.action === "patch" || input.action === "write_file") && opts.tracker && !opts.tracker.hasViewed(input.name)) {
-          await requireSkill(input, at);
-          return fail(
-            `Load skill ${input.name} with the Skill tool before changing it: ${input.action} needs its current instructions in this conversation.`,
-          );
-        }
-        switch (input.action) {
-          case "create":
-            return await create(input, at, env);
-          case "patch":
-            return await patch(input, at, env);
-          case "write_file":
-            return await writeFileAction(input, at, env);
-          case "delete":
-            return await remove(input, at, env);
-        }
-      } catch (error) {
-        return fail(error instanceof SkillError ? error.message : `Cannot ${input.action} skill ${input.name}: ${errorText(error)}`);
-      }
-    },
+    run: (input, ctx) => manageSkill(opts, input, ctx.actor ?? "agent", ctx.approvedPaths),
   }) as AnyTool;
 }

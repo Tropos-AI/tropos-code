@@ -18,6 +18,7 @@ import { proactiveHandlers } from "./proactive";
 import { projectsHandlers } from "./projects";
 import { remoteHandlers } from "./remote";
 import { serviceHandlers } from "./service";
+import { skillsHandlers } from "./skills";
 import { statusHandlers } from "./status";
 import { updateHandlers } from "./update";
 import { usageHandlers } from "./usage";
@@ -52,6 +53,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...agentsHandlers(ctx),
     ...proactiveHandlers(ctx),
     ...memoryHandlers(ctx),
+    ...skillsHandlers(ctx),
     ...extra,
   };
   return {

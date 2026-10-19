@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { PanelData } from "@core/ui/runtime";
 
+import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { deferred, mountPage, stubClipboard, stubMatchMedia } from "@/components/pages/page-test-kit";
 import { withDom } from "@/test-setup";
 
@@ -120,5 +121,77 @@ describe("SkillsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("region", { name: /Yours/ })).toBeTruthy();
     expect(socket.callsOf("panel")).toHaveLength(2);
+  });
+});
+
+const WITH_SOURCES: PanelData = {
+  title: "Skills",
+  sections: [
+    { title: "Yours (~/.tropos/workspace/skills)", items: [{ key: "user:bun-testing", label: "bun-testing", hint: "Run tests with bun", detail: ["Run tests with bun", "/h/skills/bun-testing/SKILL.md"] }] },
+    { title: "Learned on its own (~/.tropos/workspace/skills-learned)", items: [{ key: "learned:deploy-notes", label: "deploy-notes", hint: "Deploy", detail: ["Deploy", "/h/skills-learned/deploy-notes/SKILL.md"] }] },
+    { title: "This project", items: [{ key: "project:repo-skill", label: "repo-skill", hint: "Repo", detail: ["Repo", "/repo/.tropos/skills/repo-skill/SKILL.md"] }] },
+  ],
+};
+const ARCHIVED_NONE = () => [];
+
+describe("SkillsPage › managing skills", () => {
+  test("your and learned skills can be edited and deleted; project skills can't; archived ones restore", async () => {
+    const { socket } = await mountAdminPage(
+      SkillsPage,
+      {
+        "skills.read": () => ({ content: "---\ndescription: d\n---\nbody", path: "/p" }),
+        "skills.write": () => ({ ok: true }),
+        "skills.archived": () => [{ id: "deploy-2026-09-01", name: "deploy", archivedOn: "2026-09-01" }],
+        "skills.restore": () => ({ name: "deploy" }),
+      },
+      { panel: () => WITH_SOURCES },
+    );
+    expect(await screen.findByRole("button", { name: "Edit bun-testing" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit deploy-notes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete deploy-notes" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit repo-skill" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete repo-skill" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore deploy" }));
+    await waitFor(() => expect(socket.adminCalls).toContainEqual({ method: "skills.restore", params: { id: "deploy-2026-09-01" } }));
+  });
+
+  test("Edit loads the file, Save writes it back, and a refusal stays on screen", async () => {
+    let refuse = true;
+    const { socket } = await mountAdminPage(
+      SkillsPage,
+      {
+        "skills.read": () => ({ content: "---\ndescription: d\n---\nbody", path: "/p" }),
+        "skills.write": () => {
+          if (refuse) throw new Error("Refused: the content looks unsafe");
+          return { ok: true };
+        },
+        "skills.archived": ARCHIVED_NONE,
+      },
+      { panel: () => WITH_SOURCES },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Edit bun-testing" }));
+    const box = (await screen.findByRole("textbox", { name: "SKILL.md" })) as HTMLTextAreaElement;
+    expect(box.value).toContain("body");
+    fireEvent.change(box, { target: { value: "---\ndescription: d\n---\nnew body" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("looks unsafe");
+    refuse = false;
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.write", params: { source: "user", name: "bun-testing", content: "---\ndescription: d\n---\nnew body" } }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "SKILL.md" })).toBeNull());
+  });
+
+  test("Delete asks first, then deletes", async () => {
+    const { socket } = await mountAdminPage(SkillsPage, { "skills.delete": () => ({ ok: true }), "skills.archived": ARCHIVED_NONE }, { panel: () => WITH_SOURCES });
+    fireEvent.click(await screen.findByRole("button", { name: "Delete deploy-notes" }));
+    expect(socket.adminOf("skills.delete")).toHaveLength(0);
+    expect(await screen.findByText("Delete this skill?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.delete", params: { source: "learned", name: "deploy-notes" } }));
+  });
+
+  test("the Archived card says what archiving means when it is empty", async () => {
+    await mountAdminPage(SkillsPage, { "skills.archived": ARCHIVED_NONE }, { panel: () => WITH_SOURCES });
+    expect(await screen.findByText("Skills the agent stops using are archived here after 30 days, never deleted.")).toBeTruthy();
   });
 });

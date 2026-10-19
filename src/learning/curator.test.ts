@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { recordRun } from "../agents/runs";
 import { renderSpecialistFile } from "../agents/specialists";
-import { archiveIdleSpecialists, runCurator } from "./curator";
+import { archiveIdleSpecialists, listArchived, restoreArchived, runCurator } from "./curator";
 import { Ledger } from "./ledger";
 import type { Actor } from "../tools/types";
 import { recordSkillUse } from "./skill-usage";
@@ -246,5 +246,37 @@ describe("idle specialists", () => {
     const result = await runCurator(home, { ledger: new Ledger(home), now: NOW });
     expect(result).toMatchObject({ ran: true, specialists: [] });
     expect(existsSync(join(home, "agents", "idle", "AGENT.md"))).toBe(true);
+  });
+});
+
+describe("archived skills", () => {
+  const learned = () => join(home, "workspace", "skills-learned");
+
+  test("lists archived skills and restores one under its name, refusing a clash", async () => {
+    const ledger = new Ledger(home);
+    await mkdir(join(learned(), ".archive", "deploy-2026-09-01"), { recursive: true });
+    await writeFile(join(learned(), ".archive", "deploy-2026-09-01", "SKILL.md"), "---\ndescription: Deploys\n---\nsteps");
+    await mkdir(join(learned(), ".archive", "deploy-2026-09-01-2"), { recursive: true });
+    await writeFile(join(learned(), ".archive", "deploy-2026-09-01-2", "SKILL.md"), "---\ndescription: Deploys again\n---\nsteps");
+    expect(await listArchived(learned())).toEqual([
+      { id: "deploy-2026-09-01", name: "deploy", archivedOn: "2026-09-01", description: "Deploys" },
+      { id: "deploy-2026-09-01-2", name: "deploy", archivedOn: "2026-09-01", description: "Deploys again" },
+    ]);
+    expect(await restoreArchived(home, "deploy-2026-09-01", { ledger, skillsDir: learned() })).toEqual({ name: "deploy" });
+    expect(existsSync(join(learned(), "deploy", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(learned(), ".archive", "deploy-2026-09-01"))).toBe(false);
+    expect((await ledger.list(1))[0]).toMatchObject({ actor: "user", kind: "skill", action: "restore" });
+    await expect(restoreArchived(home, "deploy-2026-09-01-2", { ledger, skillsDir: learned() })).rejects.toThrow("A skill named deploy already exists.");
+    await expect(restoreArchived(home, "../x", { ledger, skillsDir: learned() })).rejects.toThrow();
+    await expect(restoreArchived(home, "nope-2026-01-01", { ledger, skillsDir: learned() })).rejects.toThrow();
+  });
+
+  test("an archive folder that is a symlink is neither listed nor restored", async () => {
+    await mkdir(join(learned(), ".archive"), { recursive: true });
+    await mkdir(join(outside, "evil"), { recursive: true });
+    await writeFile(join(outside, "evil", "SKILL.md"), "---\ndescription: x\n---\n");
+    await symlink(join(outside, "evil"), join(learned(), ".archive", "evil-2026-01-01"));
+    expect(await listArchived(learned())).toEqual([]);
+    await expect(restoreArchived(home, "evil-2026-01-01", { ledger: new Ledger(home), skillsDir: learned() })).rejects.toThrow();
   });
 });

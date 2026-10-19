@@ -1,9 +1,10 @@
 // src/learning/curator.ts
-import { lstat, mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { resolveLayoutPath } from "../home/layout";
-import { fmBool, parseFrontmatter } from "../extensions/frontmatter";
+import { fmBool, fmString, parseFrontmatter } from "../extensions/frontmatter";
 import { atomicWrite } from "../memory/notes";
+import { isInside } from "../paths";
 import { readRuns } from "../agents/runs";
 import { archiveSpecialist } from "../agents/store";
 import { AGENT_FILE, loadSpecialists, SPECIALIST_IDLE_MS } from "../agents/specialists";
@@ -172,4 +173,60 @@ export async function archiveIdleSpecialists(home: string, now: Date, ledger: Le
     }
   }
   return out;
+}
+
+export interface ArchivedSkill {
+  /** The folder name under `.archive`. */
+  id: string;
+  /** The id without its `-YYYY-MM-DD(-n)` suffix. */
+  name: string;
+  archivedOn: string;
+  description?: string;
+}
+
+const ARCHIVE_ID = /^([a-z0-9]+(?:-[a-z0-9]+)*)-(\d{4}-\d{2}-\d{2})(?:-\d+)?$/;
+
+/** Skills the curator archived, newest first. A symlink or a folder without SKILL.md is not listed. */
+export async function listArchived(skillsDir: string): Promise<ArchivedSkill[]> {
+  const archive = join(skillsDir, ".archive");
+  const ids = await readdir(archive).catch(() => [] as string[]);
+  const out: ArchivedSkill[] = [];
+  for (const id of ids) {
+    const match = ARCHIVE_ID.exec(id);
+    if (!match || !(await lstat(join(archive, id)).catch(() => null))?.isDirectory()) continue;
+    const text = await readFile(join(archive, id, "SKILL.md"), "utf8").catch(() => null);
+    if (text === null) continue;
+    const description = fmString(parseFrontmatter(text).data, "description");
+    out.push({ id, name: match[1]!, archivedOn: match[2]!, ...(description ? { description } : {}) });
+  }
+  return out.sort((a, b) => b.archivedOn.localeCompare(a.archivedOn) || a.id.localeCompare(b.id));
+}
+
+/**
+ * Moves an archived skill back to `<skillsDir>/<name>`. The id must be a plain folder directly under `.archive`, and a
+ * skill that already has the name is never replaced. Recorded as the user's restore.
+ */
+export async function restoreArchived(home: string, id: string, opts: { ledger: Ledger; skillsDir: string }): Promise<{ name: string }> {
+  const match = ARCHIVE_ID.exec(id);
+  if (!match || !isInside(opts.skillsDir, home)) throw new Error("That isn't an archived skill.");
+  const name = match[1]!;
+  const from = join(opts.skillsDir, ".archive", id);
+  if (!(await lstat(from).catch(() => null))?.isDirectory()) throw new Error("That archived skill is gone.");
+  const to = join(opts.skillsDir, name);
+  if (await lstat(to).catch(() => null)) throw new Error(`A skill named ${name} already exists.`);
+  const text = await readFile(join(from, "SKILL.md"), "utf8").catch(() => null);
+  if (text === null) throw new Error("That archived skill has no SKILL.md.");
+  // Recorded first: if the move fails, undo sees a mismatch and refuses.
+  await opts.ledger.record({
+    actor: "user",
+    kind: "skill",
+    path: join(to, "SKILL.md"),
+    action: "restore",
+    summary: `restore ${name}`,
+    before: null,
+    after: text,
+    noUndo: "The skill came back with its supporting files; delete it from the Skills page to remove it.",
+  });
+  await rename(from, to);
+  return { name };
 }

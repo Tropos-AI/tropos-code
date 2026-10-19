@@ -187,6 +187,25 @@ export interface MemoryAdmin {
   "memory.delete": { params: { target: MemoryTarget; index: number; expected: string }; result: { ok: true } };
 }
 
+// ---------- skills ----------
+
+export type SkillSource = "user" | "learned";
+
+export interface ArchivedSkillView {
+  id: string;
+  name: string;
+  archivedOn: string;
+  description?: string;
+}
+
+export interface SkillsAdmin {
+  "skills.read": { params: { source: SkillSource; name: string }; result: { content: string; path: string } };
+  "skills.write": { params: { source: SkillSource; name: string; content: string }; result: { ok: true } };
+  "skills.delete": { params: { source: SkillSource; name: string }; result: { ok: true } };
+  "skills.archived": { params: undefined; result: ArchivedSkillView[] };
+  "skills.restore": { params: { id: string }; result: { name: string } };
+}
+
 export interface ProactiveAdmin {
   "proactive.get": { params: undefined; result: ProactiveView };
   "proactive.set": { params: ProactivePatch; result: ProactiveView };
@@ -577,7 +596,8 @@ export type AdminMap = StatusAdmin &
   RemoteAdmin &
   AgentsAdmin &
   ProactiveAdmin &
-  MemoryAdmin;
+  MemoryAdmin &
+  SkillsAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -642,6 +662,11 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "proactive.set",
   "memory.edit",
   "memory.delete",
+  "skills.read",
+  "skills.write",
+  "skills.delete",
+  "skills.archived",
+  "skills.restore",
   "mcp.test",
   "plugins.setEnabled",
   "onboard.state",

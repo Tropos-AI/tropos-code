@@ -1,8 +1,9 @@
 // web/src/app/pages/SkillsPage.tsx — skills by source (yours, this project, plugins) from rpc("panel", "skills"): a
 // filter, a "/name" chip that copies the command for user-invocable skills, and details with the SKILL.md path.
-import { useDeferredValue, useId, useState } from "react";
+import { useDeferredValue, useEffect, useId, useState } from "react";
 
 import type { PanelData, PanelItem } from "@core/ui/runtime";
+import type { ArchivedSkillView, SkillSource } from "@core/web/admin/api";
 
 import { PageFrame } from "@/app/layout/PageFrame";
 import { SlashChip } from "@/components/pages/copy-chip";
@@ -12,10 +13,14 @@ import { DetailField, DetailList, DisclosureRow, looksLikePath, PathLine, Sectio
 import { ResourceView } from "@/components/pages/resource-view";
 import { useExpanded } from "@/components/pages/use-expanded";
 import { isPanelEmpty, usePanel } from "@/components/pages/use-rpc-resource";
-import { Button } from "@/components/ui/button";
+import { useAdminResource } from "@/components/admin/use-admin-resource";
+import { Modal } from "@/components/interior/modal";
+import { ConfirmDialog, Notice, TextArea, useAction } from "@/components/setup/admin-ui";
+import { Button, IconButton } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon, type IconName } from "@/components/ui/icon";
+import { useAdmin } from "@/lib/store";
 
 export interface SkillView {
   name: string;
@@ -94,8 +99,82 @@ function SkillDetail({ skill }: { skill: SkillView }) {
   );
 }
 
-function SkillsList({ data, query, onClear }: { data: PanelData; query: string; onClear: () => void }) {
+/** The skills the dashboard may change: the panel keys them `<source>:<name>`; project and plugin rows have no editable key. */
+interface Managed {
+  source: SkillSource;
+  name: string;
+}
+
+function managedOf(item: PanelItem): Managed | null {
+  const [source, ...rest] = item.key.split(":");
+  return (source === "user" || source === "learned") && rest.length > 0 ? { source, name: rest.join(":") } : null;
+}
+
+/** SKILL.md in a box. A refusal (missing description, unsafe text) is shown and the box stays open. */
+function SkillEditor({ skill, onClose, onSaved }: { skill: Managed; onClose: () => void; onSaved: () => void }) {
+  const admin = useAdmin();
+  const load = useAction();
+  const save = useAction();
+  const [text, setText] = useState<string | null>(null);
+  const [original, setOriginal] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void load.run(() => admin("skills.read", skill)).then((out) => {
+      if (alive && out) {
+        setText(out.content);
+        setOriginal(out.content);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loads once per opened skill
+  }, [admin, skill.source, skill.name]);
+  const submit = async () => {
+    if (text === null) return;
+    const done = await save.run(() => admin("skills.write", { ...skill, content: text }));
+    if (done) {
+      onSaved();
+      onClose();
+    }
+  };
+  return (
+    <Modal open onClose={save.pending ? () => {} : onClose} title={`Edit ${skill.name}`} closeLabel="Close editor" maxWidth={720}>
+      <div className="flex flex-col gap-3">
+        {load.error ? <Notice tone="error">{load.error}</Notice> : null}
+        {text === null ? (
+          load.error ? null : <p className="text-[13px] text-ink-3">Loading…</p>
+        ) : (
+          <TextArea label="SKILL.md" mono rows={16} value={text} onChange={setText} hint={skill.source === "learned" ? "The agent wrote this skill. Once you save it, it is yours and is no longer archived for lack of use." : undefined} />
+        )}
+        {save.error ? <Notice tone="error">{save.error}</Notice> : null}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={save.pending}>
+            Cancel
+          </Button>
+          <Button icon="check" onClick={() => void submit()} disabled={text === null || save.pending || text === original}>
+            {save.pending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SkillsList({ data, query, onClear, onChanged }: { data: PanelData; query: string; onClear: () => void; onChanged: () => void }) {
   const expanded = useExpanded();
+  const admin = useAdmin();
+  const [editing, setEditing] = useState<Managed | null>(null);
+  const [deleting, setDeleting] = useState<Managed | null>(null);
+  const remove = useAction();
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    const done = await remove.run(() => admin("skills.delete", deleting));
+    if (done) {
+      setDeleting(null);
+      onChanged();
+    }
+  };
   if (isPanelEmpty(data)) return <PanelEmpty icon="layers" text={data.empty ?? "No skills yet."} />;
 
   const sections = data.sections
@@ -128,6 +207,7 @@ function SkillsList({ data, query, onClear }: { data: PanelData; query: string; 
             {items.map((item) => {
               const skill = skillView(item);
               const key = `${index}:${item.key}`;
+              const managed = managedOf(item);
               return (
                 <DisclosureRow
                   key={key}
@@ -136,7 +216,25 @@ function SkillsList({ data, query, onClear }: { data: PanelData; query: string; 
                   hint={skill.summary}
                   expanded={expanded.isOpen(key)}
                   onToggle={() => expanded.toggle(key)}
-                  trailing={skill.command ? <SlashChip command={skill.command} className="h-6 max-w-full rounded-[7px] text-[11.5px] sm:max-w-[16rem]" /> : undefined}
+                  trailing={
+                    <>
+                      {skill.command ? <SlashChip command={skill.command} className="h-6 max-w-full rounded-[7px] text-[11.5px] sm:max-w-[16rem]" /> : null}
+                      {managed ? (
+                        <>
+                          <IconButton icon="pencil" label={`Edit ${skill.name}`} className="size-7" onClick={() => setEditing(managed)} />
+                          <IconButton
+                            icon="trash-2"
+                            label={`Delete ${skill.name}`}
+                            className="size-7 hover:text-error"
+                            onClick={() => {
+                              remove.clear();
+                              setDeleting(managed);
+                            }}
+                          />
+                        </>
+                      ) : null}
+                    </>
+                  }
                   detail={<SkillDetail skill={skill} />}
                 />
               );
@@ -144,7 +242,65 @@ function SkillsList({ data, query, onClear }: { data: PanelData; query: string; 
           </SectionCard>
         );
       })}
+      {editing ? <SkillEditor skill={editing} onClose={() => setEditing(null)} onSaved={onChanged} /> : null}
+      <ConfirmDialog
+        open={deleting !== null}
+        title="Delete this skill?"
+        description={`${deleting?.name ?? "This skill"} and every file in its folder, scripts and templates included, will be removed. Only its SKILL.md can be put back, from Learned on the Memory page.`}
+        confirmLabel="Delete"
+        pending={remove.pending}
+        error={remove.error}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </>
+  );
+}
+
+const ARCHIVED_EMPTY = "Skills the agent stops using are archived here after 30 days, never deleted.";
+
+/** Skills the curator archived: each can come back under its own name. */
+function ArchivedCard({ onRestored }: { onRestored: () => void }) {
+  const admin = useAdmin();
+  const archived = useAdminResource("skills.archived");
+  const restore = useAction();
+  const [restoring, setRestoring] = useState<string | null>(null);
+  const items: ArchivedSkillView[] = archived.data ?? [];
+  const bring = async (skill: ArchivedSkillView) => {
+    setRestoring(skill.id);
+    const done = await restore.run(() => admin("skills.restore", { id: skill.id }));
+    setRestoring(null);
+    if (done) {
+      archived.refresh();
+      onRestored();
+    }
+  };
+  return (
+    <SectionCard title="Archived" icon="archive" count={items.length} note="Learned skills nobody used for 30 days.">
+      {items.length === 0 ? (
+        <li className="px-5 py-4 text-[13.5px] text-ink-3">{archived.error ? "The archive could not be read." : archived.status === "loading" ? "" : ARCHIVED_EMPTY}</li>
+      ) : (
+        items.map((skill) => (
+          <li key={skill.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-5">
+            <div className="min-w-0 flex-1 basis-48">
+              <p className="break-words text-[14px] font-medium text-ink">{skill.name}</p>
+              <p className="line-clamp-2 text-[12.5px] text-ink-3">
+                Archived {skill.archivedOn}
+                {skill.description ? ` · ${skill.description}` : ""}
+              </p>
+            </div>
+            <Button size="sm" variant="secondary" icon="undo-2" disabled={restoring !== null} onClick={() => void bring(skill)} aria-label={`Restore ${skill.name}`}>
+              Restore
+            </Button>
+          </li>
+        ))
+      )}
+      {restore.error ? (
+        <li className="px-4 pb-3 sm:px-5">
+          <Notice tone="error">{restore.error}</Notice>
+        </li>
+      ) : null}
+    </SectionCard>
   );
 }
 
@@ -200,8 +356,9 @@ export function SkillsPage() {
         </div>
       ) : null}
       <ResourceView resource={resource} noun="skills">
-        {(data) => <SkillsList data={data} query={query} onClear={() => setFilter("")} />}
+        {(data) => <SkillsList data={data} query={query} onClear={() => setFilter("")} onChanged={resource.refresh} />}
       </ResourceView>
+      {resource.data ? <ArchivedCard onRestored={resource.refresh} /> : null}
     </PageFrame>
   );
 }

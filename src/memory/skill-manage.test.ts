@@ -6,7 +6,7 @@ import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { Ledger } from "../learning/ledger";
 import { SkillTracker } from "../learning/skill-tracker";
-import { createSkillManageTool, MAX_SKILL_FILE_CHARS, skillPreview } from "./skill-manage";
+import { createSkillManageTool, manageSkill, MAX_SKILL_FILE_CHARS, skillPreview } from "./skill-manage";
 
 let home: string;
 let outside: string;
@@ -275,4 +275,16 @@ test("an un-migrated home is written where its skills still are", async () => {
   await mkdir(join(home, "skills"), { recursive: true });
   const tool = createSkillManageTool({ home });
   expect(tool.subject({ action: "create", name: "ok" }, "/")).toEqual({ paths: [join(home, "skills", "ok", "SKILL.md")] });
+});
+
+test("manageSkill acts for the user and records it", async () => {
+  const ledger = new Ledger(home);
+  const opts = { home, ledger };
+  expect((await manageSkill(opts, { action: "create", name: "a", content: "---\ndescription: A\n---\nx" }, "user")).isError).toBeUndefined();
+  expect((await ledger.list(1))[0]).toMatchObject({ actor: "user", kind: "skill" });
+  expect((await manageSkill(opts, { action: "write_file", name: "a", file_path: "SKILL.md", file_content: "---\ndescription: A2\n---\ny" }, "user")).isError).toBeUndefined();
+  expect(await readFile(join(home, "workspace", "skills", "a", "SKILL.md"), "utf8")).toContain("A2");
+  expect((await manageSkill(opts, { action: "write_file", name: "a", file_path: "SKILL.md", file_content: "no frontmatter" }, "user")).isError).toBe(true);
+  expect((await manageSkill(opts, { action: "delete", name: "a" }, "user")).isError).toBeUndefined();
+  expect(existsSync(join(home, "workspace", "skills", "a"))).toBe(false);
 });
