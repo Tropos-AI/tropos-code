@@ -172,6 +172,11 @@ test("isLearnedPath allows only the files each kind writes, under the home", () 
     ["identity", "IDENTITY.md"],
     ["identity", "SOUL.md"],
     ["daily", "projects/-Users-me-app-0123456789ab/notes/2026-10-14.md"],
+    ["agent", "agents/reviewer/AGENT.md"],
+    ["agent", "agents/reviewer.md"],
+    ["memory", "agents/reviewer/MEMORY.md"],
+    ["daily", "agents/reviewer/memory/2026-10-16.md"],
+    ["skill", "agents/reviewer/skills/lint/SKILL.md"],
   ];
   for (const [kind, rel] of ok) expect({ kind, rel, ok: isLearnedPath(home, kind, join(home, rel)) }).toEqual({ kind, rel, ok: true });
   const no: Array<[LedgerKind, string]> = [
@@ -192,6 +197,14 @@ test("isLearnedPath allows only the files each kind writes, under the home", () 
     ["skill", "skills/../../escape/x/SKILL.md"],
     ["identity", ""],
     ["identity", "../SOUL.md"],
+    ["agent", "agents/.archive/x/AGENT.md"],
+    ["agent", "agents/reviewer/revisions/1.md"],
+    ["agent", "agents/reviewer/skills/AGENT.md"],
+    ["memory", "agents/.archive/MEMORY.md"],
+    ["user", "agents/reviewer/MEMORY.md"],
+    ["skill", "agents/reviewer/skills/SKILL.md"],
+    ["skill", "agents/reviewer/skills/.archive/x/SKILL.md"],
+    ["daily", "agents/reviewer/memory/today.md"],
   ];
   for (const [kind, rel] of no) expect({ kind, rel, ok: isLearnedPath(home, kind, join(home, rel)) }).toEqual({ kind, rel, ok: false });
   expect(isLearnedPath(home, "memory", join(outside, "memories", "MEMORY.md"))).toBe(false);
@@ -301,4 +314,28 @@ test("an id-less undo also follows a moved file, and still refuses an edited one
   await write(join(home, "workspace", "SOUL.md"), "y\n");
   expect(await ledger.undo()).toMatchObject({ ok: true });
   expect(await readFile(join(home, "workspace", "SOUL.md"), "utf8")).toBe("x\n");
+});
+
+test("undoing a created specialist file drops its empty folder, never one with other files", async () => {
+  const empty = join(home, "agents", "a", "AGENT.md");
+  await write(empty, "x");
+  const e = await ledger.record({ actor: "agent", kind: "agent", path: empty, action: "create", summary: "s", before: null, after: "x" });
+  expect((await ledger.undo(e.id)).ok).toBe(true);
+  expect(existsSync(join(home, "agents", "a"))).toBe(false);
+  expect(existsSync(join(home, "agents"))).toBe(true);
+  const busy = join(home, "agents", "b", "AGENT.md");
+  await write(busy, "x");
+  await write(join(home, "agents", "b", "MEMORY.md"), "keep");
+  const e2 = await ledger.record({ actor: "agent", kind: "agent", path: busy, action: "create", summary: "s", before: null, after: "x" });
+  expect((await ledger.undo(e2.id)).ok).toBe(true);
+  expect(await readFile(join(home, "agents", "b", "MEMORY.md"), "utf8")).toBe("keep");
+});
+
+test("a specialist's own skill folder is dropped on undo like any skill folder", async () => {
+  const path = join(home, "agents", "a", "skills", "lint", "SKILL.md");
+  await write(path, "x");
+  const e = await ledger.record({ actor: "agent", kind: "skill", path, action: "create", summary: "s", before: null, after: "x" });
+  expect((await ledger.undo(e.id)).ok).toBe(true);
+  expect(existsSync(join(home, "agents", "a", "skills", "lint"))).toBe(false);
+  expect(existsSync(join(home, "agents", "a", "skills"))).toBe(true);
 });

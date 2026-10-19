@@ -1,7 +1,7 @@
 // src/learning/ledger.ts
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, lstat, mkdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { legacyToCurrent } from "../home/layout";
 import { atomicWrite } from "../memory/notes";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
@@ -50,6 +50,9 @@ const DAY_NOTE = /^\d{4}-\d{2}-\d{2}\.md$/;
 // LEGACY_LAYOUT: the first two are the pre-workspace roots.
 const SKILL_ROOTS = [["skills"], [LEARNED_SKILLS_DIR], ["workspace", "skills"], ["workspace", LEARNED_SKILLS_DIR]];
 
+/** A path inside a specialist's folder agents/<id>/…; dot-folders such as .archive are not specialists. */
+const inSpecialist = (parts: string[]): boolean => parts.length >= 3 && parts[0] === "agents" && !parts[1]!.startsWith(".");
+
 /**
  * Whether `path` is a file the learning loop writes for an entry of `kind`, under the Tropos home:
  * memory and user notes in the workspace, skill files inside a skill folder, the identity files, and
@@ -63,12 +66,14 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
     case "memory":
       // The lessons are items in the workspace AGENTS.md.
       if (parts.length === 2 && parts[0] === "workspace" && parts[1] === "AGENTS.md") return true;
+      if (inSpecialist(parts) && parts.length === 3 && parts[2] === "MEMORY.md") return true;
     // falls through
     case "user":
       // LEGACY_LAYOUT: memories/ until the migration moves the notes into the workspace.
       return parts.length === 2 && (parts[0] === "memories" || parts[0] === "workspace") && (parts[1] === "MEMORY.md" || parts[1] === "USER.md");
     case "skill":
       // <root>/<skill>/<file…>; dot-folders (.archive) are not skills.
+      if (inSpecialist(parts) && parts[2] === "skills") return parts.length >= 5 && !parts[3]!.startsWith(".");
       return SKILL_ROOTS.some((root) => parts.length >= root.length + 2 && root.every((part, i) => parts[i] === part) && !parts[root.length]!.startsWith("."));
     case "identity":
       // LEGACY_LAYOUT: the home root until the migration moves them into the workspace.
@@ -77,12 +82,14 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
         (parts[parts.length - 1] === "IDENTITY.md" || parts[parts.length - 1] === "SOUL.md")
       );
     case "daily":
+      if (inSpecialist(parts)) return parts.length === 4 && parts[2] === "memory" && DAY_NOTE.test(parts[3]!);
       // LEGACY_LAYOUT: projects/<key>/notes/ until the migration moves the day notes into the journal.
       return (
         (parts.length === 4 && parts[0] === "projects" && parts[2] === "notes" && DAY_NOTE.test(parts[3]!)) ||
         (parts.length === 3 && parts[0] === "workspace" && parts[1] === "memory" && DAY_NOTE.test(parts[2]!))
       );
     case "agent":
+      if (inSpecialist(parts)) return parts.length === 3 && parts[2] === "AGENT.md";
       return parts.length === 2 && parts[0] === "agents" && parts[1]!.endsWith(".md") && !parts[1]!.startsWith(".");
     default:
       return false;
@@ -257,6 +264,10 @@ export class Ledger {
         if (entry.kind === "skill" && target.endsWith(`${sep}SKILL.md`) && (await this.isSkillFolder(dirname(target)))) {
           await rmdir(dirname(target)).catch(() => {});
         }
+        // A specialist created from nothing leaves its folder; drop it when empty (never agents/ itself).
+        if (entry.kind === "agent" && target.endsWith(`${sep}AGENT.md`) && (await this.isSpecialistFolder(dirname(target)))) {
+          await rmdir(dirname(target)).catch(() => {});
+        }
       } else {
         const text = await this.getBlob(entry.before);
         await mkdir(dirname(target), { recursive: true, mode: DIR_MODE });
@@ -300,7 +311,18 @@ export class Ledger {
   /** A skill folder directly inside a skills root (not the root itself). */
   private async isSkillFolder(dir: string): Promise<boolean> {
     const homes = [this.home, await realpath(this.home).catch(() => this.home)];
-    return homes.some((home) => SKILL_ROOTS.some((root) => dirname(dir) === resolve(home, ...root)));
+    return homes.some(
+      (home) =>
+        SKILL_ROOTS.some((root) => dirname(dir) === resolve(home, ...root)) ||
+        // agents/<id>/skills/<skill>
+        (basename(dirname(dir)) === "skills" && dirname(dirname(dirname(dir))) === resolve(home, "agents") && !basename(dirname(dirname(dir))).startsWith(".")),
+    );
+  }
+
+  /** A specialist folder directly inside agents/ (not the folder itself, not a dot-folder). */
+  private async isSpecialistFolder(dir: string): Promise<boolean> {
+    const homes = [this.home, await realpath(this.home).catch(() => this.home)];
+    return !basename(dir).startsWith(".") && homes.some((home) => dirname(dir) === resolve(home, "agents"));
   }
 
   /** Why undo may not touch the entry's file, or undefined: it must be a learned file of its kind, inside the home. */

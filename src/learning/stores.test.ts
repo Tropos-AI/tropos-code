@@ -10,6 +10,7 @@ import { createTools } from "../tools/registry";
 import type { AnyTool } from "../tools/types";
 import type { z } from "zod";
 import { workspaceOwnPaths } from "../home/layout";
+import { agentsDir } from "../paths";
 import { STORE_TOOLS, troposStorePaths } from "./stores";
 
 let dir: string;
@@ -34,6 +35,7 @@ test("lists the five tools' stores as canonical paths under the home", async () 
     ...workspaceOwnPaths(real),
     join(real, "agents"),
   ]);
+  expect(troposStorePaths(join(dir, "home"))).toContain(agentsDir(real));
 });
 
 test("a store that is itself a link is left out, wherever it points", async () => {
