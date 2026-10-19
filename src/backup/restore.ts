@@ -152,12 +152,14 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreResult
   }
   const content = [...texts].map(([rel, text]) => contentProblem(rel, text)).filter((p): p is string => p !== undefined);
   if (content.length) throw new BackupError(`Nothing was restored: ${content[0]}`, "invalid", content);
-  const risky = classifyRisky(chosen, (p) => texts.get(p));
 
   const overwritten: string[] = [];
   // A backup from before the layout change writes into the new places (LEGACY_LAYOUT).
   const placed = (path: string): string => legacyToCurrent(path) ?? path;
   const moved = (f: ManifestFile): ManifestFile => ({ ...f, path: placed(f.path) });
+  // Judged by where a file comes from and by where it lands: an old path must not slip onto an instruction file unflagged.
+  const risky: RiskyFile[] = [...classifyRisky(chosen, (p) => texts.get(p))];
+  for (const r of classifyRisky(chosen.map(moved), (p) => texts.get(p))) if (!risky.some((x) => placed(x.path) === r.path)) risky.push(r);
   for (const f of chosen) if (await lstat(join(opts.home, placed(f.path))).then(() => true, () => false)) overwritten.push(placed(f.path));
 
   if (await gatewayRunning(opts.home)) {

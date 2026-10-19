@@ -41,7 +41,7 @@ const ROOT_FILES = new Set(["SOUL.md", "IDENTITY.md", "SOUL.imported.md"]);
 export function legacyToCurrent(rel: string): string | undefined {
   // LEGACY_LAYOUT
   if (ROOT_FILES.has(rel)) return `workspace/${rel}`;
-  const memories = /^memories\/([^/]+)$/.exec(rel);
+  const memories = /^memories\/(USER\.md|MEMORY\.md|imported-[^/]+\.md)$/.exec(rel);
   if (memories) return `workspace/${memories[1]}`;
   if (/^skills(-learned)?\/.+/.test(rel)) return `workspace/${rel}`;
   return undefined;

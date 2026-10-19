@@ -38,6 +38,9 @@ const LOCK_STALE_MS = 10 * 60_000;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
+/** What may move out of the old memories/ folder: the two notes files and the overflow files of imports. */
+const movesFromMemories = (name: string): boolean => name === "USER.md" || name === "MEMORY.md" || /^imported-[^/]+\.md$/.test(name);
+
 const empty = (): LayoutMigration => ({ ran: false, moved: [], setAside: [], notesImported: 0, notesLeft: [], conflicts: [], bootstrapCreated: false });
 
 /** lstat that reads "absent" as null: a link counts as there and is never followed. */
@@ -213,7 +216,7 @@ export async function legacyLayoutReport(home: string): Promise<{ movable: strin
   for (const item of ITEMS) await consider(legacyPath(home, item), currentPath(home, item));
   const memories = join(home, "memories");
   if ((await look(memories))?.isDirectory()) {
-    for (const name of await readdir(memories)) if (name !== "USER.md" && name !== "MEMORY.md") await consider(join(memories, name), join(workspaceDir(home), name));
+    for (const name of await readdir(memories)) if (name !== "USER.md" && name !== "MEMORY.md" && movesFromMemories(name)) await consider(join(memories, name), join(workspaceDir(home), name));
   }
   await consider(join(home, "SOUL.imported.md"), join(workspaceDir(home), "SOUL.imported.md"));
   const extra = otherCwds(home);
@@ -304,7 +307,8 @@ export async function migrateHomeLayout(home: string, opts: LayoutOptions): Prom
     const memories = join(home, "memories");
     const memoriesInfo = await look(memories);
     if (memoriesInfo?.isDirectory()) {
-      for (const name of (await readdir(memories)).sort()) await consider(join(memories, name), join(workspaceDir(home), name));
+      // Only the notes move; a file named like one of the chief's instruction files is left, never put in its place.
+      for (const name of (await readdir(memories)).sort()) if (movesFromMemories(name)) await consider(join(memories, name), join(workspaceDir(home), name));
       await rmdir(memories).catch(() => undefined);
     } else if (memoriesInfo) r.conflicts.push("memories");
     await consider(join(home, "SOUL.imported.md"), join(workspaceDir(home), "SOUL.imported.md"));

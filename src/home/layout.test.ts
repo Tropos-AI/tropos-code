@@ -36,6 +36,9 @@ test("resolveLayoutPath covers root files and skill folders", async () => {
 test("legacyToCurrent", () => {
   expect(legacyToCurrent("memories/USER.md")).toBe("workspace/USER.md");
   expect(legacyToCurrent("memories/imported-hermes.md")).toBe("workspace/imported-hermes.md");
+  // Nothing else in memories/ may be mapped onto an instruction file.
+  expect(legacyToCurrent("memories/AGENTS.md")).toBeUndefined();
+  expect(legacyToCurrent("memories/BOOTSTRAP.md")).toBeUndefined();
   expect(legacyToCurrent("SOUL.md")).toBe("workspace/SOUL.md");
   expect(legacyToCurrent("SOUL.imported.md")).toBe("workspace/SOUL.imported.md");
   expect(legacyToCurrent("skills/a/SKILL.md")).toBe("workspace/skills/a/SKILL.md");
