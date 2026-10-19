@@ -13,7 +13,7 @@ import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
 import { lowerSetupAutonomy } from "./autonomy";
 import { describeSetupChange, readSetupState } from "./describe";
-import { CHAT_DOCTOR_READ_ONLY, SetupRefused, setupDecision, setupInputSchema, type SetupInput, type SetupWho } from "./matrix";
+import { CHAT_DOCTOR_READ_ONLY, mcpEnvProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, type SetupInput, type SetupWho } from "./matrix";
 import type { SecretVault } from "./secrets";
 
 export interface SetupToolDeps {
@@ -45,7 +45,6 @@ function doctorText(r: DoctorReport): string {
   const lines = r.findings.filter((f) => f.level !== "ok").map((f) => `- [${f.level}] ${f.id}: ${f.message}${f.fixable ? " (has a fix)" : ""}`);
   return [head, ...lines].join("\n");
 }
-const SECRET_REF = /^secret:\d+$/;
 
 type Json = Record<string, unknown>;
 type Snapshot = Record<ConfigFileName, Json>;
@@ -211,6 +210,8 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       case "mcp.add": {
         const name = need(input.name, "Give the MCP server a name.");
         const server = need(input.server, "Describe the server: a command (and args) or a URL.");
+        const problem = mcpEnvProblem(server.env ?? {}, link("extensions/mcp"));
+        if (problem) refuse(problem);
         // Every ref must still be held before one is taken: a half-resolved env would lose the others.
         const env = Object.entries(server.env ?? {});
         if (env.some(([, v]) => SECRET_REF.test(v) && !deps.secrets?.peek(v))) refuse(SEND_AGAIN);

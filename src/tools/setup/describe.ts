@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gatewayConfigPath } from "../../gateway/config";
 import type { PermissionPreview } from "../types";
-import type { SetupInput } from "./matrix";
+import { looksSecret, SECRET_REF, type SetupInput } from "./matrix";
 
 export type SetupState = { settings: Record<string, unknown>; gateway: Record<string, unknown> };
 
@@ -25,7 +25,6 @@ export function readSetupState(home: string): SetupState {
   return { settings: readJson(join(home, "settings.json")), gateway: readJson(gatewayConfigPath(home)) };
 }
 
-const SECRET_REF = /^secret:\d+$/;
 const RANK: Record<string, number> = { ask: 0, balanced: 1, autonomous: 2 };
 
 const obj = (v: unknown): Json => (isObject(v) ? v : {});
@@ -35,6 +34,15 @@ const arrow = (label: string, before: unknown, after: unknown): string => `${lab
 
 /** A key the request carries: its ref, or that one was pasted (a raw value is never repeated). */
 const keyNote = (secret: string | undefined): string => (secret === undefined ? "(no key given)" : SECRET_REF.test(secret) ? `(${secret}, not shown)` : "(pasted key, not shown)");
+
+const MAX_SHOWN = 200;
+
+/** An env value as the approval shows it: a ref by name, a raw key never, anything else in full (very long ones cut). */
+function envValue(name: string, value: string): string {
+  if (SECRET_REF.test(value)) return `(${value})`;
+  if (looksSecret(name, value)) return "(a pasted key: refused, it must be a secret:<n> ref)";
+  return value.length > MAX_SHOWN ? `${value.slice(0, MAX_SHOWN)}…` : value;
+}
 
 /** One shell word, quoted when it needs to be, so the approval shows the command that will run. */
 const word = (w: string): string => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
@@ -93,7 +101,7 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       if (server.command) lines.push(`command: ${[server.command, ...(server.args ?? [])].map(word).join(" ")}`);
       if (server.url) lines.push(`url: ${server.url}`);
       const env = Object.entries(server.env ?? {});
-      if (env.length) lines.push(`env: ${env.map(([k, v]) => `${k}=${SECRET_REF.test(v) ? `(${v})` : "(hidden)"}`).join(", ")}`);
+      if (env.length) lines.push(`env: ${env.map(([k, v]) => `${k}=${envValue(k, v)}`).join(", ")}`);
       if (server.command) lines.push("The command runs on this computer, as you, whenever a session starts.");
       break;
     }

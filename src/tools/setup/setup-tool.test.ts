@@ -179,6 +179,32 @@ test("an unknown or expired ref in an MCP env asks for the key again and writes 
   expect(calls).toEqual([]);
 });
 
+test("mcp.add refuses loader and interpreter variables and points to Settings → Extensions", async () => {
+  for (const name of ["NODE_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "PATH", "PYTHONPATH", "PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "BASH_ENV", "ENV", "ZDOTDIR", "GIT_SSH_COMMAND"]) {
+    const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { [name]: "--require=/tmp/x.js" } } }, makeToolContext());
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain(name);
+    expect(text(out)).toContain("Settings → Extensions");
+  }
+  expect(calls).toEqual([]);
+  expect(vault.peek("secret:1")).toBeDefined();
+});
+
+test("mcp.add refuses a raw key in the env: keys come as secret:<n> refs", async () => {
+  for (const env of [{ API: KEY }, { GITHUB_TOKEN: "plain-value-123" }]) {
+    const out = await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env } }, makeToolContext());
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain("secret:<n>");
+    expect(JSON.stringify(out)).not.toContain(KEY);
+  }
+  expect(calls).toEqual([]);
+});
+
+test("mcp.add writes an ordinary env value as given", async () => {
+  await tool.run({ action: "mcp.add", name: "x", server: { command: "node", env: { LOG_LEVEL: "debug" } } }, makeToolContext());
+  expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).mcpServers.x.env).toEqual({ LOG_LEVEL: "debug" });
+});
+
 test("mcp.disable and proactive.set go through the admin and are recorded", async () => {
   await tool.run({ action: "mcp.add", name: "gh", server: { command: "npx" } }, makeToolContext());
   await tool.run({ action: "mcp.disable", name: "gh" }, makeToolContext());

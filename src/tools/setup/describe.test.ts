@@ -45,3 +45,14 @@ test("readSetupState reads both files and treats an unreadable one as empty", as
   await writeFile(join(home, "gateway.json"), "{ not json");
   expect(readSetupState(home)).toEqual({ settings: { model: "m" }, gateway: {} });
 });
+
+test("every env value that is not a key is shown in full, so a loader variable can't hide in the approval", () => {
+  const s = { settings: {}, gateway: {} };
+  const long = "x".repeat(500);
+  const text = describeSetupChange({ action: "mcp.add", name: "x", server: { command: "node", env: { NODE_OPTIONS: "--require=/tmp/x.js", LOG_LEVEL: "debug", BLOB: long } } }, s).text;
+  expect(text).toContain("NODE_OPTIONS=--require=/tmp/x.js");
+  expect(text).toContain("LOG_LEVEL=debug");
+  expect(text).toContain(`BLOB=${"x".repeat(200)}…`);
+  expect(text).not.toContain("x".repeat(201));
+  expect(text).not.toContain("(hidden)");
+});
