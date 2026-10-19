@@ -73,7 +73,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     await installTarget(f.deps, "1.0.0", false);
     await rm(f.layout.stateFile, { force: true });
     await mkdir(f.layout.stateFile);
-    await expect(runBackgroundUpdate(f.deps, "latest")).resolves.toBeUndefined();
+    await expect(runBackgroundUpdate(f.deps, "latest")).resolves.toBeNull();
   });
 
   test("a throwing log sink neither rejects nor stops the update", async () => {
@@ -82,7 +82,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     await f.release("1.1.0");
     await installTarget(f.deps, "1.0.0", false);
     f.srv.put("channels", "latest", "1.1.0\n");
-    await expect(runBackgroundUpdate({ ...f.deps, log: () => { throw new Error("sink"); } }, "latest")).resolves.toBeUndefined();
+    await expect(runBackgroundUpdate({ ...f.deps, log: () => { throw new Error("sink"); } }, "latest")).resolves.toBe("1.1.0");
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.1.0" });
   });
 
@@ -90,7 +90,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     f = await makeEngineFixture({ now: () => now });
     await f.release("1.0.0");
     await installTarget(f.deps, "1.0.0", false);
-    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw undefined; } }, "latest")).resolves.toBeUndefined();
+    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw undefined; } }, "latest")).resolves.toBeNull();
     expect((await f.state()).autoUpdate.failures).toBe(1);
   });
 
@@ -98,7 +98,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     f = await makeEngineFixture({ now: () => now });
     await f.release("1.0.0");
     await installTarget(f.deps, "1.0.0", false);
-    await expect(runBackgroundUpdate({ ...f.deps, now: () => { throw new Error("clock"); } }, "latest")).resolves.toBeUndefined();
+    await expect(runBackgroundUpdate({ ...f.deps, now: () => { throw new Error("clock"); } }, "latest")).resolves.toBeNull();
   });
 
   test.each([
@@ -108,7 +108,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     f = await makeEngineFixture({ now: () => now });
     await f.release("1.0.0");
     await installTarget(f.deps, "1.0.0", false);
-    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw make(); } }, "latest")).resolves.toBeUndefined();
+    await expect(runBackgroundUpdate({ ...f.deps, fetch: async () => { throw make(); } }, "latest")).resolves.toBeNull();
   });
 });
 
