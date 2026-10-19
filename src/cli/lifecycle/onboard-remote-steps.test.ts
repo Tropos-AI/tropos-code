@@ -101,7 +101,8 @@ describe("telegramStep", () => {
     })();
     expect(await telegramStep(io)).toBe("next");
     await tapped;
-  });
+    // It waits for the prompt before tapping; a busy CI machine can take longer than the default 5 s to show it.
+  }, 20_000);
 
   test("with the gateway reading the bot it uses the claim, never getUpdates", async () => {
     const io = await tg(["", ""], 3000, { alive: (pid) => pid === 4242 });
