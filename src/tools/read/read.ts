@@ -2,7 +2,7 @@
 import { type FileHandle, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { z } from "zod";
-import { openVerified, sandboxBusy, type VerifiedFile } from "../file-guard";
+import { holdSandbox, openVerified, type VerifiedFile } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { errorText } from "../../error-text";
 import { defineTool, type ToolContext, type ToolOutput } from "../types";
@@ -66,34 +66,43 @@ export const readTool = defineTool({
     if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
       return { content: `${path} changed after it was approved; nothing was read. Try again.`, isError: true };
     }
-    const busy = await sandboxBusy(ctx);
-    if (busy) return busy;
-    let info;
+    const held = await holdSandbox(ctx);
+    if ("content" in held) return held;
     try {
-      info = await stat(path);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { content: `File not found: ${path}`, isError: true };
-      }
-      return cannotRead(path, error);
-    }
-    if (info.isDirectory()) {
-      return { content: `${path} is a directory. Use Glob to list its files.`, isError: true };
-    }
-
-    let opened: VerifiedFile;
-    try {
-      opened = await openVerified(path, "read");
-    } catch (error) {
-      return cannotRead(path, error);
-    }
-    try {
-      return await readOpened(path, opened, input, ctx);
+      return await readAt(path, input, ctx);
     } finally {
-      await opened.handle.close();
+      held.release();
     }
   },
 });
+
+/** Read, once the sandbox is held. */
+async function readAt(path: string, input: z.infer<typeof schema>, ctx: ToolContext): Promise<ToolOutput> {
+  let info;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { content: `File not found: ${path}`, isError: true };
+    }
+    return cannotRead(path, error);
+  }
+  if (info.isDirectory()) {
+    return { content: `${path} is a directory. Use Glob to list its files.`, isError: true };
+  }
+
+  let opened: VerifiedFile;
+  try {
+    opened = await openVerified(path, "read");
+  } catch (error) {
+    return cannotRead(path, error);
+  }
+  try {
+    return await readOpened(path, opened, input, ctx);
+  } finally {
+    await opened.handle.close();
+  }
+}
 
 /** Everything Read returns, from a handle verified to be the file at `path`; sizes and mtime come from that handle. */
 async function readOpened(path: string, { handle, info }: VerifiedFile, input: z.infer<typeof schema>, ctx: ToolContext): Promise<ToolOutput> {

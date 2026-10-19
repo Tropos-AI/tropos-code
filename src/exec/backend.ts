@@ -40,9 +40,17 @@ export interface ExecBackend {
   /** Releases what the backend holds (a container); idempotent. */
   close(): Promise<void>;
   /**
-   * Called before a host-side file tool acts and after each command: stops whatever finished commands left running,
-   * so nothing in the sandbox can swap a folder for a link while the tool opens a file. Resolves to why that can't be
-   * done right now (a background command still running), else undefined. Unset: the backend doesn't need it.
+   * Called after each command: stops whatever finished commands left running, so nothing in the sandbox can swap a
+   * folder for a link while a file tool opens a file. Resolves to why that can't be done right now (a background
+   * command still running), else undefined. Unset: the backend doesn't need it.
    */
   quiesce?(): Promise<string | undefined>;
+  /**
+   * Held by a host-side file tool for as long as it works on the project: quiesces first, refuses while a command
+   * runs, and commands started while it is held wait until it is released. Unset: nothing to exclude.
+   */
+  holdForFiles?(): Promise<FilesHold>;
 }
+
+/** A file tool's hold on the sandbox (release it once, when done), or why the tool can't act now. */
+export type FilesHold = { ok: true; release: () => void } | { ok: false; reason: string };

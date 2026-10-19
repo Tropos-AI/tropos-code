@@ -110,9 +110,10 @@ guest approves their own requests. Without a running Docker the guest is told "c
 the owner's machine".
 
 A guest's container also stops everything a command left running as soon as the command ends, so nothing of theirs
-keeps running beside the file tools (which work on the project from this computer, as you). A guest can still start a
-background job (`run_in_background`): while one runs, Read, Write, Edit and Grep in that chat refuse with a message
-saying so, until the job ends or is stopped with KillShell.
+keeps running beside the file tools (which work on the project from this computer, as you). The two take turns: a
+command started while a file tool works waits until it is done. A guest can still start a background job
+(`run_in_background`): while one runs, Read, Write, Edit and Grep in that chat refuse with a message saying so, until
+the job ends or is stopped with KillShell.
 
 ### Without a sandbox
 

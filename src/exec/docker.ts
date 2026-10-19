@@ -11,8 +11,8 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
-import type { CwdMarker, ExecBackend, ExecSpawn } from "./backend";
+import { dirname, join, sep } from "node:path";
+import type { CwdMarker, ExecBackend, ExecSpawn, FilesHold } from "./backend";
 import { type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
 
 export interface DockerBackendOptions {
@@ -223,6 +223,10 @@ export class DockerBackend implements ExecBackend {
   /** A command ran since the last sweep, so something may still be running in the container. */
   private dirty = false;
   private sweeping: Promise<string | undefined> | undefined;
+  /** File tools holding the sandbox (holdForFiles); while there is one, the `gate` file exists. */
+  private holders = 0;
+  /** A host-only file (the container can't reach it) a command's wrapper waits on before it runs anything inside. */
+  private readonly gate: string | undefined;
   /** The commands' user inside the container: the owner's ids, so files they create are the owner's. */
   private readonly user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
 
@@ -236,6 +240,7 @@ export class DockerBackend implements ExecBackend {
     this.bin = opts.dockerBin ?? "docker";
     this.hide = opts.hide ?? [];
     this.stopLeftovers = opts.stopLeftovers ?? false;
+    if (this.stopLeftovers) this.gate = join(mkdtempSync(join(tmpdir(), "tropos-gate-")), "files-busy");
     this.name = opts.name ?? `tropos-${randomBytes(6).toString("hex")}`;
     if (opts.runDir) {
       this.ownsRunDir = !existsSync(opts.runDir);
@@ -261,6 +266,15 @@ export class DockerBackend implements ExecBackend {
       `  if [ -e ${quote(join(this.runDir, `failed-${attempt}`))} ]; then cat ${quote(join(this.runDir, `failed-${attempt}`))} >&2; exit 125; fi`,
       "  sleep 0.05",
       "done",
+      // A file tool is working on the project as the owner: nothing of this command runs until it is done.
+      ...(this.gate
+        ? [
+            `while [ -e ${quote(this.gate)} ]; do`,
+            `  if [ ! -d ${quote(this.runDir)} ]; then echo "tropos sandbox: the sandbox was closed" >&2; exit 125; fi`,
+            "  sleep 0.05",
+            "done",
+          ]
+        : []),
       `${quote(this.bin)} exec -u ${quote(this.user)} -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
       "status=$?",
       // A planted commondir would point the owner's next host `git` at hooks the container wrote: undo it and fail.
@@ -376,6 +390,30 @@ export class DockerBackend implements ExecBackend {
     return this.sweeping;
   }
 
+  /**
+   * A file tool's hold on a guest's sandbox, for as long as it works on the project: taken only with no command
+   * running (after the sweep), and commands spawned while it is held wait in their host-side wrapper, before anything
+   * runs in the container, until the last holder releases. An owner's sandbox holds nothing back.
+   */
+  async holdForFiles(): Promise<FilesHold> {
+    if (!this.gate) return { ok: true, release: () => {} };
+    const problem = await this.quiesce();
+    if (problem !== undefined) return { ok: false, reason: problem };
+    // A command spawned during the sweep is running (or about to): the tool waits for it like for any other.
+    if (this.live.size > 0) return { ok: false, reason: SANDBOX_BUSY };
+    const gate = this.gate;
+    if (this.holders++ === 0) writeFileSync(gate, "");
+    let released = false;
+    return {
+      ok: true,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (--this.holders === 0) rmSync(gate, { force: true });
+      },
+    };
+  }
+
   private async sweep(): Promise<string | undefined> {
     // No container (never started, failed, or closed and removed): nothing of a command can still run.
     if (!this.dirty || !this.started || this.closing) return undefined;
@@ -395,6 +433,7 @@ export class DockerBackend implements ExecBackend {
       for (const pending of this.pendingChecks) pending.closeMessage = this.enforce(pending.snap) ?? pending.closeMessage;
       this.pendingChecks.clear();
       if (this.ownsRunDir) rmSync(this.runDir, { recursive: true, force: true });
+      if (this.gate) rmSync(dirname(this.gate), { recursive: true, force: true });
       this.started = false;
     })();
     return this.closing;

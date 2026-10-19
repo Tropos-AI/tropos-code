@@ -2,13 +2,13 @@
 // session works in. Size-capped while it streams, never over an existing file unless the owner asked for that, and
 // reported with its sha256 so the owner can check it.
 import { randomBytes } from "node:crypto";
-import { chmod, link, lstat, rename, rm } from "node:fs/promises";
+import { link, lstat, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { downloadToFile } from "../../install/fetch";
 import { InstallError } from "../../install/errors";
 import { isInside } from "../../paths";
 import { inGitControlDir, isProjectSettingsFile } from "../../permissions/engine";
-import { makeParentDirs } from "../file-guard";
+import { assertInPlace, makeParentDirs, openVerified } from "../file-guard";
 import { resolveToolPath } from "../paths";
 import { cloneUrlProblem, guardedFetch, HostRefused, hostProblem, privateHostProblem, type Resolve } from "./sources";
 
@@ -105,13 +105,23 @@ export async function download(req: DownloadRequest, place: DownloadPlace, opts:
   // One folder at a time, each checked: `mkdir -p` would follow a folder swapped for a link out of the project.
   await makeParentDirs(dirname(target));
   const temp = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString("hex")}.part`);
+  // The part file is opened like the file tools open theirs: created, then proven to be where it was asked for.
+  const openDest = async (dest: string) => {
+    const { handle } = await openVerified(dest, "create", { project: place.allowedDirs });
+    await handle.chmod(0o644).catch(async (e: unknown) => {
+      await handle.close();
+      throw e;
+    });
+    return handle;
+  };
   try {
-    const { size, sha256 } = await downloadToFile(req.url, temp, { maxBytes, timeoutMs: opts.timeoutMs ?? 60_000, idleTimeoutMs: opts.timeoutMs ?? 60_000, fetch: capped }).catch((e: unknown) => {
+    const { size, sha256 } = await downloadToFile(req.url, temp, { maxBytes, timeoutMs: opts.timeoutMs ?? 60_000, idleTimeoutMs: opts.timeoutMs ?? 60_000, fetch: capped, openDest }).catch((e: unknown) => {
       if (e instanceof InstallError && e.cause instanceof Refused) throw e.cause;
       if (e instanceof InstallError && /more than the expected/.test(e.message)) throw tooBig();
       throw e;
     });
-    await chmod(temp, 0o644);
+    // The folder is checked again right before the file is put in place by name.
+    await assertInPlace(dirname(target));
     if (req.overwrite) await rename(temp, target);
     else {
       // link() fails on an existing name: a file that appeared meanwhile is still never replaced.

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, realpath, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { makeParentDirs, openVerified, PathSwapError, replaceContents, verifyOpened } from "./file-guard";
+import { makeParentDirs, openVerified, PathSwapError, removeStray, replaceContents, verifyOpened } from "./file-guard";
 
 let dir: string;
 let project: string;
@@ -83,14 +83,14 @@ describe("openVerified", () => {
     await mkdir(join(project, "real"));
     await writeFile(join(project, "real", "a.txt"), "inside");
     await symlink(join(project, "real"), join(project, "alias"));
-    const opened = await openVerified(join(project, "alias", "a.txt"), "read", [project]);
+    const opened = await openVerified(join(project, "alias", "a.txt"), "read", { within: [project] });
     try {
       expect(opened.real).toBe(join(project, "real", "a.txt"));
     } finally {
       await opened.handle.close();
     }
     await symlink(outside, join(project, "out"));
-    await expect(openVerified(join(project, "out", "secret"), "read", [project])).rejects.toBeInstanceOf(PathSwapError);
+    await expect(openVerified(join(project, "out", "secret"), "read", { within: [project] })).rejects.toBeInstanceOf(PathSwapError);
   });
 
   test("opening a FIFO for reading returns at once instead of waiting for a writer", async () => {
@@ -122,6 +122,49 @@ describe("verifyOpened", () => {
     } finally {
       await handle.close();
     }
+  });
+});
+
+describe("removeStray", () => {
+  // The file a create made outside the project, through a folder swapped for a link between the check and the open.
+  const strayed = async () => {
+    const handle = await open(join(outside, "new.plist"), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
+    await symlink(outside, join(project, "sub"));
+    return handle;
+  };
+
+  test("an empty file a create left outside the project is removed again", async () => {
+    const handle = await strayed();
+    try {
+      expect(await removeStray(handle, join(project, "sub", "new.plist"), [project])).toBe(true);
+    } finally {
+      await handle.close();
+    }
+    expect(await exists(join(outside, "new.plist"))).toBe(false);
+  });
+
+  test("a file that is no longer the handle's is left alone", async () => {
+    const handle = await strayed();
+    try {
+      await rm(join(outside, "new.plist"));
+      await writeFile(join(outside, "new.plist"), "someone else's");
+      expect(await removeStray(handle, join(project, "sub", "new.plist"), [project])).toBe(false);
+    } finally {
+      await handle.close();
+    }
+    expect(await readFile(join(outside, "new.plist"), "utf8")).toBe("someone else's");
+  });
+
+  test("a file that landed inside the project is left: a command there could have made it anyway", async () => {
+    await mkdir(join(project, "real"));
+    const handle = await open(join(project, "real", "x"), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL);
+    await symlink(join(project, "real"), join(project, "sub"));
+    try {
+      expect(await removeStray(handle, join(project, "sub", "x"), [project])).toBe(false);
+    } finally {
+      await handle.close();
+    }
+    expect(await exists(join(project, "real", "x"))).toBe(true);
   });
 });
 

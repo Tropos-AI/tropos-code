@@ -1,6 +1,6 @@
 // src/install/fetch.ts
 import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
+import { type FileHandle, open } from "node:fs/promises";
 import { InstallError, fromFsError } from "./errors";
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
@@ -15,6 +15,8 @@ export interface FetchOptions {
   fetch?: FetchLike;
   /** Set only by tests, in code — never from the environment: allow http to 127.0.0.1/localhost. */
   allowLoopbackHttp?: boolean;
+  /** downloadToFile: opens the new file. Default: created exclusively, readable by the owner only. */
+  openDest?: (dest: string) => Promise<FileHandle>;
 }
 
 export interface DownloadResult {
@@ -110,7 +112,7 @@ export async function downloadToFile(url: string, dest: string, opts: FetchOptio
   };
   let file;
   try {
-    file = await open(dest, "wx", 0o600);
+    file = await (opts.openDest ? opts.openDest(dest) : open(dest, "wx", 0o600));
   } catch (e) {
     throw fromFsError(e, `creating ${dest}`);
   }

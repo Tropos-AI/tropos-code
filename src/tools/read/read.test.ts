@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
-import { busyBackend, swappingBackend } from "../../../test/helpers/swap-backend";
+import { busyBackend, recordingBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { toInputSchema } from "../schema";
 import { readTool } from "./read";
@@ -179,6 +179,14 @@ describe("Read: a folder swapped for a link while the file is opened", () => {
   test("while the sandbox still runs a command, nothing is read and the reason is given", async () => {
     const out = await run({ file_path: "three.txt" }, makeToolContext({ root: dir, exec: busyBackend("A background command is still running.") }));
     expect(out).toEqual({ content: "A background command is still running.", isError: true });
+  });
+
+  test("the sandbox is held while the file is read and released afterwards, also when the read fails", async () => {
+    const events: string[] = [];
+    const ctx = makeToolContext({ root: dir, exec: recordingBackend(events) });
+    expect((await run({ file_path: "three.txt" }, ctx)).isError).toBeUndefined();
+    expect((await run({ file_path: "nope.txt" }, ctx)).isError).toBe(true);
+    expect(events).toEqual(["held", "released", "held", "released"]);
   });
 
   test("a FIFO is refused at once instead of hanging the read", async () => {

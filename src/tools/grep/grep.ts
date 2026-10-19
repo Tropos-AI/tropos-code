@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { openVerified, sandboxBusy, type VerifiedFile } from "../file-guard";
+import { holdSandbox, openVerified, type VerifiedFile } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 import { assertContainedPattern, namesDir, walkFiles } from "../walk";
@@ -159,7 +159,7 @@ async function runRipgrep(
 async function readSearched(file: string, within: readonly string[] | undefined, isDenied?: (path: string) => boolean): Promise<Buffer | null> {
   let opened: VerifiedFile;
   try {
-    opened = await openVerified(file, "read", within);
+    opened = await openVerified(file, "read", { within });
   } catch {
     return null;
   }
@@ -254,11 +254,15 @@ export function createGrepTool(opts: { rgPath: string | null }) {
         }
         throw error;
       }
-      const busy = await sandboxBusy(ctx);
-      if (busy) return busy;
-      return opts.rgPath
-        ? runRipgrep(opts.rgPath, base, input, ctx.signal, ctx.isDenied)
-        : runFallback(base, input, ctx.isDenied);
+      const held = await holdSandbox(ctx);
+      if ("content" in held) return held;
+      try {
+        return await (opts.rgPath
+          ? runRipgrep(opts.rgPath, base, input, ctx.signal, ctx.isDenied)
+          : runFallback(base, input, ctx.isDenied));
+      } finally {
+        held.release();
+      }
     },
   });
 }

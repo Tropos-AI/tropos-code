@@ -415,6 +415,65 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
     expect(await backend.quiesce()).toBeUndefined();
   });
 
+  const held = async (backend: DockerBackend) => {
+    const hold = await backend.holdForFiles();
+    if (!hold.ok) throw new Error(hold.reason);
+    return hold;
+  };
+
+  test("while a file tool holds a guest's sandbox, a new command waits, and runs once the hold is released", async () => {
+    const backend = make(true);
+    await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));
+    const hold = await held(backend);
+    const marker = join(ws, `ran-${n}`);
+    const done = collect(backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'`, cwd: ws, env: {} }));
+    await Bun.sleep(300);
+    expect(existsSync(marker)).toBe(false);
+    hold.release();
+    expect((await done).code).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("commands wait until the last of several file tools lets go", async () => {
+    const backend = make(true);
+    const first = await held(backend);
+    const second = await held(backend);
+    const marker = join(ws, `ran-${n}`);
+    const done = collect(backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'`, cwd: ws, env: {} }));
+    first.release();
+    first.release(); // a second release of the same hold changes nothing
+    await Bun.sleep(300);
+    expect(existsSync(marker)).toBe(false);
+    second.release();
+    await done;
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("a file tool can't hold a guest's sandbox while one of its commands runs", async () => {
+    const backend = make(true);
+    const marker = join(ws, `started-${n}`);
+    const child = backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'; sleep 30`, cwd: ws, env: {} });
+    const done = collect(child);
+    await until(() => existsSync(marker));
+    const hold = await backend.holdForFiles();
+    expect(hold.ok).toBe(false);
+    expect(hold.ok ? "" : hold.reason).toContain("still running");
+    if (child.pid) process.kill(-child.pid, "SIGKILL");
+    await done;
+    expect((await backend.holdForFiles()).ok).toBe(true);
+  });
+
+  test("an owner's container holds nothing back: a command runs while a file tool works", async () => {
+    const backend = make(false);
+    const hold = await held(backend);
+    try {
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script: "echo ran", cwd: ws, env: {} }));
+      expect(r.out).toContain("ran");
+    } finally {
+      hold.release();
+    }
+  });
+
   test("a guest's container keeps itself alive as a user of its own, so the sweep can't stop it; commands run as the owner's user", async () => {
     const backend = make(true);
     await collect(backend.spawn({ shell: "/bin/sh", script: "true", cwd: ws, env: {} }));

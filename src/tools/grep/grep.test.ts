@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { renameSync, symlinkSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { busyBackend } from "../../../test/helpers/swap-backend";
+import { busyBackend, recordingBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { createGrepTool } from "./grep";
@@ -190,6 +190,12 @@ describe("Grep (fallback): a folder swapped for a link mid-search", () => {
     } finally {
       await removeDir(root);
     }
+  });
+
+  test("the sandbox is held while the search runs and released afterwards", async () => {
+    const events: string[] = [];
+    await createGrepTool({ rgPath: null }).run({ pattern: "foo" }, makeToolContext({ root: dir, exec: recordingBackend(events) }));
+    expect(events).toEqual(["held", "released"]);
   });
 
   test("while the sandbox still runs a command, nothing is searched", async () => {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { busyBackend, swappingBackend } from "../../../test/helpers/swap-backend";
+import { busyBackend, recordingBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { readTool } from "../read/read";
@@ -172,6 +172,15 @@ describe("Edit: a folder swapped for a link while the file is opened", () => {
     } finally {
       await removeDir(outside);
     }
+  });
+
+  test("the sandbox is held while the file is edited and released afterwards, also when the edit fails", async () => {
+    const ctx = await prepared("hello");
+    const events: string[] = [];
+    ctx.exec = recordingBackend(events);
+    expect((await editTool.run({ file_path: "f.ts", old_string: "hello", new_string: "bye" }, ctx)).isError).toBeUndefined();
+    expect((await editTool.run({ file_path: "f.ts", old_string: "absent", new_string: "x" }, ctx)).isError).toBe(true);
+    expect(events).toEqual(["held", "released", "held", "released"]);
   });
 
   test("while the sandbox still runs a command, nothing is edited", async () => {

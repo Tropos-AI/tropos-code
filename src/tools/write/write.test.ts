@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
-import { busyBackend, swappingBackend } from "../../../test/helpers/swap-backend";
+import { busyBackend, recordingBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { writeFileNoFollow } from "../file-guard";
 import { readTool } from "../read/read";
@@ -150,6 +150,15 @@ describe("Write: a folder swapped for a link while the file is opened", () => {
     const out = await writeTool.run({ file_path: "f.txt", content: "x" }, ctx);
     expect(out).toEqual({ content: "A background command is still running.", isError: true });
     expect(await exists(join(dir, "f.txt"))).toBe(false);
+  });
+
+  test("the sandbox is held while the file is written and released afterwards, also when the write is refused", async () => {
+    const events: string[] = [];
+    const ctx = makeToolContext({ root: dir, exec: recordingBackend(events) });
+    expect((await writeTool.run({ file_path: "f.txt", content: "x" }, ctx)).isError).toBeUndefined();
+    await writeFile(join(dir, "unread.txt"), "old");
+    expect((await writeTool.run({ file_path: "unread.txt", content: "x" }, ctx)).isError).toBe(true);
+    expect(events).toEqual(["held", "released", "held", "released"]);
   });
 
   test("overwriting keeps the file's mode and replaces all of its old text", async () => {

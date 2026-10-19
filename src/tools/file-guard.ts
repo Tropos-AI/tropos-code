@@ -1,7 +1,7 @@
 // src/tools/file-guard.ts
 import { constants, type Stats } from "node:fs";
-import { type FileHandle, lstat, mkdir, open, realpath, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { type FileHandle, lstat, mkdir, open, realpath, stat, unlink } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { errorText } from "../error-text";
 import { isInside } from "../paths";
 import type { ToolContext, ToolOutput } from "./types";
@@ -79,15 +79,22 @@ export interface VerifiedFile {
   real: string;
 }
 
+export interface OpenOptions {
+  /** A search's folders: a real path anywhere inside them is accepted instead of only the path itself. */
+  within?: readonly string[];
+  /** The folders a sandboxed command can change (the session's allowed dirs), for removeStray after a failed create. */
+  project?: readonly string[];
+}
+
 /**
  * Opens a file the model named and proves the handle is the file at that path before anything is read or written.
  * The leaf is never followed (O_NOFOLLOW) and nothing waits on a FIFO (O_NONBLOCK). Nothing is truncated at open:
  * "update" opens an existing file as it is (the caller replaces its contents once verified), and "create" only makes a
  * new file (O_EXCL) in a parent checked just before, so an outside file is never opened for writing through a swapped
- * path. With `within` (a search's folders), a real path anywhere inside them is accepted instead of only the path
- * itself. On a mismatch the handle is closed and PathSwapError thrown.
+ * path; one created elsewhere anyway (the parent swapped after its check) is removed again where that is safe. On a
+ * mismatch the handle is closed and PathSwapError thrown.
  */
-export async function openVerified(path: string, purpose: OpenPurpose, within?: readonly string[]): Promise<VerifiedFile> {
+export async function openVerified(path: string, purpose: OpenPurpose, opts: OpenOptions = {}): Promise<VerifiedFile> {
   const base = constants.O_NOFOLLOW | constants.O_NONBLOCK;
   let flags = base | constants.O_RDONLY;
   if (purpose === "update") flags = base | constants.O_RDWR;
@@ -97,11 +104,34 @@ export async function openVerified(path: string, purpose: OpenPurpose, within?: 
   }
   const handle = await open(path, flags, 0o666);
   try {
-    const { info, real } = await verifyOpened(handle, path, within);
+    const { info, real } = await verifyOpened(handle, path, opts.within);
     return { handle, info, real };
   } catch (error) {
+    if (purpose === "create" && opts.project) await removeStray(handle, path, opts.project);
     await handle.close();
     throw error;
+  }
+}
+
+/**
+ * Removes the empty file a create just made somewhere other than `path` (a folder on its way became a link between
+ * the check and the open). Where it landed is found from its folder's real path now; it is unlinked only if the file
+ * there is still this handle's, still empty, and lies outside `project`. Outside the project no folder on the way can
+ * be changed by a sandboxed command, so the unlink can't be redirected; inside it the command could have made the file
+ * itself, so it is left. A file that can't be found again (the link swapped back already) stays, empty. True when
+ * removed.
+ */
+export async function removeStray(handle: FileHandle, path: string, project: readonly string[]): Promise<boolean> {
+  try {
+    const info = await handle.stat();
+    const landed = join(await realpath(dirname(path)), basename(path));
+    if (project.some((dir) => isInside(fold(landed), fold(dir)))) return false;
+    const now = await lstat(landed);
+    if (now.dev !== info.dev || now.ino !== info.ino || now.size !== 0) return false;
+    await unlink(landed);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -146,13 +176,24 @@ export async function makeParentDirs(dir: string): Promise<void> {
   }
 }
 
+/** Throws PathSwapError unless `path`'s real form is the path itself: for a path-based step (a rename) right before it. */
+export async function assertInPlace(path: string): Promise<void> {
+  await realInPlace(path);
+}
+
+export interface SandboxHold {
+  release: () => void;
+}
+
 /**
- * Before a file tool touches the project: a sandbox that sweeps (a guest's container) stops what earlier commands
- * left running, so nothing there can swap a folder while the tool works. The error result while it can't.
+ * Taken before a file tool touches the project and released when it is done: a sandbox that sweeps (a guest's
+ * container) stops what earlier commands left running and holds new ones back meanwhile, so nothing there can swap a
+ * folder while the tool works. The error result while it can't be taken.
  */
-export async function sandboxBusy(ctx: ToolContext): Promise<ToolOutput | undefined> {
-  const problem = await ctx.exec?.quiesce?.();
-  return problem === undefined ? undefined : { content: problem, isError: true };
+export async function holdSandbox(ctx: ToolContext): Promise<SandboxHold | ToolOutput> {
+  const hold = await ctx.exec?.holdForFiles?.();
+  if (hold === undefined) return { release: () => {} };
+  return hold.ok ? hold : { content: hold.reason, isError: true };
 }
 
 export type Freshness = { ok: true; missing: true } | { ok: true; missing: false; mtimeMs: number } | { ok: false; error: string };
