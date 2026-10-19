@@ -104,12 +104,13 @@ function open(opts: { models?: Record<string, Listing>; prefs?: ModelPrefsContro
 }
 
 const selectedLine = (frame: string) => frame.split("\n").find((l) => l.includes("❯")) ?? "";
+/** Every section has its models (or its error): until then a key would act on a list still filling in. */
+const loaded = (r: ReturnType<typeof render>) => waitFor(() => expect(r.lastFrame()).not.toContain("Loading"));
 
 describe("ModelPicker", () => {
   test("lists ready providers' models in sections, marks the current one, and shows effort", async () => {
     const { r, asked } = open();
-    // Each section loads on its own; the failing one settles last.
-    await waitFor(() => expect(r.lastFrame()).toContain("Could not list models: 401 Unauthorized"));
+    await loaded(r);
     const frame = r.lastFrame()!;
     expect(frame).toContain("Select model");
     expect(frame).toContain("⌕ ");
@@ -148,81 +149,64 @@ describe("ModelPicker", () => {
   test("arrows, ctrl+n/p and page keys move; enter records the use and picks with the effort", async () => {
     const { prefs, log } = fakePrefs();
     const { r, picked } = open({ prefs });
-    await tick();
+    await loaded(r);
+    const selects = (model: string) => waitFor(() => expect(selectedLine(r.lastFrame()!)).toContain(model));
     r.stdin.write(DOWN);
-    await tick();
-    expect(selectedLine(r.lastFrame()!)).toContain("claude-sonnet-5");
+    await selects("claude-sonnet-5");
     r.stdin.write(ctrl("n"));
-    await tick();
-    expect(selectedLine(r.lastFrame()!)).toContain("deepseek-chat");
+    await selects("deepseek-chat");
     r.stdin.write(ctrl("p"));
-    await tick();
-    expect(selectedLine(r.lastFrame()!)).toContain("claude-sonnet-5");
+    await selects("claude-sonnet-5");
     r.stdin.write(PAGE_DOWN);
-    await tick();
-    expect(selectedLine(r.lastFrame()!)).toContain("deepseek-reasoner");
+    await selects("deepseek-reasoner");
     r.stdin.write(PAGE_UP);
-    await tick();
-    expect(selectedLine(r.lastFrame()!)).toContain("claude-opus-5-5");
+    await selects("claude-opus-5-5");
     r.stdin.write(UP);
     r.stdin.write(PAGE_DOWN);
-    await tick();
+    await selects("deepseek-reasoner");
     r.stdin.write(RIGHT);
-    await tick();
     r.stdin.write(RIGHT);
-    await tick();
     r.stdin.write(RIGHT);
-    await tick();
-    expect(r.lastFrame()).toContain("● max effort");
+    await waitFor(() => expect(r.lastFrame()).toContain("● max effort"));
     r.stdin.write(LEFT);
-    await tick();
-    expect(r.lastFrame()).toContain("◕ xhigh effort");
+    await waitFor(() => expect(r.lastFrame()).toContain("◕ xhigh effort"));
     r.stdin.write(ENTER);
-    await tick();
+    await waitFor(() => expect(picked).toEqual([["deepseek/deepseek-reasoner", "xhigh"]]));
     expect(log).toEqual(["use deepseek/deepseek-reasoner"]);
-    expect(picked).toEqual([["deepseek/deepseek-reasoner", "xhigh"]]);
   });
 
   test("typing filters into one flat list; backspace edits; esc clears, then closes", async () => {
     const { r, picked, calls } = open();
-    await tick();
+    await loaded(r);
     r.stdin.write("reas");
-    await tick();
-    let frame = r.lastFrame()!;
-    expect(frame).toContain("⌕ reas");
+    await waitFor(() => expect(r.lastFrame()).toContain("⌕ reas▏"));
+    const frame = r.lastFrame()!;
     expect(frame).toContain("deepseek-reasoner");
     expect(frame).toContain("· DeepSeek");
     expect(frame).not.toContain("claude-sonnet-5");
     expect(frame).not.toContain("deepseek-chat");
     r.stdin.write("zz");
-    await tick();
-    expect(r.lastFrame()).toContain("No models match “reaszz”.");
+    await waitFor(() => expect(r.lastFrame()).toContain("No models match “reaszz”."));
     r.stdin.write(BACKSPACE);
-    await tick();
     r.stdin.write(BACKSPACE);
-    await tick();
+    await waitFor(() => expect(selectedLine(r.lastFrame()!)).toContain("deepseek-reasoner"));
     r.stdin.write(ENTER);
-    await tick();
-    expect(picked).toEqual([["deepseek/deepseek-reasoner", "high"]]);
+    await waitFor(() => expect(picked).toEqual([["deepseek/deepseek-reasoner", "high"]]));
     r.stdin.write(ESC);
-    await tick();
-    frame = r.lastFrame()!;
-    expect(frame).toContain("type to search");
+    await waitFor(() => expect(r.lastFrame()).toContain("type to search"));
     expect(calls.closed).toBe(0);
     r.stdin.write(ESC);
-    await tick();
-    expect(calls.closed).toBe(1);
+    await waitFor(() => expect(calls.closed).toBe(1));
   });
 
   test("Anthropic models are picked bare", async () => {
     const { r, picked } = open({ current: "deepseek/deepseek-chat" });
-    await tick();
+    await loaded(r);
     expect(selectedLine(r.lastFrame()!)).toContain("deepseek-chat");
     r.stdin.write("sonnet");
-    await tick();
+    await waitFor(() => expect(selectedLine(r.lastFrame()!)).toContain("claude-sonnet-5"));
     r.stdin.write(ENTER);
-    await tick();
-    expect(picked).toEqual([["claude-sonnet-5", "high"]]);
+    await waitFor(() => expect(picked).toEqual([["claude-sonnet-5", "high"]]));
   });
 
   test("ctrl+f toggles a favorite and the list refreshes; ctrl+a asks to connect", async () => {
@@ -254,16 +238,26 @@ describe("ModelPicker", () => {
     await waitFor(() => expect(picked).toEqual([["claude-opus-5-5", "high"]]));
   });
 
+  test("two enters in one burst pick once: the second arrives while the first is still saving the recent", async () => {
+    const { prefs, log } = fakePrefs();
+    const { r, picked } = open({ prefs });
+    await loaded(r);
+    r.stdin.write(ENTER);
+    r.stdin.write(ENTER);
+    await waitFor(() => expect(picked).toEqual([["claude-opus-5-5", "high"]]));
+    await tick();
+    expect(picked).toHaveLength(1);
+    expect(log).toEqual(["use claude-opus-5-5"]);
+  });
+
   test("a provider status failure is shown", async () => {
     const { r } = open({ statusError: new Error("credentials unreadable") });
-    await tick();
-    expect(r.lastFrame()).toContain("Could not load providers: credentials unreadable");
+    await waitFor(() => expect(r.lastFrame()).toContain("Could not load providers: credentials unreadable"));
   });
 
   test("with nothing listed, enter does nothing", async () => {
     const { r, picked } = open({ models: { anthropic: [], deepseek: [], broken: [] } });
-    await tick();
-    expect(r.lastFrame()).toContain("No models listed");
+    await waitFor(() => expect(r.lastFrame()).toContain("No models listed"));
     r.stdin.write(ENTER);
     await tick();
     expect(picked).toEqual([]);
@@ -271,7 +265,7 @@ describe("ModelPicker", () => {
 
   test("strips terminal control sequences from model names and errors", async () => {
     const { r } = open({ models: { anthropic: ["evil\x1b]0;pwned\x07-model"], deepseek: new Error("bad\x1b[2Jthing"), broken: [] } });
-    await tick();
+    await loaded(r);
     const frame = r.lastFrame()!;
     expect(frame).toContain("evil-model");
     expect(frame).not.toContain("pwned");
