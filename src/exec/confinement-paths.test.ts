@@ -1,6 +1,6 @@
 // src/exec/confinement-paths.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CACHE_PATHS, ConfinementError, confinementPaths, SECRET_PATHS } from "./confinement-paths";
@@ -157,6 +157,24 @@ test("instructionFiles are the workspace's root instruction files for a non-owne
   const opts = { project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" as const };
   expect(confinementPaths({ ...opts, protectInstructions: true }).instructionFiles).toEqual(["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"].map((n) => join(realpathOr(home), "workspace", n)));
   expect(confinementPaths(opts).instructionFiles).toEqual([]);
+});
+
+test("for a non-owner, an instruction file or own file with a second hard link refuses the sandbox; the owner's runs", () => {
+  const home = mk("h", ".tropos");
+  const ws = join(home, "workspace");
+  mkdirSync(ws, { recursive: true });
+  const opts = { project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" as const };
+  writeFileSync(join(ws, "CLAUDE.md"), "owner's");
+  linkSync(join(ws, "CLAUDE.md"), join(opts.project, "claude-copy.md"));
+  expect(() => confinementPaths({ ...opts, protectInstructions: true })).toThrow(ConfinementError);
+  expect(() => confinementPaths({ ...opts, protectInstructions: true })).toThrow(join(realpathOr(ws), "CLAUDE.md"));
+  expect(() => confinementPaths(opts)).not.toThrow();
+  rmSync(join(opts.project, "claude-copy.md"));
+  writeFileSync(join(ws, "USER.md"), "about the user");
+  linkSync(join(ws, "USER.md"), join(opts.project, "user-copy.md"));
+  expect(() => confinementPaths({ ...opts, protectInstructions: true })).toThrow(join(realpathOr(ws), "USER.md"));
+  rmSync(join(opts.project, "user-copy.md"));
+  expect(() => confinementPaths({ ...opts, protectInstructions: true })).not.toThrow();
 });
 
 test("ownFiles lists the chief's files under the real home, existing or not", () => {

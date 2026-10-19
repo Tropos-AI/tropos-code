@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { mkdirSync, symlinkSync } from "node:fs";
+import { link, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import type { ExecBackend } from "../exec/backend";
@@ -82,6 +83,17 @@ test("host: Docker's answer doesn't matter to the owner", async () => {
 });
 
 const canConfine = process.platform === "darwin" || (process.platform === "linux" && (await confinementAvailable()) !== null);
+
+test("docker: a non-owner's session refuses to start while one of the chief's files has a second hard link", async () => {
+  await mkdir(join(home, "workspace"), { recursive: true });
+  await writeFile(join(home, "workspace", "TROPOS.md"), "owner's");
+  await link(join(home, "workspace", "TROPOS.md"), join(home, "copy.md"));
+  const guest = chatBackend(input({ config: config({ backend: "docker" }), role: "guest" }));
+  await expect(guest).rejects.toBeInstanceOf(SandboxUnavailableError);
+  await expect(guest).rejects.toThrow("hard link");
+  const owner = await chatBackend(input({ config: config({ backend: "docker" }), role: "owner" }));
+  await owner.backend.close();
+});
 
 test.skipIf(!canConfine)("host with confinement: the confined backend, confined", async () => {
   const got = await chatBackend(input({ config: config({ backend: "host" }), role: "owner" }));

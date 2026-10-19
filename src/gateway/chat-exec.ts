@@ -2,7 +2,7 @@
 // by the OS when it can be, or in a Docker container.
 import type { Confinement, ExecBackend } from "../exec/backend";
 import { confinedBackend, unconfinedBackend } from "../exec/confined";
-import { ConfinementError } from "../exec/confinement-paths";
+import { ConfinementError, requireSingleLinks } from "../exec/confinement-paths";
 import { DockerBackend } from "../exec/docker";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import type { GatewayConfig } from "./config";
@@ -47,6 +47,15 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     const problem = await input.dockerCheck();
     if (problem) throw new SandboxUnavailableError(role === "guest" ? `${GUEST_NEEDS_DOCKER} (${problem})` : problem);
     const { image, network, memory, cpus } = config.sandbox;
+    if (role !== "owner") {
+      // A hard link to a masked file would show it in the container under another name.
+      try {
+        requireSingleLinks([...workspaceOwnPaths(input.home), ...workspaceInstructionPaths(input.home)]);
+      } catch (err) {
+        if (err instanceof ConfinementError) throw new SandboxUnavailableError(err.message);
+        throw err;
+      }
+    }
     return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide: [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))] }), confined: true };
   }
   if (input.override) return { backend: input.override(workspace), confined: true };

@@ -65,7 +65,7 @@ test("the rules come in the order the sandbox needs: service denies, base write 
   for (const k of ["R0", "R1", "R2"]) expect(reads).toContain(`(subpath (param "${k}"))`);
 });
 
-test("paths travel as params; only the git and settings regexes embed an escaped path; a double quote is refused", () => {
+test("paths travel as params; only the any-case protection regexes embed an escaped path; a double quote is refused", () => {
   const paths = { ...base, project: "/w/a.b+c(d)[e]{f}^$|?*", gitDirs: ["/w/a.b+c(d)[e]{f}^$|?*/.git"], husky: ["/w/a.b+c(d)[e]{f}^$|?*/.husky"] };
   const { profile, params } = sandboxProfile(paths);
   expect(params).toEqual([
@@ -83,11 +83,15 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     ["O0", base.ownFiles[0]!],
     ["O1", base.ownFiles[1]!],
   ]);
-  const escaped = "/w/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\^\\$\\|\\?\\*";
-  const embedding = profile.split("\n").filter((l) => l.includes("/w/a"));
+  // Escaped, and every letter in any case.
+  const escaped = "/[Ww]/[Aa]\\.[Bb]\\+[Cc]\\([Dd]\\)\\[[Ee]\\]\\{[Ff]\\}\\^\\$\\|\\?\\*";
+  const embedding = profile.split("\n").filter((l) => l.includes("/[Ww]/[Aa]"));
   expect(embedding).toEqual([
-    `  (regex #"^${escaped}/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`,
-    `  (regex #"^${escaped}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
+    `  (regex #"^${escaped}/\\.[Gg][Ii][Tt]/(.*/)?([Hh][Oo][Oo][Kk][Ss](/.*)?|[Cc][Oo][Nn][Ff][Ii][Gg](\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee])?|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr])$")`,
+    `  (regex #"^${escaped}$")`,
+    `  (regex #"^${escaped}/\\.[Gg][Ii][Tt]$")`,
+    `  (regex #"^${escaped}/\\.[Hh][Uu][Ss][Kk][Yy](/.*)?$")`,
+    `  (regex #"^${escaped}/(.*/)?\\.[Tt][Rr][Oo][Pp][Oo][Ss](/[Ss][Ee][Tt][Tt][Ii][Nn][Gg][Ss](\\.[Ll][Oo][Cc][Aa][Ll])?\\.[Jj][Ss][Oo][Nn])?$")`,
   ]);
   for (const p of [...base.writable, ...base.deniedReads, ...base.readCarveOuts, base.cacheDir, ...base.ownFiles]) expect(profile).not.toContain(p);
 
@@ -114,6 +118,9 @@ test("a non-owner's profile write-denies the workspace's instruction files among
   const lines = profile.split("\n");
   expect(lines.indexOf(rule)).toBeGreaterThan(lines.findLastIndex((l) => l.startsWith("(allow file-write*")));
   expect(sandboxProfile(base).profile).not.toContain('(param "I0")');
+  // In any letter case too: `tropos.MD` is the same file on a case-insensitive disk.
+  expect(rule).toContain('(regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/[Tt][Rr][Oo][Pp][Oo][Ss]\\.[Mm][Dd]$")');
+  expect(profile).toContain('(regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/[Uu][Ss][Ee][Rr]\\.[Mm][Dd](/.*)?$")');
 });
 
 const sandboxExec = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
@@ -154,6 +161,10 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(guarded, "echo x > TROPOS.local.md")).not.toBe(0);
       expect(run(guarded, "echo x > AGENTS.override.md")).not.toBe(0);
       expect(run(guarded, "echo x > notes.txt")).toBe(0);
+      // The disk ignores case: a variant of the name is the same file and is refused too.
+      expect(run(guarded, "echo x > tropos.MD")).not.toBe(0);
+      expect(run(guarded, "echo x > Claude.md")).not.toBe(0);
+      expect(run(guarded, `echo x > "${join(ws.toUpperCase(), "TROPOS.md")}"`)).not.toBe(0);
       expect(existsSync(join(ws, "TROPOS.md"))).toBe(false);
       const owner = confinementPaths({ project: ws, home, userHome, env: { TMPDIR: join(fx, "tmp") } });
       expect(run(owner, "echo x > TROPOS.md")).toBe(0);
@@ -173,6 +184,10 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(paths, "echo a > .git/config")).not.toBe(0);
       expect(run(paths, "echo /elsewhere > .git/commondir")).not.toBe(0);
       expect(run(paths, "echo a > .git/HEAD.new")).toBe(0);
+      expect(run(paths, "echo a > .GIT/hooks/pre-commit")).not.toBe(0);
+      expect(run(paths, "echo a > .git/Hooks/post-checkout")).not.toBe(0);
+      expect(run(paths, "echo a > .git/CONFIG")).not.toBe(0);
+      expect(run(paths, "echo '{}' > .TROPOS/settings.json")).not.toBe(0);
       expect(run(paths, "echo '{}' > .tropos/settings.json")).not.toBe(0);
       expect(run(paths, "rm .tropos/settings.json")).not.toBe(0);
       expect(run(paths, "mv .tropos moved")).not.toBe(0);
@@ -203,6 +218,10 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(existsSync(join(ws, "MEMORY.md"))).toBe(false);
       expect(run(paths, `mkdir "${join(ws, "skills")}"`)).not.toBe(0);
       expect(existsSync(join(ws, "skills"))).toBe(false);
+      // A case variant of a name reaches the same file on this disk: refused the same way.
+      expect(run(paths, `cat "${join(ws, "user.md")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(ws, "Memory", "2026-10-16.md")}"`)).not.toBe(0);
+      expect(run(paths, `echo x > "${join(ws, "memory.MD")}"`)).not.toBe(0);
       // The rest of the workspace is still the project: readable and writable.
       expect(run(paths, `echo hi > "${join(ws, "app.ts")}" && cat "${join(ws, "app.ts")}"`)).toBe(0);
       // Seen from another project, the workspace carve-out stays readable but the chief's files do not.
@@ -338,8 +357,9 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
 test("a worktree's referenced git dirs get the same hooks and config write protection", () => {
   const { profile, params } = sandboxProfile({ ...base, linkedGitDirs: ["/r/.git/worktrees/t1", "/r/.git"] });
   expect(params).toContainEqual(["G2", "/r/.git/worktrees/t1"]);
-  expect(profile).toContain('(regex #"^/r/\\.git/worktrees/t1/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
-  expect(profile).toContain('(regex #"^/r/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
+  // Every name in any letter case: a case-insensitive disk resolves `.GIT/Hooks` to the same folder.
+  expect(profile).toContain('(regex #"^/[Rr]/\\.[Gg][Ii][Tt]/[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee][Ss]/[Tt]1/(.*/)?([Hh][Oo][Oo][Kk][Ss](/.*)?|[Cc][Oo][Nn][Ff][Ii][Gg](\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee])?|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr])$")');
+  expect(profile).toContain('(regex #"^/[Rr]/\\.[Gg][Ii][Tt]/(.*/)?([Hh][Oo][Oo][Kk][Ss](/.*)?|[Cc][Oo][Nn][Ff][Ii][Gg](\\.[Ww][Oo][Rr][Kk][Tt][Rr][Ee][Ee])?|[Cc][Oo][Mm][Mm][Oo][Nn][Dd][Ii][Rr])$")');
 });
 
 test("a worktree git dir inside a writable path is refused, not confined weakly", () => {

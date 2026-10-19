@@ -126,7 +126,7 @@ export function confinementPaths(opts: { project: string; home: string; userHome
   // inside the denied `~/.tropos`, so the builders carve it back out for read and write (like the workspace).
   // Residual: a project at `~` makes the host caches under it writable through the project itself.
   const home = real(opts.home);
-  return {
+  const paths: ConfinementPaths = {
     project,
     writable: unique(writable),
     cacheDir: prepareCacheDir(home),
@@ -140,6 +140,25 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
     platform,
   };
+  // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.
+  if (opts.protectInstructions) requireSingleLinks([...paths.instructionFiles, ...paths.ownFiles]);
+  return paths;
+}
+
+/**
+ * Refuses a protected file that has another hard link: masking or write-denying one name leaves the file open
+ * through the other. Folders and missing paths are fine (a folder's link count is its subfolders).
+ */
+export function requireSingleLinks(files: readonly string[]): void {
+  for (const file of files) {
+    let info: ReturnType<typeof lstatSync>;
+    try {
+      info = lstatSync(file);
+    } catch {
+      continue;
+    }
+    if (info.isFile() && info.nlink > 1) throw new ConfinementError(`${file} has another hard link; the sandbox won't run until that other link is removed.`);
+  }
 }
 
 /**

@@ -4,6 +4,7 @@
 // everything allowed; host services denied (Unix sockets but DNS, the keychain); writes denied; writes reopened for
 // the project and temp; secrets write-denied; the per-sandbox cache contents reopened; then the protections, last
 // among the write rules so nothing can reopen them; then secret reads denied; then the workspace and cache readable; then the chief's own files denied again.
+// Protected names are also matched in any letter case, as a case-insensitive disk resolves them.
 // Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
 // the sandbox matches resolved paths.
 import { isInside } from "../paths";
@@ -47,12 +48,17 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     ...gitDirs.map((p) => `(literal ${p})`),
     ...husky.map((p) => `(literal ${p}) (subpath ${p})`),
   ].join(" ");
+  // macOS disks usually ignore case, so every name below is matched in any case: `.GIT/Hooks` is `.git/hooks`.
   const regexes = [
     // Hooks and config in the repo and in every nested git dir (submodules under modules/, worktrees/), and the
     // commondir pointer, which would move where git looks for both.
-    ...[...paths.gitDirs, ...paths.linkedGitDirs].map((g) => `(regex #"^${escapeRegex(g)}/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`),
+    ...[...paths.gitDirs, ...paths.linkedGitDirs].map((g) => `(regex #"^${anyCase(g)}/(.*/)?(${anyCase("hooks")}(/.*)?|${anyCase("config")}(\\.${anyCase("worktree")})?|${anyCase("commondir")})$")`),
+    // The literal protections again, in any case.
+    `(regex #"^${anyCase(paths.project)}$")`,
+    ...paths.gitDirs.map((g) => `(regex #"^${anyCase(g)}$")`),
+    ...paths.husky.map((h) => `(regex #"^${anyCase(h)}(/.*)?$")`),
     // The repo's own settings hold its deny rules; a shell redirect must not strip them (the folder can't be renamed either).
-    `(regex #"^${escapeRegex(paths.project)}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
+    `(regex #"^${anyCase(paths.project)}/(.*/)?\\.${anyCase("tropos")}(/${anyCase("settings")}(\\.${anyCase("local")})?\\.${anyCase("json")})?$")`,
   ];
 
   const writeAllow = [`(subpath (param "PROJECT"))`, ...writable.map((p) => `(subpath ${p})`)];
@@ -74,13 +80,18 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     ...regexes.map((r) => `  ${r}`),
     ")",
     // A non-owner's session: the instruction files the owner's sessions load from the workspace, missing ones included.
-    ...(instructionFiles.length > 0 ? [`(deny file-write* ${instructionFiles.map((p) => `(literal ${p})`).join(" ")})`] : []),
+    ...(instructionFiles.length > 0 ? [`(deny file-write* ${instructionFiles.map((p) => `(literal ${p})`).join(" ")} ${paths.instructionFiles.map((p) => `(regex #"^${anyCase(p)}$")`).join(" ")})`] : []),
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")))`,
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
-    ...(ownFiles.length > 0 ? [`(deny file-read* file-write* ${ownFiles.map((p) => `(subpath ${p})`).join(" ")})`] : []),
+    ...(ownFiles.length > 0
+      ? [
+          `(deny file-read* file-write* ${paths.ownFiles.map((p) => `(regex #"^${anyCase(p)}(/.*)?$")`).join(" ")})`,
+          `(deny file-read* file-write* ${ownFiles.map((p) => `(subpath ${p})`).join(" ")})`,
+        ]
+      : []),
     "",
   ].join("\n");
   return { profile, params };
@@ -88,4 +99,9 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
 
 function escapeRegex(path: string): string {
   return path.replace(/[\\^$.|?*+()[\]{}]/g, "\\$&");
+}
+
+/** The path as a regex that matches it in any letter case (`[Tt][Rr]…`): the disk would treat those as one file. */
+function anyCase(path: string): string {
+  return escapeRegex(path).replace(/[a-z]/gi, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`);
 }
