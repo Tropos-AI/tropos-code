@@ -88,6 +88,24 @@ test("a project too big to search that holds the session's project is denied aro
   expect([...denied].sort()).toEqual([join(big, "README.md"), join(big, "apps", "other-app"), join(big, "libs")].sort());
 });
 
+test("a project denied whole still has its linked .env files and its links into the home folder denied where they point", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  const stash = mk("h", "stash");
+  writeFileSync(join(stash, "app.env"), "x");
+  symlinkSync(join(stash, "app.env"), join(big, ".env"));
+  writeFileSync(join(mk("h", "deep"), "db.env"), "x");
+  symlinkSync(join(fx, "h", "deep", "db.env"), join(mk("big", "apps", "web"), ".env.local"));
+  const shared = mk("h", "shared-secrets");
+  symlinkSync(shared, join(big, "shared"));
+  // A link to a system folder (a toolchain, say) stays readable: no owner secrets there, and denying it breaks builds.
+  symlinkSync("/usr/bin", join(big, "tools"));
+  // A link to the home folder itself holds the session's project: never denied.
+  symlinkSync(join(fx, "h"), join(big, "home"));
+  const denied = withOthers(mk("h", "proj"), [big]).otherProjectSecrets;
+  expect([...denied].sort()).toEqual([big, join(stash, "app.env"), join(fx, "h", "deep", "db.env"), shared].sort());
+});
+
 test("without other projects nothing extra is denied", () => {
   const paths = confinementPaths({ project: mk("proj"), home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
   expect(paths.otherProjectSecrets).toEqual([]);

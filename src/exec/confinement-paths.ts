@@ -139,6 +139,8 @@ const ENV_FILE = /^\.env(\..+)?$|^\.envrc$/;
 const ENV_SCAN_DEPTH = 2;
 /** Folders the search reads in one project; a project with more is denied whole instead (otherProjectSecrets). */
 export const ENV_SCAN_DIRS = 2_000;
+/** Folders a project denied whole is still searched for linked `.env` files, whose targets lie outside it. */
+const ENV_LINK_SCAN_DIRS = 200;
 const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", ".venv", "venv", "vendor", "target"]);
 
 /**
@@ -146,66 +148,97 @@ const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", "
  * project is never searched, even when it lies inside another one). Real paths: a linked `.env` is denied where it
  * points. Each project has its own search; one with more folders than that reads is denied whole (wholeProject), so a
  * file is never missed for lack of time. Found when the confinement is built, so a file created later in another
- * project isn't covered until the next session.
+ * project isn't covered until the next session. `keep` are folders that must stay readable (the project, temp, the
+ * cache): a link target holding one is never denied.
  */
-function otherProjectSecrets(project: string, others: readonly string[]): string[] {
+function otherProjectSecrets(project: string, others: readonly string[], userHome: string, keep: readonly string[]): string[] {
   const found: string[] = [];
   for (const other of others) {
     const root = real(other);
     if (root === project || isInside(root, project)) continue;
-    found.push(...(envFiles(root, project) ?? wholeProject(root, project)));
+    const scan = envScan(root, project, ENV_SCAN_DIRS, false);
+    found.push(...(scan.complete ? scan.found : wholeProject(root, project, userHome, keep)));
   }
   return unique(found).filter((path) => !isInside(path, project));
 }
 
 /** The projects (real paths) a confined chat elsewhere can't read at all, because they have too many folders to search. */
 export function tooBigToSearch(projects: readonly string[]): string[] {
-  return unique(projects.map(real)).filter((root) => envFiles(root) === null);
+  return unique(projects.map(real)).filter((root) => !envScan(root, undefined, ENV_SCAN_DIRS, false).complete);
 }
 
-/** One project's `.env` files, or null when it has more folders than the search reads. */
-function envFiles(root: string, project?: string): string[] | null {
+/**
+ * One project's `.env` files (real paths), reading at most `maxDirs` folders; `complete` is false when it had more.
+ * With `linksOnly`, only `.env` files that are links (to somewhere else) are collected.
+ */
+function envScan(root: string, project: string | undefined, maxDirs: number, linksOnly: boolean): { found: string[]; complete: boolean } {
   const found: string[] = [];
-  let dirs = 0;
-  const visit = (dir: string, depth: number): boolean => {
-    if (project !== undefined && isInside(dir, project)) return true;
-    if (++dirs > ENV_SCAN_DIRS) return false;
+  // Level by level, names in order: a cut-short search has still covered the levels nearest the root.
+  const queue: [string, number][] = [[root, 0]];
+  for (let dirs = 0; queue.length > 0; ) {
+    const [dir, depth] = queue.shift()!;
+    if (project !== undefined && isInside(dir, project)) continue;
+    if (++dirs > maxDirs) return { found, complete: false };
     let entries: Dirent[];
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     } catch {
-      return true; // unreadable to the owner, so to the command as well
+      continue; // unreadable to the owner, so to the command as well
     }
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name) && !visit(path, depth + 1)) return false;
-      } else if (ENV_FILE.test(entry.name) && (entry.isFile() || (entry.isSymbolicLink() && isFile(path)))) {
+        if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name)) queue.push([path, depth + 1]);
+      } else if (ENV_FILE.test(entry.name) && ((entry.isFile() && !linksOnly) || (entry.isSymbolicLink() && isFile(path)))) {
         found.push(real(path));
       }
     }
-    return true;
-  };
-  return visit(root, 0) ? found : null;
+  }
+  return { found, complete: true };
 }
 
 /**
  * Denies a whole other project: its root, or, when the session's project lies inside it, everything in it except the
- * folders that lead down to the session's project.
+ * folders that lead down to the session's project. The sandbox follows links, so what a link there points at is
+ * denied too: a linked `.env` near the top (a small search of its own), and an entry linked into the home folder, where
+ * secrets live, unless that target holds something in `keep`. A link to a system folder (a toolchain) stays readable.
  */
-function wholeProject(root: string, project: string): string[] {
-  if (!isInside(project, root)) return [root];
+function wholeProject(root: string, project: string, userHome: string, keep: readonly string[]): string[] {
   const out: string[] = [];
-  for (let dir = root; dir !== project; ) {
-    const next = join(dir, relative(dir, project).split(sep)[0]!);
+  const entries: string[] = [];
+  const list = (dir: string): string[] => {
     try {
-      for (const name of readdirSync(dir)) if (join(dir, name) !== next) out.push(join(dir, name));
+      return readdirSync(dir).map((name) => join(dir, name));
     } catch {
-      // unreadable to the owner, so to the command as well
+      return []; // unreadable to the owner, so to the command as well
     }
-    dir = next;
+  };
+  if (!isInside(project, root)) {
+    out.push(root);
+    entries.push(...list(root));
+  } else {
+    for (let dir = root; dir !== project; ) {
+      const next = join(dir, relative(dir, project).split(sep)[0]!);
+      entries.push(...list(dir).filter((path) => path !== next));
+      dir = next;
+    }
+    out.push(...entries);
   }
+  for (const entry of entries) {
+    if (!isLink(entry)) continue;
+    const target = real(entry);
+    if (isInside(target, userHome) && !keep.some((dir) => isInside(dir, target))) out.push(target);
+  }
+  out.push(...envScan(root, project, ENV_LINK_SCAN_DIRS, true).found);
   return out;
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 function isFile(path: string): boolean {
@@ -256,9 +289,10 @@ export function confinementPaths(opts: {
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
-    otherProjectSecrets: otherProjectSecrets(project, opts.otherProjects ?? []),
+    otherProjectSecrets: [],
     platform,
   };
+  paths.otherProjectSecrets = otherProjectSecrets(project, opts.otherProjects ?? [], userHome, [project, paths.cacheDir, ...paths.writable]);
   // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.
   // The specialists' folders too: their notes and skills are the chief's as much as the journal is.
   if (opts.protectInstructions) requireSingleLinks([...paths.instructionFiles, ...paths.ownFiles, real(agentsDir(opts.home))]);
