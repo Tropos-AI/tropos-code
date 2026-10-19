@@ -99,6 +99,18 @@ async function pairChat() {
 }
 
 const lastText = () => server.textsTo(CHAT).at(-1) ?? "";
+/**
+ * Sends a switch (a /project message or a button press) until it lands. The answer is shown before its turn has wrapped
+ * up (the worktree check after it), and a switch meanwhile is refused with "A turn is still running".
+ */
+async function switchProject(send: () => void, name: string) {
+  for (;;) {
+    const before = server.sent.length;
+    send();
+    const note = await server.waitFor(() => server.sent.slice(before).find((m) => m.chatId === CHAT && (m.text.startsWith(`Switched to ${name}`) || m.text.startsWith("A turn is still running"))));
+    if (note.text.startsWith("Switched")) return;
+  }
+}
 const sessionsFile = async () => JSON.parse(await readFile(join(home, "gateway", "sessions.json"), "utf8")) as Record<string, string>;
 
 describe("learning in the owner's chat", () => {
@@ -458,8 +470,7 @@ describe("projects in chats", () => {
     expect(listing.text).toContain("app  App");
     expect(listing.replyMarkup!.inline_keyboard.flat().map((b) => b.callback_data)).toEqual(["p:default", "p:app"]);
 
-    server.pushMessage(CHAT, CHAT, "/project app");
-    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to App (app)")));
+    await switchProject(() => server.pushMessage(CHAT, CHAT, "/project app"), "App (app)");
     server.pushMessage(CHAT, CHAT, "now");
     await server.waitFor(() => server.textsTo(CHAT).includes("in app"));
     expect(Object.keys(await sessionsFile()).sort()).toEqual([`telegram:${CHAT}@app`, `telegram:${CHAT}@default`]);
@@ -467,8 +478,7 @@ describe("projects in chats", () => {
 
     // Switching back with the button resumes the first session; nothing was closed or lost.
     const button = listing.replyMarkup!.inline_keyboard[0]![0]!.callback_data;
-    server.pushCallback(CHAT, CHAT, listing.messageId, button);
-    await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to Default workspace")));
+    await switchProject(() => server.pushCallback(CHAT, CHAT, listing.messageId, button), "Default workspace");
     server.pushMessage(CHAT, CHAT, "back");
     await server.waitFor(() => server.textsTo(CHAT).includes("default again"));
     expect((await sessionsFile())[`telegram:${CHAT}@default`]).toBe(defaultSession!);
