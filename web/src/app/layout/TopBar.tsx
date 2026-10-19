@@ -4,13 +4,14 @@ import type { Effort } from "@core/config/constants";
 import type { Transcript } from "@core/ui/transcript";
 import type { UndoResult } from "@core/web/protocol";
 
-import type { PageInfo } from "@/app/routes";
+import { hrefFor, type PageInfo } from "@/app/routes";
 import { ProjectPicker } from "@/components/chat/ProjectPicker";
 import { ProgressBar, type ProgressTone } from "@/components/interior/progress-bar";
 import { Tooltip, TooltipGroup } from "@/components/interior/tooltip-group";
 import { ValueFlash } from "@/components/interior/value-flash";
 import { IconButton } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { workingInSession } from "@/lib/agent-activity";
 import { errorMessage, useAppSelector, useAppStore, useConnection, useHello, useSessionState } from "@/lib/store";
 import { formatCost, formatTokens } from "@/lib/time";
 import { ui } from "@/lib/ui-store";
@@ -131,6 +132,24 @@ function UndoRedo() {
   );
 }
 
+/** "2 agents working": the specialists running for this conversation; it opens the Agents page. */
+function AgentsWorking() {
+  const sessionId = useHello()?.sessionId;
+  const count = useAppSelector((s) => workingInSession(s.activity, sessionId));
+  if (count === 0) return null;
+  const text = `${count} ${count === 1 ? "agent" : "agents"} working`;
+  return (
+    <a
+      href={hrefFor("agents")}
+      title="See what they are doing"
+      className="inline-flex h-6 shrink-0 items-center gap-1.5 self-center rounded-full border border-accent/15 bg-accent-wash px-2 text-[11.5px] font-medium whitespace-nowrap text-accent-ink outline-none transition-[border-color,box-shadow] duration-150 hover:border-accent/40 focus-visible:shadow-focus"
+    >
+      <span aria-hidden className="size-1.5 rounded-full bg-accent motion-safe:animate-pulse-dot" />
+      {text}
+    </a>
+  );
+}
+
 export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
   const title = useAppSelector((s) => sessionTitle(s.transcript));
   // The project picker needs the room the context meter and cost use on tablets and small laptops. Before the first
@@ -153,6 +172,7 @@ export function TopBar({ page, onOpenSidebar, sidebarOpen }: Props) {
         <p className={cn("hidden min-w-0 truncate text-[13px] sm:block", title ? "text-ink-2" : "italic text-ink-3")} title={title ?? undefined}>
           {title ?? "New session"}
         </p>
+        {page.id === "chat" ? <AgentsWorking /> : null}
       </div>
 
       <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">

@@ -241,3 +241,18 @@ describe("queue", () => {
     expect(isBusy(run([server({ t: "state", state: { ...STATE, busy: true } })], ready()))).toBe(true);
   });
 });
+
+describe("agents' live activity", () => {
+  const RUN = { id: "run-1", kind: "specialist" as const, agent: "reviewer", model: "m", state: "working" as const, startedAt: 0, session: { id: "s1" } };
+
+  test("the snapshot replaces what was known; events then update it; a new hello keeps it", () => {
+    let s = run([server({ t: "agents", activity: { running: [RUN], last: [] } })]);
+    expect(s.activity.running).toHaveLength(1);
+    s = run([server({ t: "agent", event: { type: "delta", id: "run-1", text: "Reading" } })], s);
+    expect(s.activity.running[0]!.text).toBe("Reading");
+    s = run([server({ t: "hello", server: HELLO })], s);
+    expect(s.activity.running).toHaveLength(1);
+    s = run([server({ t: "agent", event: { type: "end", run: { id: "run-1", kind: "specialist", agent: "reviewer", ok: true, result: "done", startedAt: 0, endedAt: 5, session: { id: "s1" } } } })], s);
+    expect(s.activity).toMatchObject({ running: [], last: [{ result: "done" }] });
+  });
+});

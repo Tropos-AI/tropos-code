@@ -9,6 +9,7 @@ import type { Transcript } from "@core/ui/transcript";
 import { BUSY_ERROR } from "@core/web/protocol";
 import { parseCommand } from "@core/ui/commands";
 
+import type { ActivityState } from "@/lib/agent-activity";
 import { appReducer, initialAppState, isBusy, nextQueued, type AppAction, type AppState, type ConnectionState, type PendingAsk, type QueuedMessage, type Toast, type ToastTone } from "@/lib/app-state";
 import { RpcError, TcodeClient, type AdminArgs, type RpcArgs, type RpcResult } from "@/lib/client";
 import type { Credentials } from "@/lib/credentials";
@@ -259,6 +260,11 @@ export function useHelloSeq(): number {
 
 export function useSessionState(): SessionState | null {
   return useAppSelector((s) => s.session);
+}
+
+/** Every agent running in the server's process, and each one's last run (src/agents/activity.ts). */
+export function useAgentActivity(): ActivityState {
+  return useAppSelector((s) => s.activity);
 }
 
 export function useTranscript(): Transcript {
