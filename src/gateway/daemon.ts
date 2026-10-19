@@ -60,6 +60,7 @@ import { createCronTool } from "../tools/cron/cron-tool";
 import { createSetupTool } from "../tools/setup/setup-tool";
 import { dashboardLink } from "./dashboard-link";
 import { onReloadSignal } from "./reload-signal";
+import { acquireGatewayLock } from "./instance-lock";
 import { chatSessionTools } from "./session-tools";
 import { suggestionTool, withSuggestions } from "../suggest/wire";
 import { CronStore } from "./cron/store";
@@ -164,6 +165,20 @@ const real = (path: string): string => {
 };
 
 export async function runGateway(run: GatewayRun): Promise<number> {
+  // Before anything is read or written: a second gateway would poll the same bot and rewrite the first one's state.
+  const lock = await acquireGatewayLock(run.home);
+  if (!lock.ok) {
+    run.err(`The gateway is already running (pid ${lock.pid}). Use \`tcode status\`.\n`);
+    return 1;
+  }
+  try {
+    return await runLockedGateway(run);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function runLockedGateway(run: GatewayRun): Promise<number> {
   const { home } = run;
   // The saved file, re-read when a session starts and on reload: a level or backend changed in the dashboard or the
   // terminal applies to the next session, and the autonomy of open ones (their policy reads this) at once.

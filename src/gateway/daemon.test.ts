@@ -67,6 +67,32 @@ describe("tcode gateway", () => {
     return { done, stop, out, err, url: () => webUrl };
   };
 
+  test("a second gateway on the same home exits at once with the first one's pid; only the first removes state.json", async () => {
+    await mkdir(join(dir, "project"));
+    const first = start();
+    while (!first.url()) await Bun.sleep(20);
+    const second = start();
+    expect(await second.done).toBe(1);
+    expect(second.err.join("")).toContain(`The gateway is already running (pid ${process.pid}). Use \`tcode status\`.`);
+    // The refused one left the running gateway's state alone.
+    expect((await readGatewayState(join(dir, "home")))?.pid).toBe(process.pid);
+    first.stop();
+    expect(await first.done).toBe(0);
+    expect(existsSync(join(dir, "home", "gateway", "state.json"))).toBe(false);
+    expect(existsSync(join(dir, "home", "gateway", "gateway.lock"))).toBe(false);
+  });
+
+  test("a lock left by a gateway that died is taken over", async () => {
+    await mkdir(join(dir, "project"));
+    await mkdir(join(dir, "home", "gateway"), { recursive: true });
+    await writeFile(join(dir, "home", "gateway", "gateway.lock"), JSON.stringify({ pid: 2 ** 22 + 4321, token: "old" }));
+    const g = start();
+    while (!g.url()) await Bun.sleep(20);
+    expect(JSON.parse(await readFile(join(dir, "home", "gateway", "gateway.lock"), "utf8")).pid).toBe(process.pid);
+    g.stop();
+    expect(await g.done).toBe(0);
+  });
+
   test("the gateway start migrates a legacy home too", async () => {
     await mkdir(join(dir, "project"));
     await mkdir(join(dir, "home", "memories"), { recursive: true });

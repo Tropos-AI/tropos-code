@@ -640,7 +640,7 @@ NOTE_EOF
     row "" "$(show_path "$bindir/tropos") -> tcode"
     if [ "$existing" = yes ]; then
       if [ -n "$old_version" ]; then row "Mode" "upgrade from $old_version"; else row "Mode" "upgrade (existing install)"; fi
-      row "After install" "tcode doctor --fix --yes; restart the gateway service if installed"
+      row "After install" "stop the gateway service if installed; tcode doctor --fix --yes; start it again"
     else
       row "Mode" "fresh install"
     fi
@@ -712,15 +712,24 @@ NOTE_EOF
   }
   if [ "$existing" = yes ]; then
     if [ -x "$tcode_bin" ]; then
-      step "Checking your setup (tcode doctor --fix --yes)..."
-      run_cmd "doctor --fix --yes" "$tcode_bin" doctor --fix --yes </dev/null
-      if [ "$run_status" -ne 0 ]; then warn "tcode doctor --fix exited with $run_status; run \"tcode doctor\" to see what needs attention (details: ${log_file:-not logged})"; else done_step "Checked your setup"; fi
+      # A new version's doctor --fix may move the home's layout: the running gateway is stopped first, so it never
+      # works on a half-moved home, and started again afterwards. The same version keeps it running.
+      restart_gateway=no
       if [ "$old_version" = "$version" ]; then
         log "same version as before; the gateway is not restarted"
       elif gateway_installed; then
-        step "Restarting the gateway service..."
-        run_cmd "gateway restart" "$tcode_bin" gateway restart </dev/null
-        if [ "$run_status" -ne 0 ]; then warn "tcode gateway restart exited with $run_status; restart it with \"tcode gateway restart\""; else done_step "Restarted the gateway service"; fi
+        restart_gateway=yes
+        step "Stopping the gateway service..."
+        run_cmd "gateway stop" "$tcode_bin" gateway stop </dev/null
+        if [ "$run_status" -ne 0 ]; then warn "tcode gateway stop exited with $run_status; the setup check runs anyway"; else done_step "Stopped the gateway service"; fi
+      fi
+      step "Checking your setup (tcode doctor --fix --yes)..."
+      run_cmd "doctor --fix --yes" "$tcode_bin" doctor --fix --yes </dev/null
+      if [ "$run_status" -ne 0 ]; then warn "tcode doctor --fix exited with $run_status; run \"tcode doctor\" to see what needs attention (details: ${log_file:-not logged})"; else done_step "Checked your setup"; fi
+      if [ "$restart_gateway" = yes ]; then
+        step "Starting the gateway service..."
+        run_cmd "gateway start" "$tcode_bin" gateway start </dev/null
+        if [ "$run_status" -ne 0 ]; then warn "tcode gateway start exited with $run_status; start it with \"tcode gateway start\""; else done_step "Started the gateway service"; fi
       fi
     else
       warn "$(show_path "$tcode_bin") is missing after the install; skipping the post-upgrade checks"

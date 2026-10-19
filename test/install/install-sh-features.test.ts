@@ -165,7 +165,7 @@ describe("the flow look (same gutter as the terminal wizard)", () => {
       await mkdir(join(sb.home, "Library/LaunchAgents"), { recursive: true });
       await writeFile(join(sb.home, "Library/LaunchAgents/ai.tropos.gateway.plist"), "<plist/>");
       const r = await sb.run(["1.1.0"], { env });
-      inOrder(r.stdout, [`${done}Upgraded 1.0.0 -> 1.1.0`, `${done}Checked your setup`, `${done}Restarted the gateway service`, `${done}Tropos Code 1.1.0`]);
+      inOrder(r.stdout, [`${done}Upgraded 1.0.0 -> 1.1.0`, `${done}Stopped the gateway service`, `${done}Checked your setup`, `${done}Started the gateway service`, `${done}Tropos Code 1.1.0`]);
       expect(r.stdout).toMatch(/Done\n$/);
     }
   });
@@ -448,7 +448,7 @@ describe("PATH block", () => {
 });
 
 describe("upgrade", () => {
-  test("an existing tcode link means an upgrade: doctor --fix --yes runs after the install, and the gateway is restarted if installed", async () => {
+  test("an existing tcode link means an upgrade: the gateway service is stopped, doctor --fix --yes runs, and the service starts again", async () => {
     const sb = await sandbox();
     await seedTcode(sb, "1.0.0");
     await mkdir(join(sb.home, "Library/LaunchAgents"), { recursive: true });
@@ -456,7 +456,8 @@ describe("upgrade", () => {
     const r = await sb.run(["1.1.0"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Upgraded 1.0.0 -> 1.1.0");
-    expect((await calls(sb)).trim().split("\n")).toEqual(["doctor --fix --yes", "gateway restart"]);
+    // Stopped first: doctor --fix may move the home's layout, which a running gateway must not see half done.
+    expect((await calls(sb)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway start"]);
     expect(r.stdout).not.toContain("Run: tcode onboard");
   });
 
@@ -471,7 +472,7 @@ describe("upgrade", () => {
     await mkdir(join(b.home, ".config/systemd/user"), { recursive: true });
     await writeFile(join(b.home, ".config/systemd/user/tropos-gateway.service"), "[Service]\n");
     expect((await b.run(["1.1.0"])).code).toBe(0);
-    expect((await calls(b)).trim().split("\n")).toEqual(["doctor --fix --yes", "gateway restart"]);
+    expect((await calls(b)).trim().split("\n")).toEqual(["gateway stop", "doctor --fix --yes", "gateway start"]);
   });
 
   test("failures of doctor and the restart only warn", async () => {
@@ -482,7 +483,8 @@ describe("upgrade", () => {
     const r = await sb.run(["1.1.0"], { env: { FAKE_TCODE_EXIT: "1" } });
     expect(r.code).toBe(0);
     expect(r.stderr).toContain("tcode doctor --fix exited with 1");
-    expect(r.stderr).toContain("tcode gateway restart exited with 1");
+    expect(r.stderr).toContain("tcode gateway stop exited with 1");
+    expect(r.stderr).toContain("tcode gateway start exited with 1");
     expect(r.stdout).toContain("Upgraded 1.0.0 -> 1.1.0");
   });
 
