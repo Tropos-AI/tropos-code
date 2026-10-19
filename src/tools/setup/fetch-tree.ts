@@ -3,12 +3,14 @@
 import { copyFile, lstat, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { shallowClone } from "./git-clone";
-import type { Source } from "./sources";
+import type { Resolve, Source } from "./sources";
 
 export interface TreeOptions {
   maxBytes: number;
   /** The environment git runs with (tests point HOME at a fixture). */
   cloneEnv?: NodeJS.ProcessEnv;
+  /** Looks the repository's host up before git runs; the system resolver by default. */
+  resolve?: Resolve;
 }
 
 const mb = (n: number): string => (n >= 1024 * 1024 ? `${Math.round(n / 1024 / 1024)} MB` : `${n} bytes`);
@@ -58,7 +60,7 @@ export async function fetchTree(source: Exclude<Source, { kind: "file" }>, dest:
     await copyTree(from, dest, "", { left: opts.maxBytes, max: opts.maxBytes });
     return;
   }
-  await shallowClone(source.url, dest, { ...(opts.cloneEnv ? { env: opts.cloneEnv } : {}), ...(source.ref ? { ref: source.ref } : {}) });
+  await shallowClone(source.url, dest, { ...(opts.cloneEnv ? { env: opts.cloneEnv } : {}), ...(source.ref ? { ref: source.ref } : {}), ...(opts.resolve ? { resolve: opts.resolve } : {}) });
   // Nothing of git's stays: the folder is plain files from here on.
   await rm(join(dest, ".git"), { recursive: true, force: true });
   if ((await treeBytes(dest)) > opts.maxBytes) throw tooBig(opts.maxBytes);

@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { guardedFetch, parseSource, privateHostProblem, subdirProblem } from "./sources";
+import { guardedFetch, hostProblem, parseSource, PRIVATE_HOST, privateHostProblem, subdirProblem } from "./sources";
 
 test("a GitHub folder link becomes a shallow clone of the repo at that branch, and a file link its raw file", () => {
   expect(parseSource("https://github.com/acme/kit/tree/main/plugins/x")).toEqual({ kind: "git", url: "https://github.com/acme/kit.git", ref: "main", subdir: "plugins/x" });
@@ -37,14 +37,32 @@ test("a folder inside the repo is relative and stays inside", () => {
   expect(subdirProblem("plugins/x")).toBeUndefined();
 });
 
+/** A stub DNS: every name listed resolves to its addresses; anything else doesn't resolve. */
+const dns = (table: Record<string, string[]>) => async (host: string) => {
+  const found = table[host];
+  if (!found) throw new Error(`ENOTFOUND ${host}`);
+  return found;
+};
+const DNS = dns({ "example.com": ["93.184.216.34", "2606:2800:220:1::1"], "rebind.example": ["93.184.216.34", "10.0.0.5"], "v6.example": ["fd12::1"], "loop.example": ["::1"], "meta.example": ["169.254.169.254"] });
+
 test("the guarded fetch refuses a redirect hop to a private host before it is fetched", async () => {
   const seen: string[] = [];
   const inner = (async (url: string) => {
     seen.push(url);
     return new Response("", { status: 302, headers: { location: "https://169.254.169.254/latest" } });
   }) as unknown as typeof fetch;
-  const f = guardedFetch(inner);
+  const f = guardedFetch(inner, DNS);
   await f("https://example.com/a", {});
   await expect(f("https://169.254.169.254/latest", {})).rejects.toThrow(/this computer or your local network/);
+  await expect(f("https://meta.example/latest", {})).rejects.toThrow(/this computer or your local network/);
   expect(seen).toEqual(["https://example.com/a"]);
+});
+
+test("a name is looked up first: any private, loopback, link-local or unique-local address refuses it, and so does a name that doesn't resolve", async () => {
+  expect(await hostProblem(new URL("https://example.com/x"), DNS)).toBeUndefined();
+  for (const host of ["rebind.example", "v6.example", "loop.example", "meta.example"]) expect({ host, p: await hostProblem(new URL(`https://${host}/x`), DNS) }).toEqual({ host, p: PRIVATE_HOST });
+  expect(await hostProblem(new URL("https://nowhere.example/x"), DNS)).toContain("couldn't find");
+  // A literal address needs no lookup; a file:// URL the owner gave is local by design.
+  expect(await hostProblem(new URL("https://8.8.8.8/x"), dns({}))).toBeUndefined();
+  expect(await hostProblem(new URL("file:///srv/repo.git"), dns({}))).toBeUndefined();
 });

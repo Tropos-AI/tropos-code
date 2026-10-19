@@ -100,7 +100,7 @@ beforeEach(() => {
 });
 
 function deps(over: Partial<SetupToolDeps> = {}): SetupToolDeps {
-  return { home, userHome, who: LOCAL, admin, ledger, reload: async () => void reloads++, secrets: vault, providers, fetch: web, cloneEnv: { HOME: userHome, PATH: process.env.PATH }, ...over };
+  return { home, userHome, who: LOCAL, admin, ledger, reload: async () => void reloads++, secrets: vault, providers, fetch: web, cloneEnv: { HOME: userHome, PATH: process.env.PATH }, resolve: async () => ["93.184.216.34"], ...over };
 }
 
 const text = (out: { content: unknown }) => String(out.content);

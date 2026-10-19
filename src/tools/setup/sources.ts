@@ -1,9 +1,22 @@
 // src/tools/setup/sources.ts — where an install or download comes from, decided once from the text the owner approved:
 // the preview and the run both read it through parseSource, so what is fetched is what was shown.
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { isAbsolute, normalize, sep } from "node:path";
 import { expandHome } from "../../paths";
-import { cloneUrlProblem } from "./git-clone";
+
+/** Why git may not fetch this URL, or undefined: https or file only, and no credentials in it (the approval shows it). */
+export function cloneUrlProblem(url: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return `${url.slice(0, 80)} isn't a URL I can clone: give an https:// git URL.`;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "file:") return "I only clone https:// git URLs (or a file:// repository on this computer).";
+  if (u.username || u.password) return "That URL carries a username or password; give it without them (a private repo uses your git credentials).";
+  return undefined;
+}
 
 export type Source =
   /** A repository, cloned shallow; `subdir` is the folder inside it that holds the plugin or skill. */
@@ -56,11 +69,40 @@ export function subdirProblem(subdir: string): string | undefined {
   return undefined;
 }
 
-/** A fetch that refuses every hop (the first URL and each redirect it is handed) to a private host. */
-export function guardedFetch(inner: typeof fetch): (url: string, init?: RequestInit) => Promise<Response> {
+/** Looks a host name up: every address it has. */
+export type Resolve = (host: string) => Promise<string[]>;
+
+export const systemResolve: Resolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
+
+/** A host refused before anything is fetched from it. */
+export class HostRefused extends Error {}
+
+/**
+ * Why a URL's host is off limits, or undefined, after looking the name up: a public name whose addresses include a
+ * private, loopback, link-local or unique-local one is refused like the address itself, and so is a name that doesn't
+ * resolve. A file:// URL is a path the owner gave on this computer: nothing to look up.
+ */
+export async function hostProblem(url: URL, resolve: Resolve = systemResolve): Promise<string | undefined> {
+  if (url.protocol === "file:") return undefined;
+  const literal = privateHostProblem(url);
+  if (literal) return literal;
+  const host = url.hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.+$/, "");
+  if (isIP(host)) return undefined;
+  let addresses: string[];
+  try {
+    addresses = await resolve(host);
+  } catch {
+    return `I couldn't find the host ${host}.`;
+  }
+  if (!addresses.length) return `I couldn't find the host ${host}.`;
+  return addresses.some((a) => (isIP(a) === 6 ? ipv6Private(a) : isIP(a) === 4 && ipv4Private(a))) ? PRIVATE_HOST : undefined;
+}
+
+/** A fetch that refuses every hop (the first URL and each redirect it is handed) to a private host, name looked up first. */
+export function guardedFetch(inner: typeof fetch, resolve: Resolve = systemResolve): (url: string, init?: RequestInit) => Promise<Response> {
   return async (url, init) => {
-    const problem = privateHostProblem(new URL(url));
-    if (problem) throw new Error(problem);
+    const problem = await hostProblem(new URL(url), resolve);
+    if (problem) throw new HostRefused(problem);
     return inner(url, init);
   };
 }
