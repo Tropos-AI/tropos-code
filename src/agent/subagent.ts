@@ -50,6 +50,21 @@ export const DEFAULT_SUBAGENT_TURNS = 50;
 export const MAX_SUBAGENT_TURNS = 200;
 export const AGENT_TOOL_NAME = "Agent";
 
+/** Tools only the chief holds: no subagent or specialist delegates, schedules or changes Tropos's setup. */
+export const HUB_ONLY_TOOLS: ReadonlySet<string> = new Set([AGENT_TOOL_NAME, "AgentManage", "Cron"]);
+
+/** What one subagent run came to, handed to `observe` once on every exit path. */
+export interface SubagentRun {
+  messages: MessageParam[];
+  toolUses: number;
+  turns: number;
+  /** undefined when any reply came from a model without a known price. */
+  costUsd: number | undefined;
+  ok: boolean;
+  durationMs: number;
+  report: string;
+}
+
 /** Short model names agent files use (Claude Code's aliases), mapped to current model ids. */
 const MODEL_ALIASES: Record<string, string> = {
   opus: "claude-opus-5-5",
@@ -68,11 +83,11 @@ function listed(names: string[], tool: string): boolean {
   return names.some((n) => n === tool || (n.endsWith("*") && tool.startsWith(n.slice(0, -1))));
 }
 
-/** The child's tools: the definition's list (missing or `*` = all), minus disallowed ones, never Agent. */
+/** The child's tools: the definition's list (missing or `*` = all), minus disallowed ones, never a hub-only tool. */
 export function filterTools(tools: AnyTool[], def: Pick<SubagentDefinition, "tools" | "disallowedTools">): AnyTool[] {
   const wanted = def.tools && !(def.tools.length === 1 && def.tools[0] === "*") ? def.tools : undefined;
   return tools.filter(
-    (t) => t.name !== AGENT_TOOL_NAME && (!wanted || listed(wanted, t.name)) && !listed(def.disallowedTools ?? [], t.name),
+    (t) => !HUB_ONLY_TOOLS.has(t.name) && (!wanted || listed(wanted, t.name)) && !listed(def.disallowedTools ?? [], t.name),
   );
 }
 
@@ -99,7 +114,14 @@ export function serializeAsks(
 }
 
 /** Runs one subagent to completion and turns its last reply into the Agent tool's result. */
-export async function runSubagent(def: SubagentDefinition, prompt: string, deps: SubagentDeps, ctx: ToolContext): Promise<ToolOutput> {
+export async function runSubagent(
+  def: SubagentDefinition,
+  prompt: string,
+  deps: SubagentDeps,
+  ctx: ToolContext,
+  observe?: (run: SubagentRun) => void,
+): Promise<ToolOutput> {
+  const startedAt = Date.now();
   let cwd = ctx.cwd();
   const toolContext: Omit<ToolContext, "signal"> = {
     cwd: () => cwd,
@@ -119,6 +141,7 @@ export async function runSubagent(def: SubagentDefinition, prompt: string, deps:
   let toolUses = 0;
   let turns = 0;
   let lastError: string | undefined;
+  let cost: number | undefined = 0;
   const child = new Agent({
     model: deps.model,
     tools: filterTools(deps.tools, def),
@@ -148,23 +171,41 @@ export async function runSubagent(def: SubagentDefinition, prompt: string, deps:
       else if (event.type === "assistant") turns++;
       else if (event.type === "notice" && event.level === "error") lastError = event.text;
       // Only the cost: the child's context size says nothing about the parent's window.
-      else if (event.type === "usage") deps.recordCost?.(event.costUsd);
+      else if (event.type === "usage") {
+        deps.recordCost?.(event.costUsd);
+        cost = cost === undefined || event.costUsd === undefined ? undefined : cost + event.costUsd;
+      }
     },
   });
+  // Observers never break a run.
+  const finish = (out: ToolOutput): ToolOutput => {
+    try {
+      observe?.({
+        messages: child.messages,
+        toolUses,
+        turns,
+        costUsd: cost,
+        ok: !out.isError,
+        durationMs: Date.now() - startedAt,
+        report: typeof out.content === "string" ? out.content : JSON.stringify(out.content),
+      });
+    } catch {}
+    return out;
+  };
   let reason;
   try {
     reason = await child.run(prompt, ctx.signal);
   } catch (err) {
-    return { content: `The ${def.name} agent failed: ${errorText(err)}`, isError: true };
+    return finish({ content: `The ${def.name} agent failed: ${errorText(err)}`, isError: true });
   }
-  if (reason === "aborted") return { content: INTERRUPTED, isError: true };
+  if (reason === "aborted") return finish({ content: INTERRUPTED, isError: true });
   const last = lastAssistantText(child);
   const footer = `(${def.name} · ${toolUses} tool ${toolUses === 1 ? "use" : "uses"} · ${turns} ${turns === 1 ? "turn" : "turns"})`;
   if (reason !== "end_turn" && reason !== "max_tokens") {
     const why = lastError ?? `it stopped early (${reason})`;
-    return { content: `The ${def.name} agent did not finish: ${why}${last ? `\n\nLast reply:\n${last}` : ""}\n\n${footer}`, isError: true, summary: `stopped: ${reason}` };
+    return finish({ content: `The ${def.name} agent did not finish: ${why}${last ? `\n\nLast reply:\n${last}` : ""}\n\n${footer}`, isError: true, summary: `stopped: ${reason}` });
   }
-  return { content: `${last || "(the agent returned no text)"}\n\n${footer}`, summary: `${toolUses} tool ${toolUses === 1 ? "use" : "uses"}` };
+  return finish({ content: `${last || "(the agent returned no text)"}\n\n${footer}`, summary: `${toolUses} tool ${toolUses === 1 ? "use" : "uses"}` });
 }
 
 function lastAssistantText(agent: Agent): string {

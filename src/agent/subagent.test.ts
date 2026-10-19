@@ -6,7 +6,7 @@ import { makeToolContext } from "../../test/helpers/tool-context";
 import { compileRules } from "../permissions/engine";
 import { defineTool, type AnyTool, type ToolContext } from "../tools/types";
 import type { PermissionAnswer, PermissionPrompt } from "./events";
-import { filterTools, resolveAgentModel, runSubagent, serializeAsks, subagentSystem, type SubagentDeps } from "./subagent";
+import { filterTools, resolveAgentModel, runSubagent, serializeAsks, subagentSystem, type SubagentDeps, type SubagentRun } from "./subagent";
 
 const tool = (name: string, kind: "read" | "exec" = "read") =>
   defineTool({
@@ -214,4 +214,39 @@ test("a subagent reports its cost and saves 'don't ask again' rules", async () =
   expect(rules).toEqual(["Bash(rm:*)"]);
   expect(costs).toHaveLength(2);
   expect(costs.every((c) => typeof c === "number" && c > 0)).toBe(true);
+});
+
+test("no subagent gets a hub-only tool", () => {
+  const list = [tool("Read"), tool("Agent"), tool("AgentManage"), tool("Cron")];
+  expect(filterTools(list, { tools: ["*"] }).map((t) => t.name)).toEqual(["Read"]);
+  expect(filterTools(list, { tools: ["Read", "Cron", "AgentManage"] }).map((t) => t.name)).toEqual(["Read"]);
+});
+
+describe("observe", () => {
+  test("receives the outcome once, with the summed cost", async () => {
+    const seen: SubagentRun[] = [];
+    const d = deps([() => reply([toolUseBlock("t1", "Read", { x: "a" })], "tool_use"), () => reply([textBlock("All good.")])]);
+    const out = await runSubagent(def, "go", d, ctx(), (run) => seen.push(run));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ ok: true, toolUses: 1, turns: 2, report: out.content });
+    expect(seen[0]!.costUsd).toBeGreaterThan(0);
+    expect(seen[0]!.durationMs).toBeGreaterThanOrEqual(0);
+    expect(seen[0]!.messages.length).toBeGreaterThan(2);
+  });
+
+  test("costUsd is undefined when any reply had no price", async () => {
+    const seen: SubagentRun[] = [];
+    const d = deps([() => reply([toolUseBlock("t1", "Read", {})], "tool_use", "mystery-model"), () => reply([textBlock("done")])]);
+    await runSubagent(def, "go", d, ctx(), (run) => seen.push(run));
+    expect(seen[0]!.costUsd).toBeUndefined();
+  });
+
+  test("is called on an abort too", async () => {
+    const seen: SubagentRun[] = [];
+    const ac = new AbortController();
+    ac.abort();
+    await runSubagent(def, "go", deps([() => reply([textBlock("x")])]), ctx({ signal: ac.signal }), (run) => seen.push(run));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.ok).toBe(false);
+  });
 });
