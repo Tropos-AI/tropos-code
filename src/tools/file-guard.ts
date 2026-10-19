@@ -191,7 +191,7 @@ export interface SandboxHold {
  * folder while the tool works. The error result while it can't be taken.
  */
 export async function holdSandbox(ctx: ToolContext): Promise<SandboxHold | ToolOutput> {
-  const hold = await ctx.exec?.holdForFiles?.();
+  const hold = await ctx.exec?.holdForFiles?.(ctx.signal);
   if (hold === undefined) return { release: () => {} };
   return hold.ok ? hold : { content: hold.reason, isError: true };
 }

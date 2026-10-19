@@ -113,7 +113,8 @@ the owner's machine".
 
 A guest's container also stops everything a command left running as soon as the command ends, so nothing of theirs
 keeps running beside the file tools (which work on the project from this computer, as you). The two take turns: a
-command started while a file tool works waits until it is done. A guest can still start a background job
+command started while a file tool works waits until it is done, and a file tool waits for a command that is still
+running. A guest can still start a background job
 (`run_in_background`): while one runs, Read, Write, Edit and Grep in that chat refuse with a message saying so, until
 the job ends or is stopped with KillShell.
 

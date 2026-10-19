@@ -84,6 +84,7 @@ export const bashTool = defineTool({
         script: `cd ${quote(startDir)} || exit 1\n${input.command}\n`,
         cwd: startDir,
         env: childEnv(),
+        background: true,
       });
       const id = ctx.jobs.add(input.command, child, exec);
       return { content: `Started background job ${id}. Read its output with BashOutput and stop it with KillShell.`, summary: id };
