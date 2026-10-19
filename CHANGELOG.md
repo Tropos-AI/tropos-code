@@ -6,6 +6,25 @@ Each release's notes on GitHub are its section of this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- In the terminal, a message gets an answer again: since 0.5.0 the first turn of every interactive session kept
+  gathering its context and never reached the model.
+- Esc interrupts a turn while it is still getting ready, not only once the model is answering.
+- After `/model` or `/effort`, the header names the model and effort in use.
+- Stopping a command or background job on macOS no longer leaves behind a child it was starting at that moment.
+
+### Security
+
+- Read, Write, Edit, Grep and downloads check the file again once it is open: if a folder on its way was swapped for
+  a link in the meantime, nothing is read or written. Nothing is truncated before that check, and missing folders are
+  created one at a time.
+- A guest's Docker container stops whatever a command left running as soon as it ends, and the guest's commands and
+  the file tools take turns.
+- Confined chat commands can no longer read shell and REPL histories, other coding agents' folders, Vault, Terraform
+  and 1Password CLI credentials, or the `.env` files of your other projects.
+- `tcode doctor` notes what the Autonomous level allows: network access and reads outside the secret list.
+
 ## [0.5.3] - 2026-10-19
 
 ### Added
@@ -22,18 +41,6 @@ Each release's notes on GitHub are its section of this file.
 
 - No stale "Updated to" notice after a newer manual install; `tcode gateway` says when there is nothing to start.
 - The help for `tcode gateway`, `tcode install`, `tcode update` and `tcode onboard` describes what the commands do.
-- Stopping a command or background job on macOS no longer leaves behind a child it was starting at that moment.
-
-### Security
-
-- Read, Write, Edit, Grep and downloads check the file again once it is open: if a folder on its way was swapped for
-  a link in the meantime, nothing is read or written. Nothing is truncated before that check, and missing folders are
-  created one at a time.
-- A guest's Docker container stops whatever a command left running as soon as it ends, and the guest's commands and
-  the file tools take turns.
-- Confined chat commands can no longer read shell and REPL histories, other coding agents' folders, Vault, Terraform
-  and 1Password CLI credentials, or the `.env` files of your other projects.
-- `tcode doctor` notes what the Autonomous level allows: network access and reads outside the secret list.
 
 ## [0.5.2] - 2026-10-19
 
