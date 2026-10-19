@@ -35,7 +35,13 @@ beforeEach(async () => {
   await Bun.write(join(dir, "bad", ".tropos", "settings.json"), "{not json");
   server = new FakeTelegramServer();
 });
+/** Gateways a test started. One a failed test left running is stopped, so it can't keep polling into the next test. */
+const gateways: Array<{ stop(): void; done: Promise<number> }> = [];
 afterEach(async () => {
+  for (const gw of gateways.splice(0)) {
+    gw.stop();
+    await gw.done.catch(() => {});
+  }
   server.stop();
   await removeDir(dir);
 });
@@ -84,6 +90,7 @@ function startGateway(steps: Step[], services: GatewayService[] = [], opts: { bo
       ...opts.seams,
     },
   });
+  gateways.push({ stop, done });
   /** The `until` info, once the gateway is running. */
   const running = () => server.waitFor(() => info);
   return { done, stop, err, model, workspaces, backendsClosed, running };
