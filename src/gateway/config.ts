@@ -46,6 +46,11 @@ export function uniqueSlug(name: string, taken: Iterable<string>): string {
   }
 }
 
+/** C8's proactive-message defaults: quiet outside 09:00-21:00, at most one note a day, checked every 4 hours. */
+export const PROACTIVE_DEFAULTS = { activeHours: { start: "09:00", end: "21:00" }, everyHours: 4, maxPerDay: 1 } as const;
+
+const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "a time like 09:00");
+
 const schema = z.object({
   /** The projects chats can work in besides the built-in `default`; each is the only directory its sessions can touch. */
   projects: z.array(projectSchema).default([]),
@@ -66,6 +71,19 @@ const schema = z.object({
   idleMinutes: z.number().int().min(1).max(24 * 60).default(30),
   /** Port of the dashboard; unset is 4317. Never changes by itself. */
   webPort: z.number().int().min(1).max(65535).optional(),
+  /** Messages the agent starts itself. `enabled` unset follows whether Telegram is connected. */
+  proactive: z
+    .object({
+      enabled: z.boolean().optional(),
+      activeHours: z.object({ start: timeOfDay, end: timeOfDay }).default({ ...PROACTIVE_DEFAULTS.activeHours }),
+      everyHours: z.number().int().min(1).max(24).default(PROACTIVE_DEFAULTS.everyHours),
+      maxPerDay: z.number().int().min(0).max(3).default(PROACTIVE_DEFAULTS.maxPerDay),
+    })
+    .default({ ...PROACTIVE_DEFAULTS, activeHours: { ...PROACTIVE_DEFAULTS.activeHours } }),
+  /** Where new projects are created; unset is ~/Projects. */
+  newProjectsDir: z.string().min(1).optional(),
+  /** Real paths of projects the owner removed, so running `tcode` there doesn't add them back. */
+  removedProjectPaths: z.array(z.string().min(1)).default([]),
   /** Phone access: the dashboard published to the owner's own tailnet by `tailscale serve` (never Funnel). */
   remoteAccess: z
     .object({
@@ -87,6 +105,20 @@ const schema = z.object({
 export const gatewayConfigSchema = schema;
 
 export type GatewayConfig = z.infer<typeof schema>;
+export type ProactiveConfig = GatewayConfig["proactive"];
+
+/** Proactive messages are on when the owner said so, else when there is a Telegram chat to send them to. */
+export function proactiveEnabled(config: GatewayConfig, telegramConnected: boolean): boolean {
+  return config.proactive.enabled ?? telegramConnected;
+}
+
+/** Where new projects are created; `~/` expands against `userHome`. */
+export function newProjectsDirOf(config: GatewayConfig, userHome: string): string {
+  const dir = config.newProjectsDir;
+  if (!dir) return join(userHome, "Projects");
+  if (dir === "~") return userHome;
+  return dir.startsWith("~/") ? join(userHome, dir.slice(2)) : dir;
+}
 
 export class GatewayConfigError extends Error {}
 

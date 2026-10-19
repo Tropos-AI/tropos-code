@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { GatewayConfigError, configPermissionWarning, gatewayConfigPath, loadGatewayConfig, saveGatewayConfig, telegramToken } from "./config";
+import { GatewayConfigError, configPermissionWarning, gatewayConfigPath, gatewayConfigSchema, loadGatewayConfig, newProjectsDirOf, proactiveEnabled, saveGatewayConfig, telegramToken } from "./config";
 
 let home: string;
 beforeEach(async () => {
@@ -135,5 +135,25 @@ describe("remoteAccess", () => {
     const config = await loadGatewayConfig(home);
     await saveGatewayConfig(home, { ...config, remoteAccess: { tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" } });
     expect((await loadGatewayConfig(home)).remoteAccess).toEqual({ tailscale: true, httpsPort: 8443, hostname: "mac.tail1234.ts.net" });
+  });
+});
+
+describe("proactive and new-project settings", () => {
+  test("proactive defaults are C8's; enabled unset follows Telegram", async () => {
+    const c = await loadGatewayConfig(home);
+    expect(c.proactive).toEqual({ activeHours: { start: "09:00", end: "21:00" }, everyHours: 4, maxPerDay: 1 });
+    expect(proactiveEnabled(c, false)).toBe(false);
+    expect(proactiveEnabled(c, true)).toBe(true);
+    expect(proactiveEnabled({ ...c, proactive: { ...c.proactive, enabled: false } }, true)).toBe(false);
+    expect(c.removedProjectPaths).toEqual([]);
+  });
+  test("bad proactive values are refused naming the key", async () => {
+    await writeFile(gatewayConfigPath(home), JSON.stringify({ proactive: { activeHours: { start: "25:00", end: "21:00" } } }));
+    await expect(loadGatewayConfig(home)).rejects.toThrow("proactive.activeHours.start");
+  });
+  test("newProjectsDir defaults to ~/Projects and expands ~", () => {
+    const base = gatewayConfigSchema.parse({});
+    expect(newProjectsDirOf(base, "/u")).toBe("/u/Projects");
+    expect(newProjectsDirOf({ ...base, newProjectsDir: "~/Code" }, "/u")).toBe("/u/Code");
   });
 });
