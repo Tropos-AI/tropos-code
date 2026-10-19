@@ -94,8 +94,8 @@ export const PROVIDERS: ProviderInfo[] = [
     keyRequired: true,
     keyURL: "https://platform.deepseek.com/api_keys",
     keyPrefixes: ["sk-"],
-    // With tools present, earlier reasoning_content must be sent back or the request fails.
-    capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content", effort: reasoningEffort(["low", "high", "max"]) },
+    // With tools present, earlier reasoning_content must be sent back or the request fails. Its API reads text only.
+    capabilities: { maxTokensParam: null, streamUsage: true, keepReasoning: true, reasoningField: "reasoning_content", effort: reasoningEffort(["low", "high", "max"]), vision: false },
   },
   {
     id: "openrouter",
@@ -228,7 +228,8 @@ export const PROVIDERS: ProviderInfo[] = [
     keyRequired: true,
     keyURL: "https://cloud.cerebras.ai",
     keyPrefixes: ["csk-"],
-    capabilities: { maxTokensParam: null, streamUsage: true },
+    // Its models read text only.
+    capabilities: { maxTokensParam: null, streamUsage: true, vision: false },
   },
   {
     id: "ollama",

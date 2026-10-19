@@ -1,9 +1,9 @@
 // src/session/store.ts
 import type { SessionRole } from "../gateway/types";
 import type Anthropic from "@anthropic-ai/sdk";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { projectKey } from "../paths";
 
@@ -48,7 +48,7 @@ function titleFrom(message: MessageParam): string | undefined {
   for (const block of message.content) {
     if (block.type !== "text") continue;
     const text = block.text.trim();
-    if (text.startsWith("<context>") || text.startsWith("<mode>")) continue;
+    if (text.startsWith("<context>") || text.startsWith("<mode>") || text.startsWith("<attachment ")) continue;
     return clip(text);
   }
   return undefined;
@@ -58,6 +58,73 @@ function clip(text: string): string | undefined {
   const flat = text.replace(/\s+/g, " ").trim();
   if (!flat) return undefined;
   return flat.length > TITLE_MAX ? `${flat.slice(0, TITLE_MAX - 1)}…` : flat;
+}
+
+/**
+ * On disk an image is a reference to a file in `<session>.attachments/` (named by a hash of its bytes, so one image
+ * is stored once); in memory it is inline base64 again. Inline base64 would make every line of the JSONL heavy.
+ */
+interface StoredImageSource {
+  type: "tropos_file";
+  media_type: string;
+  file: string;
+}
+
+const IMAGE_FILE = /^[0-9a-f]{32}\.(png|jpg|gif|webp)$/;
+const IMAGE_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
+const IMAGE_GONE = "[image no longer available: its file was removed from the session folder]";
+
+type ContentBlock = Exclude<MessageParam["content"], string>[number];
+type ImageMap = (block: { type: "image"; source: unknown }) => unknown;
+
+/** The message with every image block (also those inside tool results) replaced by `fn`'s result. */
+function mapImages(message: MessageParam, fn: ImageMap): MessageParam {
+  if (typeof message.content === "string") return message;
+  const mapBlock = (block: ContentBlock): ContentBlock => {
+    if (block.type === "image") return fn(block) as ContentBlock;
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return { ...block, content: block.content.map((b) => (b.type === "image" ? fn(b) : b)) } as ContentBlock;
+    }
+    return block;
+  };
+  return { ...message, content: message.content.map(mapBlock) };
+}
+
+/** The message as the JSONL stores it, and the image files to write first. */
+function externalizeImages(message: MessageParam): { stored: MessageParam; files: Array<{ name: string; data: string }> } {
+  const files: Array<{ name: string; data: string }> = [];
+  const stored = mapImages(message, (block) => {
+    const source = block.source as { type?: string; media_type?: string; data?: string };
+    const ext = IMAGE_EXT[source.media_type ?? ""];
+    if (source.type !== "base64" || !ext || typeof source.data !== "string") return block;
+    const name = `${createHash("sha256").update(source.data).digest("hex").slice(0, 32)}.${ext}`;
+    if (!files.some((f) => f.name === name)) files.push({ name, data: source.data });
+    return { ...block, source: { type: "tropos_file", media_type: source.media_type!, file: name } satisfies StoredImageSource };
+  });
+  return { stored, files };
+}
+
+/** Loads the images a saved message refers to; one whose file is gone becomes a note, so the session still resumes. */
+async function rehydrateImages(message: MessageParam, dir: string): Promise<MessageParam> {
+  const refs: StoredImageSource[] = [];
+  mapImages(message, (block) => {
+    const source = block.source as StoredImageSource;
+    if (source?.type === "tropos_file") refs.push(source);
+    return block;
+  });
+  if (refs.length === 0) return message;
+  const data = new Map<string, string | null>();
+  for (const ref of refs) {
+    if (data.has(ref.file)) continue;
+    const ok = typeof ref.file === "string" && IMAGE_FILE.test(ref.file);
+    data.set(ref.file, ok ? await readFile(join(dir, ref.file)).then((b) => b.toString("base64"), () => null) : null);
+  }
+  return mapImages(message, (block) => {
+    const source = block.source as StoredImageSource;
+    if (source?.type !== "tropos_file") return block;
+    const base64 = data.get(source.file);
+    return base64 ? { ...block, source: { type: "base64", media_type: source.media_type, data: base64 } } : { type: "text", text: IMAGE_GONE };
+  });
 }
 
 /** If the history ends with tool_use blocks that never got results, the user message that closes them. */
@@ -147,7 +214,9 @@ export class SessionStore {
     const store = new SessionStore(id, path, false);
     // A crash can leave a final line without "\n"; end it so the repair starts a fresh line.
     if (text.length > 0 && !text.endsWith("\n")) await store.appendRaw("\n");
-    const { meta, messages } = parseSession(text);
+    const parsed = parseSession(text);
+    const meta = parsed.meta;
+    const messages = await Promise.all(parsed.messages.map((m) => rehydrateImages(m, store.attachmentsDir)));
     store.titled = meta.title !== undefined;
     const repair = danglingToolResults(messages);
     if (repair) {
@@ -157,8 +226,25 @@ export class SessionStore {
     return { store, messages, meta };
   }
 
+  /** Where this session's images are kept: beside the transcript, `<id>.attachments/`. */
+  get attachmentsDir(): string {
+    return this.path.replace(/\.jsonl$/, ".attachments");
+  }
+
   async appendMessage(message: MessageParam): Promise<void> {
-    await this.write({ type: "message", message, ts: new Date().toISOString() });
+    const { stored, files } = externalizeImages(message);
+    const line = `${JSON.stringify({ type: "message", message: stored, ts: new Date().toISOString() } satisfies SessionLine)}\n`;
+    // In the same queued step as the line, so a line never names an image that isn't written yet.
+    await this.chain(async () => {
+      if (files.length > 0) {
+        await mkdir(this.attachmentsDir, { recursive: true, mode: DIR_MODE });
+        for (const file of files) {
+          const path = join(this.attachmentsDir, file.name);
+          if (!existsSync(path)) await writeFile(path, Buffer.from(file.data, "base64"), { mode: FILE_MODE });
+        }
+      }
+      await appendFile(this.path, line, { mode: FILE_MODE });
+    });
     if (!this.titled) {
       const title = titleFrom(message);
       if (title) {
@@ -182,9 +268,13 @@ export class SessionStore {
     return this.appendRaw(`${JSON.stringify(line)}\n`);
   }
 
-  /** The chain keeps going after a failed append; the failure is reported to this caller only. */
   private appendRaw(text: string): Promise<void> {
-    const run = this.writes.then(() => appendFile(this.path, text, { mode: FILE_MODE }));
+    return this.chain(() => appendFile(this.path, text, { mode: FILE_MODE }));
+  }
+
+  /** Runs `op` after every earlier write. The chain keeps going after a failure; it is reported to this caller only. */
+  private chain(op: () => Promise<void>): Promise<void> {
+    const run = this.writes.then(op);
     this.writes = run.catch(() => {});
     return run;
   }
