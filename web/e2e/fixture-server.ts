@@ -4,6 +4,9 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { recordRun } from "../../src/agents/runs";
+import { archiveSpecialist, createSpecialist, updateSpecialist } from "../../src/agents/store";
+import { Ledger } from "../../src/learning/ledger";
 import { FilePairing } from "../../src/gateway/pairing";
 import { loadGatewayConfig, saveGatewayConfig } from "../../src/gateway/config";
 import { assetsFromDir, SOURCE_DIST } from "../../src/web/assets";
@@ -45,6 +48,21 @@ await writeFile(keyFile, e2e.key);
 const config = await loadGatewayConfig(home);
 // A Telegram token (the fake fetch below answers getMe), so the Setup page's owner-link step has a bot to show.
 await saveGatewayConfig(home, { ...config, telegram: { ...config.telegram, botToken: "123456:e2e-token" }, remoteAccess: { tailscale: true, httpsPort: 443, hostname: NAME } });
+
+// The Agents page: a reviewer with runs, skills and a revision, a paused researcher, and an archived writer.
+const ledger = new Ledger(home);
+const owner = { ledger, actor: "agent" as const };
+const contract = "## Purpose\nReview pull requests for bugs.\n## Not my job\nMerging.\n## Report\nFindings by severity.\n## Escalate when\nA change touches auth.";
+await createSpecialist(home, { id: "reviewer", description: "Reviews pull requests for bugs and risky changes", prompt: contract, emoji: "🔍", tools: ["Read", "Grep", "Glob"] }, owner);
+await updateSpecialist(home, "reviewer", { description: "Reviews pull requests for bugs, risky changes and missing tests" }, { ledger, actor: "review" });
+await mkdir(join(home, "agents", "reviewer", "skills", "lint"), { recursive: true });
+await writeFile(join(home, "agents", "reviewer", "MEMORY.md"), "Prefers small diffs. ".repeat(60));
+await recordRun(home, { ts: new Date().toISOString(), agent: "reviewer", specialist: true, task: "review PR 12 in the web app", ok: true, result: "Two findings: a missing null check and an untested branch.", durationMs: 4200, costUsd: 0.03, cwd: home });
+await recordRun(home, { ts: new Date(Date.now() - 3_600_000).toISOString(), agent: "reviewer", specialist: true, task: "look at the failing build", ok: false, result: "No build output was available to read.", durationMs: 900, cwd: home });
+await createSpecialist(home, { id: "researcher", description: "Digs through docs and the web for answers", prompt: contract, emoji: "📚", model: "claude-sonnet-5-5" }, { ledger, actor: "user" });
+await updateSpecialist(home, "researcher", { paused: true }, { ledger, actor: "user" });
+await createSpecialist(home, { id: "scribe", description: "Drafts release notes", prompt: contract }, owner);
+await archiveSpecialist(home, "scribe", { ledger, actor: "user" });
 
 const logins = loginCodesFor(home);
 const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });

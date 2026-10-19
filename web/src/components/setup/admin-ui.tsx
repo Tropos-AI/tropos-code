@@ -79,11 +79,11 @@ export function TextField({ label, value, onChange, hint, type = "text", placeho
   );
 }
 
-export function TextArea({ label, value, onChange, hint, placeholder, rows = 4, className }: { label: string; value: string; onChange: (value: string) => void; hint?: ReactNode; placeholder?: string; rows?: number; className?: string }) {
+export function TextArea({ label, value, onChange, hint, placeholder, rows = 4, className, mono }: { label: string; value: string; onChange: (value: string) => void; hint?: ReactNode; placeholder?: string; rows?: number; className?: string; mono?: boolean }) {
   return (
     <FieldShell label={label} hint={hint} className={className}>
       {({ id, describedBy }) => (
-        <textarea id={id} value={value} rows={rows} placeholder={placeholder} aria-describedby={describedBy} onChange={(event) => onChange(event.target.value)} className={cn(CONTROL, "resize-y py-2.5 leading-relaxed")} />
+        <textarea id={id} value={value} rows={rows} placeholder={placeholder} aria-describedby={describedBy} onChange={(event) => onChange(event.target.value)} className={cn(CONTROL, "resize-y py-2.5 leading-relaxed", mono && "font-mono text-[12.5px]")} />
       )}
     </FieldShell>
   );
