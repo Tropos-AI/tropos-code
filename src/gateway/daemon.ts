@@ -46,7 +46,7 @@ import {
   withTemporaryProject,
   type Project,
 } from "./projects";
-import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
+import { ChatRouter, RoutedSessions, chatLabel, parseSessionKey, sessionKey } from "./router";
 import { privateTelegramSender, reapRevoked } from "./revocation";
 import { SessionPool, type HostHandle } from "./pool";
 import { ownerCronTool } from "../tools/cron/owner-cron";
@@ -424,7 +424,8 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
       learn: role === "owner",
       ownsExtensions: false,
     });
-    const host = new WebHost(runtime);
+    // The dashboard's Agents page shows this chat's turns as "Telegram", "Scheduled" …
+    const host = new WebHost(runtime, { chat: chatLabel(key, role) });
     await host.start();
     return {
       host,

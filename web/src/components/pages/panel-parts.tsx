@@ -108,6 +108,8 @@ type DisclosureRowProps = {
   /** The disclosed content; rows without it render static. */
   detail?: ReactNode;
   className?: string;
+  /** Drawn first inside the row's <li>, positioned against it (the Agents page's org-chart connectors). */
+  decoration?: ReactNode;
 };
 
 /**
@@ -115,7 +117,7 @@ type DisclosureRowProps = {
  * the hit area, while controls on the label line (copy chips) sit above it as siblings — no nested buttons. Opening
  * reveals the details below with Interior springs; following rows glide down (layout position, transform only).
  */
-export function DisclosureRow({ label, hint, aside, status, statusLabel, lead, meta, trailing, expanded, onToggle, detail, className }: DisclosureRowProps) {
+export function DisclosureRow({ label, hint, aside, status, statusLabel, lead, meta, trailing, expanded, onToggle, detail, className, decoration }: DisclosureRowProps) {
   const reduced = usePrefersReducedMotion();
   const detailId = useId();
   const hintId = useId();
@@ -123,6 +125,7 @@ export function DisclosureRow({ label, hint, aside, status, statusLabel, lead, m
 
   return (
     <m.li layout="position" transition={reduced ? INSTANT : CELL} className={cn("relative", className)}>
+      {decoration}
       <div className="px-2 py-1.5 sm:px-3">
         <div
           className={cn(

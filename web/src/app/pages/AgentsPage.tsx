@@ -3,6 +3,7 @@
 // Edits here are owner actions: ledgered and undoable on the server.
 import { useEffect, useState } from "react";
 
+import type { AgentRunEnd, AgentRunView } from "@core/agents/activity";
 import type { AgentRoster, SpecialistView } from "@core/web/admin/api";
 import type { PanelData, PanelItem } from "@core/ui/runtime";
 
@@ -13,13 +14,15 @@ import { ResourceView } from "@/components/pages/resource-view";
 import { useExpanded } from "@/components/pages/use-expanded";
 import { isPanelEmpty, usePanel, useRpcResource, type Resource } from "@/components/pages/use-rpc-resource";
 import { EditSpecialistDialog } from "@/components/agents/edit-specialist-dialog";
+import { LastRunLine, LiveBadge, OrgConnector, RunLine, RunningCount } from "@/components/agents/live-activity";
 import { ago, SpecialistDetail } from "@/components/agents/specialist-detail";
 import { ConfirmDialog, LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Icon, type IconName } from "@/components/ui/icon";
-import { useAdmin } from "@/lib/store";
+import { lastRunOf, liveState, runsOf } from "@/lib/agent-activity";
+import { useAdmin, useAgentActivity } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export interface AgentView {
@@ -178,6 +181,36 @@ function otherAgents(data: PanelData | undefined): PanelData | undefined {
 
 const creator = (spec: SpecialistView, chief: string): string => (spec.createdBy === "user" ? "by you" : spec.createdBy === "review" ? "by the review" : `by ${chief}`);
 
+interface LastRun {
+  at: number;
+  result: string;
+  ok: boolean;
+}
+
+/** The newer of the live feed's last run and the roster's logged one. */
+function lastRunFor(live: AgentRunEnd | undefined, logged: SpecialistView["runs"][number] | undefined): LastRun | undefined {
+  const fromLog = logged ? { at: Date.parse(logged.ts), result: logged.result, ok: logged.ok } : undefined;
+  const fromLive = live ? { at: live.endedAt, result: live.result, ok: live.ok } : undefined;
+  if (!fromLog || !Number.isFinite(fromLog.at)) return fromLive;
+  return fromLive && fromLive.at >= fromLog.at ? fromLive : fromLog;
+}
+
+/** A card's live part: what its runs are doing now, or how its last run went. */
+function LivePart({ runs, last, showChat }: { runs: AgentRunView[]; last?: LastRun; showChat: boolean }) {
+  if (runs.length > 0) {
+    return (
+      <ul className="flex flex-col gap-1.5" aria-label="Running now">
+        {runs.map((run) => (
+          <li key={run.id}>
+            <RunLine run={run} showChat={showChat} />
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return last ? <LastRunLine at={last.at} result={last.result} ok={last.ok} /> : null;
+}
+
 interface RowProps {
   spec: SpecialistView;
   chiefName: string;
@@ -185,9 +218,13 @@ interface RowProps {
   onToggle: () => void;
   onRoster: (roster: AgentRoster, said: string) => void;
   onProblem: (text: string) => void;
+  /** Its piece of the org chart. */
+  connector: { from: "chief" | "sibling"; to: "next" | "elbow" };
+  runs: AgentRunView[];
+  last?: LastRun;
 }
 
-function SpecialistRow({ spec, chiefName, open, onToggle, onRoster, onProblem }: RowProps) {
+function SpecialistRow({ spec, chiefName, open, onToggle, onRoster, onProblem, connector, runs, last }: RowProps) {
   const admin = useAdmin();
   const action = useAction();
   const [editing, setEditing] = useState(false);
@@ -206,16 +243,12 @@ function SpecialistRow({ spec, chiefName, open, onToggle, onRoster, onProblem }:
   }, [action.error, spec.id, onProblem]);
 
   const label = spec.id;
+  const state = liveState(runs);
   return (
     <>
       <DisclosureRow
-        className={cn(
-          "rounded-[14px] border border-rule bg-surface shadow-card transition-shadow duration-150 hover:shadow-raised",
-          // The rail: a vertical stroke through every card, ending at the last one's tick, and a tick into each card.
-          "before:absolute before:-left-5 before:-top-3 before:bottom-[-12px] before:w-0.5 before:bg-rule-strong before:content-['']",
-          "first:before:-top-5 last:before:bottom-auto last:before:h-10",
-          "after:absolute after:-left-5 after:top-[38px] after:h-0.5 after:w-5 after:bg-rule-strong after:content-['']",
-        )}
+        className={cn("rounded-[14px] border border-rule bg-surface shadow-card transition-shadow duration-150 hover:shadow-raised", state !== "idle" && "border-accent/25")}
+        decoration={<OrgConnector from={connector.from} to={connector.to} />}
         lead={
           <span aria-hidden className={cn("mt-px grid size-8 shrink-0 place-items-center rounded-[10px] border border-rule bg-paper text-[16px] shadow-well", spec.paused && "opacity-60 grayscale")}>
             {spec.emoji ?? <Icon name="bot" size="sm" />}
@@ -224,9 +257,15 @@ function SpecialistRow({ spec, chiefName, open, onToggle, onRoster, onProblem }:
         label={label}
         hint={spec.description}
         aside={spec.paused ? undefined : (spec.model ?? undefined)}
-        trailing={spec.paused ? <Badge tone="off">Paused</Badge> : undefined}
+        trailing={
+          <>
+            {spec.paused ? <Badge tone="off">Paused</Badge> : null}
+            {!spec.paused || state !== "idle" ? <LiveBadge state={state} /> : null}
+          </>
+        }
         meta={
           <div className="flex flex-col gap-2">
+            <LivePart runs={runs} last={last} showChat />
             <p className="text-[12px] text-ink-3">
               {creator(spec, chiefName)} · {ago(spec.createdAt)}
             </p>
@@ -289,7 +328,16 @@ function SpecialistRow({ spec, chiefName, open, onToggle, onRoster, onProblem }:
   );
 }
 
-function ChiefCard({ chief, count, limit }: { chief: AgentRoster["chief"]; count: number; limit: number }) {
+interface ChiefCardProps {
+  chief: AgentRoster["chief"];
+  count: number;
+  limit: number;
+  /** Its turns running now, one per chat. */
+  runs: AgentRunView[];
+  last?: LastRun;
+}
+
+function ChiefCard({ chief, count, limit, runs, last }: ChiefCardProps) {
   return (
     <Card as="section" aria-labelledby="chief-heading" className="relative flex flex-wrap items-center gap-x-4 gap-y-3 bg-linear-to-b from-surface to-paper/70">
       <span aria-hidden className="grid size-12 shrink-0 place-items-center rounded-[14px] border border-rule bg-paper-2 text-[24px] shadow-raised">
@@ -302,6 +350,7 @@ function ChiefCard({ chief, count, limit }: { chief: AgentRoster["chief"]; count
         <p className="mt-0.5 text-[13.5px] text-ink-2">Leads every conversation</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <LiveBadge state={liveState(runs)} />
         <MonoChip>{chief.model}</MonoChip>
         {count > 0 ? (
           <span className="font-mono text-[11.5px] text-ink-3">
@@ -309,6 +358,11 @@ function ChiefCard({ chief, count, limit }: { chief: AgentRoster["chief"]; count
           </span>
         ) : null}
       </div>
+      {runs.length > 0 || last ? (
+        <div className="basis-full">
+          <LivePart runs={runs} last={last} showChat />
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -352,18 +406,27 @@ function ArchivedRow({ spec, onRoster, onProblem }: { spec: SpecialistView; onRo
 
 function Roster({ roster, onRoster, onProblem }: { roster: AgentRoster; onRoster: (r: AgentRoster, said: string) => void; onProblem: (text: string) => void }) {
   const expanded = useExpanded();
+  const activity = useAgentActivity();
   const { chief, specialists } = roster;
+  const chiefLast = lastRunOf(activity, "chief");
   return (
     <>
       <div>
-        <ChiefCard chief={chief} count={specialists.length} limit={roster.limit} />
+        <ChiefCard
+          chief={chief}
+          count={specialists.length}
+          limit={roster.limit}
+          runs={runsOf(activity, "chief")}
+          last={chiefLast ? { at: chiefLast.endedAt, result: chiefLast.result, ok: chiefLast.ok } : undefined}
+        />
         {specialists.length > 0 ? (
           <section aria-labelledby="specialists-heading" className="ml-6 sm:ml-8">
             <h2 id="specialists-heading" className="sr-only">
               Specialists
             </h2>
+            {/* pt-5 and gap-3 are what OrgConnector's offsets assume. */}
             <ul aria-labelledby="specialists-heading" className="flex flex-col gap-3 pl-5 pt-5">
-              {specialists.map((spec) => (
+              {specialists.map((spec, i) => (
                 <SpecialistRow
                   key={spec.id}
                   spec={spec}
@@ -372,6 +435,9 @@ function Roster({ roster, onRoster, onProblem }: { roster: AgentRoster; onRoster
                   onToggle={() => expanded.toggle(spec.id)}
                   onRoster={onRoster}
                   onProblem={onProblem}
+                  connector={{ from: i === 0 ? "chief" : "sibling", to: i === specialists.length - 1 ? "elbow" : "next" }}
+                  runs={runsOf(activity, "specialist", spec.id)}
+                  last={lastRunFor(lastRunOf(activity, "specialist", spec.id), spec.runs[0])}
                 />
               ))}
             </ul>
@@ -405,13 +471,19 @@ export function AgentsPage() {
     },
   };
   const count = shown?.specialists.length;
+  const running = useAgentActivity().running.length;
 
   return (
     <PageFrame
       title="Agents"
       eyebrow="Extensions"
       description="Tropos leads every conversation and asks specialists for focused work. Start a message with @name to talk to one directly."
-      actions={<PageActions resource={resource} summary={count ? `${count} ${count === 1 ? "specialist" : "specialists"}` : undefined} noun="agents" />}
+      actions={
+        <>
+          <RunningCount count={running} />
+          <PageActions resource={resource} summary={count ? `${count} ${count === 1 ? "specialist" : "specialists"}` : undefined} noun="agents" />
+        </>
+      }
     >
       <LiveRegion>
         <span className="sr-only">{said}</span>

@@ -25,7 +25,8 @@ import { runReviewAgent, specialistLearnedNotice } from "../learning/review";
 import { SPECIALIST_REVIEW_ALLOWED_TOOLS, SPECIALIST_SELF_REVIEW_PROMPT } from "../learning/review-prompts";
 import { ReadState } from "../tools/read-state";
 import { MemoryTodoStore } from "../tools/todo/todo";
-import { recordRun, type DelegationRun } from "./runs";
+import { agentActivity, follow, waitingWhileAsking, type AgentActivity } from "./activity";
+import { recordRun, runResult, type DelegationRun } from "./runs";
 import { ARCHIVE_DIR, loadSpecialists, MAX_PARALLEL_SPECIALISTS, type Specialist } from "./specialists";
 
 /** The hub-only tools plus this plan's privacy additions: a specialist never reads the owner's identity or past chats. */
@@ -52,6 +53,10 @@ export interface SpecialistDeps extends SubagentDeps {
   background(work: Promise<void>): void;
   /** Why a model can't be used now (unknown provider, no key), or null; unset means every model is tried as is. */
   checkModel?(model: string): Promise<string | null>;
+  /** The chat's session, so the dashboard shows which conversation a run belongs to. */
+  sessionId?(): string;
+  /** Where the run's live activity goes; the process's feed by default. */
+  activity?: AgentActivity;
 }
 
 /**
@@ -315,6 +320,8 @@ export async function runSpecialist(
   if (slots.running >= slots.max) ctx.progress?.(`waiting: ${slots.max} specialists are running`);
   const release = await slots.acquire(ctx.signal);
   if (!release) return { content: INTERRUPTED, isError: true };
+  const live = (deps.activity ?? agentActivity).start({ kind: "specialist", agent: spec.id, model, sessionId: deps.sessionId?.() ?? "", task });
+  let outcome = { ok: false, result: "It stopped before reporting." };
   try {
     const others = (await loadSpecialists(deps.home)).filter((s) => s.id !== spec.id).map((s) => s.dir);
     const rules = specialistDenyRules(deps.home, spec, others);
@@ -325,9 +332,17 @@ export async function runSpecialist(
     const out = await runSubagent(
       { ...spec, prompt: `${SPECIALIST_RULES}\n\n${spec.prompt.trim()}`, model },
       prompt,
-      { ...deps, tools: kit.tools, contextText: kit.contextText, permissions },
+      {
+        ...deps,
+        tools: kit.tools,
+        contextText: kit.contextText,
+        permissions,
+        askPermission: waitingWhileAsking(live, deps.askPermission),
+        onEvent: (event) => follow(live, event),
+      },
       ctx,
       (run) => {
+        outcome = { ok: run.ok, result: runResult(run.report) };
         const entry: DelegationRun = {
           ts: new Date().toISOString(),
           agent: spec.id,
@@ -347,6 +362,7 @@ export async function runSpecialist(
     await logged;
     return out;
   } finally {
+    live.end(outcome.ok, outcome.result);
     release();
   }
 }

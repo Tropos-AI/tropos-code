@@ -8,7 +8,7 @@ import { mountAdminPage } from "@/components/setup/admin-test-kit";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
+const { act, screen, cleanup, fireEvent, waitFor, within } = await import("@testing-library/react");
 const { AgentsPage, agentView } = await import("@/app/pages/AgentsPage");
 
 const AGENTS: PanelData = {
@@ -139,6 +139,85 @@ describe("AgentsPage", () => {
     expect(socket.adminOf("agents.update")[0]!.params).toEqual({ id: "reviewer", revision: 2, changes: { description: "Reviews diffs" } });
     expect(await within(dialog).findByText(/changed since you opened it \(now revision 3\)/)).toBeTruthy();
     expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  describe("org-chart connectors", () => {
+    /** Each specialist's connector pieces, read from their data attributes (structure, not pixels). */
+    const connectors = () =>
+      screen.queryAllByRole("listitem").flatMap((li) => {
+        const pieces = [...li.querySelectorAll(":scope > [data-connector]")];
+        return pieces.length === 0 ? [] : [pieces.map((p) => `${p.getAttribute("data-connector")}:${p.getAttribute("data-from") ?? ""}${p.getAttribute("data-to") ?? ""}`)];
+      });
+
+    test("none without specialists", async () => {
+      await mountAdminPage(AgentsPage, { "agents.roster": () => EMPTY_ROSTER }, { panel: () => BUILTIN_ONLY_PANEL });
+      await screen.findByText("Specialists appear here as Tropos learns what you need.");
+      expect(document.querySelectorAll("[data-connector]")).toHaveLength(0);
+    });
+
+    test("one specialist: one trunk from the chief down to its elbow", async () => {
+      await mountAdminPage(AgentsPage, { "agents.roster": () => roster() }, { panel: () => BUILTIN_ONLY_PANEL });
+      await screen.findByRole("button", { name: "reviewer" });
+      expect(connectors()).toEqual([["trunk:chiefelbow", "elbow:"]]);
+    });
+
+    test("three specialists: the trunk runs unbroken through the first two and ends in the last one's elbow", async () => {
+      const three = roster({ specialists: [specialist(), specialist({ id: "writer", name: "writer" }), specialist({ id: "tester", name: "tester" })] });
+      await mountAdminPage(AgentsPage, { "agents.roster": () => three }, { panel: () => BUILTIN_ONLY_PANEL });
+      await screen.findByRole("button", { name: "tester" });
+      expect(connectors()).toEqual([
+        ["trunk:chiefnext", "elbow:"],
+        ["trunk:siblingnext", "elbow:"],
+        ["trunk:siblingelbow", "elbow:"],
+      ]);
+      // Decoration only: screen readers skip it.
+      for (const piece of document.querySelectorAll("[data-connector]")) expect(piece.getAttribute("aria-hidden")).toBe("true");
+    });
+  });
+
+  describe("live activity", () => {
+    const chiefRun = { id: "run-1", kind: "chief" as const, agent: "Tropos", model: "claude-opus-5-5", state: "working" as const, startedAt: Date.now(), session: { id: "tg", chat: "Telegram" } };
+    const specRun = { id: "run-2", kind: "specialist" as const, agent: "reviewer", model: "claude-sonnet-5-5", state: "working" as const, task: "review PR 12", startedAt: Date.now(), session: { id: "tg", chat: "Telegram" } };
+    const rowOf = (name: string) => screen.getByRole("button", { name }).closest("li")!;
+
+    test("a snapshot on arrival, then start, delta and end events, redraw the header count and each card", async () => {
+      const { socket } = await mountAdminPage(AgentsPage, { "agents.roster": () => roster() }, { panel: () => BUILTIN_ONLY_PANEL });
+      await screen.findByRole("button", { name: "reviewer" });
+      const send = async (message: Parameters<typeof socket.deliver>[0]) => act(async () => socket.deliver(message));
+      expect(screen.queryByText(/running$/)).toBeNull();
+      expect(within(rowOf("reviewer")).getByText("Idle")).toBeTruthy();
+
+      await send({ t: "agents", activity: { running: [chiefRun], last: [] } });
+      expect(screen.getByText("1 running")).toBeTruthy();
+      const chief = screen.getByRole("region", { name: /Tropos/ });
+      expect(within(chief).getByText("Working")).toBeTruthy();
+      expect(within(chief).getByText("Telegram")).toBeTruthy();
+
+      await send({ t: "agent", event: { type: "start", run: specRun } });
+      expect(screen.getByText("2 running")).toBeTruthy();
+      const row = rowOf("reviewer");
+      expect(within(row).getByText("Working")).toBeTruthy();
+      expect(within(row).getByText("claude-sonnet-5-5")).toBeTruthy();
+
+      await send({ t: "agent", event: { type: "delta", id: "run-2", text: "Reading the diff" } });
+      expect(within(rowOf("reviewer")).getByText("Reading the diff")).toBeTruthy();
+      await send({ t: "agent", event: { type: "delta", id: "run-2", tool: "Bash: bun test", text: null } });
+      expect(within(rowOf("reviewer")).getByText("Bash: bun test")).toBeTruthy();
+      expect(within(rowOf("reviewer")).queryByText("Reading the diff")).toBeNull();
+      await send({ t: "agent", event: { type: "delta", id: "run-2", state: "waiting" } });
+      expect(within(rowOf("reviewer")).getByText("Waiting for approval")).toBeTruthy();
+
+      await send({ t: "agent", event: { type: "end", run: { id: "run-2", kind: "specialist", agent: "reviewer", ok: true, result: "No issues found.", startedAt: specRun.startedAt, endedAt: Date.now(), session: specRun.session } } });
+      expect(screen.getByText("1 running")).toBeTruthy();
+      expect(within(rowOf("reviewer")).getByText("Idle")).toBeTruthy();
+      expect(within(rowOf("reviewer")).getByText(/Last run: just now · No issues found\./)).toBeTruthy();
+    });
+
+    test("an idle specialist shows its last logged run from the roster", async () => {
+      await mountAdminPage(AgentsPage, { "agents.roster": () => roster() }, { panel: () => BUILTIN_ONLY_PANEL });
+      await screen.findByRole("button", { name: "reviewer" });
+      expect(within(rowOf("reviewer")).getByText(/Last run: .* · LGTM/)).toBeTruthy();
+    });
   });
 
   test("plain agents from the panel appear under Other agents, built-ins don't", async () => {

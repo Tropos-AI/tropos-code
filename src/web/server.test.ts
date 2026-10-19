@@ -6,6 +6,7 @@ import { reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fa
 import { fakeRuntime } from "../../test/helpers/fake-runtime";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { openAuthed, rawLogin, rawSocket, testAccess } from "../../test/helpers/web-client";
+import { AgentActivity } from "../agents/activity";
 import { assetsFromDir, type AssetMap } from "./assets";
 import { DeviceStore, devicesPath, type Device } from "./devices";
 import { WebHost } from "./host";
@@ -44,13 +45,15 @@ interface StartOptions {
   /** Wraps the chat host, to see what reaches it. */
   wrap?: (host: ChatHost) => ChatHost;
   devices?: DeviceStore;
+  activity?: AgentActivity;
 }
 
 async function start(steps: Step[] = [], over: StartOptions = {}) {
   const runtime = fakeRuntime(steps);
-  const host = new WebHost(runtime);
+  const host = new WebHost(runtime, over.activity ? { activity: over.activity } : {});
   server = await startWebServer({
     host: over.wrap ? over.wrap(host) : host,
+    ...(over.activity ? { activity: over.activity } : {}),
     admin: over.admin,
     assets: over.assets ?? assets,
     devices: over.devices ?? devices,
@@ -370,6 +373,31 @@ describe("WebSocket", () => {
     expect(b.messages.some((m) => m.t === "state" && m.state.busy)).toBe(true);
     a.ws.close();
     b.ws.close();
+  });
+
+  test("every logged-in tab gets the agents' live activity: a snapshot after the state, then each start, delta and end", async () => {
+    const activity = new AgentActivity({ intervalMs: 0 });
+    // A chat elsewhere in the process (a Telegram chat's host) is already working.
+    const elsewhere = activity.start({ kind: "chief", agent: "Tropos", model: "m", sessionId: "tg-1", chat: "Telegram" });
+    const { base } = await start([() => reply([textBlock("Hello from the agent")])], { activity });
+    const a = await connect(base);
+    const b = await connect(base);
+    const snapshot = (await b.next((m) => m.t === "agents")) as Extract<ServerMessage, { t: "agents" }>;
+    expect(b.messages.map((m) => m.t).slice(0, 4)).toEqual(["auth_ok", "hello", "state", "agents"]);
+    expect(snapshot.activity.running).toMatchObject([{ id: elsewhere.id, session: { chat: "Telegram" } }]);
+    await a.rpc("prompt", { text: "hi" });
+    const begun = (await b.next((m) => m.t === "agent" && m.event.type === "start" && m.event.run.session.id === "fake-session")) as Extract<ServerMessage, { t: "agent" }>;
+    expect(begun.event).toMatchObject({ run: { kind: "chief", session: { chat: "Dashboard" } } });
+    await b.next((m) => m.t === "agent" && m.event.type === "delta" && m.event.text === "Hello from the agent");
+    await b.next((m) => m.t === "agent" && m.event.type === "end" && m.event.run.result === "Hello from the agent");
+    elsewhere.end(true, "sent the summary");
+    await a.next((m) => m.t === "agent" && m.event.type === "end" && m.event.run.id === elsewhere.id);
+    // A closed tab hears nothing more, and a live tab is unaffected by it.
+    b.ws.close();
+    await b.closed;
+    activity.start({ kind: "chief", agent: "Tropos", model: "m", sessionId: "tg-2" }).end(true, "later");
+    await a.next((m) => m.t === "agent" && m.event.type === "end" && m.event.run.result === "later");
+    a.ws.close();
   });
 
   test("permission prompts go to every tab; the first answer wins and the prompt closes everywhere", async () => {

@@ -4,6 +4,7 @@ import type { PermissionPrompt } from "@core/agent/events";
 import { addTurnDone, addUser, emptyTranscript, flush, historyToTranscript, reduce, type Transcript } from "@core/ui/transcript";
 import type { HelloInfo, ServerMessage, SessionState } from "@core/web/protocol";
 
+import { applyActivity, emptyActivity, type ActivityState } from "@/lib/agent-activity";
 import type { ConnectionStatus } from "@/lib/client";
 
 export interface ConnectionState {
@@ -54,6 +55,8 @@ export interface AppState {
   queueSeq: number;
   /** Set when the user interrupts a turn with messages queued: they wait until sent, edited or discarded. */
   queuePaused: boolean;
+  /** Every agent running in the server's process (all chats), and each one's last run. */
+  activity: ActivityState;
 }
 
 export type AppAction =
@@ -90,6 +93,7 @@ export const initialAppState: AppState = {
   queue: [],
   queueSeq: 0,
   queuePaused: false,
+  activity: emptyActivity,
 };
 
 function onServer(state: AppState, message: ServerMessage, now: number): AppState {
@@ -143,6 +147,12 @@ function onServer(state: AppState, message: ServerMessage, now: number): AppStat
       return { ...state, asks: [...state.asks, { id: message.id, prompt: message.prompt }] };
     case "ask_closed":
       return removeAsk(state, message.id);
+    case "agents":
+      return { ...state, activity: message.activity };
+    case "agent": {
+      const activity = applyActivity(state.activity, message.event);
+      return activity === state.activity ? state : { ...state, activity };
+    }
     default:
       // rpc_result is correlated by the client and never reaches the store.
       return state;

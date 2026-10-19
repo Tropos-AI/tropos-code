@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FakeSessions } from "../../test/helpers/telegram-fakes";
 import { addProject, setDefaultProject, removeProject, setProjectShared } from "./projects";
-import { ChatRouter, RoutedSessions, parseSessionKey, sessionKey } from "./router";
+import { ChatRouter, RoutedSessions, chatLabel, parseSessionKey, sessionKey } from "./router";
 
 let dir: string;
 let home: string;
@@ -19,6 +19,18 @@ beforeEach(async () => {
   await addProject(home, { path: join(dir, "user", "api") }, { userHome: join(dir, "nobody") });
 });
 afterEach(() => removeDir(dir));
+
+describe("chatLabel", () => {
+  test("names where a session's conversation happens, never the chat's id", () => {
+    expect(chatLabel(sessionKey("telegram:123", "app"), "owner")).toBe("Telegram");
+    expect(chatLabel(sessionKey("telegram:456", "app"), "guest")).toBe("Telegram (guest)");
+    expect(chatLabel(sessionKey("project:app", "app"), "scheduled")).toBe("Scheduled");
+    expect(chatLabel(sessionKey("project:app:guest", "app"), "guest")).toBe("Scheduled (guest)");
+    expect(chatLabel(sessionKey("heartbeat:owner", "default"), "owner")).toBe("Heartbeat");
+    expect(chatLabel(sessionKey("slack:T1", "app"), "owner")).toBe("Slack");
+    expect(chatLabel("garbled", "owner")).toBe("Chat");
+  });
+});
 
 describe("ChatRouter", () => {
   test("a chat is in the default project until it picks, and the pick survives a restart", async () => {
