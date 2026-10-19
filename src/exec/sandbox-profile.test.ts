@@ -12,6 +12,8 @@ const base: ConfinementPaths = {
   cacheDir: "/u/.tropos/sandbox-cache",
   gitDirs: ["/w/app/.git", "/w/app/realgit"],
   husky: ["/w/app/.husky"],
+  worktreesRoot: "/u/.tropos/worktrees",
+  linkedGitDirs: [],
   deniedReads: ["/u/.ssh", "/u/.tropos", "/Library/Keychains"],
   readCarveOuts: ["/u/.tropos/workspace", "/u/.tropos/worktrees"],
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
@@ -296,4 +298,11 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       rmSync(fx, { recursive: true, force: true });
     }
   });
+});
+
+test("a worktree's referenced git dirs get the same hooks and config write protection", () => {
+  const { profile, params } = sandboxProfile({ ...base, linkedGitDirs: ["/r/.git/worktrees/t1", "/r/.git"] });
+  expect(params).toContainEqual(["G2", "/r/.git/worktrees/t1"]);
+  expect(profile).toContain('(regex #"^/r/\\.git/worktrees/t1/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
+  expect(profile).toContain('(regex #"^/r/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
 });

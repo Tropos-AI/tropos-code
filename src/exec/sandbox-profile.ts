@@ -19,7 +19,7 @@ export interface SandboxProfile {
 
 export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
-  for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.gitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
+  for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
@@ -29,7 +29,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
       return `(param "${prefix}${i}")`;
     });
   const writable = named("W", paths.writable);
-  const gitDirs = named("G", paths.gitDirs);
+  const gitDirs = named("G", [...paths.gitDirs, ...paths.linkedGitDirs]);
   const husky = named("K", paths.husky);
   const secrets = named("R", paths.deniedReads);
   const carveOuts = named("C", paths.readCarveOuts);
@@ -48,7 +48,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   const regexes = [
     // Hooks and config in the repo and in every nested git dir (submodules under modules/, worktrees/), and the
     // commondir pointer, which would move where git looks for both.
-    ...paths.gitDirs.map((g) => `(regex #"^${escapeRegex(g)}/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`),
+    ...[...paths.gitDirs, ...paths.linkedGitDirs].map((g) => `(regex #"^${escapeRegex(g)}/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`),
     // The repo's own settings hold its deny rules; a shell redirect must not strip them (the folder can't be renamed either).
     `(regex #"^${escapeRegex(paths.project)}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ];

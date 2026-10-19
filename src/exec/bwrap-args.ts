@@ -40,7 +40,7 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   // Parity with the macOS profile needs real dirs: a linked or file `.git`/`.husky`/`.tropos` (a worktree gitfile, a
   // link a chat could swap) can't be made a read-only mount point, so refuse rather than confine something weaker.
   // A linked worktree's `.git` is a plain file (a pointer into the owner's repo): it is kept read-only in place below.
-  requireRealDirOrAbsent(join(project, ".git"), { allowFile: true });
+  requireRealDirOrAbsent(join(project, ".git"), { allowFile: isInside(project, paths.worktreesRoot) && project !== paths.worktreesRoot });
   for (const name of [".husky", ".tropos"]) requireRealDirOrAbsent(join(project, name));
 
   const args = ["--unshare-all", "--share-net", "--new-session", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
@@ -89,6 +89,11 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
       const commondir = join(dir, "commondir");
       if (exists(commondir)) args.push("--ro-bind", commondir, commondir);
     }
+  }
+  // A worktree's real git dirs lie outside the project (read-only already unless the repo sits in a writable path):
+  // their hooks and config stay read-only either way.
+  for (const dir of paths.linkedGitDirs) {
+    for (const name of ["hooks", "config", "config.worktree", "commondir"]) if (exists(join(dir, name))) args.push("--ro-bind", join(dir, name), join(dir, name));
   }
   for (const husky of paths.husky) args.push(...protect(husky, "dir"));
   // The repo's settings hold its deny rules: the whole `.tropos` read-only, or an empty read-only one if missing.

@@ -1,6 +1,6 @@
 // src/exec/confinement-paths.ts — the paths a confined chat command may write, must not touch, and must not read.
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
-import { lstatSync, mkdirSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { workspaceOwnPaths } from "../home/layout";
@@ -90,6 +90,10 @@ export interface ConfinementPaths {
   gitDirs: string[];
   /** `<project>/.husky` and, when it is a link, its target inside the project. */
   husky: string[];
+  /** Tropos's worktrees folder: the only place a `.git` file (a linked worktree's pointer) is accepted. */
+  worktreesRoot: string;
+  /** A linked worktree's git dirs outside the project (its admin dir and the repo's common dir); hooks and config in them are protected. */
+  linkedGitDirs: string[];
   deniedReads: string[];
   /** Readable although inside a denied path: Tropos's default project and the chats' git worktrees. */
   readCarveOuts: string[];
@@ -123,6 +127,8 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     cacheDir: prepareCacheDir(home),
     gitDirs: withLinkTarget(join(project, ".git"), project),
     husky: withLinkTarget(join(project, ".husky"), project),
+    worktreesRoot: real(worktreesDir(opts.home)),
+    linkedGitDirs: linkedGitDirs(project, real(worktreesDir(opts.home))),
     deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
@@ -205,6 +211,30 @@ function withLinkTarget(path: string, project: string): string[] {
   } catch {
     // dangling: nothing further to protect
   }
+  return unique(out);
+}
+
+/**
+ * A `.git` file points at a git dir that may sit inside the project, where its hooks and config would be writable, so
+ * only a Tropos worktree (under the worktrees folder) may have one. Then the dirs it names are returned so they can
+ * be protected like `.git` is: the worktree's admin dir and the repo's common dir.
+ */
+function linkedGitDirs(project: string, worktreesRoot: string): string[] {
+  const gitFile = join(project, ".git");
+  let info: ReturnType<typeof lstatSync>;
+  try {
+    info = lstatSync(gitFile);
+  } catch {
+    return [];
+  }
+  if (!info.isFile()) return [];
+  if (!isInside(project, worktreesRoot) || project === worktreesRoot) throw new ConfinementError(`${gitFile} is a gitfile; only a Tropos worktree may have one.`);
+  const target = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(gitFile, "utf8"))?.[1];
+  if (!target) throw new ConfinementError(`${gitFile} doesn't name a git dir.`);
+  const admin = real(resolve(project, target));
+  const out = [admin];
+  const pointer = join(admin, "commondir");
+  if (existsSync(pointer)) out.push(real(resolve(admin, readFileSync(pointer, "utf8").trim())));
   return unique(out);
 }
 

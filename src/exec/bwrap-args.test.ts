@@ -137,6 +137,29 @@ test("a symlinked or file .git is refused rather than confined weaker", () => {
   expect(() => bwrapArgs(paths(), project)).toThrow(ConfinementError);
 });
 
+test("a gitfile in an ordinary project is refused", () => {
+  rmSync(join(project, ".git"), { recursive: true });
+  writeFileSync(join(project, ".git"), "gitdir: .hidden-git\n");
+  expect(() => paths()).toThrow(ConfinementError);
+});
+
+test("a Tropos worktree's referenced git dirs keep hooks and config read-only", () => {
+  const repo = join(fx, "repo", ".git");
+  const admin = join(repo, "worktrees", "t1");
+  mkdirSync(join(repo, "hooks"), { recursive: true });
+  mkdirSync(join(admin, "hooks"), { recursive: true });
+  writeFileSync(join(repo, "config"), "[core]");
+  writeFileSync(join(admin, "commondir"), "../..\n");
+  const wt = join(userHome, ".tropos", "worktrees", "app", "t1");
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, ".git"), `gitdir: ${admin}\n`);
+  const c = paths(wt);
+  expect(c.linkedGitDirs).toEqual([admin, repo]);
+  const args = bwrapArgs(c, wt);
+  const bind = at(args, "--bind", wt, wt);
+  for (const p of [join(repo, "hooks"), join(repo, "config"), join(admin, "hooks"), join(admin, "commondir")]) expect(at(args, ...ro(p))).toBeGreaterThan(bind);
+});
+
 test("a linked worktree's .git file is kept read-only in place, and the worktrees folder is carved out for reading", () => {
   const wt = join(userHome, ".tropos", "worktrees", "app", "t1");
   mkdirSync(wt, { recursive: true });
