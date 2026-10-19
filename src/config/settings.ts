@@ -100,6 +100,8 @@ export interface ProviderSetting {
   baseURL?: string;
   /** Display name for a provider that isn't built in. */
   name?: string;
+  /** Which API an endpoint that isn't built in speaks: OpenAI Chat Completions (the default), OpenAI Responses, or Anthropic Messages. */
+  api?: "chat" | "responses" | "anthropic";
 }
 
 export type PartialSettings = Partial<Omit<Settings, "permissions" | "learning">> & {
@@ -204,7 +206,7 @@ const layerSchema = z.object({
   providers: z
     .record(
       z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "provider ids are lowercase letters, digits and dashes"),
-      z.object({ baseURL: z.string().url().optional(), name: z.string().min(1).optional() }),
+      z.object({ baseURL: z.string().url().optional(), name: z.string().min(1).optional(), api: z.enum(["chat", "responses", "anthropic"]).optional() }),
     )
     .optional(),
   autoUpdates: z.boolean().optional(),

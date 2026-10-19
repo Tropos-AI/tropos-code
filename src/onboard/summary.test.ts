@@ -28,13 +28,13 @@ describe("setupSummary", () => {
     const s = await setupSummary(testDeps(home, { telegramBaseUrl: server.baseUrl }));
     expect(s.steps.map((x) => x.id)).toEqual(["provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service"]);
     expect(s.steps.find((x) => x.id === "projects")).toMatchObject({ status: "done", detail: "1 project" });
-    expect(s.dashboardUrl).toBe("http://localhost:4317");
+    expect(s.dashboardUrl).toBe("http://127.0.0.1:4317");
     expect(s.botUrl).toBe("https://t.me/tropos_bot");
     expect(s.examples).toEqual(exampleAsks("app"));
     expect(s.examples).toHaveLength(3);
     expect(s.health).toEqual({ ok: 0, warn: 0, error: 0, problems: [] });
     await writeGateway({ webPort: 4400 });
-    expect((await setupSummary(testDeps(home))).dashboardUrl).toBe("http://localhost:4400");
+    expect((await setupSummary(testDeps(home))).dashboardUrl).toBe("http://127.0.0.1:4400");
   });
 
   test("without a bot there is no bot link; without a project the first example is general", async () => {

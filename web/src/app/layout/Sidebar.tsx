@@ -24,21 +24,16 @@ type Props = {
   idPrefix: string;
 };
 
+/** The logo (the tab's icon, without a background), then the agent's own name when it has one. */
 export function Brand({ version, demo, identity }: { version?: string; demo?: boolean; identity?: { name?: string; emoji?: string } }) {
   return (
-    <a href={hrefFor("chat")} className="-mx-1 flex items-center gap-2.5 rounded-[9px] px-1 py-1 outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]">
-      <img src="/brand/tropos-logo.png" alt="" width={26} height={26} className="size-[26px] shrink-0 select-none" draggable={false} />
-      {identity?.name ? (
-        <span className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">
-            {identity.emoji ? `${identity.emoji} ` : ""}
-            {identity.name}
-          </span>
-          <span className="text-[11px] text-ink-3">Tropos Code</span>
-        </span>
-      ) : (
-        <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">Tropos Code</span>
-      )}
+    <a
+      href={hrefFor("chat")}
+      aria-label={identity?.name ? `${identity.name} · Tropos Code` : "Tropos Code"}
+      className="-mx-1 flex items-center gap-2.5 rounded-[9px] px-1 py-1 outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--accent)]"
+    >
+      <img src="/brand/favicon-192.png" alt="" width={26} height={26} className="size-[26px] shrink-0 select-none" draggable={false} />
+      {identity?.name ? <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-ink [font-stretch:86%]">{identity.name}</span> : null}
       {demo ? (
         <Badge tone="accent" className="ml-auto">
           demo

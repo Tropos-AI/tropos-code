@@ -18,30 +18,21 @@ afterEach(() => cleanup());
 const brandLink = () => screen.getByRole("link", { name: /Tropos Code/ });
 
 describe("Brand", () => {
-  test("with a named identity: emoji and name, then a small Tropos Code line", () => {
+  test("the logo without a background, then the agent's name; no Tropos Code text beside it", () => {
     render(createElement(Brand, { version: "0.5.2", identity: { name: "Nova", emoji: "🦊" } }));
     const link = brandLink();
-    expect(link.textContent).toContain("🦊 Nova");
-    expect(screen.getByText("Tropos Code").className).toContain("text-[11px]");
+    expect(link.querySelector("img")!.getAttribute("src")).toBe("/brand/favicon-192.png");
+    expect(link.textContent).toBe("Novav0.5.2");
     expect(link.getAttribute("href")).toBe("#/chat");
-    expect(screen.getByText("v0.5.2")).toBeTruthy();
   });
 
-  test("a name without an emoji shows the bare name", () => {
-    render(createElement(Brand, { identity: { name: "Nova" } }));
-    const name = screen.getByText("Nova");
-    expect(name.textContent).toBe("Nova");
-    expect(screen.getByText("Tropos Code")).toBeTruthy();
-  });
-
-  test("no identity, or one without a name: just Tropos Code", () => {
+  test("no identity, or one without a name: the logo alone", () => {
     render(createElement(Brand, { identity: { emoji: "🦊" } }));
-    const link = brandLink();
-    expect(link.textContent).not.toContain("🦊");
-    expect(screen.getByText("Tropos Code").className).toContain("text-[15px]");
+    expect(brandLink().textContent).toBe("");
     cleanup();
     render(createElement(Brand, {}));
-    expect(brandLink().textContent).toBe("Tropos Code");
+    expect(brandLink().textContent).toBe("");
+    expect(brandLink().querySelector("img")).toBeTruthy();
   });
 
   test("demo shows a badge instead of the version", () => {
@@ -70,7 +61,7 @@ describe("SidebarContent", () => {
 
   test("the brand shows the agent's identity from hello", async () => {
     await mount({}, {}, { name: "Nova", emoji: "🦊" });
-    expect(brandLink().textContent).toContain("🦊 Nova");
+    expect(brandLink().textContent).toContain("Nova");
     expect(screen.getByText("v0.5.2")).toBeTruthy();
   });
 
@@ -80,14 +71,13 @@ describe("SidebarContent", () => {
     await act(async () => {
       socket.deliver({ t: "state", state: { ...TEST_STATE, identity: { name: "Bob", emoji: "🔧" } } });
     });
-    expect(brandLink().textContent).toContain("🔧 Bob");
+    expect(brandLink().textContent).toContain("Bob");
     expect(brandLink().textContent).not.toContain("Nova");
   });
 
-  test("without an identity the brand is just Tropos Code; showBrand=false hides it", async () => {
+  test("without an identity the brand is just the logo; showBrand=false hides it", async () => {
     await mount();
-    expect(screen.getByText("Tropos Code").className).toContain("text-[15px]");
-    expect(brandLink().textContent).not.toContain("Nova");
+    expect(brandLink().textContent).toBe("v0.5.2");
     cleanup();
     await mount({ showBrand: false });
     expect(screen.queryByRole("link", { name: /Tropos Code/ })).toBeNull();

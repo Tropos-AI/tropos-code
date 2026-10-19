@@ -29,7 +29,7 @@ export async function setupSummary(deps: OnboardDeps): Promise<SetupSummaryView>
   const problems = (report?.findings ?? []).filter((f) => f.level === "warn" || f.level === "error").slice(0, MAX_PROBLEMS).map((f) => f.message);
   return {
     steps: state.steps.filter((s) => s.id !== "welcome" && s.id !== "done").map(({ id, title, status, detail }) => ({ id, title, status, ...(detail ? { detail } : {}) })),
-    dashboardUrl: `http://localhost:${config ? dashboardPort(config) : DEFAULT_PORT}`,
+    dashboardUrl: `http://127.0.0.1:${config ? dashboardPort(config) : DEFAULT_PORT}`,
     ...(bot ? { botUrl: `https://t.me/${bot}` } : {}),
     examples: exampleAsks(config?.projects[0]?.name),
     health: { ok: report?.summary.ok ?? 0, warn: report?.summary.warn ?? 0, error: report?.summary.error ?? 0, problems },

@@ -143,6 +143,6 @@ test("phone.enable returns url and code; summary answers", async () => {
   const off = typedAdmin(ctxFor(), onboardHandlers(ctxFor(), testDeps(home)));
   await expect(off.handle("onboard.phone.enable", undefined)).rejects.toThrow("Tailscale");
   const summary = await admin.handle("onboard.summary", undefined);
-  expect(summary.dashboardUrl).toContain("localhost");
+  expect(summary.dashboardUrl).toContain("127.0.0.1");
   expect(summary.steps.map((x) => x.id)).not.toContain("done");
 });

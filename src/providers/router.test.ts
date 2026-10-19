@@ -118,6 +118,24 @@ describe("ProviderRouter", () => {
     expect(status.find((s) => s.info.id === "deepseek")!.baseURL).toBe("https://proxy.example/v1");
   });
 
+  test("an endpoint the owner added can speak the Anthropic or the Responses API, at its own address", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => (urls.push(String(input)), sse("ok"))) as unknown as typeof fetch;
+    const router = new ProviderRouter({
+      home: dir,
+      env: { GW_API_KEY: "k" },
+      settings: { gw: { baseURL: "https://gw.example", api: "anthropic", name: "Gateway" }, resp: { baseURL: "https://resp.example/v1", api: "responses" } },
+      fetch: fetchImpl,
+    });
+    await router.send(req("gw/claude-x"), handlers, signal()).catch(() => undefined);
+    await router.send(req("resp/model-y"), handlers, signal()).catch(() => undefined);
+    expect(urls[0]).toStartWith("https://gw.example/v1/messages");
+    expect(urls[1]).toBe("https://resp.example/v1/responses");
+    const status = await router.status();
+    expect(status.find((s) => s.info.id === "gw")).toMatchObject({ info: { api: "anthropic", name: "Gateway" }, custom: true, baseURL: "https://gw.example" });
+    expect(status.find((s) => s.info.id === "anthropic")!.custom).toBe(false);
+  });
+
   test("a settings entry for a built-in provider never duplicates it", () => {
     expect(allProviders({ deepseek: { baseURL: "https://x/v1" } }).filter((p) => p.id === "deepseek")).toHaveLength(1);
     expect(allProviders({ odd: {} }).some((p) => p.id === "odd")).toBe(false);

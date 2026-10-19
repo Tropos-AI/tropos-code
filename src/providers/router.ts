@@ -12,6 +12,8 @@ export interface ProviderStatus {
   /** Where the key comes from; null when there is none (fine for local providers). */
   key: KeySource | null;
   baseURL: string;
+  /** Added in settings.json, not built in. */
+  custom?: boolean;
 }
 
 export interface RouterOptions {
@@ -30,7 +32,7 @@ export function allProviders(settings: Record<string, ProviderSetting>): Provide
     .map(([id, s]) => ({
       id,
       name: s.name ?? id,
-      api: "chat",
+      api: s.api ?? "chat",
       baseURL: s.baseURL!,
       keyEnv: [`${id.toUpperCase().replace(/-/g, "_")}_API_KEY`],
       keyRequired: false,
@@ -66,6 +68,7 @@ export class ProviderRouter implements Model {
       info,
       key: resolveApiKey(info.keyEnv, info.id, this.opts.env, saved)?.source ?? null,
       baseURL: this.baseURL(info),
+      custom: !this.builtin(info),
     }));
   }
 
@@ -108,9 +111,23 @@ export class ProviderRouter implements Model {
     return this.anthropicModel.model;
   }
 
+  /** An Anthropic-compatible endpoint the owner added: the Anthropic SDK at its base URL, with its own key. */
+  private async customAnthropic(info: ProviderInfo): Promise<Model> {
+    const key = await this.key(info);
+    const client = new Anthropic({ maxRetries: 0, baseURL: this.baseURL(info), apiKey: key ?? "none", ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}) });
+    return new AnthropicModel(client);
+  }
+
+  private builtin(info: ProviderInfo): boolean {
+    return PROVIDERS.some((p) => p.id === info.id);
+  }
+
   async send(req: TurnRequest, handlers: StreamHandlers, signal: AbortSignal): Promise<Message> {
     const { provider, model } = parseModelId(req.model, this.providers);
-    if (provider.api === "anthropic") return (await this.anthropic()).send({ ...req, model }, handlers, signal);
+    if (provider.api === "anthropic") {
+      const target = this.builtin(provider) ? await this.anthropic() : await this.customAnthropic(provider);
+      return target.send({ ...req, model }, handlers, signal);
+    }
     if (provider.api === "responses") {
       const opts = provider.responses ?? { summaries: false, encryptedReasoning: false };
       return new ResponsesModel(this.endpoint(provider), opts, this.opts.fetch).send(req, handlers, signal);
@@ -124,7 +141,9 @@ export class ProviderRouter implements Model {
     if (!info) throw new Error(`Unknown provider ${id}`);
     if (info.api === "anthropic") {
       const key = await this.key(info);
-      const client = new Anthropic({ maxRetries: 1, ...(key ? { apiKey: key } : {}) });
+      const client = this.builtin(info)
+        ? new Anthropic({ maxRetries: 1, ...(key ? { apiKey: key } : {}) })
+        : new Anthropic({ maxRetries: 1, baseURL: this.baseURL(info), apiKey: key ?? "none" });
       const ids: string[] = [];
       for await (const m of client.models.list({}, { signal })) ids.push(m.id);
       return ids.sort();

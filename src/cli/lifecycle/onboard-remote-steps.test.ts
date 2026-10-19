@@ -191,7 +191,7 @@ describe("doneStep", () => {
     expect(text).toContain("the disk is almost full");
     expect(text).toContain("Run `tcode doctor --fix`.");
     expect(text).toContain("https://t.me/tropos_bot");
-    expect(text).toContain("http://localhost:4317");
+    expect(text).toContain("http://127.0.0.1:4317");
     expect(text).toMatch(/– .*\(later: `tcode onboard`\)/);
     expect(io.opened).toEqual(["http://localhost:4317/#login=ONE-TIME-KEY"]);
   });

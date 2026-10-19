@@ -5,6 +5,7 @@ import { AnimatePresence, m } from "motion/react";
 
 import type { ProviderInfoView } from "@core/web/protocol";
 
+import { API_OPTIONS, AddProviderForm } from "@/components/pages/settings/add-provider-form";
 import { ConnectForm } from "@/components/pages/settings/connect-form";
 import { ResourceView } from "@/components/pages/resource-view";
 import type { Resource } from "@/components/pages/use-rpc-resource";
@@ -12,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { CELL, CROSSFADE, INSTANT } from "@/lib/springs";
-import { errorMessage, useAppStore } from "@/lib/store";
+import { errorMessage, useAdmin, useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /** The status line, as /providers words it in the terminal. */
@@ -62,8 +63,24 @@ type RowProps = {
 
 function ProviderRow({ provider, inUse, formOpen, onOpenForm, onCloseForm, onChanged }: RowProps) {
   const store = useAppStore();
+  const admin = useAdmin();
   const reduced = usePrefersReducedMotion();
   const [removing, setRemoving] = useState(false);
+
+  // An added endpoint goes away entirely: its settings.json entry, then its saved key.
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      await admin("config.set", { file: "settings", path: `providers.${provider.id}`, value: null });
+      await store.rpc("providers.disconnect", provider.id).catch(() => false);
+      store.toast({ tone: "ok", title: `Removed ${provider.name}` });
+      onChanged();
+    } catch (error) {
+      store.toast({ tone: "error", title: `Couldn't remove ${provider.name}`, description: errorMessage(error) });
+    } finally {
+      setRemoving(false);
+    }
+  };
 
   const disconnect = async () => {
     setRemoving(true);
@@ -94,9 +111,19 @@ function ProviderRow({ provider, inUse, formOpen, onOpenForm, onCloseForm, onCha
           <p className={cn("mt-0.5 text-[13px]", provider.key ? "text-ok" : "text-ink-2")}>
             <KeyLine provider={provider} />
           </p>
+          {provider.custom ? (
+            <p className="mt-0.5 break-all text-[12px] text-ink-3">
+              {API_OPTIONS.find((o) => o.value === provider.custom!.api)?.label} · <code className="font-mono">{provider.custom.baseURL}</code>
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2 self-center">
-          {provider.key?.kind === "saved" ? (
+          {provider.custom ? (
+            <Button variant="danger" size="sm" icon="trash-2" onClick={() => void remove()} disabled={removing} aria-label={`Remove ${provider.name}`}>
+              {removing ? "Removing…" : "Remove"}
+            </Button>
+          ) : null}
+          {provider.key?.kind === "saved" && !provider.custom ? (
             <Button variant="danger" size="sm" icon="log-out" onClick={() => void disconnect()} disabled={removing} aria-label={`Disconnect ${provider.name}`}>
               {removing ? "Removing…" : "Disconnect"}
             </Button>
@@ -144,7 +171,9 @@ type Props = {
 };
 
 export function ProvidersPanel({ resource, currentProvider }: Props) {
+  const store = useAppStore();
   const [formFor, setFormFor] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   return (
     <div className="flex flex-col gap-4">
       <p className="max-w-[62ch] text-[13.5px] leading-relaxed text-ink-2">
@@ -167,6 +196,24 @@ export function ProvidersPanel({ resource, currentProvider }: Props) {
           </ul>
         )}
       </ResourceView>
+      {adding ? (
+        <AddProviderForm
+          taken={(resource.data ?? []).map((p) => p.id)}
+          onCancel={() => setAdding(false)}
+          onAdded={(name) => {
+            store.toast({ tone: "ok", title: `Added ${name}`, description: "Pick its models in the model picker." });
+            setAdding(false);
+            resource.refresh();
+          }}
+        />
+      ) : (
+        <div>
+          <Button size="sm" icon="plus" onClick={() => setAdding(true)}>
+            Add a provider
+          </Button>
+          <p className="mt-1.5 text-[12.5px] text-ink-3">Any endpoint compatible with Anthropic or OpenAI: a proxy, LiteLLM, vLLM, a hosted gateway.</p>
+        </div>
+      )}
     </div>
   );
 }

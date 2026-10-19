@@ -244,6 +244,44 @@ async function mountSettingsTab(tab: string, admin: AdminHandlers) {
   return mountAdminPage(SettingsPage, admin, { "providers.status": () => [], "modelPrefs.get": () => ({ favorites: [], recent: [] }) });
 }
 
+describe("Settings › Providers › Add a provider", () => {
+  test("adds an Anthropic-compatible endpoint to settings.json, sends the key once, and lists it with Remove", async () => {
+    stubMatchMedia();
+    const added: { id: string; name: string; key: null; keyRequired: false; keyURL: null; keyEnv: string[]; custom: { baseURL: string; api: "anthropic" } }[] = [];
+    window.history.replaceState(null, "", "#/settings/models");
+    const { socket } = await mountAdminPage(
+      SettingsPage,
+      { "config.set": () => (added.push({ id: "my-gateway", name: "My Gateway", key: null, keyRequired: false, keyURL: null, keyEnv: [], custom: { baseURL: "https://gw.example", api: "anthropic" } }), { file: "settings", path: "/s", value: {}, schema: {} }) },
+      { "providers.status": () => [...added], "providers.connect": () => null, "modelPrefs.get": () => ({ favorites: [], recent: [] }) },
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Add a provider" }));
+    const form = screen.getByRole("form", { name: "Add a provider" });
+    fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "My Gateway" } });
+    fireEvent.change(within(form).getByLabelText("API"), { target: { value: "anthropic" } });
+    fireEvent.change(within(form).getByLabelText("Base URL"), { target: { value: "not a url" } });
+    await act(async () => void fireEvent.submit(form));
+    expect(within(form).getByRole("alert").textContent).toContain("full URL");
+    expect(socket.adminOf("config.set")).toHaveLength(0);
+
+    fireEvent.change(within(form).getByLabelText("Base URL"), { target: { value: "https://gw.example" } });
+    fireEvent.change(within(form).getByLabelText("API key (optional)"), { target: { value: SECRET } });
+    await act(async () => void fireEvent.submit(form));
+    await waitFor(() => expect(socket.adminOf("config.set")[0]!.params).toEqual({ file: "settings", path: "providers.my-gateway", value: { name: "My Gateway", api: "anthropic", baseURL: "https://gw.example" } }));
+    await waitFor(() => expect(socket.callsOf("providers.connect")).toEqual([{ method: "providers.connect", params: { id: "my-gateway", key: SECRET } }]));
+    expect(keyInDom(SECRET)).toBe(false);
+    await waitFor(() => expect(row("My Gateway").textContent).toContain("https://gw.example"));
+    expect(within(row("My Gateway")).getByRole("button", { name: "Remove My Gateway" })).toBeTruthy();
+  });
+
+  test("providerId makes a settings key; a taken name is refused", async () => {
+    const { providerId, addProviderProblem } = await import("@/components/pages/settings/add-provider-form");
+    expect(providerId("My Gateway (EU)")).toBe("my-gateway-eu");
+    expect(addProviderProblem("OpenAI", "https://x.example/v1", ["openai"])).toContain("already");
+    expect(addProviderProblem("x", "ftp://x.example", [])).toContain("https://");
+    expect(addProviderProblem("x", "http://localhost:8000/v1", [])).toBeNull();
+  });
+});
+
 describe("Settings › Service & updates › service", () => {
   test("shows the state, the unit and log paths, and restarts", async () => {
     stubMatchMedia();

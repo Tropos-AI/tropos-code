@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { AnimatePresence, m } from "motion/react";
 
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
@@ -170,6 +170,46 @@ export function Tabs({
 
   const rowRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
+
+  // A mouse has no sideways scroll: its wheel scrolls the strip while there is more of it to see.
+  useEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return; // a trackpad's sideways swipe already works
+      const max = row.scrollWidth - row.clientWidth;
+      if (max <= 0 || (e.deltaY < 0 && row.scrollLeft <= 0) || (e.deltaY > 0 && row.scrollLeft >= max)) return;
+      e.preventDefault();
+      row.scrollLeft += e.deltaY;
+    };
+    row.addEventListener("wheel", onWheel, { passive: false });
+    return () => row.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // ...and dragging it with the mouse scrolls it too; a drag that started on a tab doesn't also open that tab.
+  const dragStart = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    drag.current = { x: e.clientX, left: e.currentTarget.scrollLeft, moved: false };
+  };
+  const dragMove = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    if (!d.moved && Math.abs(dx) < 5) return;
+    d.moved = true;
+    e.currentTarget.scrollLeft = d.left - dx;
+  };
+  const dragEnd = () => {
+    if (!drag.current?.moved) drag.current = null;
+  };
+  const swallowDragClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (drag.current?.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    drag.current = null;
+  };
   const [plateau, setPlateau] = useState({ x: 0, width: 0, ready: false });
 
   const selectedIndex = items.findIndex((item) => item.value === tabs.value);
@@ -209,7 +249,12 @@ export function Tabs({
         aria-orientation="horizontal"
         ref={rowRef}
         aria-label={label}
-        className="relative flex w-full overflow-x-auto bg-stone-200/70 px-3 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        onPointerDown={dragStart}
+        onPointerMove={dragMove}
+        onPointerUp={dragEnd}
+        onPointerLeave={() => (drag.current = null)}
+        onClickCapture={swallowDragClick}
+        className="relative flex w-full select-none overflow-x-auto bg-stone-200/70 px-3 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         <m.span
           layout

@@ -61,6 +61,8 @@ export interface ProviderInfoView {
   noKeyNote?: string;
   /** How the key is set, never the key itself. */
   key: { kind: "env"; name: string } | { kind: "saved" } | null;
+  /** An endpoint the owner added in settings.json (not built in), with where it is and which API it speaks. */
+  custom?: { baseURL: string; api: "chat" | "responses" | "anthropic" };
 }
 
 /** Every RPC: its params and its result. */

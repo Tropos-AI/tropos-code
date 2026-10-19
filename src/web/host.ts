@@ -332,6 +332,7 @@ export class WebHost {
             noKeyNote: s.info.noKeyNote,
             // Where the key comes from, never the key.
             key: s.key ? (s.key.kind === "env" ? { kind: "env", name: s.key.name } : { kind: "saved" }) : null,
+            ...(s.custom ? { custom: { baseURL: s.baseURL, api: s.info.api } } : {}),
           }),
         ) as RpcMap[M]["result"];
       case "providers.connect": {
