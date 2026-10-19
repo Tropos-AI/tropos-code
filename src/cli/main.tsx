@@ -12,6 +12,7 @@ import { resolveToolPath } from "../tools/paths";
 import { createTools } from "../tools/registry";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
+import { layoutAtStart } from "../home/migrate";
 import { VERSION } from "../version";
 import { startNativeSession } from "../install/session";
 import { runInstallCommand, type CommandContext } from "../install/commands";
@@ -199,6 +200,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     }
     const warning = await configPermissionWarning(home);
     if (warning) err(`tcode: ${warning}\n`);
+    await layoutAtStart(home, VERSION, err);
     return await runGateway({
       home,
       env,
@@ -265,6 +267,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     err(`tcode: using bash for commands (your shell ${picked.rejected} isn't POSIX-compatible)\n`);
   }
 
+  await layoutAtStart(home, VERSION, err);
   const ext = await loadExtensions({ cwd, home, settings, env });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
   for (const warning of ext.warnings) err(`tcode: ${sanitizeForTerminal(warning)}\n`);

@@ -65,6 +65,18 @@ describe("tcode gateway", () => {
     return { done, stop, out, err, url: () => webUrl };
   };
 
+  test("the gateway start migrates a legacy home too", async () => {
+    await mkdir(join(dir, "project"));
+    await mkdir(join(dir, "home", "memories"), { recursive: true });
+    await writeFile(join(dir, "home", "memories", "USER.md"), "u\n");
+    const g = start();
+    while (!g.url()) await Bun.sleep(20);
+    expect(existsSync(join(dir, "home", "workspace", "USER.md"))).toBe(true);
+    expect(g.err.join("")).toContain("Moved Tropos's memory");
+    g.stop();
+    await g.done;
+  });
+
   test("serves the shell at http://127.0.0.1:<port>/ with no key in any output; the old token file is ignored", async () => {
     await mkdir(join(dir, "project"));
     const oldToken = "o".repeat(43);

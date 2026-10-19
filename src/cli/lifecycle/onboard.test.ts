@@ -7,17 +7,10 @@ import type { Flow } from "../../ui/flow";
 import { engineFakes, scriptAnswers, scriptedFlow } from "./onboard-test-kit";
 import { fakeRunner } from "../../doctor/testing";
 import { makeFixture as baseFixture, type Fixture } from "./lifecycle-fixture";
-import { BOOTSTRAP_TEXT } from "../../context/identity";
 import { runOnboard, type OnboardCliDeps } from "./onboard";
 import type { LifecycleContext } from "./types";
 
-/** A fresh install carries the first-run ritual file, so the identity step starts open. */
-const makeFixture: typeof baseFixture = async (over) => {
-  const fx = await baseFixture(over);
-  await mkdir(join(fx.ctx.home, "workspace"), { recursive: true });
-  await writeFile(join(fx.ctx.home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
-  return fx;
-};
+const makeFixture = baseFixture;
 
 let fx: Fixture;
 afterEach(() => fx?.cleanup());
@@ -69,6 +62,14 @@ describe("usage", () => {
     fx = await makeFixture({ interactive: false });
     expect(await runOnboard([], fx.ctx, { engine: engine() })).toBe(64);
   });
+});
+
+test("tcode onboard on a fresh home lays it out first, so the identity step is todo", async () => {
+  fx = await makeFixture({ env: { DS_KEY: GOOD_KEY } });
+  const argv = ["--non-interactive", "--accept-risk", "--json", "--provider", "deepseek", "--api-key-env", "DS_KEY", "--skip-telegram", "--skip-service"];
+  await runOnboard(argv, fx.ctx, { engine: engine() });
+  expect(await exists(join(fx.ctx.home, "workspace", "BOOTSTRAP.md"))).toBe(true);
+  expect(JSON.parse(fx.stdout()).steps.find((s: { id: string }) => s.id === "identity").status).toBe("todo");
 });
 
 describe("--non-interactive", () => {

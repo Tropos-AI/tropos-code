@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { readManifest } from "../backup";
+import { readManifest } from "../backup/index";
 import { AGENTS_TEMPLATE } from "../memory/agents-file";
 import { projectDir } from "../session/store";
 import { ensureHomeLayout, importLegacyNotes, layoutNotice, legacyLayoutReport, migrateHomeLayout } from "./migrate";

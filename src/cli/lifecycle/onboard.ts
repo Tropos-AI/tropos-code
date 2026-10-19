@@ -21,6 +21,7 @@ import {
 } from "../../onboard/engine";
 import { RISK_NOTICE } from "../../onboard/copy";
 import { flowForContext, type Flow } from "../../ui/flow";
+import { layoutAtStart } from "../../home/migrate";
 import { runWizard } from "./onboard-wizard";
 import { allProviders } from "../../providers/router";
 import { readSettingsFile } from "../../config/settings";
@@ -109,6 +110,7 @@ export async function runOnboard(argv: string[], ctx: LifecycleContext, cli: Onb
     if (value !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) return usage(ctx, `--${name} takes the NAME of an environment variable, not a value.`);
   }
 
+  await layoutAtStart(ctx.home, ctx.version, ctx.err, ctx.now);
   const deps = makeOnboardDeps({ home: ctx.home, userHome: ctx.userHome, env: ctx.env, now: ctx.now, execPath: ctx.execPath, scriptPath: ctx.scriptPath, ...cli.engine });
   if (v.has("provider") && !allProviders((await readSettingsFile(join(ctx.home, "settings.json")).catch(() => null))?.providers ?? {}).some((p) => p.id === v.get("provider"))) {
     return usage(ctx, `unknown provider "${v.get("provider")}".`);

@@ -56,6 +56,14 @@ describe("main", () => {
     expect((await listSessions(home, project))[0]!.title).toBe("say hi");
   });
 
+  test("the first session start migrates a legacy home and says so", async () => {
+    await mkdir(join(home, "memories"), { recursive: true });
+    await writeFile(join(home, "memories", "USER.md"), "Prefers tabs\n");
+    const r = await cli(["-p", "hi"], [() => reply([textBlock("ok")])]);
+    expect(r.err).toContain("Moved Tropos's memory, identity and skills into ~/.tropos/workspace.");
+    expect(await Bun.file(join(home, "workspace", "USER.md")).text()).toBe("Prefers tabs\n");
+  });
+
   test("piped stdin is appended to the prompt", async () => {
     const r = await cli(["-p", "summarize"], [() => reply([textBlock("ok")])], "line one\nline two");
     const first = r.model.requests[0]!.messages[0]!.content as Array<{ text: string }>;

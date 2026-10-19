@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, readlink, realpath, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { legacyToCurrent } from "../home/layout";
+import { importLegacyNotes } from "../home/migrate";
 import { settingsLayerSchema } from "../config/settings";
 import { gatewayConfigSchema } from "../gateway/config";
 import { isInside } from "../paths";
@@ -153,14 +155,17 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreResult
   const risky = classifyRisky(chosen, (p) => texts.get(p));
 
   const overwritten: string[] = [];
-  for (const f of chosen) if (await lstat(join(opts.home, f.path)).then(() => true, () => false)) overwritten.push(f.path);
+  // A backup from before the layout change writes into the new places (LEGACY_LAYOUT).
+  const placed = (path: string): string => legacyToCurrent(path) ?? path;
+  const moved = (f: ManifestFile): ManifestFile => ({ ...f, path: placed(f.path) });
+  for (const f of chosen) if (await lstat(join(opts.home, placed(f.path))).then(() => true, () => false)) overwritten.push(placed(f.path));
 
   if (await gatewayRunning(opts.home)) {
     const w = "The gateway is running. Stop it (tcode gateway stop) before restoring, or it may overwrite what is restored.";
     warnings.push(w);
     say({ phase: "warn", message: w });
   }
-  if (opts.dryRun) return { dryRun: true, manifest, restored: chosen, overwritten, warnings, risky };
+  if (opts.dryRun) return { dryRun: true, manifest, restored: chosen.map(moved), overwritten, warnings, risky };
   if (risky.length && !opts.trustCode) {
     throw new BackupError(
       `This backup replaces files that can run code or let people in (${risky.map((r) => r.path).join(", ")}); nothing was restored. Restore it only if you trust whoever made it.`,
@@ -203,7 +208,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreResult
     if ("problem" in mp) throw new BackupError(mp.problem, "unsafe");
     const digest = createHash("sha256").update(e.kind === "symlink" ? e.linkname : e.data).digest("hex");
     if (digest !== f.sha256) throw new BackupError(`archive changed during restore: checksum mismatch for ${f.path}`, "invalid");
-    const dest = await destinationFor(homeReal, mp.rel);
+    const dest = await destinationFor(homeReal, placed(mp.rel));
     const tmp = `${dest}.restore-${process.pid}`;
     try {
       if (e.kind === "symlink") {
@@ -236,6 +241,13 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreResult
   }
   if (done !== chosen.length) throw new BackupError(`restored ${done} of ${chosen.length} files: the archive changed during restore`, "invalid");
   say({ phase: "done", message: `restored ${done} files` });
-  return { dryRun: false, manifest, restored: chosen.filter((f) => !skippedLinks.has(f.path)), overwritten, safetyBackup, warnings, risky };
+  if (chosen.some((f) => /^projects\/[^/]+\/notes\//.test(f.path))) {
+    try {
+      await importLegacyNotes(opts.home);
+    } catch (err) {
+      warnings.push(`couldn't move the restored notes into the journal: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { dryRun: false, manifest, restored: chosen.filter((f) => !skippedLinks.has(f.path)).map(moved), overwritten, safetyBackup, warnings, risky };
 }
 

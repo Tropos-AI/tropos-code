@@ -6,6 +6,7 @@ import { dockerCheck } from "./docker";
 import { driftCheck } from "./drift";
 import { gatewayCheck } from "./gateway";
 import { gatewayStateCheck } from "./gateway-state";
+import { homeLayoutCheck } from "./home-layout";
 import { installCheck } from "./install";
 import { mcpCheck } from "./mcp";
 import { permissionsCheck } from "./permissions";
@@ -32,6 +33,7 @@ export const ALL_CHECKS: Check[] = [
   gatewayStateCheck,
   webAccessCheck,
   workspaceCheck,
+  homeLayoutCheck,
   sessionsDefaultCheck,
   driftCheck,
   mcpCheck,

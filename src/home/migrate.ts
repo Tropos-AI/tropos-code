@@ -2,7 +2,8 @@
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, readlink, rename, rmdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { BackupError, createBackup, stamp } from "../backup";
+import { createBackup, stamp } from "../backup/create";
+import { BackupError } from "../backup/errors";
 import { BOOTSTRAP_TEXT, IDENTITY_STATE_FILE, parseIdentityFile } from "../context/identity";
 import { listProjects } from "../gateway/projects";
 import { AGENTS_TEMPLATE } from "../memory/agents-file";
@@ -346,4 +347,14 @@ export function layoutNotice(r: LayoutMigration): string | null {
   if (r.setAside.length > 0) parts.push(`Files that were already in the default workspace were renamed, not used: ${r.setAside.join(", ")}.`);
   if (r.conflicts.length > 0) parts.push(`Both an old and a new copy exist, so these were left as they are: ${r.conflicts.join(", ")}. Run tcode doctor.`);
   return parts.length > 0 ? parts.join(" ") : null;
+}
+
+/** Lays the home out at a start and says what happened on stderr; a failure is reported and never stops the start. */
+export async function layoutAtStart(home: string, version: string, err: (text: string) => void, now: () => number = Date.now): Promise<void> {
+  try {
+    const notice = layoutNotice(await ensureHomeLayout(home, { now, version }));
+    if (notice) err(`tcode: ${notice}\n`);
+  } catch (error) {
+    err(`tcode: couldn't lay out ~/.tropos: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
 }

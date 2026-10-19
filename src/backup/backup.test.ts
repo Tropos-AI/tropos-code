@@ -175,7 +175,7 @@ describe("restoreBackup", () => {
     const res = await restoreBackup({ archive: r.archive!, home, now, onProgress: (e) => events.push(e), ...TRUST, only: parseParts(["config", "memory"]) });
     expect(res.dryRun).toBe(false);
     expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).theme).toBe("dark");
-    expect(await readFile(join(home, "memories", "a.md"), "utf8")).toBe("memory a");
+    expect(await readFile(join(home, "workspace", "a.md"), "utf8")).toBe("memory a"); // an old backup lands in the new place
     expect(await readFile(join(home, "memories", "extra.md"), "utf8")).toBe("keep me");
     expect(await readFile(join(home, "credentials.json"), "utf8")).toBe("{}"); // not in the chosen parts
     expect(res.safetyBackup).toContain(join(home, "backups", "tropos-safety-"));
@@ -186,13 +186,53 @@ describe("restoreBackup", () => {
     expect((await stat(join(home, "credentials.json"))).mode & 0o777).toBe(0o600);
   });
 
+  test("a backup from before the layout change restores into the new places", async () => {
+    const key = "k-123456789012";
+    const src = await makeTmpDir("backup-src-");
+    const saved = home;
+    home = src;
+    await put("memories/USER.md", "u");
+    await put("skills/a/SKILL.md", "s");
+    await put(`projects/${key}/s.jsonl`, `${JSON.stringify({ type: "meta", cwd: "/x/y" })}\n`);
+    await put(`projects/${key}/notes/2026-10-15.md`, "- 09:00 shipped\n");
+    const r = await createBackup({ home, now, output: join(root, "legacy.tar.gz"), secrets: false });
+    home = join(root, "fresh");
+    const res = await restoreBackup({ archive: r.archive!, home, now, ...TRUST });
+    expect(res.restored.map((f) => f.path)).toContain("workspace/USER.md");
+    expect(await readFile(join(home, "workspace", "USER.md"), "utf8")).toBe("u");
+    expect(await readFile(join(home, "workspace", "skills", "a", "SKILL.md"), "utf8")).toBe("s");
+    expect(await lstat(join(home, "memories")).catch(() => null)).toBeNull();
+    expect(await lstat(join(home, "skills")).catch(() => null)).toBeNull();
+    // The notes' project can't be traced here (the key doesn't hash from its cwd), so they stay for the doctor.
+    expect(await readFile(join(home, "projects", key, "notes", "2026-10-15.md"), "utf8")).toContain("shipped");
+    await removeDir(src);
+    home = saved;
+  });
+
+  test("restored legacy notes of a traceable project land in the journal", async () => {
+    const cwd = "/x/y";
+    const { projectKey } = await import("../paths");
+    const src = await makeTmpDir("backup-src-");
+    const saved = home;
+    home = src;
+    await put(`projects/${projectKey(cwd)}/s.jsonl`, `${JSON.stringify({ type: "meta", cwd })}\n`);
+    await put(`projects/${projectKey(cwd)}/notes/2026-10-15.md`, "- 09:00 shipped\n");
+    const r = await createBackup({ home, now, output: join(root, "legacy2.tar.gz"), secrets: false });
+    home = join(root, "fresh2");
+    await restoreBackup({ archive: r.archive!, home, now, ...TRUST });
+    expect(await readFile(join(home, "workspace", "memory", "2026-10-15.md"), "utf8")).toContain("- shipped");
+    await removeDir(src);
+    home = saved;
+  });
+
   test("dry run changes nothing", async () => {
     const r = await createBackup({ home, now, output: join(root, "b.tar.gz") });
-    await put("memories/a.md", "changed");
+    await put("workspace/a.md", "changed");
     const res = await restoreBackup({ archive: r.archive!, home, now, dryRun: true });
     expect(res.dryRun).toBe(true);
-    expect(res.overwritten).toContain("memories/a.md");
-    expect(await readFile(join(home, "memories", "a.md"), "utf8")).toBe("changed");
+    expect(res.overwritten).toContain("workspace/a.md");
+    expect(res.restored.map((f) => f.path)).toContain("workspace/a.md");
+    expect(await readFile(join(home, "workspace", "a.md"), "utf8")).toBe("changed");
     expect(await readdir(join(home, "backups"))).toEqual(["old.tar.gz"]);
   });
 
@@ -202,8 +242,8 @@ describe("restoreBackup", () => {
     const fresh = join(root, "fresh");
     const res = await restoreBackup({ archive: r.archive!, home: fresh, now, ...TRUST });
     expect(res.safetyBackup).toBeUndefined();
-    expect(await readFile(join(fresh, "skills", "s", "SKILL.md"), "utf8")).toBe("skill");
-    expect(await readlink(join(fresh, "memories", "inside"))).toBe("a.md");
+    expect(await readFile(join(fresh, "workspace", "skills", "s", "SKILL.md"), "utf8")).toBe("skill");
+    expect(await readlink(join(fresh, "workspace", "inside"))).toBe("a.md");
   });
 
   test("a tampered archive is refused before anything is written", async () => {
@@ -284,7 +324,7 @@ describe("hostile archives", () => {
     const elsewhere = join(root, "elsewhere");
     await mkdir(elsewhere);
     await rmMemories();
-    await symlink(elsewhere, join(home, "memories"));
+    await symlink(elsewhere, join(home, "workspace"));
     const archive = await hostile("s.tar.gz", [{ name: "tropos-home/memories/a.md", data: "x" }], [{ path: "memories/a.md" }]);
     await expect(restoreBackup({ archive, home, now, safetyBackup: false })).rejects.toMatchObject({ code: "unsafe" });
     expect(await readdir(elsewhere)).toEqual([]);
@@ -358,9 +398,9 @@ describe("restore trust", () => {
     expect(v.problems.join()).toMatch(/gateway\/token.*not restorable/);
     const res = await restoreBackup({ archive, home, now, safetyBackup: false });
     expect(res.warnings.join()).toContain("gateway/token");
-    expect(res.restored.map((f) => f.path)).toEqual(["memories/new.md"]);
+    expect(res.restored.map((f) => f.path)).toEqual(["workspace/new.md"]);
     expect(await readFile(join(home, "gateway", "token"), "utf8")).toBe("TOKEN");
-    expect(await readFile(join(home, "memories", "new.md"), "utf8")).toBe("m");
+    expect(await readFile(join(home, "workspace", "new.md"), "utf8")).toBe("m");
   });
 
   test("logged-in devices and login codes are never restored either: an archive cannot log a browser in", async () => {
@@ -370,7 +410,7 @@ describe("restore trust", () => {
     expect(v.problems.join()).toMatch(/gateway\/devices\.json.*not restorable/);
     expect(v.problems.join()).toMatch(/gateway\/login-codes\.json.*not restorable/);
     const res = await restoreBackup({ archive, home, now, safetyBackup: false });
-    expect(res.restored.map((f) => f.path)).toEqual(["memories/new.md"]);
+    expect(res.restored.map((f) => f.path)).toEqual(["workspace/new.md"]);
     expect(await readFile(join(home, "gateway", "devices.json"), "utf8")).toBe("{}");
   });
 
@@ -430,14 +470,14 @@ describe("restore trust", () => {
     expect(await readdir(join(home, "backups"))).toEqual(["old.tar.gz"]);
     const done = await restoreBackup({ archive, home, now, safetyBackup: false, trustCode: true });
     expect(done.risky.map((r) => r.path)).toEqual(["SOUL.md"]);
-    expect(await readFile(join(home, "SOUL.md"), "utf8")).toBe("obey");
+    expect(await readFile(join(home, "workspace", "SOUL.md"), "utf8")).toBe("obey");
   });
 
   test("an archive with nothing risky restores without trustCode", async () => {
     const archive = await forge("b.tar.gz", { "memories/a.md": "new", "settings.json": '{"theme":"light"}' });
     const res = await restoreBackup({ archive, home, now, safetyBackup: false });
     expect(res.risky).toEqual([]);
-    expect(await readFile(join(home, "memories", "a.md"), "utf8")).toBe("new");
+    expect(await readFile(join(home, "workspace", "a.md"), "utf8")).toBe("new");
   });
 
   test("only= limits what counts as risky to what would be written", async () => {
@@ -462,15 +502,16 @@ describe("restore trust", () => {
     test("a link that resolves out through something already in the home is removed and skipped with a warning", async () => {
       const elsewhere = join(root, "elsewhere");
       await mkdir(elsewhere);
-      await symlink(elsewhere, join(home, "memories", "ext"));
-      // By its text ../memories/ext/up stays inside; on disk memories/ext leads out.
-      const archive = await forge("c.tar.gz", { "memories/new.md": "m" }, { "skills/k": "../memories/ext/up", "skills/ok": "../memories/new.md" });
+      await mkdir(join(home, "workspace"), { recursive: true });
+      await symlink(elsewhere, join(home, "workspace", "ext"));
+      // By its text ../ext/up stays inside; on disk workspace/ext leads out.
+      const archive = await forge("c.tar.gz", { "memories/new.md": "m" }, { "skills/k": "../ext/up", "skills/ok": "../new.md" });
       const res = await restoreBackup({ archive, home, now, safetyBackup: false, ...TRUST });
-      expect(await lstat(join(home, "skills", "k")).catch(() => null)).toBeNull();
+      expect(await lstat(join(home, "workspace", "skills", "k")).catch(() => null)).toBeNull();
       expect(res.warnings.join()).toMatch(/skills\/k/);
-      expect(res.restored.map((f) => f.path)).not.toContain("skills/k");
-      expect(await readlink(join(home, "skills", "ok"))).toBe("../memories/new.md");
-      expect(await readFile(join(home, "memories", "new.md"), "utf8")).toBe("m");
+      expect(res.restored.map((f) => f.path)).not.toContain("workspace/skills/k");
+      expect(await readlink(join(home, "workspace", "skills", "ok"))).toBe("../new.md");
+      expect(await readFile(join(home, "workspace", "new.md"), "utf8")).toBe("m");
       expect(await readdir(elsewhere)).toEqual([]);
     });
   });
