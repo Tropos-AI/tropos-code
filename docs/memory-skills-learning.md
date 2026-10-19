@@ -109,7 +109,7 @@ archives specialists nobody used for 60 days. Archived skills can be restored fr
 ## Identity
 
 Your agent has a name, an emoji and a vibe (`IDENTITY.md`), and a voice (`SOUL.md`). You set them in
-`tcode onboard`, or the agent asks in your first chat. They show in the terminal header and the dashboard, and you can
+`tcode onboard`, or the agent asks in your first chat. They show in the terminal header, and you can
 edit both files. Identity never overrides your instructions or permissions.
 
 ## Instructions you write

@@ -36,7 +36,9 @@ Every link Tropos prints is `http://127.0.0.1:<port>/`, never `localhost`, which
 
 ## The pages
 
-The sidebar groups the pages into **Work**, **Agent** and **Control**.
+The sidebar shows the Tropos logo and the installed version at the top, and groups the pages into **Work**,
+**Agent** and **Control**. When the background service moves to a new version, open tabs show "Updating to
+<version>…" and reconnect by themselves.
 
 ### Work
 
@@ -73,7 +75,7 @@ The sidebar groups the pages into **Work**, **Agent** and **Control**.
 | Channels & devices | Telegram (token, test, owner), who is approved and who is waiting, logged-in devices |
 | Phone access | Turn Tailscale phone access on or off; the phone address, QR code and a login code |
 | Suggestions | Whether the agent may message you on Telegram by itself, active hours, how often, the daily limit, and where new projects are created |
-| Service & updates | Install, start, stop or restart the background service; the update channel, background updates and "update now"; version; **Run setup again** |
+| Service & updates | Install, start, stop or restart the background service; the update channel, "Install updates automatically", **Check now** and **Update now** (which restarts the service into the new version); version; **Run setup again** |
 | Backups | Create, verify, restore and delete backups |
 | Advanced | The raw `settings.json` and `gateway.json` editor (validated), where chat commands run (this computer or Docker), the Docker sandbox, uninstall |
 

@@ -99,7 +99,9 @@ this terminal is closed.
 
 ### 10. Done
 
-A quick health check and a summary of what is set up and what you skipped, with a few things to try first, such as
+A quick health check and a summary of what is set up and what you skipped. It also says that updates install by
+themselves (on your channel) and that the background service restarts into each new version when nothing is
+running, and where to turn that off (Settings → Service & updates). Then a few things to try first, such as
 "What changed in my project this week?", "Every weekday at 9, summarise my open pull requests." or "Remember that I
 deploy on Fridays." At the end the dashboard opens (unless `--no-open`).
 

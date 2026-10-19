@@ -52,7 +52,7 @@ rules. Anything else in them is ignored with a warning naming it. Put the rest i
 | `refusalFallback` | boolean | `true` | Anthropic models: let the API fall back to its default model when the model declines a request |
 | `env` | object of strings | `{}` | Environment variables Tropos adds to its own environment at start (for example a provider's key variable). Shell commands still never inherit credential-like variables |
 | `providers` | object | `{}` | Base URLs for built-in providers, and your own endpoints: `{ "<id>": { "baseURL", "name", "api": "chat" \| "responses" \| "anthropic" } }`. Ids are lowercase letters, digits and dashes |
-| `autoUpdates` | boolean | `true` | Background updates. See [Updates](updates.md) |
+| `autoUpdates` | boolean | `true` | Automatic updates: the background service and terminal sessions install new releases, and the service restarts into them when idle. See [Updates](updates.md) |
 | `autoUpdatesChannel` | `latest` \| `stable` | `latest` | The release channel |
 | `hooks` | object | `{}` | Commands run on agent events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`; each a list of `{ matcher, hooks: [{ type: "command", command, timeout }] }` (timeout in seconds, up to 3600, default 60) |
 | `mcpServers` | object | `{}` | MCP servers: `{ command, args, env, cwd, disabled }` or `{ type: "http" \| "sse", url, headers, disabled }`. See [MCP servers, plugins and skills](mcp-plugins-skills.md#mcp-servers) |
@@ -160,7 +160,7 @@ development).
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, … | Provider keys; they win over saved keys. See [Providers](providers-and-models.md#built-in-providers) |
 | `<ID>_API_KEY` | The key for an endpoint you added with id `<id>` |
 | `TROPOS_TELEGRAM_BOT_TOKEN` | The Telegram bot token; wins over `gateway.json` |
-| `TROPOS_DISABLE_AUTOUPDATER` | `1` turns background updates off |
+| `TROPOS_DISABLE_AUTOUPDATER` | `1` turns automatic updates off |
 | `TROPOS_MCP_TIMEOUT` | Milliseconds an MCP server has to start (default 15000) |
 | `TROPOS_MCP_TOOL_TIMEOUT` | Milliseconds an MCP tool call may take (default 120000) |
 | `NO_COLOR` | No colour, and plain gutter characters in setup |

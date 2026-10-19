@@ -239,7 +239,10 @@ tcode gateway install [--workspace <dir>]
 tcode gateway uninstall | start | stop | restart
 ```
 
-`tcode gateway` runs the background service in this terminal, for debugging. `install` runs it at login as a
+`tcode gateway` runs the background service in this terminal, for debugging. A message from Telegram opens a session
+in the chat's project; its commands run inside the OS sandbox (`sandbox-exec` on macOS, `bwrap` on Linux), and what
+runs without asking follows the autonomy level (default `balanced`); guests' commands always run in Docker. See
+[Autonomy and the sandbox](autonomy-and-sandbox.md). `install` runs it at login as a
 background service (launchd on macOS, a systemd user unit on Linux) and starts it; `uninstall`, `start`, `stop` and
 `restart` manage that service. State and logs: `tcode status`, `tcode logs`.
 
@@ -259,7 +262,8 @@ tcode install [stable|latest|<version>] [--force]
 tcode rollback
 ```
 
-`update` never installs an older version. `install` is a one-time install of a release (no target means `latest`); it
+`update` never installs an older version, and after moving to a newer one it restarts a running background service
+so it runs the new version (a stopped service stays stopped). `install` is a one-time install of a release (no target means `latest`); it
 doesn't change your update channel. `--force` re-verifies and re-activates a version that is already installed, and
 replaces a command link Tropos didn't create. `rollback` returns to the previous installed version after verifying
 it; background updates then skip the version you left until a newer release appears. See [Updates](updates.md).

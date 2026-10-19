@@ -77,6 +77,9 @@ tcode              # or start a coding session in this terminal
 
 Release key fingerprint: SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8
 
+Updates are automatic: new releases install by themselves, and the background service restarts into each one when
+nothing is running ([Updates and rollback](docs/updates.md)).
+
 Verifying the installer before running it, installer flags and what the installer changes on your machine:
 [docs/install.md](docs/install.md). A first walk-through: [Getting started](docs/getting-started.md).
 

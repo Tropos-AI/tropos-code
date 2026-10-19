@@ -122,7 +122,9 @@ Yes, in the dashboard (attach, paste or drop) and in Telegram (photos). See
 
 ### How do I update or go back to an older version?
 
-Updates happen in the background; `tcode update` updates now and `tcode rollback` goes back. See
+Automatically: automatic updates are on by default, and the background service restarts into each new version once
+nothing is running. `tcode update` (or Update now in the dashboard) updates right away and restarts the service;
+`tcode rollback` goes back. Turn automatic updates off in Settings → Service & updates. See
 [Updates and rollback](updates.md).
 
 ### How do I uninstall it?

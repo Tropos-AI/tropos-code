@@ -39,7 +39,7 @@ More: [Install and verify](install.md#troubleshooting).
 | Installed but stopped | `tcode gateway start`; see why it stopped with `tcode logs gateway` |
 | "The gateway is already running in the background (pid …); there is nothing to start." | There is one gateway per `~/.tropos`. Use `tcode dashboard`, or `tcode gateway restart` |
 | Changes don't take effect | `tcode gateway restart` |
-| After an update, the old version still answers | `tcode gateway restart` (the service keeps the version it started with) |
+| After an update, the old version still answers | The service restarts into a new version only once nothing is running; `tcode logs gateway` says what it waits for. `tcode gateway restart` moves now |
 | "Invalid …/gateway.json" | The file was edited by hand and doesn't validate. `tcode config validate --file gateway` names the key; fix it, or restore the backup next to it (`gateway.json.bak`) |
 
 ## The dashboard
