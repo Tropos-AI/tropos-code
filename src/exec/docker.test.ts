@@ -36,6 +36,16 @@ function collect(child: ChildProcess) {
     child.once("close", (code) => resolve({ out, err, code }));
   });
 }
+/**
+ * SIGKILLs a command's process group until its output closes. On macOS one signal to a group misses a child that its
+ * shell is forking at that moment, and that child (a `sleep 30`) would hold the output open past the test's timeout.
+ */
+async function stop(backend: DockerBackend, child: ChildProcess, closed: Promise<unknown>) {
+  for (;;) {
+    backend.signal(child, "SIGKILL");
+    if (await Promise.race([closed.then(() => true), Bun.sleep(100).then(() => false)])) return;
+  }
+}
 async function until(check: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
   while (!check()) {
@@ -275,7 +285,7 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     const child = backend.spawn({ shell: "/bin/sh", script, cwd: ws, env: {} });
     const result = collect(child);
     await until(() => existsSync(join(ws, ".git", "commondir")));
-    backend.signal(child, "SIGKILL"); // the wrapper dies before its own check, so only the host can report
+    await stop(backend, child, result); // the wrapper dies before its own check, so only the host can report
     const r = await result;
     expect(r.err.split(COMMONDIR_TAMPERED).length - 1).toBe(2); // the command's fake line, then the host's real one
     expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
@@ -391,14 +401,14 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
 
   test("while a guest's background command still runs, file tools are told to wait and nothing is swept", async () => {
     const backend = make(true);
-    const child = backend.spawn({ shell: "/bin/sh", script: "touch started; sleep 30", cwd: ws, env: {} });
+    const marker = join(ws, `started-${n}`);
+    const child = backend.spawn({ shell: "/bin/sh", script: `touch '${marker}'; sleep 30`, cwd: ws, env: {} });
     const done = collect(child);
-    await until(() => existsSync(join(ws, "started")));
+    await until(() => existsSync(marker));
     const before = sweeps().length;
     expect(await backend.quiesce()).toContain("still running");
     expect(sweeps().length).toBe(before);
-    if (child.pid) process.kill(-child.pid, "SIGKILL");
-    await done;
+    await stop(backend, child, done);
     expect(await backend.quiesce()).toBeUndefined();
     expect(sweeps().length).toBe(before + 1);
   });
@@ -458,8 +468,7 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
     const hold = await backend.holdForFiles();
     expect(hold.ok).toBe(false);
     expect(hold.ok ? "" : hold.reason).toContain("still running");
-    if (child.pid) process.kill(-child.pid, "SIGKILL");
-    await done;
+    await stop(backend, child, done);
     expect((await backend.holdForFiles()).ok).toBe(true);
   });
 
