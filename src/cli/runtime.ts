@@ -12,7 +12,7 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
-import { resolveLayoutPath, workspaceOwnPaths } from "../home/layout";
+import { resolveLayoutPath, workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
 import { delegationContext } from "../agents/runs";
@@ -103,8 +103,7 @@ export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> 
 }
 
 /** The chief's files as the engine compares them: as written and resolved (a home reached through a link), so neither spelling slips past. */
-function ownFileGuards(home: string): string[] {
-  const paths = workspaceOwnPaths(home);
+function ownFileGuards(home: string, paths: string[] = workspaceOwnPaths(home)): string[] {
   return [...new Set(paths.flatMap((p) => {
     try {
       return [p, resolveToolPath(p, "/")];
@@ -129,6 +128,7 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     role: ctx.role,
     autonomy: ctx.autonomy?.(),
     ownFiles: ownFileGuards(ctx.home),
+    instructionFiles: ownFileGuards(ctx.home, workspaceInstructionPaths(ctx.home)),
     stores: {
       // The journal (workspace/memory) is in troposStorePaths; the project's old notes folder stays a store, held to the same no-links check.
       paths: [...troposStorePaths(ctx.home), canonicalStorePath(ctx.home, legacyNotesDir(ctx.home, ctx.cwd))].filter((p) => p !== undefined), // LEGACY_LAYOUT

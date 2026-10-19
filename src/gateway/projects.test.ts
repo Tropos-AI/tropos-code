@@ -15,6 +15,7 @@ import {
   defaultProjectId,
   defaultProjectPath,
   ensureDefaultProject,
+  ensureGuestProject,
   getProject,
   listProjects,
   projectForChat,
@@ -58,6 +59,18 @@ describe("the built-in default project", () => {
     await writeFile(join(project.path, "README.md"), "mine");
     await ensureDefaultProject(home, { git: async () => {} });
     expect(await readFile(join(project.path, "README.md"), "utf8")).toBe("mine");
+  });
+
+  test("ensureGuestProject makes the guests' own workspace next to the chief's: a folder, git init and a README", async () => {
+    const inited: string[] = [];
+    const project = await ensureGuestProject(home, { git: async (d) => void inited.push(d) });
+    expect(project).toMatchObject({ id: "guest", path: join(home, "guest-workspace"), builtin: true });
+    expect(inited).toEqual([project.path]);
+    expect(await readFile(join(project.path, "README.md"), "utf8")).toContain("guest");
+    // Never one of the owner's projects: not listed, not found by id, never the default.
+    expect((await listProjects(home)).map((p) => p.id)).toEqual(["default"]);
+    expect(await fileProjectSource(home).get("guest")).toBeUndefined();
+    await expect(setDefaultProject(home, "guest")).rejects.toThrow('There is no project "guest"');
   });
 
   test("an existing .git is left alone, and a failing git doesn't fail the project", async () => {

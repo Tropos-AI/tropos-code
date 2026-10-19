@@ -18,7 +18,7 @@ import { loginCodesFor } from "../web/login-codes";
 import { gatewayConfigSchema, saveGatewayConfig } from "./config";
 import { readGatewayState, type GatewayRun } from "./daemon";
 import { git, makeRepo } from "../snapshots/test-repo";
-import { addProject } from "./projects";
+import { addProject, setProjectShared } from "./projects";
 import { TelegramApi } from "./telegram/api";
 import type { ChatSession, ChatSink, GatewayService, GatewayServiceDeps } from "./types";
 
@@ -221,6 +221,21 @@ describe("chat roles reach the session", () => {
     expect(await gw.done).toBe(0);
   });
 
+  test("a guest's chat works in the guest workspace, never in the chief's", async () => {
+    const gw = startGateway([() => reply([textBlock("owner here")]), () => reply([textBlock("guest here")])]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT);
+    await pair(GUEST);
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.textsTo(CHAT).includes("owner here"));
+    server.pushMessage(GUEST, GUEST, "hey");
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest here"));
+    expect(Object.keys(await sessionsFile()).sort()).toEqual([`telegram:${CHAT}@default`, `telegram:${GUEST}@guest`].sort());
+    expect(gw.workspaces.map((w) => realpathSync(w))).toEqual([realpathSync(join(home, "workspace")), realpathSync(join(home, "guest-workspace"))]);
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("the owner's chat hears a skipped setup step once and has Suggestion; a guest's chat neither", async () => {
     await mkdir(home, { recursive: true });
     await Bun.write(join(home, "onboarding.json"), JSON.stringify({ skipped: ["phone"] }));
@@ -263,8 +278,13 @@ describe("chat roles reach the session", () => {
     // Each transcript records the role it ran as (SessionSearch leaves the guest's out).
     const ids = await sessionsFile();
     const roleOf = async (chat: number) => {
-      const path = join(home, "projects", (await readdir(join(home, "projects")))[0]!, `${ids[`telegram:${chat}@default`]}.jsonl`);
-      return JSON.parse((await readFile(path, "utf8")).split("\n")[0]!).role;
+      // The owner's chat is in the default workspace, the guest's in the guest workspace.
+      const key = chat === GUEST ? `telegram:${chat}@guest` : `telegram:${chat}@default`;
+      for (const d of await readdir(join(home, "projects"))) {
+        const path = join(home, "projects", d, `${ids[key]}.jsonl`);
+        if (await Bun.file(path).exists()) return JSON.parse((await readFile(path, "utf8")).split("\n")[0]!).role;
+      }
+      return undefined;
     };
     expect(await roleOf(CHAT)).toBe("owner");
     expect(await roleOf(GUEST)).toBe("guest");
@@ -277,7 +297,8 @@ describe("chat roles reach the session", () => {
     await server.waitFor(() => server.commands.length > 0);
     await pair(CHAT);
     await pair(GUEST);
-    const workspace = realpathSync(join(home, "workspace"));
+    await mkdir(join(home, "guest-workspace"), { recursive: true });
+    const workspace = realpathSync(join(home, "guest-workspace"));
     const id = "00000000-0000-4000-8000-000000000001";
     const transcript = join(projectDir(home, workspace), `${id}.jsonl`);
     await mkdir(projectDir(home, workspace), { recursive: true });
@@ -285,7 +306,7 @@ describe("chat roles reach the session", () => {
       transcript,
       `${JSON.stringify({ type: "meta", sessionId: id, cwd: workspace })}\n${JSON.stringify({ type: "message", message: { role: "user", content: "the zebra password is hunter2" }, ts: "2026-10-01T00:00:00Z" })}\n`,
     );
-    await Bun.write(join(home, "gateway", "sessions.json"), JSON.stringify({ [`telegram:${GUEST}@default`]: id }));
+    await Bun.write(join(home, "gateway", "sessions.json"), JSON.stringify({ [`telegram:${GUEST}@guest`]: id }));
     server.pushMessage(GUEST, GUEST, "again");
     await server.waitFor(() => server.textsTo(GUEST).includes("hello again"));
     const metas = (await readFile(transcript, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === "meta");
@@ -344,6 +365,33 @@ describe("scheduling from chats", () => {
 
     gw.stop();
     expect(await gw.done).toBe(0);
+  });
+});
+
+describe.skipIf(Bun.which("git") === null)("a guest's scheduled job", () => {
+  test("runs in a worktree of a shared repo, else in the guest workspace; never in the owner's checkout", async () => {
+    const repo = await makeRepo();
+    try {
+      await mkdir(home, { recursive: true });
+      await addProject(home, { path: repo, name: "App" }, { userHome: join(dir, "nobody") });
+      await addProject(home, { path: join(dir, "app"), name: "Private" }, { userHome: join(dir, "nobody") });
+      await setProjectShared(home, "app", true);
+      let deps: GatewayServiceDeps | undefined;
+      const service: GatewayService = { name: "fake", start: async (d) => void (deps = d), stop: async () => {} };
+      const gw = startGateway([() => reply([textBlock("in the repo")]), () => reply([textBlock("in the guest workspace")])], [service]);
+      await gw.running();
+      expect(await (await deps!.openSession("app", { untrusted: true })).prompt("guest job")).toBe("end_turn");
+      expect(gw.workspaces[0]!.startsWith(join(home, "worktrees", "app") + "/")).toBe(true);
+      expect(await (await deps!.openSession("default", { untrusted: true })).prompt("guest job")).toBe("end_turn");
+      expect(realpathSync(gw.workspaces[1]!)).toBe(realpathSync(join(home, "guest-workspace")));
+      // A project the owner didn't share is not there for a guest's job.
+      await expect(deps!.openSession("private", { untrusted: true })).rejects.toThrow(/no project "private"/);
+      expect(git(repo, "status", "--porcelain")).toBe("");
+      gw.stop();
+      expect(await gw.done).toBe(0);
+    } finally {
+      await removeDir(repo);
+    }
   });
 });
 
@@ -517,10 +565,16 @@ describe("gateway services", () => {
     const plain = await fake.deps().openSession("default");
     expect(await plain.prompt("run the owner's job")).toBe("end_turn");
     const ids = await sessionsFile();
-    expect(Object.keys(ids).sort()).toEqual(["project:default:guest@default", "project:default@default"]);
-    const dir = join(home, "projects", (await readdir(join(home, "projects")))[0]!);
-    const roleOf = async (key: string) => JSON.parse((await readFile(join(dir, `${ids[key]}.jsonl`), "utf8")).split("\n")[0]!).role;
-    expect(await roleOf("project:default:guest@default")).toBe("guest");
+    // A guest's job in the default project runs in the guest workspace.
+    expect(Object.keys(ids).sort()).toEqual(["project:default@default", "project:guest:guest@guest"]);
+    const roleOf = async (key: string) => {
+      for (const d of await readdir(join(home, "projects"))) {
+        const file = join(home, "projects", d, `${ids[key]}.jsonl`);
+        if (await Bun.file(file).exists()) return JSON.parse((await readFile(file, "utf8")).split("\n")[0]!).role;
+      }
+      return undefined;
+    };
+    expect(await roleOf("project:guest:guest@guest")).toBe("guest");
     expect(await roleOf("project:default@default")).toBe("scheduled");
     expect(await fake.deps().ownerChat!()).toBeUndefined();
     await pairChat();

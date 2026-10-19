@@ -173,4 +173,16 @@ describe("untrusted jobs", () => {
     await run(job({ origin: "telegram:1" }), new AbortController().signal);
     expect(opened).toEqual([{ untrusted: true }, { untrusted: false }]);
   });
+
+  test("an untrusted job's allowCommands are ignored: whatever still asks is denied", async () => {
+    const session = new FakeSession();
+    session.script = async (_p, s) => {
+      s.emit((k) => k.ask(1, bash("npm test")));
+      return "end_turn";
+    };
+    const run = createJobRunner({ home: "/h", openSession: async () => session, projectPath: async () => "/w", ownerChat: async () => "telegram:1" });
+    await run(job({ origin: "telegram:2", allowCommands: ["Bash(npm test:*)"] }), new AbortController().signal);
+    await run(job({ origin: "telegram:1", allowCommands: ["Bash(npm test:*)"] }), new AbortController().signal);
+    expect(session.answers.map((a) => a.answer.kind)).toEqual(["deny", "allow"]);
+  });
 });

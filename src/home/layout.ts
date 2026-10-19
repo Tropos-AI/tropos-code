@@ -2,7 +2,7 @@
 import { lstatSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { journalDir, learnedSkillsDir, userSkillsDir, workspaceFile } from "../paths";
+import { journalDir, learnedSkillsDir, userSkillsDir, workspaceDir, workspaceFile } from "../paths";
 
 export type LegacyItem = "SOUL.md" | "IDENTITY.md" | "USER.md" | "MEMORY.md" | "skills" | "skills-learned";
 
@@ -55,6 +55,14 @@ export function workspaceOwnPaths(home: string): string[] {
     userSkillsDir(home),
     learnedSkillsDir(home),
   ];
+}
+
+/**
+ * Instruction files at the workspace root that the owner's sessions there would load (or that other tools read): only
+ * the owner may write them. AGENTS.md is one of the chief's own files already.
+ */
+export function workspaceInstructionPaths(home: string): string[] {
+  return ["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"].map((name) => join(workspaceDir(home), name));
 }
 
 export const LAYOUT_VERSION = 2;

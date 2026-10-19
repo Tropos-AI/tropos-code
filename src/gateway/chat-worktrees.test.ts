@@ -25,13 +25,16 @@ describe.skipIf(Bun.which("git") === null)("chat worktrees", () => {
     for (const d of dirs.splice(0)) await removeDir(d);
   });
 
-  test("a chat in a registered repo gets a worktree; the default workspace and scheduled runs don't", async () => {
+  test("a chat in a registered repo gets a worktree, and so does a guest's job; the default workspace and the owner's scheduled runs don't", async () => {
     const w = await workdirForSession({ key: "telegram:1@app", project: app, store, create: createWorktree, home });
     expect(w?.path.startsWith(join(home, "worktrees", "app"))).toBe(true);
     expect(await workdirForSession({ key: "telegram:1@app", project: app, store, create: createWorktree, home })).toEqual(w);
     expect(await workdirForSession({ key: "telegram:1@default", project: builtinProject(home), store, create: createWorktree, home })).toBeUndefined();
     expect(await workdirForSession({ key: "project:app@app", project: app, store, create: createWorktree, home })).toBeUndefined();
-    expect(await workdirForSession({ key: "project:app:guest@app", project: app, store, create: createWorktree, home })).toBeUndefined();
+    // A guest's job never works in the owner's checkout.
+    const guestJob = await workdirForSession({ key: "project:app:guest@app", project: app, store, create: createWorktree, home });
+    expect(guestJob?.path.startsWith(join(home, "worktrees", "app"))).toBe(true);
+    expect(guestJob?.path).not.toBe(w?.path);
   });
 
   test("a stored worktree whose folder is gone is replaced by a new one", async () => {

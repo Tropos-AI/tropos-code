@@ -30,15 +30,18 @@ import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
 import { effectiveAutonomy, ensureChatSettings, lowerAutonomy, pinnedTestCommands, sessionAutonomy } from "./autonomy";
 import { chatBackend } from "./chat-exec";
-import { createChatWorktrees, workdirForSession, worktreeContext } from "./chat-worktrees";
+import { createChatWorktrees, isGuestJobKey, workdirForSession, worktreeContext } from "./chat-worktrees";
 import { createWorktree, WorktreeStore, type Worktree } from "./worktrees";
 import { ProjectContexts } from "./contexts";
 import { SenderNotApprovedError, UserFacingError } from "./errors";
 import {
   DEFAULT_PROJECT_ID,
+  GUEST_PROJECT_ID,
   TEMPORARY_PROJECT_ID,
+  ensureBuiltinProject,
   ensureDefaultProject,
   fileProjectSource,
+  guestProject,
   guestVisible,
   withTemporaryProject,
   type Project,
@@ -254,9 +257,19 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const sender = privateTelegramSender(parseSessionKey(key)?.chatKey ?? "");
       if (sender !== undefined && !(await run.pairing.isApproved("telegram", sender))) throw new SenderNotApprovedError();
       const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
-      const project = await source.get(projectId);
+      let project = projectId === GUEST_PROJECT_ID ? guestProject(home) : await source.get(projectId);
       if (!project) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");
-      if (project.builtin) await ensureDefaultProject(home, { git: run.seams?.git });
+      const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
+      // A guest never works in a project the owner hasn't shared, in a worktree of it or otherwise; nobody but a guest
+      // works in the guest workspace, whose files a guest wrote.
+      if (role === "guest" ? !guestVisible(project) : project.id === GUEST_PROJECT_ID) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");
+      // A guest's scheduled job never runs in the owner's checkout: a worktree of a shared repo, else the guest workspace.
+      let worktree: Worktree | undefined;
+      if (isGuestJobKey(key) && project.id !== GUEST_PROJECT_ID) {
+        worktree = project.builtin ? undefined : await openWorktree(key, project);
+        if (!worktree) project = guestProject(home);
+      }
+      if (project.builtin) await ensureBuiltinProject(home, project, { git: run.seams?.git });
       else {
         const problem = workspaceProblem(project.path, home);
         if (problem) throw new UserFacingError(`Project "${project.name}" can't be used: ${problem}`);
@@ -265,10 +278,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       const { pc, release } = await contexts.acquire(project);
       let exec: { backend: ExecBackend; confined: boolean } | undefined;
       try {
-        const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
-        // A guest never works in a project the owner hasn't shared, in a worktree of it or otherwise.
-        if (role === "guest" && !guestVisible(project)) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");
-        const worktree = await openWorktree(key, project);
+        worktree ??= await openWorktree(key, project);
         // Fail closed: no Docker for a session that needs it, or no confinement it may go without, means no session.
         exec = await chatBackend({
           config,
@@ -641,9 +651,15 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     openSession: async (target, opts) => {
       if (target.includes(":")) return sessions.open(target);
       const project = await source.get(target);
-      if (!project || (opts?.untrusted && !guestVisible(project))) throw new UserFacingError(`There is no project "${target}".`);
-      // A guest's job gets a session of its own that runs (and is recorded) as a guest's.
-      return pool.open(sessionKey(`project:${target}${opts?.untrusted ? ":guest" : ""}`, target));
+      if (!opts?.untrusted) {
+        if (!project) throw new UserFacingError(`There is no project "${target}".`);
+        return pool.open(sessionKey(`project:${target}`, target));
+      }
+      // A guest's job gets a session of its own that runs (and is recorded) as a guest's: in a worktree of a project the
+      // owner shared, else in the guest workspace (the chief's default one included).
+      if (project?.builtin) return pool.open(sessionKey(`project:${GUEST_PROJECT_ID}:guest`, GUEST_PROJECT_ID));
+      if (!project || !guestVisible(project)) throw new UserFacingError(`There is no project "${target}".`);
+      return pool.open(sessionKey(`project:${target}:guest`, target));
     },
     ownerChat: () => ownerChatKey(run.pairing),
   };

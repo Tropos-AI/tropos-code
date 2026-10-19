@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { workspaceDir } from "../paths";
+import { guestWorkspaceDir, workspaceDir } from "../paths";
 import { resolveToolPath } from "../tools/paths";
 import { loadGatewayConfig, newProjectsDirOf, saveGatewayConfig, slugify, uniqueSlug } from "./config";
 import { workspaceProblem } from "./policy";
@@ -14,18 +14,20 @@ export interface Project {
   id: string;
   name: string;
   path: string;
-  /** The managed default project at ~/.tropos/workspace. */
+  /** A managed project: the default one at ~/.tropos/workspace, or the guests' at ~/.tropos/guest-workspace. */
   builtin?: boolean;
-  /** Guests may see and enter it (the built-in project always is). */
+  /** Guests may see and enter it. */
   shared?: boolean;
 }
 
-/** What a guest may list and switch into: the default workspace and projects the owner shared. */
-export function guestVisible(p: Project): boolean {
-  return p.builtin === true || p.id === "default" || p.shared === true;
-}
-
 export const DEFAULT_PROJECT_ID = "default";
+/** The guests' own default project; it is never in the owner's list. */
+export const GUEST_PROJECT_ID = "guest";
+
+/** What a guest may list and switch into: their own workspace and projects the owner shared (the chief's only when shared). */
+export function guestVisible(p: Project): boolean {
+  return p.id === GUEST_PROJECT_ID || p.shared === true;
+}
 /** The id of the one-off project `tcode gateway --workspace <dir>` makes for a single run. */
 export const TEMPORARY_PROJECT_ID = "cwd";
 
@@ -43,6 +45,13 @@ folder being there already.
 Run tcode in any git repo and it's added as a project; or ask me to add one.
 `;
 
+const GUEST_README = `# Tropos guest workspace
+
+The folder chats from guests (and the jobs they schedule) work in, unless the owner shares a project with them.
+The owner's own workspace is not visible from here. It is a git repository on purpose: the sandbox relies on the
+.git folder being there already.
+`;
+
 /** Where a project list comes from; the gateway layers a one-off project over the file registry. */
 export interface ProjectSource {
   list(): Promise<Project[]>;
@@ -54,12 +63,17 @@ export function builtinProject(home: string): Project {
   return { id: DEFAULT_PROJECT_ID, name: "Default workspace", path: defaultProjectPath(home), builtin: true };
 }
 
-/** The built-in project first, then the registered ones. Never creates anything. */
-export async function listProjects(home: string): Promise<Project[]> {
-  const config = await loadGatewayConfig(home);
-  return [builtinProject(home), ...config.projects.filter((p) => p.id !== DEFAULT_PROJECT_ID).map((p): Project => ({ id: p.id, name: p.name, path: p.path, ...(p.shared ? { shared: true } : {}) }))];
+export function guestProject(home: string): Project {
+  return { id: GUEST_PROJECT_ID, name: "Guest workspace", path: guestWorkspaceDir(home), builtin: true };
 }
 
+/** The built-in project first, then the registered ones. Never creates anything, and never lists the guest workspace. */
+export async function listProjects(home: string): Promise<Project[]> {
+  const config = await loadGatewayConfig(home);
+  return [{ ...builtinProject(home), ...(config.shareDefault ? { shared: true } : {}) }, ...config.projects.filter((p) => p.id !== DEFAULT_PROJECT_ID).map((p): Project => ({ id: p.id, name: p.name, path: p.path, ...(p.shared ? { shared: true } : {}) }))];
+}
+
+/** A registered or built-in project by id; never the guest workspace (only a guest's own sessions open that). */
 export async function getProject(home: string, id: string): Promise<Project | undefined> {
   return (await listProjects(home)).find((p) => p.id === id);
 }
@@ -99,12 +113,7 @@ export interface EnsureDeps {
   git?: (dir: string) => Promise<void>;
 }
 
-/**
- * Creates ~/.tropos/workspace on first use: the directory, a `git init` (the sandbox's protection of .git needs one to
- * exist) and a README saying what it is. Existing files are never touched.
- */
-export async function ensureDefaultProject(home: string, deps: EnsureDeps = {}): Promise<Project> {
-  const project = builtinProject(home);
+async function ensureManaged(project: Project, readmeText: string, deps: EnsureDeps): Promise<Project> {
   await mkdir(project.path, { recursive: true });
   if (!existsSync(join(project.path, ".git"))) {
     try {
@@ -114,8 +123,27 @@ export async function ensureDefaultProject(home: string, deps: EnsureDeps = {}):
     }
   }
   const readme = join(project.path, "README.md");
-  if (!existsSync(readme)) await writeFile(readme, README, { flag: "wx" }).catch(() => {});
+  if (!existsSync(readme)) await writeFile(readme, readmeText, { flag: "wx" }).catch(() => {});
   return project;
+}
+
+/**
+ * Creates ~/.tropos/workspace on first use: the directory, a `git init` (the sandbox's protection of .git needs one to
+ * exist) and a README saying what it is. Existing files are never touched.
+ */
+export async function ensureDefaultProject(home: string, deps: EnsureDeps = {}): Promise<Project> {
+  return ensureManaged(builtinProject(home), README, deps);
+}
+
+/** The same for the guests' workspace, ~/.tropos/guest-workspace. */
+export async function ensureGuestProject(home: string, deps: EnsureDeps = {}): Promise<Project> {
+  return ensureManaged(guestProject(home), GUEST_README, deps);
+}
+
+/** Creates whichever managed project this is; anything else is left alone. */
+export async function ensureBuiltinProject(home: string, project: Project, deps: EnsureDeps = {}): Promise<void> {
+  if (project.id === GUEST_PROJECT_ID) await ensureGuestProject(home, deps);
+  else if (project.builtin) await ensureDefaultProject(home, deps);
 }
 
 export interface AddProjectInput {
@@ -257,8 +285,13 @@ export async function autoRegisterProject(home: string, cwd: string, deps: { use
 
 /** Lets guests into a project (or shuts them out again). Registering a project never shares it. */
 export async function setProjectShared(home: string, id: string, shared: boolean): Promise<Project> {
-  if (id === DEFAULT_PROJECT_ID) throw new ProjectError("The default workspace is always open to guests.");
+  if (id === GUEST_PROJECT_ID) throw new ProjectError("The guest workspace is the guests' own; it is always theirs.");
   const config = await loadGatewayConfig(home);
+  if (id === DEFAULT_PROJECT_ID) {
+    // The chief's own files stay hidden from a guest's session even then (workspaceOwnPaths).
+    await saveGatewayConfig(home, { ...config, shareDefault: shared || undefined });
+    return { ...builtinProject(home), ...(shared ? { shared } : {}) };
+  }
   const found = config.projects.find((p) => p.id === id);
   if (!found) throw new ProjectError(`There is no project "${id}".`);
   await saveGatewayConfig(home, { ...config, projects: config.projects.map((p) => (p.id === id ? { ...p, shared: shared || undefined } : p)) });

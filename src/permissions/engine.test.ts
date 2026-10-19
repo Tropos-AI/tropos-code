@@ -651,3 +651,23 @@ describe("decide — the chief's own files", () => {
     expect(decide(read(`${ws}/app.ts`), ctx({ ...base, confine: true, role: "owner" })).behavior).toBe("allow");
   });
 });
+
+describe("decide — instruction files at the chief's workspace root", () => {
+  const ws = "/home/u/.tropos/workspace";
+  const instructionFiles = ["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"].map((n) => `${ws}/${n}`);
+  const base = { cwd: ws, allowedDirs: [ws], instructionFiles, allow: ["Edit(**)"] };
+
+  test("a guest, a scheduled run or a session with no role can't write them, whatever the rules or mode", () => {
+    for (const name of ["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"]) {
+      expect(decide(edit(`${ws}/${name}`), ctx({ ...base, role: "guest" }))).toEqual({ behavior: "deny", reason: `${ws}/${name} holds instructions for the owner's sessions; only the owner may change it.` });
+    }
+    expect(decide(edit(`${ws}/TROPOS.md`), ctx({ ...base, role: "scheduled", autonomy: { level: "autonomous", testCommands: [] } })).behavior).toBe("deny");
+    expect(decide(edit(`${ws}/TROPOS.md`), ctx({ ...base, role: "guest", mode: "bypass" })).behavior).toBe("deny");
+    expect(decide(edit(`${ws}/CLAUDE.md`), ctx({ ...base })).behavior).toBe("deny");
+  });
+  test("reading them is not affected, and the owner writes them as any other file", () => {
+    expect(decide(read(`${ws}/TROPOS.md`), ctx({ ...base, role: "guest" })).behavior).toBe("allow");
+    expect(decide(edit(`${ws}/TROPOS.md`), ctx({ ...base, role: "owner" })).behavior).toBe("allow");
+    expect(decide(edit(`${ws}/sub/TROPOS.md`), ctx({ ...base, role: "guest" })).behavior).toBe("allow");
+  });
+});

@@ -1,8 +1,9 @@
 import { constants, existsSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
+import { blockedPlaceholder, scanText } from "../learning/threats";
 import { stripAgentSections } from "../memory/agents-file";
-import { workspaceFile } from "../paths";
+import { workspaceDir, workspaceFile } from "../paths";
 
 export interface MemoryFile {
   path: string;
@@ -156,15 +157,26 @@ const PROJECT_MEMORY_NAMES = ["TROPOS.md", "AGENTS.md", "CLAUDE.md"];
 export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[]> {
   const files: MemoryFile[] = [];
   const seen = new Set<string>();
-  const add = async (path: string, scope: string | null, source: MemoryFile["source"], transform?: (text: string) => string) => {
+  const add = async (path: string, scope: string | null, source: MemoryFile["source"], transform?: (text: string) => string, check?: (text: string) => Promise<string>) => {
     const read = await readMemoryFile(path, scope);
     if (read === null) return false;
-    const content = transform ? transform(read).trim() : read;
+    const shaped = transform ? transform(read).trim() : read;
+    const content = check && shaped ? await check(shaped) : shaped;
     const key = (await canonical(path)) ?? path;
     if (seen.has(key)) return true;
     seen.add(key);
     if (content) files.push({ path, content, source });
     return true;
+  };
+
+  // Instruction files in the chief's workspace sit where a shared guest or a scheduled run could have written them:
+  // they go through the same threat scan as notes and skills, and a flagged one is replaced as a whole.
+  const workspaceRoot = await canonical(workspaceDir(home));
+  const scanned = async (path: string, text: string): Promise<string> => {
+    const real = await canonical(path);
+    if (workspaceRoot === null || real === null || !(real === workspaceRoot || isInside(real, workspaceRoot))) return text;
+    const scan = scanText(text);
+    return scan.ok ? text : blockedPlaceholder(scan.reason);
   };
 
   const homeRoot = await canonical(home);
@@ -188,9 +200,11 @@ export async function loadMemory(cwd: string, home: string): Promise<MemoryFile[
   }
   for (const dir of chain) {
     for (const name of PROJECT_MEMORY_NAMES) {
-      if (await add(join(dir, name), scope, "project")) break;
+      const path = join(dir, name);
+      if (await add(path, scope, "project", undefined, (text) => scanned(path, text))) break;
     }
   }
-  await add(join(cwd, "TROPOS.local.md"), scope, "project");
+  const local = join(cwd, "TROPOS.local.md");
+  await add(local, scope, "project", undefined, (text) => scanned(local, text));
   return files;
 }

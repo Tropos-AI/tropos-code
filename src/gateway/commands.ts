@@ -131,7 +131,7 @@ export async function runGatewayCommand(command: GatewayCommand, c: GatewayComma
       case "projects-list": {
         const projects = await listProjects(home);
         const defaultId = await defaultProjectId(home);
-        for (const p of projects) c.out(`${p.id === defaultId ? "*" : " "} ${p.id.padEnd(16)} ${p.name}  ${p.path}${p.shared && !p.builtin ? "  (shared with guests)" : ""}\n`);
+        for (const p of projects) c.out(`${p.id === defaultId ? "*" : " "} ${p.id.padEnd(16)} ${p.name}  ${p.path}${p.shared ? "  (shared with guests)" : ""}\n`);
         c.out("* = where new chats start. Add one: tcode projects add <path>\n");
         return 0;
       }

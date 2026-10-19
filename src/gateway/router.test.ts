@@ -75,21 +75,37 @@ describe("session keys", () => {
 
 describe("guests and shared projects", () => {
   const guestRouter = () => new ChatRouter({ home, isGuest: async (k) => k.startsWith("telegram:g") });
-  test("a guest sees and enters only the default workspace and shared projects; the owner sees all", async () => {
+  test("a guest sees and enters only their own guest workspace and shared projects; the owner sees all but the guest workspace", async () => {
     const router = guestRouter();
-    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["default"]);
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["guest"]);
+    expect((await router.current("telegram:g1")).path).toBe(join(home, "guest-workspace"));
     expect((await router.list("telegram:1")).map((p) => p.id)).toEqual(["default", "app", "api"]);
     await expect(router.select("telegram:g1", "app")).rejects.toThrow('There is no project "app"');
+    await expect(router.select("telegram:g1", "default")).rejects.toThrow('There is no project "default"');
+    await expect(router.select("telegram:1", "guest")).rejects.toThrow('There is no project "guest"');
     expect((await router.select("telegram:1", "app")).id).toBe("app");
     await setProjectShared(home, "app", true);
-    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["default", "app"]);
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["guest", "app"]);
     expect((await router.select("telegram:g1", "app")).id).toBe("app");
   });
-  test("a guest whose project stops being shared falls back to the default workspace", async () => {
+  test("a guest starts in the guest workspace even when the owner's default is a shared project", async () => {
+    await setProjectShared(home, "api", true);
+    await setDefaultProject(home, "api");
+    expect((await guestRouter().current("telegram:g1")).id).toBe("guest");
+    expect((await guestRouter().current("telegram:1")).id).toBe("api");
+  });
+  test("the chief's workspace is guest-visible only once the owner shares it", async () => {
+    const router = guestRouter();
+    await setProjectShared(home, "default", true);
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["guest", "default"]);
+    await setProjectShared(home, "default", false);
+    expect((await router.list("telegram:g1")).map((p) => p.id)).toEqual(["guest"]);
+  });
+  test("a guest whose project stops being shared falls back to the guest workspace", async () => {
     await setProjectShared(home, "app", true);
     const router = guestRouter();
     await router.select("telegram:g1", "app");
     await setProjectShared(home, "app", false);
-    expect((await router.current("telegram:g1")).id).toBe("default");
+    expect((await router.current("telegram:g1")).id).toBe("guest");
   });
 });

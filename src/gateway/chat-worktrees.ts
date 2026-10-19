@@ -3,17 +3,23 @@
 import { existsSync } from "node:fs";
 import type { AppContext } from "../cli/runtime";
 import { builtinProject, type Project } from "./projects";
-import { sessionKey } from "./router";
+import { parseSessionKey, sessionKey } from "./router";
 import type { ChatWorktrees } from "./types";
 import { createWorktree, finishWorktree, ghReady, hostGit, OWNER_ONLY_FINISH, WorktreeStore, worktreeChanges, type GitRun, type Worktree } from "./worktrees";
 
+/** A session key of a guest's scheduled job: `project:<id>:guest@<id>`. */
+export function isGuestJobKey(key: string): boolean {
+  const chatKey = parseSessionKey(key)?.chatKey ?? "";
+  return chatKey.startsWith("project:") && chatKey.endsWith(":guest");
+}
+
 /**
- * The worktree a chat session works in, or undefined when it works in the project folder itself: the default
- * workspace, scheduled runs and anything that isn't a git repo with a commit. A chat keeps its worktree until the
- * owner finishes the task, so a closed or restarted session picks the same one up.
+ * The worktree a chat session (or a guest's scheduled job) works in, or undefined when it works in the project folder
+ * itself: the default workspace, the owner's scheduled runs and anything that isn't a git repo with a commit. A chat
+ * keeps its worktree until the owner finishes the task, so a closed or restarted session picks the same one up.
  */
 export async function workdirForSession(o: { key: string; project: Project; store: WorktreeStore; create: typeof createWorktree; home: string }): Promise<Worktree | undefined> {
-  if (o.project.builtin || o.project.id === builtinProject(o.home).id || !o.key.startsWith("telegram:")) return undefined;
+  if (o.project.builtin || o.project.id === builtinProject(o.home).id || !(o.key.startsWith("telegram:") || isGuestJobKey(o.key))) return undefined;
   const stored = await o.store.get(o.key);
   if (stored && existsSync(stored.path)) return stored;
   const made = await o.create({ home: o.home, key: o.key, projectId: o.project.id, repo: o.project.path });

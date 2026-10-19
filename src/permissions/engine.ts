@@ -64,6 +64,8 @@ export interface PermissionContext {
   autonomy?: AutonomyPolicy;
   /** The chief's own files inside the default project (workspaceOwnPaths): only the store tools may use them. */
   ownFiles?: string[];
+  /** Instruction files at the default project's root (workspaceInstructionPaths): only the owner may write them. */
+  instructionFiles?: string[];
 }
 
 export type Decision =
@@ -230,6 +232,13 @@ export function ownFilePath(req: PermissionRequest, ctx: PermissionContext): str
   return req.paths.find((p) => own.some((dir) => isInside(foldPath(p), dir)));
 }
 
+/** The first of an edit's paths that is one of the workspace's instruction files. */
+function instructionFilePath(req: PermissionRequest, ctx: PermissionContext): string | undefined {
+  if (req.kind !== "edit" || !ctx.instructionFiles?.length) return undefined;
+  const files = ctx.instructionFiles.map(foldPath);
+  return req.paths.find((p) => files.includes(foldPath(p)));
+}
+
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
   // One work allowance covers every deny and ask rule, so many rules cannot multiply the cost.
   const budget = createRestrictBudget();
@@ -241,6 +250,9 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   if (own && (ctx.confine || ctx.role !== "owner")) {
     return { behavior: "deny", reason: `${own} is Tropos's own memory; only its memory tools may use it in this session.` };
   }
+  // The owner's sessions in the default project load these; nobody else may plant text in them.
+  const instruction = ctx.role !== "owner" ? instructionFilePath(req, ctx) : undefined;
+  if (instruction) return { behavior: "deny", reason: `${instruction} holds instructions for the owner's sessions; only the owner may change it.` };
   // The owner's own notes, skills and identity live under the Tropos home, outside any workspace.
   const ownerStoreSave = ctx.role === "owner" && isStoreSave(req, ctx);
   if (ctx.confine && !ownerStoreSave) {

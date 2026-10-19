@@ -4,7 +4,7 @@ import type { Confinement, ExecBackend } from "../exec/backend";
 import { confinedBackend, unconfinedBackend } from "../exec/confined";
 import { ConfinementError } from "../exec/confinement-paths";
 import { DockerBackend } from "../exec/docker";
-import { workspaceOwnPaths } from "../home/layout";
+import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import type { GatewayConfig } from "./config";
 import { SandboxUnavailableError } from "./errors";
 import type { SessionRole } from "./types";
@@ -47,7 +47,7 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     const problem = await input.dockerCheck();
     if (problem) throw new SandboxUnavailableError(role === "guest" ? `${GUEST_NEEDS_DOCKER} (${problem})` : problem);
     const { image, network, memory, cpus } = config.sandbox;
-    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide: workspaceOwnPaths(input.home) }), confined: true };
+    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide: [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))] }), confined: true };
   }
   if (input.override) return { backend: input.override(workspace), confined: true };
   if ((await input.confinement()) === null) {

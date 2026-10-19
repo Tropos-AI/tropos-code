@@ -58,6 +58,8 @@ const schema = z.object({
   projects: z.array(projectSchema).default([]),
   /** The project a chat starts in until it picks another. */
   defaultProject: z.string().min(1).default("default"),
+  /** Guests may see and enter the built-in default workspace (the chief's). Off unless the owner shares it. */
+  shareDefault: z.boolean().optional(),
   telegram: z.object({ botToken: z.string().min(1).optional() }).default({}),
   sandbox: sandboxSchema,
   /** How chats run commands and how freely they act. */

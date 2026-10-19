@@ -21,7 +21,7 @@ export interface JobRunnerDeps {
 /**
  * A scheduled run has nobody to approve anything. Its session carries its project's autonomy (at `balanced`, read-only
  * commands and pinned tests run unasked); whatever still asks is denied here unless the job lists it (`allowCommands`,
- * e.g. "Bash(npm test:*)"), and then only for a command inside the project.
+ * e.g. "Bash(npm test:*)"), and then only for a command inside the project. A guest's job never gets this.
  */
 export function allowedByJob(prompt: PermissionPrompt, job: CronJob, cwd: string, home: string): boolean {
   if (!job.allowCommands?.length || prompt.toolName !== "Bash") return false;
@@ -44,7 +44,8 @@ export function createJobRunner(deps: JobRunnerDeps): CronDeps["runJob"] {
   const runOnce = async (job: CronJob, signal: AbortSignal): Promise<{ text: string }> => {
     const cwd = await deps.projectPath(job.project);
     if (!cwd) throw new Error(`The project "${job.project}" doesn't exist any more.`);
-    const session = await deps.openSession(job.project, { untrusted: untrustedJob(job, await deps.ownerChat?.()) });
+    const untrusted = untrustedJob(job, await deps.ownerChat?.());
+    const session = await deps.openSession(job.project, { untrusted });
     await session.clear();
     let last = "";
     const detach = session.attach({
@@ -54,7 +55,8 @@ export function createJobRunner(deps: JobRunnerDeps): CronDeps["runJob"] {
           if (text) last = text;
         }
       },
-      ask: (id, prompt) => session.answer(id, allowedByJob(prompt, job, cwd, deps.home) ? { kind: "allow" } : { kind: "deny", message: "No one is here to approve this scheduled run." }),
+      // A guest's job never widens what it may run: its allowCommands are the guest's own words.
+      ask: (id, prompt) => session.answer(id, !untrusted && allowedByJob(prompt, job, cwd, deps.home) ? { kind: "allow" } : { kind: "deny", message: "No one is here to approve this scheduled run." }),
       askClosed: () => {},
       state: () => {},
     });

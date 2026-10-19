@@ -2,7 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gatewayDir } from "./config";
-import { ProjectError, builtinProject, fileProjectSource, guestVisible, type Project, type ProjectSource } from "./projects";
+import { ProjectError, builtinProject, fileProjectSource, guestProject, guestVisible, GUEST_PROJECT_ID, type Project, type ProjectSource } from "./projects";
 import type { ChatSession, SessionProvider } from "./types";
 
 /** The pool's key for a chat in a project: `telegram:123@my-app`. Each (chat, project) pair has its own session. */
@@ -20,7 +20,7 @@ export interface ChatRouterOptions {
   home: string;
   /** Where projects come from (default: the registry in gateway.json). */
   source?: ProjectSource;
-  /** True for a chat that runs as a guest: it only sees the default workspace and shared projects. */
+  /** True for a chat that runs as a guest: it only sees the guest workspace and shared projects. */
   isGuest?: (chatKey: string) => Promise<boolean>;
 }
 
@@ -34,16 +34,18 @@ export class ChatRouter {
     this.path = join(gatewayDir(opts.home), "chats.json");
   }
 
-  /** The chat's project: its own choice while that project still exists, else the default project. */
-  /** The projects this chat may see: all for the owner, the shared ones for a guest. */
+  /** The projects this chat may see: all but the guest workspace for the owner; that and the shared ones for a guest. */
   async list(chatKey: string): Promise<Project[]> {
-    const projects = await this.source.list();
-    return (await this.opts.isGuest?.(chatKey)) ? projects.filter(guestVisible) : projects;
+    const projects = (await this.source.list()).filter((p) => p.id !== GUEST_PROJECT_ID);
+    return (await this.opts.isGuest?.(chatKey)) ? [guestProject(this.opts.home), ...projects.filter(guestVisible)] : projects;
   }
 
+  /** The chat's project: its own choice while that project still exists, else the default project (a guest's own). */
   async current(chatKey: string): Promise<Project> {
+    const guest = (await this.opts.isGuest?.(chatKey)) === true;
     const [chosen, projects] = await Promise.all([this.read().then((m) => m[chatKey]), this.list(chatKey)]);
     const byId = (id: string | undefined) => (id === undefined ? undefined : projects.find((p) => p.id === id));
+    if (guest) return byId(chosen) ?? guestProject(this.opts.home);
     return byId(chosen) ?? byId(await this.source.defaultId()) ?? projects[0] ?? builtinProject(this.opts.home);
   }
 

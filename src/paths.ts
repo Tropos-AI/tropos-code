@@ -79,6 +79,8 @@ export type WorkspaceFileName = "AGENTS.md" | "SOUL.md" | "IDENTITY.md" | "USER.
 /** The default project and the chief's home: its own files sit here next to whatever the chat creates. */
 export const workspaceDir = (home: string): string => join(home, "workspace");
 export const workspaceFile = (home: string, name: WorkspaceFileName): string => join(workspaceDir(home), name);
+/** The guests' own default project: a guest's chat or job never works in the chief's workspace unless it is shared. */
+export const guestWorkspaceDir = (home: string): string => join(home, "guest-workspace");
 /** The daily journal. */
 export const journalDir = (home: string): string => join(workspaceDir(home), "memory");
 export const userSkillsDir = (home: string): string => join(workspaceDir(home), "skills");
