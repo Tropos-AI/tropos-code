@@ -126,6 +126,16 @@ export function App({ runtime }: { runtime: Runtime }) {
     [stdout],
   );
 
+  // The header is printed once with the past rows; a new model or effort redraws them so it names the one in use.
+  const headerShows = useRef({ model: settings.model, effort: settings.effort });
+  useEffect(() => {
+    const shown = headerShows.current;
+    if (shown.model === settings.model && shown.effort === settings.effort) return;
+    headerShows.current = { model: settings.model, effort: settings.effort };
+    stdout.write(CLEAR_SCREEN);
+    setStaticKey((k) => k + 1);
+  }, [settings.model, settings.effort, stdout]);
+
   /** Runs a non-turn operation (clear, resume, undo) with input locked out. */
   const exclusive = useCallback(
     async (work: () => Promise<void>) => {

@@ -141,6 +141,20 @@ describe("App", () => {
     expect(runtime.state().model).toBe("claude-sonnet-5-5");
   });
 
+  test("the header follows a model or effort change", async () => {
+    const runtime = fakeRuntime([]);
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("/model claude-sonnet-5-5");
+    await tick();
+    r.stdin.write("\r");
+    await waitFor(() => expect(all(r)).toContain("claude-sonnet-5-5 · effort high"));
+    r.stdin.write("/effort low");
+    await tick();
+    r.stdin.write("\r");
+    await waitFor(() => expect(all(r)).toContain("claude-sonnet-5-5 · effort low"));
+  });
+
   test("a same-tick double Enter starts exactly one turn", async () => {
     const slow: Step = async () => {
       await Bun.sleep(80);
