@@ -13,7 +13,9 @@ import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
 import { lowerSetupAutonomy } from "./autonomy";
 import { describeSetupChange, readSetupState } from "./describe";
-import { CHAT_DOCTOR_READ_ONLY, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, setupTextProblem, type SetupInput, type SetupWho } from "./matrix";
+import { downloadTarget } from "./download";
+import { EXTEND_ACTIONS, performExtend, type ExtendAction, type ExtendKit } from "./extend";
+import { CHAT_DOCTOR_READ_ONLY, isDestructive, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, setupTextProblem, type SetupInput, type SetupWho } from "./matrix";
 import type { SecretVault } from "./secrets";
 
 export interface SetupToolDeps {
@@ -33,9 +35,14 @@ export interface SetupToolDeps {
   inGateway?: boolean;
   restartDelayMs?: number;
   setTimer?: (fn: () => void, ms: number) => unknown;
+  /** Test seams: the fetch downloads and skills use, and the environment git clones with. */
+  fetch?: typeof fetch;
+  cloneEnv?: NodeJS.ProcessEnv;
 }
 
 export const SEND_AGAIN = "Send that key again; I only hold it for 30 minutes.";
+const EXTEND: ReadonlySet<string> = new Set(EXTEND_ACTIONS);
+const isExtend = (action: string): action is ExtendAction => EXTEND.has(action);
 const NO_UNDO_CONNECT = "Disconnect it instead.";
 const NO_UNDO = "This can't be undone.";
 
@@ -60,7 +67,11 @@ const need = <T>(value: T | undefined, what: string): T => (value === undefined 
 const DESCRIPTION =
   "Change Tropos's own setup. Actions: telegram.connect / telegram.disconnect; project.add (a folder), project.create (a new folder " +
   "with git init; in a chat the chat switches to it), project.rename, project.remove, project.default; model.set (model and/or effort " +
-  "for new sessions); provider.connect (an API key); mcp.add, mcp.enable, mcp.disable; proactive.set (messages I start myself, their " +
+  "for new sessions); provider.connect (an API key); mcp.add, mcp.edit (only what changes), mcp.enable, mcp.disable, mcp.remove, " +
+  "mcp.list, mcp.test (start it once and list its tools); plugin.install (from a git URL, a GitHub link, a marketplace repo plus the " +
+  "plugin's name, or a local folder; one that runs programs installs switched off), plugin.enable, plugin.disable, plugin.remove, " +
+  "plugin.list; skill.install (a SKILL.md URL, or a repo and the skill's folder); download (an https file into the current project, " +
+  "at most 200 MB, never over an existing file unless the user asked: overwrite); proactive.set (messages I start myself, their " +
   "active hours and daily limit; \"stop messaging me\" is enabled: false); autonomy.lower (never raises); doctor.run (read-only) and " +
   "doctor.fix (one finding, at the computer only); service.restart; tropos.update. Use it whenever the user asks to change any of these: " +
   "never edit settings.json or gateway.json yourself. Keys and tokens the user pasted appear as [secret:<n>: …]; pass the ref " +
@@ -150,6 +161,13 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
     return held.value;
   }
 
+  /** An MCP env with its refs taken from the vault. Every ref must still be held first: a half-resolved env would lose the others. */
+  function envFromVault(env: Record<string, string>, taken: string[]): Record<string, string> {
+    const entries = Object.entries(env);
+    if (entries.some(([, v]) => SECRET_REF.test(v) && !deps.secrets?.peek(v))) refuse(SEND_AGAIN);
+    return Object.fromEntries(entries.map(([k, v]) => [k, secretValue(v, taken)]));
+  }
+
   function proactiveText(v: ProactiveView): string {
     return `Saved. Proactive messages are ${v.enabled ? "on" : "off"}; active hours ${v.activeHours.start}–${v.activeHours.end}, at most ${v.maxPerDay} a day.`;
   }
@@ -157,6 +175,20 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
   async function perform(input: SetupInput, ctx: ToolContext, taken: string[]): Promise<string> {
     const { admin } = deps;
     const gatewayPaths = (...paths: string[]): Touched[] => [{ file: "gateway", paths }];
+    if (isExtend(input.action)) {
+      const kit: ExtendKit = {
+        home,
+        admin,
+        ledger,
+        reload: deps.reload,
+        link,
+        changing: (touched, summary, work, noUndo) => changing(touched, input, ctx, summary, work, noUndo),
+        envFromVault: (env) => envFromVault(env, taken),
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}),
+      };
+      return performExtend(input.action, input, ctx, kit);
+    }
     switch (input.action) {
       case "project.add": {
         const path = need(input.path, "Say which folder to add.");
@@ -216,10 +248,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
         const server = need(input.server, "Describe the server: a command (and args) or a URL.");
         const problem = mcpServerProblem(server, link("extensions/mcp"));
         if (problem) refuse(problem);
-        // Every ref must still be held before one is taken: a half-resolved env would lose the others.
-        const env = Object.entries(server.env ?? {});
-        if (env.some(([, v]) => SECRET_REF.test(v) && !deps.secrets?.peek(v))) refuse(SEND_AGAIN);
-        const resolved = env.length ? { env: Object.fromEntries(env.map(([k, v]) => [k, secretValue(v, taken)])) } : {};
+        const resolved = Object.keys(server.env ?? {}).length ? { env: envFromVault(server.env ?? {}, taken) } : {};
         const type = server.type ?? (server.url ? "http" : "stdio");
         const setting = { type, ...(server.command ? { command: server.command } : {}), ...(server.args ? { args: server.args } : {}), ...(server.url ? { url: server.url } : {}), ...resolved };
         return changing([{ file: "settings", paths: [`mcpServers.${name}`] }], input, ctx, `add MCP server ${name}`, async () => {
@@ -322,10 +351,16 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
     description: DESCRIPTION,
     schema: setupInputSchema,
     // Never the secret: refs and raw keys stay out of the transcript row.
-    summarize: (input) => [input.action, input.name ?? input.project ?? input.model ?? input.provider ?? input.level ?? input.finding].filter(Boolean).join(" "),
-    subject: (input) => ({ paths: [], target: `setup:${input.action}` }),
+    summarize: (input) => [input.action, input.name ?? input.project ?? input.model ?? input.provider ?? input.level ?? input.finding ?? input.url ?? input.source].filter(Boolean).join(" "),
+    // A download names the file it writes, so deny rules and a chat's confinement to its workspace apply to it. Throws
+    // for a path that won't resolve: the call fails closed.
+    subject: (input, cwd) => ({
+      paths: input.action === "download" && input.url !== undefined ? [downloadTarget({ url: input.url, ...(input.path ? { path: input.path } : {}) }, cwd)] : [],
+      target: `setup:${input.action}`,
+      ...(isDestructive(input) ? { destructive: true } : {}),
+    }),
     preview(input) {
-      const p = describeSetupChange(input, readSetupState(home));
+      const p = describeSetupChange(input, { ...readSetupState(home), home });
       const notes: string[] = [];
       if (input.action === "project.create" && deps.chatKey) notes.push("This chat switches to it.");
       if (input.action === "telegram.disconnect" && deps.who.origin === "channel") notes.push("You won't reach me on Telegram until it's connected again.");

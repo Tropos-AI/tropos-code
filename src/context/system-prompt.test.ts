@@ -130,6 +130,11 @@ test("the prompt routes setup through TroposSetup and never to the config files"
   expect(SYSTEM_PROMPT).toContain('"work on <name>" means SwitchProject');
 });
 
+test("the prompt sends installs and downloads the owner asks for through TroposSetup, not Bash", () => {
+  expect(SYSTEM_PROMPT).toContain("MCP servers, plugins and skills (install, change, remove, test) and downloading a file into the project");
+  expect(SYSTEM_PROMPT).toContain("not with Bash, git or curl");
+});
+
 test("the prompt carries the suggestion rules", () => {
   expect(SYSTEM_PROMPT).toContain("<suggestions>");
   expect(SYSTEM_PROMPT).toContain("at most one suggestion per conversation");

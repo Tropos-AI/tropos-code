@@ -517,8 +517,20 @@ describe("decide — saving to Tropos's stores", () => {
   });
 });
 
+describe("decide — destructive exec", () => {
+  const remove: PermissionRequest = { toolName: "TroposSetup", kind: "exec", paths: [], target: "setup:plugin.remove", destructive: true };
+  test("removing what can't be brought back always asks: no allow rule or autonomy level approves it, and no rule is offered", () => {
+    expect(decide(remove, ctx({ allow: ["TroposSetup"] }))).toEqual({ behavior: "ask", reason: "This can't be undone." });
+    expect(decide(remove, { ...ctx({ allow: ["TroposSetup(setup:plugin.remove)"] }), autonomy: { level: "autonomous", testCommands: [] } })).toEqual({ behavior: "ask", reason: "This can't be undone." });
+    expect(decide({ ...remove, destructive: false }, ctx({ allow: ["TroposSetup"] })).behavior).toBe("allow");
+  });
+  test("a deny rule still wins", () => {
+    expect(decide(remove, ctx({ deny: ["TroposSetup"] })).behavior).toBe("deny");
+  });
+});
+
 describe("decide — autonomy", () => {
-  const auto = (level: Autonomy, testCommands: string[] = [], over: Parameters<typeof ctx>[0] = {}): PermissionContext => ({
+  const auto =(level: Autonomy, testCommands: string[] = [], over: Parameters<typeof ctx>[0] = {}): PermissionContext => ({
     ...ctx(over),
     autonomy: { level, testCommands },
   });
