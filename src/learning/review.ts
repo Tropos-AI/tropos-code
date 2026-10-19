@@ -81,7 +81,10 @@ const NOTICE_MAX = 160;
 
 /** The one-line notice for a review that changed something, clipped to NOTICE_MAX characters. */
 export function learnedNotice(changes: ReviewResult["changes"]): string {
-  const text = NOTICE_PREFIX + changes.map((c) => c.summary).join("; ");
+  const created = changes.flatMap((c) => (c.tool === "AgentManage" ? [/^AgentManage create (.+)$/.exec(c.summary)?.[1]] : [])).filter((n): n is string => n !== undefined);
+  const rest = changes.filter((c) => !(c.tool === "AgentManage" && /^AgentManage create /.test(c.summary)));
+  const parts = [...created.map((n) => `🧩 New specialist: ${n}`), ...(rest.length > 0 ? [NOTICE_PREFIX + rest.map((c) => c.summary).join("; ")] : [])];
+  const text = parts.join(" · ");
   return text.length > NOTICE_MAX ? `${text.slice(0, NOTICE_MAX - 1)}…` : text;
 }
 
@@ -303,6 +306,7 @@ export class LearningLoop {
   }
 }
 
+const SPECIALIST_ACTIONS_REFUSAL = "Specialists can only be created or updated during the learning review.";
 const REMOVE_ONLY_REFUSAL = "The learning review can't only remove notes; replace or merge them instead.";
 
 /**
@@ -327,6 +331,14 @@ export function reviewToolGate(
           subject: (input, cwd) => tool.subject(input, cwd),
           run: (input, ctx) =>
             consolidates(input) ? tool.run(input, ctx) : Promise.resolve({ content: REMOVE_ONLY_REFUSAL, isError: true }),
+        });
+      }
+      if (tool.name === "AgentManage") {
+        // Defense in depth: archiving or deleting a specialist is the owner's decision.
+        return wrap(tool, {
+          kind: tool.kind,
+          subject: (input, cwd) => tool.subject(input, cwd),
+          run: (input, ctx) => (mayManageSpecialist(input) ? tool.run(input, ctx) : Promise.resolve({ content: SPECIALIST_ACTIONS_REFUSAL, isError: true })),
         });
       }
       if (tool.name !== "SkillManage") return tool;
@@ -377,6 +389,11 @@ function consolidates(input: unknown): boolean {
   return action === "add" || action === "replace";
 }
 
+function mayManageSpecialist(input: unknown): boolean {
+  const action = typeof input === "object" && input !== null ? (input as { action?: unknown }).action : undefined;
+  return action === "create" || action === "update";
+}
+
 function isDelete(input: unknown): boolean {
   return typeof input === "object" && input !== null && (input as { action?: unknown }).action === "delete";
 }
@@ -385,6 +402,7 @@ function isDelete(input: unknown): boolean {
 export function reviewAskPermission(prompt: PermissionPrompt): PermissionAnswer {
   if (!REVIEW_WRITE_TOOLS.includes(prompt.toolName)) return { kind: "deny", message: `${prompt.toolName} needs approval, and the learning review can't ask for it.` };
   if (prompt.toolName === "SkillManage" && isDelete(prompt.input)) return { kind: "deny", message: "Skills can't be deleted during the learning review." };
+  if (prompt.toolName === "AgentManage" && !mayManageSpecialist(prompt.input)) return { kind: "deny", message: SPECIALIST_ACTIONS_REFUSAL };
   if (prompt.toolName === "Memory" && !consolidates(prompt.input)) return { kind: "deny", message: REMOVE_ONLY_REFUSAL };
   return { kind: "allow" };
 }

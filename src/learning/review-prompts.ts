@@ -1,12 +1,13 @@
 // src/learning/review-prompts.ts
+import { ROLE_CONTRACT_TEMPLATE } from "../agents/store";
 // The background review's instructions, adapted from Hermes Agent's memory/skill review prompts.
 // They arrive as the last user message of a copy of the conversation, so they speak about "the conversation above".
 
 /** Tools the review may run; every other tool keeps its schema (prompt-cache parity) but refuses. */
-export const REVIEW_ALLOWED_TOOLS = ["Memory", "SkillManage", "Skill", "Read", "Glob", "Grep", "SessionSearch", "DailyNote"];
+export const REVIEW_ALLOWED_TOOLS = ["Memory", "SkillManage", "Skill", "Read", "Glob", "Grep", "SessionSearch", "DailyNote", "AgentManage"];
 
 /** The allowed tools that write; their successful calls are what the review "learned". */
-export const REVIEW_WRITE_TOOLS = ["Memory", "SkillManage", "DailyNote"];
+export const REVIEW_WRITE_TOOLS = ["Memory", "SkillManage", "DailyNote", "AgentManage"];
 
 /** The exact reply that means "nothing worth keeping". */
 export const NOTHING = "NOTHING";
@@ -46,6 +47,16 @@ const SKILL_RULES =
   "3. create a new skill named for the class of task (e.g. `release-a-bun-cli`), never for this one instance.\n" +
   "Write lessons, not logs: the steps and pitfalls someone needs next time, not the story of this session. Never delete a skill.";
 
+/** The review's third job: a specialist for work that keeps coming back. */
+export const SPECIALIST_REVIEW_RULES =
+  "Specialists (the AgentManage tool) are persistent helpers for a kind of work that keeps coming back. Create one only when this kind of work has now come up at least three times " +
+  "(this conversation, the <delegations> list below, the journal; use SessionSearch to check), and no existing specialist fits; when one nearly fits, update it instead. " +
+  "Name it for the kind of work in kebab-case (pr-reviewer), give a one-line description the chief can route on, a role contract with these sections:\n" +
+  `${ROLE_CONTRACT_TEMPLATE}\n` +
+  "and the fewest tools that do the job. Leave the model out unless the role is simple enough for a cheaper one. " +
+  "Never create one for a single task or for something the user wants to decide personally. " +
+  "When 12 are active, don't create: fold the role into the closest specialist with update. Never archive or delete.";
+
 const NEVER =
   "Never save:\n" +
   "- environment or setup failures, or claims that a tool or service is broken;\n" +
@@ -73,6 +84,7 @@ export const SKILL_REVIEW_PROMPT = join(
     "or did the user expect a different method or outcome than the one a skill gave you?",
   SIGNALS,
   SKILL_RULES,
+  SPECIALIST_REVIEW_RULES,
   NEVER,
   FOOTER,
 );
@@ -84,6 +96,7 @@ export const COMBINED_REVIEW_PROMPT = join(
   SIGNALS,
   MEMORY_RULES,
   SKILL_RULES,
+  SPECIALIST_REVIEW_RULES,
   NEVER,
   FOOTER,
 );
@@ -110,6 +123,7 @@ export const FINAL_PROMPT = join(
   SIGNALS,
   MEMORY_RULES,
   SKILL_RULES,
+  SPECIALIST_REVIEW_RULES,
   NEVER,
   FOOTER,
 );

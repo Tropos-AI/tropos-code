@@ -5,6 +5,7 @@ import { FakeModel, reply, textBlock, toolUseBlock } from "../../test/helpers/fa
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { settle, waitFor } from "../../test/helpers/wait";
 import type { AgentHooks } from "../agent/agent";
+import type { PermissionPrompt } from "../agent/events";
 import type { Mode } from "../config/constants";
 import { compileRules } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
@@ -361,7 +362,7 @@ describe("reviewToolGate", () => {
 describe("reviewAskPermission", () => {
   const prompt = (toolName: string, input: unknown = {}) => ({ toolName, kind: "edit" as const, summary: "", input });
   test("approves the review's writes, never a delete, never anything else", () => {
-    for (const name of REVIEW_WRITE_TOOLS) expect(reviewAskPermission(prompt(name, { action: "add" }))).toEqual({ kind: "allow" });
+    for (const name of REVIEW_WRITE_TOOLS) expect(reviewAskPermission(prompt(name, { action: name === "AgentManage" ? "create" : "add" }))).toEqual({ kind: "allow" });
     expect(reviewAskPermission(prompt("SkillManage", { action: "delete" })).kind).toBe("deny");
     expect(reviewAskPermission(prompt("SkillManage", null)).kind).toBe("allow");
     expect(reviewAskPermission(prompt("Read")).kind).toBe("deny");
@@ -801,5 +802,54 @@ describe("specialist self-review", () => {
       "💡 🔍 reviewer learned: Memory add memory: x; SkillManage create lint",
     );
     expect(specialistLearnedNotice("r", [{ tool: "Memory", summary: "y".repeat(400) }]).length).toBe(160);
+  });
+});
+
+describe("the review and specialists", () => {
+  const agentManage = defineTool({
+    name: "AgentManage",
+    kind: "edit",
+    description: "manage",
+    schema: z.object({ action: z.string(), name: z.string() }),
+    summarize: (i) => `${i.action} ${i.name}`,
+    subject: () => ({ paths: ["/h/agents/x/AGENT.md"] }),
+    run: async (i) => ({ content: `${i.action} done` }),
+  }) as AnyTool;
+  const ctx = makeToolContext();
+
+  test("it may create and update specialists, never delete or archive them", async () => {
+    const [gated] = reviewToolGate([agentManage]);
+    expect(await gated!.run({ action: "archive", name: "x" }, ctx)).toEqual({ content: "Specialists can only be created or updated during the learning review.", isError: true });
+    expect((await gated!.run({ action: "delete", name: "x" }, ctx)).isError).toBe(true);
+    expect((await gated!.run({ action: "create", name: "x" }, ctx)).content).toBe("create done");
+    expect((await gated!.run({ action: "update", name: "x" }, ctx)).isError).toBeUndefined();
+    const ask = (action: string) => reviewAskPermission({ toolName: "AgentManage", input: { action, name: "x" } } as unknown as PermissionPrompt);
+    expect(ask("delete").kind).toBe("deny");
+    expect(ask("archive").kind).toBe("deny");
+    expect(ask("create").kind).toBe("allow");
+    expect(ask("update").kind).toBe("allow");
+  });
+
+  test("a specialist creation is announced on its own line first", () => {
+    expect(learnedNotice([{ tool: "AgentManage", summary: "AgentManage create 🔍 reviewer — reviews pull requests" }])).toBe("🧩 New specialist: 🔍 reviewer — reviews pull requests");
+    expect(
+      learnedNotice([
+        { tool: "Memory", summary: "Memory add memory: x" },
+        { tool: "AgentManage", summary: "AgentManage create 🔍 reviewer — reviews pull requests" },
+      ]),
+    ).toBe("🧩 New specialist: 🔍 reviewer — reviews pull requests · 💡 Learned: Memory add memory: x");
+    expect(learnedNotice([{ tool: "AgentManage", summary: "AgentManage update reviewer" }])).toBe("💡 Learned: AgentManage update reviewer");
+  });
+
+  test("the skill, combined and final prompts carry the third-time rule; the memory prompt does not", () => {
+    for (const kind of ["skill", "combined", "final"] as const) {
+      expect(REVIEW_PROMPTS[kind]).toContain("at least three times");
+      expect(REVIEW_PROMPTS[kind]).toContain("## Escalate when");
+      expect(REVIEW_PROMPTS[kind]).toContain("Never archive or delete.");
+    }
+    expect(REVIEW_PROMPTS.memory).not.toContain("three times");
+    expect(REVIEW_PROMPTS.flush).not.toContain("three times");
+    expect(REVIEW_ALLOWED_TOOLS).toContain("AgentManage");
+    expect(REVIEW_WRITE_TOOLS).toContain("AgentManage");
   });
 });

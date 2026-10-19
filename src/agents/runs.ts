@@ -1,6 +1,9 @@
 // src/agents/runs.ts
 import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { neutraliseHarnessTags } from "../context/tags";
+import { agentLabel } from "../extensions/agents";
+import { loadSpecialists, MAX_ACTIVE_SPECIALISTS } from "./specialists";
 
 /** One delegation to a subagent or specialist; the log feeds the curator, the dashboard and the review. */
 export interface DelegationRun {
@@ -64,4 +67,29 @@ export async function readRuns(home: string, opts: { agent?: string; since?: num
     if (opts.limit !== undefined && out.length >= opts.limit) break;
   }
   return out;
+}
+
+const DELEGATIONS_DAYS = 30;
+const DELEGATIONS_LINES = 40;
+
+/** The `<delegations>` block the review reads: how many specialists exist, and what was delegated lately. */
+export async function delegationContext(home: string, now: Date = new Date()): Promise<string> {
+  const active = (await loadSpecialists(home).catch(() => [])).filter((s) => !s.archived);
+  const runs = await readRuns(home, { since: now.getTime() - DELEGATIONS_DAYS * 86_400_000 });
+  const day = (ts: string) => ts.slice(0, 10);
+  const lastUse = (id: string) => runs.find((r) => r.agent === id);
+  const clean = (text: string) => neutraliseHarnessTags(text.replace(/\s+/g, " ").trim());
+  const specialists = active.map((s) => {
+    const last = lastUse(s.id) ?? undefined;
+    return `- ${clean(agentLabel(s))}: ${clean(s.description)} (last used ${last ? day(last.ts) : "never"})`;
+  });
+  const work = runs.slice(0, DELEGATIONS_LINES).map((r) => `- ${day(r.ts)} ${clean(r.agent)}: ${clean(r.task)} (${r.ok ? "ok" : "failed"})`);
+  return [
+    "<delegations>",
+    `Specialists: ${active.length} of ${MAX_ACTIVE_SPECIALISTS} active`,
+    ...specialists,
+    `Delegated work in the last ${DELEGATIONS_DAYS} days, newest first:`,
+    ...(work.length > 0 ? work : ["- none yet"]),
+    "</delegations>",
+  ].join("\n");
 }

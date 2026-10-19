@@ -753,6 +753,26 @@ describe("learning and identity", () => {
     expect(await readCounters()).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
   });
 
+  test("the final review's prompt ends with the delegations block; a memory review's does not", async () => {
+    const model = await setup([text("a"), text("b"), text(NOTHING)], LONG);
+    const { runtime: rt } = await runtime();
+    const agent = rt.newAgent({ emit: () => {}, askPermission: allow });
+    await agent.run("one", signal());
+    await agent.run("two", signal());
+    await rt.shutdown();
+    const last = JSON.stringify(model.requests[2]!.messages.at(-1));
+    expect(last).toContain("<delegations>");
+    expect(last.lastIndexOf("<delegations>")).toBeGreaterThan(last.indexOf("session is ending"));
+    const memory = await setup([text("a"), text("b"), text(NOTHING)]);
+    const second = await runtime();
+    const a2 = second.runtime.newAgent({ emit: () => {}, askPermission: allow });
+    await a2.run("one", signal());
+    await a2.run("two", signal());
+    await waitFor(() => memory.requests.length >= 3);
+    await second.runtime.shutdown({ finalReview: false });
+    expect(JSON.stringify(memory.requests[2]!.messages.at(-1))).not.toContain("<delegations>");
+  });
+
   test("shutdown({ finalReview: false }) skips it; the counters carry to the next runtime", async () => {
     const model = await setup([text("a"), text("b"), text("c")], LONG);
     const { runtime: rt } = await runtime();

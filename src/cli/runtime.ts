@@ -13,6 +13,7 @@ import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
 import { resolveLayoutPath, workspaceOwnPaths } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
+import { delegationContext } from "../agents/runs";
 import { loadCounters, saveCounters, type LearningCounters } from "../learning/counters";
 import { FINAL_REVIEW_TIMEOUT_MS, flushWindow, LearningLoop, runReviewAgent } from "../learning/review";
 import { loadIdentity } from "../context/identity";
@@ -230,7 +231,10 @@ export function makeAgent(
         initial: opts.counters?.initial,
         saveCounters: opts.counters?.save,
         notice: (text) => opts.ui.emit({ type: "notice", level: "info", text, learned: true }),
-        runReview: async (_kind, prompt, history, signal) => {
+        runReview: async (kind, prompt, history, signal) => {
+          // Only the reviews that may create a specialist see what was delegated lately.
+          const withDelegations = kind === "skill" || kind === "combined" || kind === "final";
+          if (withDelegations) prompt = `${prompt}\n\n${await delegationContext(ctx.home).catch(() => "")}`.trim();
           const result = await runReviewAgent({
             model: ctx.model,
             tools: ctx.tools,

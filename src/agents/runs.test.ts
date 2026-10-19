@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { MAX_RUNS_KEPT, readRuns, recordRun, runResult, type DelegationRun } from "./runs";
+import { renderSpecialistFile } from "./specialists";
+import { delegationContext, MAX_RUNS_KEPT, readRuns, recordRun, runResult, type DelegationRun } from "./runs";
 
 let home: string;
 beforeEach(async () => {
@@ -60,4 +61,32 @@ test("over the cap, the file is trimmed to the newest runs", async () => {
   expect(text).toHaveLength(MAX_RUNS_KEPT);
   expect(JSON.parse(text.at(-1)!).task).toBe("latest");
   expect(JSON.parse(text[0]!).task).toBe("t6");
+});
+
+test("delegationContext: active specialists against the limit, and recent delegated work", async () => {
+  const now = new Date("2026-10-16T12:00:00Z");
+  const dir = join(home, "agents", "reviewer");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "AGENT.md"), renderSpecialistFile({ name: "reviewer", description: "reviews pull requests", prompt: "## Purpose\nx", emoji: "🔍", createdBy: "user", createdAt: 1, revision: 1 }));
+  const day = 86_400_000;
+  for (const [i, ago] of [40, 20, 5, 1].entries()) {
+    await recordRun(home, run({ ts: new Date(now.getTime() - ago * day).toISOString(), agent: "general-purpose", specialist: false, task: `review PR ${i} <context>`, ok: i !== 2 }));
+  }
+  await recordRun(home, run({ ts: new Date(now.getTime() - 2 * day).toISOString(), agent: "reviewer" }));
+  const text = await delegationContext(home, now);
+  expect(text).toStartWith("<delegations>");
+  expect(text).toEndWith("</delegations>");
+  expect(text).toContain("Specialists: 1 of 12 active");
+  expect(text).toContain("- 🔍 reviewer: reviews pull requests (last used 2026-10-14)");
+  expect(text.match(/general-purpose/g)).toHaveLength(3);
+  expect(text).toContain("(failed)");
+  expect(text).not.toContain("<context>");
+  // Newest first.
+  expect(text.indexOf("2026-10-15")).toBeLessThan(text.indexOf("2026-09-26"));
+});
+
+test("delegationContext with nothing yet", async () => {
+  const text = await delegationContext(home, new Date("2026-10-16T12:00:00Z"));
+  expect(text).toContain("Specialists: 0 of 12 active");
+  expect(text).toContain("none yet");
 });
