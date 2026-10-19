@@ -134,6 +134,11 @@ const WITH_SOURCES: PanelData = {
 };
 const ARCHIVED_NONE = () => [];
 
+/** Lets a dialog's open and close frames run inside act, so they do not warn. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 2; i += 1) await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+}
+
 describe("SkillsPage › managing skills", () => {
   test("your and learned skills can be edited and deleted; project skills can't; archived ones restore", async () => {
     const { socket } = await mountAdminPage(
@@ -179,6 +184,7 @@ describe("SkillsPage › managing skills", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.write", params: { source: "user", name: "bun-testing", content: "---\ndescription: d\n---\nnew body" } }));
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "SKILL.md" })).toBeNull());
+    await settle();
   });
 
   test("Delete asks first, then deletes", async () => {
@@ -188,6 +194,7 @@ describe("SkillsPage › managing skills", () => {
     expect(await screen.findByText("Delete this skill?")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.delete", params: { source: "learned", name: "deploy-notes" } }));
+    await settle();
   });
 
   test("the Archived card says what archiving means when it is empty", async () => {
