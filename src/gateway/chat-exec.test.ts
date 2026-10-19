@@ -74,6 +74,16 @@ test("docker: with Docker up, the container backend (or the test's), confined", 
   expect(await chatBackend(input({ config: config({ backend: "docker" }), role: "owner", override: () => backend }))).toEqual({ backend, confined: true });
 });
 
+test("docker: only a guest's container stops what its commands leave running", async () => {
+  const stops = (b: ExecBackend) => (b as unknown as { stopLeftovers: boolean }).stopLeftovers;
+  const owner = await chatBackend(input({ config: config({ backend: "docker" }), role: "owner" }));
+  expect(stops(owner.backend)).toBe(false);
+  await owner.backend.close();
+  const guest = await chatBackend(input({ config: config({ backend: "host" }), role: "guest" }));
+  expect(stops(guest.backend)).toBe(true);
+  await guest.backend.close();
+});
+
 test("host: Docker's answer doesn't matter to the owner", async () => {
   let asked = false;
   const backend = fake();

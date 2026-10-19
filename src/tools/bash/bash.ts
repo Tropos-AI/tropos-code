@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { constants } from "node:os";
 import { z } from "zod";
+import type { ExecBackend } from "../../exec/backend";
 import { localBackend } from "../../exec/local";
 import { isInside } from "../../paths";
 import { defineTool } from "../types";
@@ -74,7 +75,7 @@ export const bashTool = defineTool({
   subject: (input, cwd) => ({ command: input.command, paths: [], cwd }),
   async run(input, ctx) {
     const startDir = ctx.cwd();
-    const exec = ctx.exec ?? localBackend;
+    const exec: ExecBackend = ctx.exec ?? localBackend;
     if (input.run_in_background) {
       const child = exec.spawn({
         shell: ctx.shell,
@@ -151,6 +152,8 @@ export const bashTool = defineTool({
       (stream as unknown as { unref?: () => void }).unref?.();
     }
     child.unref();
+    // A guest's sandbox stops what the command left running before the next tool call (DockerBackend.quiesce).
+    await exec.quiesce?.();
 
     const notes: string[] = [];
     try {

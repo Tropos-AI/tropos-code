@@ -29,6 +29,8 @@ export interface DockerBackendOptions {
   dockerBin?: string;
   /** Paths inside `workspace` the container must not see (the chief's own files); the ones that exist are masked. */
   hide?: string[];
+  /** A guest's sandbox: whatever a command leaves running is stopped once it ends (see quiesce). */
+  stopLeftovers?: boolean;
 }
 
 const INSIDE_RUN = "/run/tropos";
@@ -36,6 +38,18 @@ const START_TIMEOUT_MS = 300_000; // a first run may have to pull the image
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const LABEL = "tropos=1";
 const OWNER_LABEL = "tropos.pid";
+/** `nobody`: the user the keeper (`sleep infinity`) of a guest's container runs as, apart from the commands' user. */
+const KEEPER_ID = 65534;
+
+/**
+ * Runs inside a guest's container as the commands' user: kill(-1) signals every process that user may signal but the
+ * caller, atomically, so a loop that forks can't slip through. PID 1 (docker-init) is never signalled, and the keeper
+ * runs as another user, so the container survives.
+ */
+const SWEEP = "kill -9 -1 2>/dev/null; echo swept";
+
+const SANDBOX_BUSY =
+  "A background command is still running in this chat's sandbox, so files can't be read or changed until it ends. Wait for it, or stop it with KillShell.";
 
 /**
  * `docker run` arguments that mask the `hide` paths inside the workspace: a file with /dev/null, a folder with an empty
@@ -203,6 +217,14 @@ export class DockerBackend implements ExecBackend {
   private readonly runs = new WeakMap<ChildProcess, Run>();
   /** Commands whose `commondir` check hasn't run yet (see spawn). */
   private readonly pendingChecks = new Set<PendingCheck>();
+  private readonly stopLeftovers: boolean;
+  /** Commands whose wrapper hasn't exited yet: background jobs, or a foreground command still running. */
+  private readonly live = new Set<ChildProcess>();
+  /** A command ran since the last sweep, so something may still be running in the container. */
+  private dirty = false;
+  private sweeping: Promise<string | undefined> | undefined;
+  /** The commands' user inside the container: the owner's ids, so files they create are the owner's. */
+  private readonly user = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
 
   constructor(opts: DockerBackendOptions) {
     this.workspace = opts.workspace;
@@ -213,6 +235,7 @@ export class DockerBackend implements ExecBackend {
     this.pidsLimit = opts.pidsLimit ?? 256;
     this.bin = opts.dockerBin ?? "docker";
     this.hide = opts.hide ?? [];
+    this.stopLeftovers = opts.stopLeftovers ?? false;
     this.name = opts.name ?? `tropos-${randomBytes(6).toString("hex")}`;
     if (opts.runDir) {
       this.ownsRunDir = !existsSync(opts.runDir);
@@ -238,7 +261,7 @@ export class DockerBackend implements ExecBackend {
       `  if [ -e ${quote(join(this.runDir, `failed-${attempt}`))} ]; then cat ${quote(join(this.runDir, `failed-${attempt}`))} >&2; exit 125; fi`,
       "  sleep 0.05",
       "done",
-      `${quote(this.bin)} exec -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
+      `${quote(this.bin)} exec -u ${quote(this.user)} -w ${quote(opts.cwd)} -e PATH=${quote(CONTAINER_PATH)} -e HOME=/tmp -e TERM=dumb ${quote(this.name)} sh -c ${quote(inner)} ${quote(opts.shell)} ${quote(opts.script)}`,
       "status=$?",
       // A planted commondir would point the owner's next host `git` at hooks the container wrote: undo it and fail.
       ...(snap ? commondirGuardShell(snap, quote) : []),
@@ -251,6 +274,11 @@ export class DockerBackend implements ExecBackend {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
+    this.dirty = true;
+    this.live.add(child);
+    const ended = () => this.live.delete(child);
+    child.once("exit", ended);
+    child.once("error", ended);
     // Host-side fallback for when the wrapper never gets to its check (its process group was SIGKILLed): checked on
     // any exit, and in close() for a command still running then (that result is kept on the entry, so it is still
     // reported here). Registered before bash.ts's listeners, so the message lands in the command's stderr before its
@@ -303,7 +331,7 @@ export class DockerBackend implements ExecBackend {
       const pid = this.containerPid(child);
       if (pid !== undefined) {
         // Kill the command inside; the docker client then exits by itself with the command's status.
-        const killer = spawn(this.bin, ["exec", this.name, "sh", "-c", TREE_KILL, "tropos-kill", sig.replace(/^SIG/, ""), String(pid)], {
+        const killer = spawn(this.bin, ["exec", "-u", this.user, this.name, "sh", "-c", TREE_KILL, "tropos-kill", sig.replace(/^SIG/, ""), String(pid)], {
           detached: true,
           stdio: "ignore",
         });
@@ -330,8 +358,34 @@ export class DockerBackend implements ExecBackend {
     }
     const pid = this.containerPid(child);
     if (pid === undefined || !this.started) return false;
-    const r = spawnSync(this.bin, ["exec", this.name, "sh", "-c", 'kill -0 "$0"', String(pid)], { stdio: "ignore", timeout: 5_000 });
+    const r = spawnSync(this.bin, ["exec", "-u", this.user, this.name, "sh", "-c", 'kill -0 "$0"', String(pid)], { stdio: "ignore", timeout: 5_000 });
     return r.status === 0;
+  }
+
+  /**
+   * A guest's sandbox: before a host-side file tool acts (and after each command), everything that finished commands
+   * left running in the container is killed, so no loop of theirs can swap a project folder for a link while the
+   * tool opens a file there as the owner. Background jobs stay a feature: while one runs nothing is killed, and the
+   * file tools are refused with SANDBOX_BUSY until it ends or is stopped. Otherwise the job would be killed by the
+   * next file tool, or keep running beside it, which is exactly the race.
+   */
+  async quiesce(): Promise<string | undefined> {
+    if (!this.stopLeftovers) return undefined;
+    if (this.live.size > 0) return SANDBOX_BUSY;
+    this.sweeping ??= this.sweep().finally(() => (this.sweeping = undefined));
+    return this.sweeping;
+  }
+
+  private async sweep(): Promise<string | undefined> {
+    // No container (never started, failed, or closed and removed): nothing of a command can still run.
+    if (!this.dirty || !this.started || this.closing) return undefined;
+    this.dirty = false;
+    const r = await run(this.bin, ["exec", "-u", this.user, this.name, "sh", "-c", SWEEP, "tropos-sweep"], 30_000);
+    if (r.error || r.code !== 0 || !r.stdout.includes("swept")) {
+      this.dirty = true;
+      return `Couldn't stop what earlier commands left running in this chat's sandbox (${(r.error?.message ?? r.stderr.trim()) || `exit ${r.code}`}), so files are left alone for now. Try again.`;
+    }
+    return undefined;
   }
 
   close(): Promise<void> {
@@ -387,6 +441,9 @@ export class DockerBackend implements ExecBackend {
   private async startContainer(): Promise<void> {
     const uid = process.getuid?.() ?? 1000;
     const gid = process.getgid?.() ?? 1000;
+    // A guest's keeper runs as a user of its own, which the sweep's kill(-1) can't signal; it starts in / because that
+    // user may not be allowed into the workspace. Commands set their user and directory on each `docker exec`.
+    const keeper = uid === KEEPER_ID ? KEEPER_ID - 1 : KEEPER_ID;
     const args = [
       "run", "-d", "--rm", "--init",
       "--name", this.name,
@@ -399,14 +456,14 @@ export class DockerBackend implements ExecBackend {
       "--pids-limit", String(this.pidsLimit),
       "--memory", this.memory,
       "--cpus", this.cpus,
-      "-u", `${uid}:${gid}`,
+      "-u", this.stopLeftovers ? `${keeper}:${keeper}` : `${uid}:${gid}`,
       "-v", `${this.workspace}:${this.workspace}`,
       // What a later host-side `git` or commit runs: a command in the container must not plant code there.
       ...protectedPaths(this.workspace).flatMap((path) => ["-v", `${path}:${path}:ro`]),
       // The chief's own files: masked after the workspace mount, so the container sees neither their text nor their names.
       ...hideMounts(this.workspace, this.hide),
       "-v", `${this.runDir}:${INSIDE_RUN}`,
-      "-w", this.workspace,
+      "-w", this.stopLeftovers ? "/" : this.workspace,
       this.image,
       "sleep", "infinity",
     ];

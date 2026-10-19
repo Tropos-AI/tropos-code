@@ -105,6 +105,11 @@ are mounted read-only (an empty `.tropos` is created when the project has none).
 guest approves their own requests. Without a running Docker the guest is told "commands from this chat need Docker on
 the owner's machine".
 
+A guest's container also stops everything a command left running as soon as the command ends, so nothing of theirs
+keeps running beside the file tools (which work on the project from this computer, as you). A guest can still start a
+background job (`run_in_background`): while one runs, Read, Write, Edit and Grep in that chat refuse with a message
+saying so, until the job ends or is stopped with KillShell.
+
 ### Without a sandbox
 
 On a machine with no `sandbox-exec` and no `bwrap`, your own chats run commands unconfined, as you (with the same
@@ -124,8 +129,9 @@ need Docker (`chat.backend`), even with that consent. Guests always need Docker.
   reaches the agent until you approve it on this computer.
 - **Your own allow rules don't apply in a chat.** What runs unasked is what the level allows. A chat can't grant
   "always allow", can't use bypass or accept-edits mode, and its file tools are confined to the project (a path
-  outside it, or a symlink out of it, is refused, not asked about). A request too long to show in full is denied
-  rather than put behind a button.
+  outside it, or a symlink out of it, is refused, not asked about). A file is checked again once it is open: if a
+  folder on its way was swapped for a link in the meantime, nothing is read or written. A request too long to show in
+  full is denied rather than put behind a button.
 - **Fewer tools.** A chat has no WebFetch. Guests and scheduled runs also have no session search (your other
   conversations) and don't see your notes or journal. Formatters and language servers are off in chats.
 - **Unsafe projects are refused.** A project that is your home directory, a parent of it, or `~/.tropos` can't be

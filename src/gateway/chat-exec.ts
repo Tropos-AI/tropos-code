@@ -57,7 +57,10 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
         throw err;
       }
     }
-    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide: [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))] }), confined: true };
+    const hide = [...workspaceOwnPaths(input.home), ...(role === "owner" ? [] : workspaceInstructionPaths(input.home))];
+    // A guest's command could leave a loop running that swaps a project folder for a link while a file tool, on the
+    // host as the owner, opens a file there: their container stops it once each command ends.
+    return { backend: input.override?.(workspace) ?? new DockerBackend({ workspace, image, network, memory, cpus, hide, stopLeftovers: role === "guest" }), confined: true };
   }
   if (input.override) return { backend: input.override(workspace), confined: true };
   if ((await input.confinement()) === null) {

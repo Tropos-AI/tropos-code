@@ -145,7 +145,8 @@ Files inside a repository arrive with the code, so Tropos treats them as untrust
 - Nobody is in by default: an unknown sender gets a one-time code (valid for an hour, a few per hour at most), and
   nothing they write reaches the agent until you approve the code on this computer.
 - `tcode pairing list` and `revoke` manage who is in; `tcode security audit` lists paired senders.
-- Guests' commands run only in Docker, in their own folder or projects you shared.
+- Guests' commands run only in Docker, in their own folder or projects you shared. Whatever a command leaves running
+  there is stopped when it ends, and while a guest's background job runs, the file tools in that chat wait.
 
 ## Releases
 
