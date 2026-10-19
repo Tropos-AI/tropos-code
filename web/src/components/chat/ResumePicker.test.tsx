@@ -6,7 +6,7 @@ import type { SessionSummaryView } from "@core/web/protocol";
 import { withDom } from "@/test-setup";
 
 withDom();
-const { render, screen, cleanup, act, fireEvent } = await import("@testing-library/react");
+const { render, screen, cleanup, act, fireEvent, waitFor } = await import("@testing-library/react");
 const { createElement } = await import("react");
 const { ResumePicker } = await import("@/components/chat/ResumePicker");
 const { connectedStore, withProviders, wait, HELLO } = await import("@/components/chat/chat-test-kit");
@@ -145,10 +145,15 @@ describe("ResumePicker", () => {
     const ctx = connectedStore({});
     const view = render(withProviders(ctx.store, createElement(ResumePicker, { open: true, onClose: () => {} })));
     await screen.findByRole("dialog");
-    const [call] = ctx.socket.rpcs("sessions");
+    // The dialog is in the page as soon as it renders; the listing is asked for by an effect that may run after that.
+    const call = await waitFor(() => {
+      const [sent] = ctx.socket.rpcs("sessions");
+      if (!sent) throw new Error("the sessions haven't been asked for yet");
+      return sent;
+    });
     view.unmount();
     await act(async () => {
-      ctx.socket.deliver({ t: "rpc_result", id: call!.id, ok: false, error: "late" });
+      ctx.socket.deliver({ t: "rpc_result", id: call.id, ok: false, error: "late" });
       await wait(10);
     });
     expect(ctx.store.getState().toasts).toEqual([]);
