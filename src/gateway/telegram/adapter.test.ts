@@ -577,8 +577,9 @@ describe("TelegramAdapter", () => {
     ctx.server.pushMessage(CHAT, CHAT, "after failures");
     await ctx.server.waitFor(() => ctx.server.textsTo(CHAT).includes("echo: after failures"));
     expect(ctx.session().prompts).toEqual(["after failures"]);
+    // The poll that acknowledges the message can still be on its way when the reply has arrived.
     const offs = ctx.server.getUpdatesOffsets;
-    expect(offs[offs.length - 1]!).toBeGreaterThan(offs[0]!);
+    await ctx.server.waitFor(() => offs[offs.length - 1]! > offs[0]!);
   });
 
   test("stop() aborts a long poll promptly and is idempotent", async () => {
