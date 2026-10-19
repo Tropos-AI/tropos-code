@@ -610,3 +610,44 @@ describe("decide — autonomy", () => {
     expect(decide(memory, auto("autonomous", [], { role: "guest", stores })).behavior).toBe("ask");
   });
 });
+
+describe("decide — the chief's own files", () => {
+  const ws = "/home/u/.tropos/workspace";
+  const own = [`${ws}/USER.md`, `${ws}/memory`];
+  const base = { cwd: ws, allowedDirs: [ws], ownFiles: own, allow: ["Edit(**)"] };
+
+  test("a confined session can't read or edit the chief's files", () => {
+    const c = ctx({ ...base, confine: true, role: "owner" });
+    const d = decide(read(`${ws}/USER.md`), c);
+    expect(d).toEqual({ behavior: "deny", reason: `${ws}/USER.md is Tropos's own memory; only its memory tools may use it in this session.` });
+    expect(decide({ toolName: "Grep", kind: "read", paths: [`${ws}/memory/2026-10-16.md`] }, c).behavior).toBe("deny");
+    expect(decide(edit(`${ws}/USER.md`), c).behavior).toBe("deny");
+  });
+  test("a guest is denied even unconfined", () => {
+    expect(decide(read(`${ws}/USER.md`), ctx({ ...base, role: "guest" })).behavior).toBe("deny");
+    expect(decide(read(`${ws}/USER.md`), ctx({ ...base })).behavior).toBe("deny"); // no role: not the owner
+  });
+  test("the owner's terminal is asked, never auto-allowed by Edit(**) or accept-edits", () => {
+    expect(decide(edit(`${ws}/USER.md`), ctx({ ...base, role: "owner" })).behavior).toBe("ask");
+    expect(decide(edit(`${ws}/memory/x.md`), ctx({ ...base, mode: "acceptEdits", role: "owner" })).behavior).toBe("ask");
+    expect(decide(read(`${ws}/USER.md`), ctx({ ...base, role: "owner" }))).toEqual({ behavior: "ask", reason: `Tropos's own file: ${ws}/USER.md` });
+    expect(decide(edit(`${ws}/USER.md`), ctx({ ...base, role: "owner", autonomy: { level: "autonomous", testCommands: [] } })).behavior).toBe("ask");
+  });
+  test("a case variant on a case-insensitive disk is the same file", () => {
+    if (process.platform !== "darwin" && process.platform !== "win32") return;
+    expect(decide(read(`${ws}/user.md`), ctx({ ...base, confine: true, role: "owner" })).behavior).toBe("deny");
+  });
+  test("bypass lets the owner through; a deny rule and confinement still win", () => {
+    expect(decide(edit(`${ws}/USER.md`), ctx({ ...base, role: "owner", mode: "bypass" })).behavior).toBe("allow");
+    expect(decide(edit(`${ws}/USER.md`), ctx({ ...base, role: "guest", mode: "bypass" })).behavior).toBe("deny");
+  });
+  test("store tools are not affected by the guard", () => {
+    const stores = { paths: [`${ws}/USER.md`], askBeforeSaving: false };
+    const memory: PermissionRequest = { toolName: "Memory", kind: "edit", paths: [`${ws}/USER.md`] };
+    expect(decide(memory, ctx({ ...base, role: "owner", stores })).behavior).toBe("allow");
+  });
+  test("other workspace files are untouched by the guard", () => {
+    expect(decide(edit(`${ws}/app.ts`), ctx({ ...base, role: "owner" })).behavior).toBe("allow");
+    expect(decide(read(`${ws}/app.ts`), ctx({ ...base, confine: true, role: "owner" })).behavior).toBe("allow");
+  });
+});

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { bashTool } from "../tools/bash/bash";
-import { DockerBackend, protectedPaths, sweepLeftoverContainers } from "./docker";
+import { DockerBackend, hideMounts, protectedPaths, sweepLeftoverContainers } from "./docker";
 import { COMMONDIR_TAMPERED, commondirUnsafe } from "./git-integrity";
 
 const IMAGE = "alpine:3.22";
@@ -43,6 +43,32 @@ async function until(check: () => boolean, ms = 10_000) {
     await Bun.sleep(50);
   }
 }
+
+describe("hideMounts", () => {
+  test("hidden paths are masked inside the container: a file with /dev/null, a folder with a read-only tmpfs; missing ones add nothing", async () => {
+    const ws = realpathSync(await makeTmpDir("tropos-hide-"));
+    try {
+      await writeFile(join(ws, "USER.md"), "u");
+      await mkdir(join(ws, "memory"));
+      const args = hideMounts(ws, [join(ws, "USER.md"), join(ws, "memory"), join(ws, "MEMORY.md"), join(ws, "skills")]);
+      expect(args).toEqual(["-v", `/dev/null:${join(ws, "USER.md")}:ro`, "--tmpfs", `${join(ws, "memory")}:ro`]);
+    } finally {
+      await removeDir(ws);
+    }
+  });
+  test("a path outside the workspace, or a link, is not masked", async () => {
+    const ws = realpathSync(await makeTmpDir("tropos-hide-"));
+    const out = realpathSync(await makeTmpDir("tropos-hide-out-"));
+    try {
+      await writeFile(join(out, "x.md"), "x");
+      await symlink(join(out, "x.md"), join(ws, "link.md"));
+      expect(hideMounts(ws, [join(out, "x.md"), join(ws, "link.md")])).toEqual([]);
+    } finally {
+      await removeDir(ws);
+      await removeDir(out);
+    }
+  });
+});
 
 describe("protectedPaths", () => {
   test("links that leave the workspace (or dangle) make the sandbox refuse, and nothing is created through them", async () => {

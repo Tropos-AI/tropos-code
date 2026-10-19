@@ -172,3 +172,23 @@ test("a project that holds the user's home hides the secrets again after binding
   expect(at(after.slice(tropos), ...ro(join(userHome, ".tropos", "workspace")))).toBeGreaterThan(0);
   expect(at(after.slice(tropos), "--bind", c.cacheDir, c.cacheDir)).toBeGreaterThan(0);
 });
+
+test("the chief's own files are masked after the project bind and the workspace carve-out", () => {
+  const ws = join(userHome, ".tropos", "workspace");
+  mkdirSync(join(ws, "memory"), { recursive: true });
+  writeFileSync(join(ws, "USER.md"), "u");
+  // Seen from another project: after the carve-out bind.
+  let c = paths();
+  let args = bwrapArgs(c, project);
+  const carve = at(args, ...ro(ws));
+  expect(carve).toBeGreaterThan(0);
+  expect(at(args, ...nullFile(join(ws, "USER.md")))).toBeGreaterThan(carve);
+  expect(at(args, ...emptyDir(join(ws, "memory")))).toBeGreaterThan(carve);
+  expect(at(args, ...nullFile(join(ws, "AGENTS.md")))).toBe(-1); // missing: nothing to mask
+  // The workspace as the project: after the project bind.
+  c = paths(ws);
+  args = bwrapArgs(c, ws);
+  const projectBind = at(args, "--bind", ws, ws);
+  expect(at(args, ...nullFile(join(ws, "USER.md")))).toBeGreaterThan(projectBind);
+  expect(at(args, ...emptyDir(join(ws, "memory")))).toBeGreaterThan(projectBind);
+});

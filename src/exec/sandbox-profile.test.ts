@@ -14,6 +14,7 @@ const base: ConfinementPaths = {
   husky: ["/w/app/.husky"],
   deniedReads: ["/u/.ssh", "/u/.tropos", "/Library/Keychains"],
   readCarveOut: "/u/.tropos/workspace",
+  ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
   platform: "darwin",
 };
 
@@ -38,11 +39,13 @@ test("the rules come in the order the sandbox needs: service denies, base write 
     '(deny file-write* (literal (param "PROJECT"))',
     '(deny file-read* (subpath (param "R0"))',
     '(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))',
+    "(deny file-read* file-write* (subpath (param \"O0\")) (subpath (param \"O1\")))",
   ];
   const at = order.map((rule) => profile.indexOf(rule));
   for (const i of at) expect(i).toBeGreaterThanOrEqual(0);
   expect(at).toEqual([...at].sort((a, b) => a - b));
-  expect(profile.trimEnd().endsWith('(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))')).toBe(true);
+  // The chief's own files are denied last, after the carve-out they sit in (the last match wins).
+  expect(profile.trimEnd().endsWith('(deny file-read* file-write* (subpath (param "O0")) (subpath (param "O1")))')).toBe(true);
   // Host services: the keychain (securityd) over Mach and every Unix-socket connect (docker.sock, ssh/gpg agents).
   const mach = ruleWith(profile, "(deny mach-lookup");
   for (const svc of ['(global-name "com.apple.securityd")', '(global-name "com.apple.SecurityServer")']) expect(mach).toContain(svc);
@@ -73,6 +76,8 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     ["R2", base.deniedReads[2]!],
     ["C0", base.readCarveOut],
     ["CD0", base.cacheDir],
+    ["O0", base.ownFiles[0]!],
+    ["O1", base.ownFiles[1]!],
   ]);
   const escaped = "/w/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\^\\$\\|\\?\\*";
   const embedding = profile.split("\n").filter((l) => l.includes("/w/a"));
@@ -80,7 +85,7 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     `  (regex #"^${escaped}/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`,
     `  (regex #"^${escaped}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ]);
-  for (const p of [...base.writable, ...base.deniedReads, base.readCarveOut, base.cacheDir]) expect(profile).not.toContain(p);
+  for (const p of [...base.writable, ...base.deniedReads, base.readCarveOut, base.cacheDir, ...base.ownFiles]) expect(profile).not.toContain(p);
 
   expect(() => sandboxProfile({ ...base, project: '/w/a"b' })).toThrow(new ConfinementError(`/w/a"b can't be confined: its path contains a double quote.`));
   expect(() => sandboxProfile({ ...base, gitDirs: ["/w/app/.git", '/w/app/g"it'] })).toThrow(ConfinementError);
@@ -139,6 +144,30 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(paths, `cat "${join(userHome, ".tropos", "gateway.json")}"`)).not.toBe(0);
       expect(run(paths, `cat "${join(userHome, ".tropos", "workspace", "f")}"`)).toBe(0);
       expect(readdirSync(project).sort()).toEqual([".git", ".tropos", "src", "sub"]); // sub made by `mkdir -p`, its .tropos refused
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("the profile denies reading and writing workspace/USER.md and memory/ though the workspace is writable", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const ws = join(userHome, ".tropos", "workspace");
+      mkdirSync(join(ws, "memory"), { recursive: true });
+      writeFileSync(join(ws, "USER.md"), "secret about the user");
+      writeFileSync(join(ws, "memory", "2026-10-16.md"), "journal");
+      const paths = confinementPaths({ project: ws, home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(paths, `cat "${join(ws, "USER.md")}"`)).not.toBe(0);
+      expect(run(paths, `echo x >> "${join(ws, "USER.md")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(ws, "memory", "2026-10-16.md")}"`)).not.toBe(0);
+      expect(run(paths, `echo x > "${join(ws, "memory", "new.md")}"`)).not.toBe(0);
+      expect(run(paths, `echo x > "${join(ws, "MEMORY.md")}"`)).not.toBe(0); // missing files can't be created either
+      // The rest of the workspace is still the project: readable and writable.
+      expect(run(paths, `echo hi > "${join(ws, "app.ts")}" && cat "${join(ws, "app.ts")}"`)).toBe(0);
+      // Seen from another project, the workspace carve-out stays readable but the chief's files do not.
+      const other = confinementPaths({ project: join(fx, "outside"), home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(other, `cat "${join(ws, "app.ts")}"`)).toBe(0);
+      expect(run(other, `cat "${join(ws, "USER.md")}"`)).not.toBe(0);
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }

@@ -62,6 +62,8 @@ export interface PermissionContext {
   stores?: { paths: string[]; askBeforeSaving: boolean };
   /** Unset outside the gateway: everything asks as before. */
   autonomy?: AutonomyPolicy;
+  /** The chief's own files inside the default project (workspaceOwnPaths): only the store tools may use them. */
+  ownFiles?: string[];
 }
 
 export type Decision =
@@ -216,11 +218,29 @@ function autonomyAllows(req: PermissionRequest, ctx: PermissionContext): boolean
   return known && pathsStayInside(req.command, req.cwd ?? ctx.cwd, ctx.home, ctx.allowedDirs);
 }
 
+/** Folded the way the disk compares names, so `user.md` can't slip past a guard on `USER.md` on macOS/Windows. */
+function foldPath(path: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/** The first of the request's paths that lies in one of the chief's own files. */
+function ownFilePath(req: PermissionRequest, ctx: PermissionContext): string | undefined {
+  if (!ctx.ownFiles?.length || STORE_TOOL_NAMES.has(req.toolName)) return undefined;
+  const own = ctx.ownFiles.map(foldPath);
+  return req.paths.find((p) => own.some((dir) => isInside(foldPath(p), dir)));
+}
+
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
   // One work allowance covers every deny and ask rule, so many rules cannot multiply the cost.
   const budget = createRestrictBudget();
   const denied = ctx.rules.deny.find((rule) => ruleHits(rule, req, ctx, "any", true, budget));
   if (denied) return { behavior: "deny", reason: `Blocked by the deny rule ${formatRule(denied)}.` };
+  // The chief's files sit in the default project: generic file tools stay away from them in confined and non-owner
+  // sessions, and the owner is asked (below). The store tools keep their own path.
+  const own = ownFilePath(req, ctx);
+  if (own && (ctx.confine || ctx.role !== "owner")) {
+    return { behavior: "deny", reason: `${own} is Tropos's own memory; only its memory tools may use it in this session.` };
+  }
   // The owner's own notes, skills and identity live under the Tropos home, outside any workspace.
   const ownerStoreSave = ctx.role === "owner" && isStoreSave(req, ctx);
   if (ctx.confine && !ownerStoreSave) {
@@ -231,6 +251,8 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   if (ctx.mode === "plan" && (req.kind === "edit" || req.kind === "exec")) {
     return { behavior: "deny", reason: PLAN_MODE_REASON };
   }
+  // Ahead of every allow path (rules, accept-edits, autonomy): a broad `Edit(**)` never approves these silently.
+  if (own) return { behavior: "ask", reason: `Tropos's own file: ${own}` };
   if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
   // Asking hooks still turn this allow into a prompt (src/agent/agent.ts).
   if (ownerStoreSave && !ctx.stores!.askBeforeSaving) return { behavior: "allow" };

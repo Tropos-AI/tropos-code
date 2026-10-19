@@ -151,3 +151,11 @@ function realpathOr(p: string): string {
     return p;
   }
 }
+
+test("ownFiles lists the chief's files under the real home, existing or not", () => {
+  const home = mk("h", ".tropos");
+  const paths = confinementPaths({ project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" });
+  for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "BOOTSTRAP.md"]) expect(paths.ownFiles).toContain(join(home, "workspace", name));
+  for (const dir of ["memory", "skills", "skills-learned"]) expect(paths.ownFiles).toContain(join(home, "workspace", dir));
+  expect(paths.ownFiles).not.toContain(join(home, "workspace"));
+});

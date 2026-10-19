@@ -62,6 +62,9 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   if (reopened.length > 0 && isInside(paths.cacheDir, project) && exists(paths.cacheDir)) args.push("--bind", paths.cacheDir, paths.cacheDir);
   if (carve && reopened.some((secret) => isInside(carveOut, secret))) args.push("--ro-bind", carveOut, carveOut);
 
+  // The chief's own files, last among the binds that could bring them back (the project or the workspace carve-out).
+  for (const own of paths.ownFiles.filter(isStatable)) args.push(...hide(own));
+
   // `.git` as a mount point can't be renamed (EBUSY): `mv .git g2; write g2/hooks/x; mv g2 .git` fails.
   for (const [i, git] of paths.gitDirs.entries()) {
     if (!isRealDir(git)) {
@@ -105,6 +108,16 @@ function requireRealDirOrAbsent(path: string): void {
   }
   if (info.isSymbolicLink() || !info.isDirectory()) {
     throw new ConfinementError(`${path} can't be confined: it must be a real directory, not a symlink or file.`);
+  }
+}
+
+/** Exists and resolves (a dangling link can't be hidden: there is nothing to mask). */
+function isStatable(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

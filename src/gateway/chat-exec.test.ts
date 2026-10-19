@@ -5,6 +5,7 @@ import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import type { ExecBackend } from "../exec/backend";
+import { workspaceOwnPaths } from "../home/layout";
 import { confinementAvailable } from "../exec/confined";
 import { chatBackend, GUEST_NEEDS_DOCKER } from "./chat-exec";
 import { gatewayConfigSchema, type GatewayConfig } from "./config";
@@ -61,6 +62,8 @@ test("docker: a docker problem fails closed, as before", async () => {
 test("docker: with Docker up, the container backend (or the test's), confined", async () => {
   const docker = await chatBackend(input({ config: config({ backend: "docker" }), role: "owner" }));
   expect(docker).toMatchObject({ backend: { kind: "docker" }, confined: true });
+  // The chief's own files are masked in the container (a project at ~/.tropos/workspace holds them).
+  expect((docker.backend as unknown as { hide: string[] }).hide).toEqual(workspaceOwnPaths(home));
   await docker.backend.close();
   const backend = fake();
   expect(await chatBackend(input({ config: config({ backend: "docker" }), role: "owner", override: () => backend }))).toEqual({ backend, confined: true });

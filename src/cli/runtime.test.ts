@@ -21,6 +21,7 @@ import { loadExtensions, sessionTools } from "./extensions";
 import { troposStorePaths } from "../learning/stores";
 import { legacyNotesDir } from "../memory/daily";
 import { journalDir } from "../paths";
+import { workspaceOwnPaths } from "../home/layout";
 import { channelContext } from "../gateway/policy";
 import { createRuntime, createToolContext, makeAgent, permissionContext, type AppContext } from "./runtime";
 
@@ -107,6 +108,8 @@ test("permissionContext carries the role, the origin's confinement and the store
   expect(local.stores!.paths).toEqual([...troposStorePaths(ctx.home), legacyNotesDir(ctx.home, ctx.cwd)]);
   // The journal is under workspace/memory, which troposStorePaths already holds.
   expect(local.stores!.paths).toContain(journalDir(ctx.home));
+  // The chief's own files are guarded from the generic file tools.
+  for (const own of workspaceOwnPaths(ctx.home)) expect(local.ownFiles).toContain(own);
   const asking = { ...ctx, origin: "channel" as const, role: "guest" as const, settings: { ...DEFAULT_SETTINGS, learning: { ...DEFAULT_SETTINGS.learning, askBeforeSaving: true } } };
   expect(permissionContext(asking, "default")).toMatchObject({ mode: "default", confine: true, role: "guest", stores: { askBeforeSaving: true } });
 });

@@ -27,6 +27,8 @@ export interface DockerBackendOptions {
   /** Host dir for cwd markers and pid files, mounted at /run/tropos. Default: a fresh temp dir. */
   runDir?: string;
   dockerBin?: string;
+  /** Paths inside `workspace` the container must not see (the chief's own files); the ones that exist are masked. */
+  hide?: string[];
 }
 
 const INSIDE_RUN = "/run/tropos";
@@ -34,6 +36,31 @@ const START_TIMEOUT_MS = 300_000; // a first run may have to pull the image
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const LABEL = "tropos=1";
 const OWNER_LABEL = "tropos.pid";
+
+/**
+ * `docker run` arguments that mask the existing `hide` paths inside the workspace: a file with /dev/null, a folder with
+ * an empty read-only tmpfs. A path outside the workspace, a missing one, or one that is a link is left alone (a link's
+ * target isn't the chief's file, and the container could swap the link anyway).
+ */
+export function hideMounts(workspace: string, hide: readonly string[]): string[] {
+  let root: string;
+  try {
+    root = realpathSync(workspace);
+  } catch {
+    return [];
+  }
+  return hide.flatMap((path) => {
+    if (path !== root && !path.startsWith(root + sep) && !(path === workspace || path.startsWith(workspace + sep))) return [];
+    let info: ReturnType<typeof lstatSync>;
+    try {
+      info = lstatSync(path);
+    } catch {
+      return [];
+    }
+    if (info.isSymbolicLink()) return [];
+    return info.isDirectory() ? ["--tmpfs", `${path}:ro`] : ["-v", `/dev/null:${path}:ro`];
+  });
+}
 
 /**
  * Paths inside the workspace that are mounted read-only, because the owner's next `git` command (or commit hook)
@@ -164,6 +191,7 @@ export class DockerBackend implements ExecBackend {
   private readonly cpus: string;
   private readonly pidsLimit: number;
   private readonly bin: string;
+  private readonly hide: string[];
   private readonly ownsRunDir: boolean;
   private starting: Promise<void> | undefined;
   private started = false;
@@ -181,6 +209,7 @@ export class DockerBackend implements ExecBackend {
     this.cpus = opts.cpus ?? "2";
     this.pidsLimit = opts.pidsLimit ?? 256;
     this.bin = opts.dockerBin ?? "docker";
+    this.hide = opts.hide ?? [];
     this.name = opts.name ?? `tropos-${randomBytes(6).toString("hex")}`;
     if (opts.runDir) {
       this.ownsRunDir = !existsSync(opts.runDir);
@@ -371,6 +400,8 @@ export class DockerBackend implements ExecBackend {
       "-v", `${this.workspace}:${this.workspace}`,
       // What a later host-side `git` or commit runs: a command in the container must not plant code there.
       ...protectedPaths(this.workspace).flatMap((path) => ["-v", `${path}:${path}:ro`]),
+      // The chief's own files: masked after the workspace mount, so the container sees neither their text nor their names.
+      ...hideMounts(this.workspace, this.hide),
       "-v", `${this.runDir}:${INSIDE_RUN}`,
       "-w", this.workspace,
       this.image,
