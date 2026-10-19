@@ -93,6 +93,35 @@ test("an https host is looked up before git runs; one that resolves to a private
   expect(looked).toHaveLength(3);
 });
 
+/** A stand-in git that reports `version` and writes the arguments of a clone to a file (then fails, as offline). */
+async function fakeGit(version: string): Promise<{ env: NodeJS.ProcessEnv; args: () => Promise<string[]> }> {
+  const bin = join(root, `bin-${version}`);
+  const out = join(bin, "args.txt");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "git"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "git version ${version}"; exit 0; fi\nprintf '%s\\n' "$@" > '${out}'\nexit 1\n`);
+  await chmod(join(bin, "git"), 0o755);
+  return { env: { HOME: userHome, PATH: `${bin}:${process.env.PATH}` }, args: async () => (await readFile(out, "utf8")).trim().split("\n") };
+}
+
+test("git is pinned to the addresses that were checked, so a second lookup can't send it elsewhere", async () => {
+  const git = await fakeGit("2.54.0");
+  const resolve = async () => ["93.184.216.34", "2606:4700::1111"];
+  await expect(shallowClone("https://git.example/acme/kit.git", join(root, "a"), { env: git.env, resolve })).rejects.toThrow(/couldn't be cloned/);
+  expect(await git.args()).toContain("http.curloptResolve=git.example:443:93.184.216.34,[2606:4700::1111]");
+  await expect(shallowClone("https://git.example:8443/kit.git", join(root, "b"), { env: git.env, resolve })).rejects.toThrow(/couldn't be cloned/);
+  expect(await git.args()).toContain("http.curloptResolve=git.example:8443:93.184.216.34,[2606:4700::1111]");
+});
+
+test("a git older than 2.37 (no http.curloptResolve) clones as before, unpinned; a file:// repository is never pinned", async () => {
+  const old = await fakeGit("2.30.1");
+  await expect(shallowClone("https://git.example/kit.git", join(root, "a"), { env: old.env, resolve: async () => ["93.184.216.34"] })).rejects.toThrow(/couldn't be cloned/);
+  expect((await old.args()).join(" ")).not.toContain("curloptResolve");
+  expect(await old.args()).toContain("https://git.example/kit.git");
+  const now = await fakeGit("2.54.0");
+  await expect(shallowClone("file:///srv/kit.git", join(root, "b"), { env: now.env, resolve: async () => ["93.184.216.34"] })).rejects.toThrow(/couldn't be cloned/);
+  expect((await now.args()).join(" ")).not.toContain("curloptResolve");
+});
+
 test("a clone that fails says why and leaves nothing behind", async () => {
   const dest = join(root, "missing");
   await expect(shallowClone(`file://${join(root, "nope.git")}`, dest, { env })).rejects.toThrow(/couldn't be cloned/);

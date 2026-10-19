@@ -5,7 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, normalize } from "node:path";
 import { z } from "zod";
 import { readUserSettingsRaw, setAt, unsetAt, updateUserSettings } from "../../config/store";
 import { MANIFESTS, readPlugin, type LoadedPlugin } from "../../extensions/plugins";
@@ -137,37 +137,55 @@ function pluginFolder(dir: string, name: string | undefined, fallback: string): 
 /** The folders whose files sessions read as instructions: a plugin's skills, commands and agents. */
 const PROMPT_FOLDERS = ["skills", "commands", "agents"];
 
+/** Every path the manifest declares for its commands, agents or skills (Claude Code's "commands": "./x" or ["./x"]). */
+function declaredPromptPaths(root: string, manifest: string | null): string[] {
+  if (!manifest) return [];
+  let data: unknown;
+  try {
+    data = JSON.parse(readFileSync(join(root, manifest), "utf8"));
+  } catch {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const key of PROMPT_FOLDERS) {
+    const value = (data as Record<string, unknown>)[key];
+    const list = typeof value === "string" ? [value] : Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+    for (const p of list) {
+      if (subdirProblem(p)) throw new Error(`The plugin's manifest names ${JSON.stringify(p.slice(0, 80))} for its ${key}; that must be a relative path that stays inside the plugin.`);
+      paths.push(normalize(p).replace(/\/+$/, ""));
+    }
+  }
+  return paths;
+}
+
 /**
  * Refuses a plugin whose prompt text fails the strict threat scan, the one skill.install applies: every text file under
- * skills/, commands/ and agents/ (a skill's supporting files are read on demand too). Files that aren't text aren't
- * prompt text and are left alone.
+ * skills/, commands/ and agents/ and under each path the manifest declares for them (a skill's supporting files are read
+ * on demand too). Fails closed: a markdown file that isn't valid UTF-8 can't be scanned, so it refuses the install. Other
+ * files that aren't text (a skill's image) aren't prompt text and are left alone.
  */
-async function scanPromptFiles(root: string): Promise<void> {
-  const walk = async (dir: string, rel: string): Promise<void> => {
-    let names: string[];
+async function scanPromptFiles(root: string, manifest: string | null): Promise<void> {
+  const scanFile = async (path: string, rel: string): Promise<void> => {
+    let text: string;
     try {
-      names = (await readdir(dir)).sort();
+      text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path));
     } catch {
+      if (/\.md$/i.test(rel)) throw new Error(`Refused: ${rel} isn't valid UTF-8 text, so I can't check it. A plugin's skills, commands and agents are instructions for later sessions; I only install them once checked.`);
       return;
     }
-    for (const name of names) {
-      const path = join(dir, name);
-      const relPath = `${rel}/${name}`;
-      const info = await lstat(path);
-      if (info.isDirectory()) await walk(path, relPath);
-      else if (info.isFile()) {
-        let text: string;
-        try {
-          text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path));
-        } catch {
-          continue;
-        }
-        const scan = scanText(text, { strict: true });
-        if (!scan.ok) throw new Error(`Refused: ${relPath} looks unsafe (${scan.reason}). A plugin's skills, commands and agents are loaded as instructions in later sessions, so I don't install one with injected instructions, secret exfiltration, fetch-and-run lines or hidden characters.`);
-      }
-    }
+    const scan = scanText(text, { strict: true });
+    if (!scan.ok) throw new Error(`Refused: ${rel} looks unsafe (${scan.reason}). A plugin's skills, commands and agents are loaded as instructions in later sessions, so I don't install one with injected instructions, secret exfiltration, fetch-and-run lines or hidden characters.`);
   };
-  for (const folder of PROMPT_FOLDERS) await walk(join(root, folder), folder);
+  const scanned = new Set<string>();
+  const visit = async (path: string, rel: string): Promise<void> => {
+    if (scanned.has(rel)) return;
+    scanned.add(rel);
+    const info = await lstat(path).catch(() => null);
+    if (info?.isFile()) return scanFile(path, rel);
+    if (!info?.isDirectory()) return;
+    for (const name of (await readdir(path)).sort()) await visit(join(path, name), `${rel}/${name}`);
+  };
+  for (const rel of [...PROMPT_FOLDERS, ...declaredPromptPaths(root, manifest)]) await visit(join(root, rel), rel);
 }
 
 /** Installs a plugin into <home>/plugins/<name>. Throws a readable Error; a failure leaves nothing behind. */
@@ -190,7 +208,7 @@ export async function installPlugin(deps: PluginOpsDeps, req: PluginRequest): Pr
     if (!read.ok) throw new Error(`That plugin can't be installed: ${read.reason}.`);
     if (!read.manifest && !found.listed) throw new Error("That isn't a plugin: it has no plugin.json (.claude-plugin/plugin.json).");
     if (read.warnings.length) throw new Error(`That plugin can't be installed: ${read.warnings.join("; ")}.`);
-    await scanPromptFiles(found.dir);
+    await scanPromptFiles(found.dir, read.manifest);
     const name = read.plugin.name;
     const dest = join(base, name);
     if (findPlugin(deps.home, name) || existsSync(dest)) throw new Error(`A plugin named ${name} is already installed. Remove it first to install it again.`);
