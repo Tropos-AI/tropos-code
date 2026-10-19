@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { download, downloadName, downloadTarget, MAX_DOWNLOAD_BYTES } from "./download";
@@ -106,4 +106,19 @@ test("only https from a public host: http, credentials and private hosts are ref
 test("an HTTP error saves nothing", async () => {
   await expect(download({ url: "https://example.com/a" }, place(), { resolve: DNS, fetch: server("nope", {}, 404) })).rejects.toThrow(/404/);
   expect(await readdir(project)).toEqual([]);
+});
+
+test("a folder swapped for a link after the target was checked: no folder is created outside and nothing is fetched", async () => {
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await mkdir(join(project, "vendor"));
+  // The host lookup runs after the target was checked: a racing command acts then.
+  const racing = async (host: string) => {
+    await rename(join(project, "vendor"), join(project, "vendor.old"));
+    await symlink(outside, join(project, "vendor"));
+    return DNS(host);
+  };
+  await expect(download({ url: "https://example.com/a.zip", path: "vendor/lib/a.zip" }, place(), { resolve: racing, fetch: server() })).rejects.toThrow(/changed while it was being opened/);
+  expect(await readdir(outside)).toEqual([]);
+  expect(fetched).toEqual([]);
 });

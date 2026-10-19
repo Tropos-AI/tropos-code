@@ -2,12 +2,13 @@
 // session works in. Size-capped while it streams, never over an existing file unless the owner asked for that, and
 // reported with its sha256 so the owner can check it.
 import { randomBytes } from "node:crypto";
-import { chmod, link, lstat, mkdir, rename, rm } from "node:fs/promises";
+import { chmod, link, lstat, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { downloadToFile } from "../../install/fetch";
 import { InstallError } from "../../install/errors";
 import { isInside } from "../../paths";
 import { inGitControlDir, isProjectSettingsFile } from "../../permissions/engine";
+import { makeParentDirs } from "../file-guard";
 import { resolveToolPath } from "../paths";
 import { cloneUrlProblem, guardedFetch, HostRefused, hostProblem, privateHostProblem, type Resolve } from "./sources";
 
@@ -101,7 +102,8 @@ export async function download(req: DownloadRequest, place: DownloadPlace, opts:
     return res;
   };
 
-  await mkdir(dirname(target), { recursive: true });
+  // One folder at a time, each checked: `mkdir -p` would follow a folder swapped for a link out of the project.
+  await makeParentDirs(dirname(target));
   const temp = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString("hex")}.part`);
   try {
     const { size, sha256 } = await downloadToFile(req.url, temp, { maxBytes, timeoutMs: opts.timeoutMs ?? 60_000, idleTimeoutMs: opts.timeoutMs ?? 60_000, fetch: capped }).catch((e: unknown) => {

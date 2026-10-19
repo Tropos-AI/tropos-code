@@ -39,4 +39,10 @@ export interface ExecBackend {
   alive(child: ChildProcess): boolean;
   /** Releases what the backend holds (a container); idempotent. */
   close(): Promise<void>;
+  /**
+   * Called before a host-side file tool acts and after each command: stops whatever finished commands left running,
+   * so nothing in the sandbox can swap a folder for a link while the tool opens a file. Resolves to why that can't be
+   * done right now (a background command still running), else undefined. Unset: the backend doesn't need it.
+   */
+  quiesce?(): Promise<string | undefined>;
 }

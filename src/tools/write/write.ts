@@ -1,9 +1,8 @@
 // src/tools/write/write.ts
-import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
+import { cannotWrite, checkFreshness, makeParentDirs, openVerified, replaceContents, sandboxBusy, staleText } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 
@@ -32,14 +31,24 @@ export const writeTool = defineTool({
     if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
       return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
     }
+    const busy = await sandboxBusy(ctx);
+    if (busy) return busy;
     let output: ToolOutput;
     try {
       const fresh = await checkFreshness(path, ctx);
       if (!fresh.ok) return { content: fresh.error, isError: true };
-      const before = fresh.missing ? "" : await readFile(path, "utf8");
-      await mkdir(dirname(path), { recursive: true });
-      await writeFileNoFollow(path, input.content);
-      ctx.readState.record(path, (await stat(path)).mtimeMs);
+      await makeParentDirs(dirname(path));
+      const { handle, info } = await openVerified(path, fresh.missing ? "create" : "update");
+      let before = "";
+      try {
+        // The file opened must still be the one that was read.
+        if (!fresh.missing && info.mtimeMs !== fresh.mtimeMs) return { content: staleText(path), isError: true };
+        if (!fresh.missing) before = await handle.readFile("utf8");
+        await replaceContents(handle, input.content);
+        ctx.readState.record(path, (await handle.stat()).mtimeMs);
+      } finally {
+        await handle.close();
+      }
       const diff = makeDiff(path, before, input.content);
       const lineCount = input.content.split("\n").length - (input.content.endsWith("\n") ? 1 : 0);
       output = fresh.missing

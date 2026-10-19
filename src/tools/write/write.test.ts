@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeToolContext } from "../../../test/helpers/tool-context";
+import { busyBackend, swappingBackend } from "../../../test/helpers/swap-backend";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { writeFileNoFollow } from "../file-guard";
 import { readTool } from "../read/read";
@@ -102,6 +103,64 @@ describe("Write", () => {
     await symlink(join(dir, "target-outside"), join(project, "leaf"));
     await expect(writeFileNoFollow(join(project, "leaf"), "pwned")).rejects.toThrow();
     expect(await readFile(join(dir, "target-outside"), "utf8")).toBe("untouched");
+  });
+});
+
+describe("Write: a folder swapped for a link while the file is opened", () => {
+  let outside: string;
+  beforeEach(async () => {
+    outside = await makeTmpDir();
+    await mkdir(join(dir, "sub"));
+  });
+  afterEach(() => removeDir(outside));
+
+  test("an existing file behind a swapped parent is neither truncated nor overwritten, and its text isn't shown", async () => {
+    await writeFile(join(dir, "sub", "agent.plist"), "decoy");
+    await writeFile(join(outside, "agent.plist"), "precious");
+    // Both files get the same mtime, so the freshness check alone can't tell them apart.
+    const then = new Date(2020, 0, 1);
+    await utimes(join(dir, "sub", "agent.plist"), then, then);
+    await utimes(join(outside, "agent.plist"), then, then);
+    const ctx = makeToolContext({ root: dir });
+    await readTool.run({ file_path: "sub/agent.plist" }, ctx);
+    ctx.exec = swappingBackend(join(dir, "sub"), outside);
+    const out = await writeTool.run({ file_path: "sub/agent.plist", content: "pwned" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(String(out.content)).toContain("changed while it was being opened");
+    expect(JSON.stringify(out)).not.toContain("precious");
+    expect(await readFile(join(outside, "agent.plist"), "utf8")).toBe("precious");
+  });
+
+  test("a new file under a swapped parent is not created outside", async () => {
+    const ctx = makeToolContext({ root: dir, exec: swappingBackend(join(dir, "sub"), outside) });
+    const out = await writeTool.run({ file_path: "sub/evil.plist", content: "pwned" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(await exists(join(outside, "evil.plist"))).toBe(false);
+  });
+
+  test("missing folders under a swapped parent are not created outside", async () => {
+    const ctx = makeToolContext({ root: dir, exec: swappingBackend(join(dir, "sub"), outside) });
+    const out = await writeTool.run({ file_path: "sub/a/b/evil.plist", content: "pwned" }, ctx);
+    expect(out.isError).toBe(true);
+    expect(await exists(join(outside, "a"))).toBe(false);
+  });
+
+  test("while the sandbox still runs a command, nothing is written", async () => {
+    const ctx = makeToolContext({ root: dir, exec: busyBackend("A background command is still running.") });
+    const out = await writeTool.run({ file_path: "f.txt", content: "x" }, ctx);
+    expect(out).toEqual({ content: "A background command is still running.", isError: true });
+    expect(await exists(join(dir, "f.txt"))).toBe(false);
+  });
+
+  test("overwriting keeps the file's mode and replaces all of its old text", async () => {
+    await writeFile(join(dir, "run.sh"), "a much longer original text\n");
+    await chmod(join(dir, "run.sh"), 0o755);
+    const ctx = makeToolContext({ root: dir });
+    await readTool.run({ file_path: "run.sh" }, ctx);
+    const out = await writeTool.run({ file_path: "run.sh", content: "short\n" }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(await readFile(join(dir, "run.sh"), "utf8")).toBe("short\n");
+    expect((await stat(join(dir, "run.sh"))).mode & 0o777).toBe(0o755);
   });
 });
 

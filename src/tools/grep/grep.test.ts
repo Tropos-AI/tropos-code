@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { renameSync, symlinkSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { busyBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { createGrepTool } from "./grep";
@@ -162,3 +164,36 @@ for (const engine of engines) {
     });
   });
 }
+
+describe("Grep (fallback): a folder swapped for a link mid-search", () => {
+  test("a file the walk accepted is not read once its folder leads outside", async () => {
+    const root = await makeTmpDir();
+    try {
+      const project = join(root, "project");
+      await mkdir(join(project, "sub"), { recursive: true });
+      await mkdir(join(root, "outside"));
+      await writeFile(join(project, "sub", "notes.txt"), "decoy\n");
+      await writeFile(join(root, "outside", "notes.txt"), "TOKEN=hunter2\n");
+      let swapped = false;
+      // The walk asks about each file after it checked where it lies: the moment a racing command would act.
+      const isDenied = (p: string) => {
+        if (!swapped && p.endsWith("notes.txt")) {
+          swapped = true;
+          renameSync(join(project, "sub"), join(project, "sub.old"));
+          symlinkSync(join(root, "outside"), join(project, "sub"));
+        }
+        return false;
+      };
+      const out = await createGrepTool({ rgPath: null }).run({ pattern: "TOKEN", output_mode: "content" }, makeToolContext({ root: project, isDenied }));
+      expect(swapped).toBe(true);
+      expect(String(out.content)).not.toContain("hunter2");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
+  test("while the sandbox still runs a command, nothing is searched", async () => {
+    const out = await createGrepTool({ rgPath: null }).run({ pattern: "foo" }, makeToolContext({ root: dir, exec: busyBackend("A background command is still running.") }));
+    expect(out).toEqual({ content: "A background command is still running.", isError: true });
+  });
+});

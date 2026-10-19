@@ -1,9 +1,8 @@
 // src/tools/edit/edit.ts
-import { mkdir, readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { makeDiff } from "../diff";
-import { cannotWrite, checkFreshness, writeFileNoFollow } from "../file-guard";
+import { cannotWrite, checkFreshness, makeParentDirs, openVerified, replaceContents, sandboxBusy, staleText } from "../file-guard";
 import { PathResolutionError, resolveToolPath } from "../paths";
 import { defineTool, type ToolOutput } from "../types";
 
@@ -44,6 +43,8 @@ export const editTool = defineTool({
     if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) {
       return { content: `${path} changed after it was approved; nothing was written. Try again.`, isError: true };
     }
+    const busy = await sandboxBusy(ctx);
+    if (busy) return busy;
     let output: ToolOutput;
     try {
       const fresh = await checkFreshness(path, ctx);
@@ -51,52 +52,64 @@ export const editTool = defineTool({
 
       if (fresh.missing) {
         if (input.old_string !== "") return { content: `File not found: ${path}`, isError: true };
-        await mkdir(dirname(path), { recursive: true });
-        await writeFileNoFollow(path, input.new_string);
-        ctx.readState.record(path, (await stat(path)).mtimeMs);
+        await makeParentDirs(dirname(path));
+        const { handle } = await openVerified(path, "create");
+        try {
+          await replaceContents(handle, input.new_string);
+          ctx.readState.record(path, (await handle.stat()).mtimeMs);
+        } finally {
+          await handle.close();
+        }
         return { content: `Created ${path}.`, display: makeDiff(path, "", input.new_string), summary: "created" };
       }
       if (input.old_string === "") {
         return { content: `${path} already exists; give the text to replace in old_string.`, isError: true };
       }
 
-      const original = await readFile(path, "utf8");
-      const crlf = original.includes("\r\n");
-      const toFile = (s: string) => (crlf ? s.replace(/\r?\n/g, "\r\n") : s);
-      const oldText = toFile(input.old_string);
-      const newText = toFile(input.new_string);
+      const { handle, info } = await openVerified(path, "update");
+      try {
+        // The file opened must still be the one that was read.
+        if (info.mtimeMs !== fresh.mtimeMs) return { content: staleText(path), isError: true };
+        const original = await handle.readFile("utf8");
+        const crlf = original.includes("\r\n");
+        const toFile = (s: string) => (crlf ? s.replace(/\r?\n/g, "\r\n") : s);
+        const oldText = toFile(input.old_string);
+        const newText = toFile(input.new_string);
 
-      const count = countOccurrences(original, oldText);
-      if (count === 0) {
-        return {
-          content: `old_string was not found in ${path}. Read the file again and copy the text exactly, including whitespace.`,
-          isError: true,
-        };
-      }
-      if (count > 1 && !input.replace_all) {
-        return {
-          content: `old_string appears ${count} times in ${path}. Include more surrounding lines to make it unique, or set replace_all to true.`,
-          isError: true,
-        };
-      }
+        const count = countOccurrences(original, oldText);
+        if (count === 0) {
+          return {
+            content: `old_string was not found in ${path}. Read the file again and copy the text exactly, including whitespace.`,
+            isError: true,
+          };
+        }
+        if (count > 1 && !input.replace_all) {
+          return {
+            content: `old_string appears ${count} times in ${path}. Include more surrounding lines to make it unique, or set replace_all to true.`,
+            isError: true,
+          };
+        }
 
-      // split/join and slicing insert newText literally; String.replace would expand $&, $1, $$.
-      let updated: string;
-      if (input.replace_all) {
-        updated = original.split(oldText).join(newText);
-      } else {
-        const at = original.indexOf(oldText);
-        updated = original.slice(0, at) + newText + original.slice(at + oldText.length);
+        // split/join and slicing insert newText literally; String.replace would expand $&, $1, $$.
+        let updated: string;
+        if (input.replace_all) {
+          updated = original.split(oldText).join(newText);
+        } else {
+          const at = original.indexOf(oldText);
+          updated = original.slice(0, at) + newText + original.slice(at + oldText.length);
+        }
+        await replaceContents(handle, updated);
+        ctx.readState.record(path, (await handle.stat()).mtimeMs);
+        const diff = makeDiff(path, original.replace(/\r\n/g, "\n"), updated.replace(/\r\n/g, "\n"));
+        const replaced = input.replace_all ? count : 1;
+        output = {
+          content: `Edited ${path} (${replaced} replacement${replaced === 1 ? "" : "s"}).`,
+          display: diff,
+          summary: `+${diff.added} −${diff.removed}`,
+        };
+      } finally {
+        await handle.close();
       }
-      await writeFileNoFollow(path, updated);
-      ctx.readState.record(path, (await stat(path)).mtimeMs);
-      const diff = makeDiff(path, original.replace(/\r\n/g, "\n"), updated.replace(/\r\n/g, "\n"));
-      const replaced = input.replace_all ? count : 1;
-      output = {
-        content: `Edited ${path} (${replaced} replacement${replaced === 1 ? "" : "s"}).`,
-        display: diff,
-        summary: `+${diff.added} −${diff.removed}`,
-      };
     } catch (error) {
       return cannotWrite(path, error);
     }
