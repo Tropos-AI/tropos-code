@@ -44,7 +44,7 @@ class FakeSocket implements SocketLike {
   }
 }
 
-const HELLO: HelloInfo = { version: "0.5.1", cwd: "/repo", sessionId: "s1", modes: ["default"], commands: [], history: [{ role: "user", content: "Fix the flaky test" }] };
+const HELLO: HelloInfo = { version: "0.5.2", cwd: "/repo", sessionId: "s1", modes: ["default"], commands: [], history: [{ role: "user", content: "Fix the flaky test" }] };
 const STATE: SessionState = { model: "claude-opus-5-5", effort: "high", mode: "default", busy: false, contextTokens: 50_000, contextWindow: 200_000, totalCostUsd: 0.42, turns: 1 };
 
 afterEach(() => {
