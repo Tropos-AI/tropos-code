@@ -7,7 +7,7 @@
 // Paths travel as -D params, never inlined, except where a rule needs a regex. Profile paths must be real paths:
 // the sandbox matches resolved paths.
 import { isInside } from "../paths";
-import { ConfinementError, type ConfinementPaths } from "./confinement-paths";
+import { ConfinementError, requireLinkedGitDirsOutsideWritable, type ConfinementPaths } from "./confinement-paths";
 
 /** mDNSResponder's socket: every host-name lookup (getaddrinfo) goes through it. */
 const DNS_SOCKET = "/private/var/run/mDNSResponder";
@@ -18,6 +18,7 @@ export interface SandboxProfile {
 }
 
 export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
+  requireLinkedGitDirsOutsideWritable(paths);
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
   for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);

@@ -12,7 +12,7 @@
 import { lstatSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { isInside } from "../paths";
-import { ConfinementError, type ConfinementPaths } from "./confinement-paths";
+import { ConfinementError, requireLinkedGitDirsOutsideWritable, type ConfinementPaths } from "./confinement-paths";
 import { findNestedGitDirs } from "./git-integrity";
 
 /** Host services a chat must not reach: the per-user runtime dir (ssh/gpg agents, session bus), Docker, D-Bus. */
@@ -37,6 +37,7 @@ export function hostServiceMasks(candidates: readonly string[]): string[] {
 
 export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   const { project } = paths;
+  requireLinkedGitDirsOutsideWritable(paths);
   // Parity with the macOS profile needs real dirs: a linked or file `.git`/`.husky`/`.tropos` (a worktree gitfile, a
   // link a chat could swap) can't be made a read-only mount point, so refuse rather than confine something weaker.
   // A linked worktree's `.git` is a plain file (a pointer into the owner's repo): it is kept read-only in place below.

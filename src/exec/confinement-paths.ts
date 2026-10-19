@@ -238,6 +238,18 @@ function linkedGitDirs(project: string, worktreesRoot: string): string[] {
   return unique(out);
 }
 
+/**
+ * A worktree's linked git dirs live in the owner's repo, outside every writable path, so a missing hooks or config there
+ * cannot be created from inside the sandbox. If one resolves inside a writable path it could be, and the "protected"
+ * hooks and config would not be: refuse to confine rather than run with weaker protection.
+ */
+export function requireLinkedGitDirsOutsideWritable(paths: Pick<ConfinementPaths, "project" | "writable" | "cacheDir" | "linkedGitDirs">): void {
+  const writable = [paths.project, paths.cacheDir, ...paths.writable];
+  for (const dir of paths.linkedGitDirs) {
+    if (writable.some((w) => isInside(dir, w))) throw new ConfinementError(`${dir} can't be confined: a worktree's git dir lies inside a path the sandbox can write.`);
+  }
+}
+
 function unique(paths: (string | undefined)[]): string[] {
   return [...new Set(paths.filter((p): p is string => p !== undefined))];
 }

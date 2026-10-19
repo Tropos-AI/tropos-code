@@ -243,3 +243,11 @@ test("an own file that is a link, even a dangling one, refuses the sandbox", () 
   expect(() => bwrapArgs(paths(ws), ws)).toThrow(ConfinementError);
   expect(() => bwrapArgs(paths(ws), ws)).toThrow(join(ws, "USER.md"));
 });
+
+test("a worktree git dir inside a writable path is refused, not confined weakly", () => {
+  const p = paths();
+  for (const dir of [join(project, "inner", ".git"), join(fx, "tmp", "r", ".git")]) {
+    expect(() => bwrapArgs({ ...p, linkedGitDirs: [dir] }, project)).toThrow(ConfinementError);
+  }
+  expect(() => bwrapArgs({ ...p, linkedGitDirs: [join(fx, "elsewhere", ".git")] }, project)).not.toThrow();
+});

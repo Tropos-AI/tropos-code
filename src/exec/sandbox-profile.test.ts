@@ -306,3 +306,10 @@ test("a worktree's referenced git dirs get the same hooks and config write prote
   expect(profile).toContain('(regex #"^/r/\\.git/worktrees/t1/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
   expect(profile).toContain('(regex #"^/r/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")');
 });
+
+test("a worktree git dir inside a writable path is refused, not confined weakly", () => {
+  for (const dir of ["/w/app/inner/.git", "/private/tmp/r/.git", "/u/.tropos/sandbox-cache/r/.git"]) {
+    expect(() => sandboxProfile({ ...base, linkedGitDirs: [dir] })).toThrow(ConfinementError);
+  }
+  expect(() => sandboxProfile({ ...base, linkedGitDirs: ["/r/.git"] })).not.toThrow();
+});
