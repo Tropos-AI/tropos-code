@@ -126,3 +126,19 @@ describe("candidateFrom", () => {
     expect(candidateFrom(msg({ from: undefined }), 5)).toBeNull();
   });
 });
+
+test("an automatic window: a 128-bit secret, open a day; the dashboard opening one turns automatic off", async () => {
+  const home = await makeTmpDir("claim-auto-");
+  try {
+    const store = new OwnerClaimStore(home);
+    await store.open({ auto: true });
+    const nonce = (await store.nonce())!;
+    expect(Buffer.from(nonce, "base64url").length).toBe(16);
+    expect(await store.isAuto()).toBe(true);
+    await store.open();
+    expect(await store.isAuto()).toBe(false);
+    expect(await store.nonce()).toBe(nonce);
+  } finally {
+    await removeDir(home);
+  }
+});

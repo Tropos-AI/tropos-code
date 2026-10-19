@@ -75,13 +75,15 @@ export class OwnerClaimStore {
       const now = this.now();
       const file = await this.read();
       const live = file !== null && file.openUntil > now;
-      const auto = opts.auto === true || (live && file.auto === true);
+      // Only `tcode onboard` asks for an automatic window; the dashboard's (it confirms on screen) turns that off.
+      const auto = opts.auto === true;
       await this.write({
-        openUntil: Math.max(live ? file.openUntil : 0, now + (auto ? OWNER_CLAIM_AUTO_HOURS * 3_600_000 : OWNER_CLAIM_MINUTES * 60_000)),
+        openUntil: now + (auto ? OWNER_CLAIM_AUTO_HOURS * 3_600_000 : OWNER_CLAIM_MINUTES * 60_000),
         ...(auto ? { auto } : {}),
         windowStart: live ? file.windowStart : Math.floor(now / 1000) * 1000,
         generation: live ? file.generation : randomBytes(8).toString("hex"),
-        nonce: live ? file.nonce : randomBytes(9).toString("base64url"),
+        // 128 bits: in an automatic window this secret alone makes its sender the owner.
+        nonce: live ? file.nonce : randomBytes(16).toString("base64url"),
         candidates: live ? file.candidates : [],
       });
     });
