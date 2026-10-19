@@ -17,6 +17,7 @@ import { downloadTarget } from "./download";
 import { EXTEND_ACTIONS, performExtend, type ExtendAction, type ExtendKit } from "./extend";
 import { CHAT_DOCTOR_READ_ONLY, isDestructive, mcpServerProblem, SECRET_REF, SetupRefused, setupDecision, setupInputSchema, setupTextProblem, type SetupInput, type SetupWho } from "./matrix";
 import type { SecretVault } from "./secrets";
+import type { Resolve } from "./sources";
 
 export interface SetupToolDeps {
   home: string;
@@ -35,9 +36,10 @@ export interface SetupToolDeps {
   inGateway?: boolean;
   restartDelayMs?: number;
   setTimer?: (fn: () => void, ms: number) => unknown;
-  /** Test seams: the fetch downloads and skills use, and the environment git clones with. */
+  /** Test seams: the fetch downloads and skills use, the environment git clones with, and the DNS lookup of hosts. */
   fetch?: typeof fetch;
   cloneEnv?: NodeJS.ProcessEnv;
+  resolve?: Resolve;
 }
 
 export const SEND_AGAIN = "Send that key again; I only hold it for 30 minutes.";
@@ -186,6 +188,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
         envFromVault: (env) => envFromVault(env, taken),
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}),
+        ...(deps.resolve ? { resolve: deps.resolve } : {}),
       };
       return performExtend(input.action, input, ctx, kit);
     }

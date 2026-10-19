@@ -5,7 +5,7 @@ import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { git } from "../../snapshots/test-repo";
-import { shallowClone } from "./git-clone";
+import { CLONE_FLAGS, shallowClone } from "./git-clone";
 
 let root: string;
 let userHome: string;
@@ -69,6 +69,28 @@ test("only https and file URLs reach git: ext::, ssh, http and option-like URLs 
     await expect(shallowClone(url, join(root, "x"), { env })).rejects.toThrow(/https/);
   }
   expect(existsSync(join(root, "x"))).toBe(false);
+});
+
+test("git never follows a redirect: the host the owner approved is the only one asked", () => {
+  expect(CLONE_FLAGS.join(" ")).toContain("-c http.followRedirects=false");
+});
+
+test("an https host is looked up before git runs; one that resolves to a private address, or doesn't resolve, is refused", async () => {
+  const looked: string[] = [];
+  const resolve = async (host: string) => {
+    looked.push(host);
+    if (host === "git.internal-corp.example") return ["10.1.2.3"];
+    if (host === "v6.example") return ["fe80::1"];
+    throw new Error("ENOTFOUND");
+  };
+  await expect(shallowClone("https://git.internal-corp.example/x.git", join(root, "a"), { env, resolve })).rejects.toThrow(/local network/);
+  await expect(shallowClone("https://v6.example/x.git", join(root, "b"), { env, resolve })).rejects.toThrow(/local network/);
+  await expect(shallowClone("https://nowhere.example/x.git", join(root, "c"), { env, resolve })).rejects.toThrow(/couldn't find/);
+  expect(looked).toEqual(["git.internal-corp.example", "v6.example", "nowhere.example"]);
+  for (const d of ["a", "b", "c"]) expect(existsSync(join(root, d))).toBe(false);
+  // A file:// repository the owner named is local by design: nothing is looked up.
+  await shallowClone(await bareRepo({ "a.txt": "one\n" }), join(root, "d"), { env, resolve });
+  expect(looked).toHaveLength(3);
 });
 
 test("a clone that fails says why and leaves nothing behind", async () => {

@@ -1,7 +1,9 @@
 // src/tools/setup/git-clone.ts — the one git clone TroposSetup runs on the host (plugins and skills from a repo). Nothing
 // the clone brings may run: no hook (the user's own hooksPath or template included), no fsmonitor, no submodules, no
 // LFS filter, no transport but https and file, and symlinks land as plain files so a repo can't point outside itself.
+// The host is looked up first and git follows no redirect, so it only ever talks to the public host the owner approved.
 import { rm } from "node:fs/promises";
+import { cloneUrlProblem, hostProblem, type Resolve } from "./sources";
 
 export interface CloneOptions {
   /** The environment git runs with; the process's by default. Tests point HOME at a fixture config. */
@@ -9,12 +11,14 @@ export interface CloneOptions {
   timeoutMs?: number;
   /** A branch or tag to check out instead of the default branch. */
   ref?: string;
+  /** Looks the host up before git runs; the system resolver by default. */
+  resolve?: Resolve;
 }
 
 const CLONE_TIMEOUT_MS = 120_000;
 const STDERR_CHARS = 500;
 
-const FLAGS = [
+export const CLONE_FLAGS = [
   "-c", "core.hooksPath=/dev/null",
   "-c", "core.fsmonitor=false",
   "-c", "core.symlinks=false",
@@ -23,20 +27,9 @@ const FLAGS = [
   "-c", "protocol.https.allow=always",
   "-c", "protocol.file.allow=always",
   "-c", "submodule.recurse=false",
+  // A redirect would reach a host nobody checked (or approved).
+  "-c", "http.followRedirects=false",
 ];
-
-/** Why git may not fetch this URL, or undefined: https or file only, and no credentials in it (the approval shows it). */
-export function cloneUrlProblem(url: string): string | undefined {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return `${url.slice(0, 80)} isn't a URL I can clone: give an https:// git URL.`;
-  }
-  if (u.protocol !== "https:" && u.protocol !== "file:") return "I only clone https:// git URLs (or a file:// repository on this computer).";
-  if (u.username || u.password) return "That URL carries a username or password; give it without them (a private repo uses your git credentials).";
-  return undefined;
-}
 
 const REF = /^[A-Za-z0-9._/-]{1,100}$/;
 
@@ -56,9 +49,11 @@ export async function shallowClone(url: string, dest: string, opts: CloneOptions
   const problem = cloneUrlProblem(url);
   if (problem) throw new Error(problem);
   if (opts.ref !== undefined && (!REF.test(opts.ref) || opts.ref.startsWith("-") || opts.ref.includes(".."))) throw new Error(`${opts.ref.slice(0, 60)} isn't a branch or tag name I can use.`);
+  const hostRefused = await hostProblem(new URL(url), opts.resolve);
+  if (hostRefused) throw new Error(hostRefused);
   const git = Bun.which("git", { PATH: opts.env?.PATH ?? process.env.PATH ?? "" });
   if (!git) throw new Error("git isn't installed on this computer, so I can't clone a repository.");
-  const args = [git, ...FLAGS, "clone", "--depth", "1", "--no-recurse-submodules", "--quiet", ...(opts.ref ? ["--branch", opts.ref] : []), "--", url, dest];
+  const args = [git, ...CLONE_FLAGS, "clone", "--depth", "1", "--no-recurse-submodules", "--quiet", ...(opts.ref ? ["--branch", opts.ref] : []), "--", url, dest];
   let code: number;
   let stderr: string;
   try {

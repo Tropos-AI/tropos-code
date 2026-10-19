@@ -31,6 +31,20 @@ function server(body: string | ReadableStream<Uint8Array> = BODY, headers: Recor
 }
 
 const place = () => ({ cwd: project, allowedDirs: [project] });
+/** A stub DNS: example.com is public, intranet.example points into the local network. */
+const DNS = async (host: string) => {
+  if (host === "example.com") return ["93.184.216.34"];
+  if (host === "intranet.example") return ["192.168.1.20"];
+  throw new Error("ENOTFOUND");
+};
+
+test("a name that resolves to a private address is refused before anything is fetched, as a first URL or a redirect", async () => {
+  await expect(download({ url: "https://intranet.example/a.zip" }, place(), { resolve: DNS, fetch: server() })).rejects.toThrow(/local network/);
+  expect(fetched).toEqual([]);
+  await expect(download({ url: "https://example.com/a" }, place(), { resolve: DNS, fetch: server("", { location: "https://intranet.example/a" }, 302) })).rejects.toThrow(/local network/);
+  expect(fetched).toEqual(["https://example.com/a"]);
+  expect(await readdir(project)).toEqual([]);
+});
 
 test("the file is named after the URL unless a path is given", () => {
   expect(downloadName("https://example.com/files/report%202026.pdf?x=1")).toBe("report 2026.pdf");
@@ -42,7 +56,7 @@ test("the file is named after the URL unless a path is given", () => {
 });
 
 test("a download lands inside the project and reports its path, size and sha256", async () => {
-  const out = await download({ url: "https://example.com/data/notes.txt", path: "data/notes.txt" }, place(), { fetch: server() });
+  const out = await download({ url: "https://example.com/data/notes.txt", path: "data/notes.txt" }, place(), { resolve: DNS, fetch: server() });
   expect(out).toEqual({ path: join(project, "data", "notes.txt"), size: BODY.length, sha256: sha(BODY) });
   expect(await readFile(out.path, "utf8")).toBe(BODY);
   expect((await readdir(join(project, "data"))).filter((n) => n.startsWith("."))).toEqual([]);
@@ -50,22 +64,22 @@ test("a download lands inside the project and reports its path, size and sha256"
 
 test("an existing file is never replaced unless overwrite was asked for", async () => {
   await writeFile(join(project, "a.txt"), "mine");
-  await expect(download({ url: "https://example.com/a.txt" }, place(), { fetch: server() })).rejects.toThrow(/already exists/);
+  await expect(download({ url: "https://example.com/a.txt" }, place(), { resolve: DNS, fetch: server() })).rejects.toThrow(/already exists/);
   expect(await readFile(join(project, "a.txt"), "utf8")).toBe("mine");
   expect(fetched).toEqual([]);
-  await download({ url: "https://example.com/a.txt", overwrite: true }, place(), { fetch: server() });
+  await download({ url: "https://example.com/a.txt", overwrite: true }, place(), { resolve: DNS, fetch: server() });
   expect(await readFile(join(project, "a.txt"), "utf8")).toBe(BODY);
 });
 
 test("over the size cap nothing is kept: a declared length is refused up front, a streamed body when it passes the cap", async () => {
   expect(MAX_DOWNLOAD_BYTES).toBe(200 * 1024 * 1024);
-  await expect(download({ url: "https://example.com/big.bin" }, place(), { fetch: server("x".repeat(64), { "content-length": "64" }), maxBytes: 32 })).rejects.toThrow(/bigger than/);
+  await expect(download({ url: "https://example.com/big.bin" }, place(), { resolve: DNS, fetch: server("x".repeat(64), { "content-length": "64" }), maxBytes: 32 })).rejects.toThrow(/bigger than/);
   const stream = new ReadableStream<Uint8Array>({
     pull(c) {
       c.enqueue(new Uint8Array(16));
     },
   });
-  await expect(download({ url: "https://example.com/big.bin" }, place(), { fetch: server(stream), maxBytes: 32 })).rejects.toThrow(/bigger than/);
+  await expect(download({ url: "https://example.com/big.bin" }, place(), { resolve: DNS, fetch: server(stream), maxBytes: 32 })).rejects.toThrow(/bigger than/);
   expect(await readdir(project)).toEqual([]);
 });
 
@@ -73,7 +87,7 @@ test("a path outside the project, into .git, or through a link that leaves the p
   await mkdir(join(project, ".git", "hooks"), { recursive: true });
   await symlink(root, join(project, "out"));
   for (const path of ["../escape.txt", "/etc/x", ".git/hooks/post-checkout", "out/x.txt", ".tropos/settings.json"]) {
-    await expect(download({ url: "https://example.com/x", path }, place(), { fetch: server() })).rejects.toThrow(/inside this project|runs code later/);
+    await expect(download({ url: "https://example.com/x", path }, place(), { resolve: DNS, fetch: server() })).rejects.toThrow(/inside this project|runs code later/);
   }
   expect(fetched).toEqual([]);
   expect(existsSync(join(root, "x.txt"))).toBe(false);
@@ -81,15 +95,15 @@ test("a path outside the project, into .git, or through a link that leaves the p
 
 test("only https from a public host: http, credentials and private hosts are refused, and so is a redirect to one", async () => {
   for (const url of ["http://example.com/a", "https://u:p@example.com/a", "https://127.0.0.1/a", "https://169.254.169.254/latest/meta-data"]) {
-    await expect(download({ url }, place(), { fetch: server() })).rejects.toThrow();
+    await expect(download({ url }, place(), { resolve: DNS, fetch: server() })).rejects.toThrow();
   }
   expect(fetched).toEqual([]);
-  await expect(download({ url: "https://example.com/a" }, place(), { fetch: server("", { location: "https://10.0.0.1/a" }, 302) })).rejects.toThrow(/local network/);
+  await expect(download({ url: "https://example.com/a" }, place(), { resolve: DNS, fetch: server("", { location: "https://10.0.0.1/a" }, 302) })).rejects.toThrow(/local network/);
   expect(fetched).toEqual(["https://example.com/a"]);
   expect(await readdir(project)).toEqual([]);
 });
 
 test("an HTTP error saves nothing", async () => {
-  await expect(download({ url: "https://example.com/a" }, place(), { fetch: server("nope", {}, 404) })).rejects.toThrow(/404/);
+  await expect(download({ url: "https://example.com/a" }, place(), { resolve: DNS, fetch: server("nope", {}, 404) })).rejects.toThrow(/404/);
   expect(await readdir(project)).toEqual([]);
 });

@@ -14,7 +14,7 @@ import { scanText } from "../../learning/threats";
 import { manageSkill, MAX_SKILL_FILE_CHARS } from "../../memory/skill-manage";
 import type { Actor } from "../types";
 import { fetchTree, folderIn } from "./fetch-tree";
-import { guardedFetch, parseSource } from "./sources";
+import { guardedFetch, HostRefused, hostProblem, parseSource, type Resolve } from "./sources";
 
 export interface SkillInstallDeps {
   home: string;
@@ -22,6 +22,8 @@ export interface SkillInstallDeps {
   actor: Actor;
   fetch?: typeof fetch;
   cloneEnv?: NodeJS.ProcessEnv;
+  /** Looks each host up before it is fetched from or cloned; the system resolver by default. */
+  resolve?: Resolve;
 }
 
 export interface SkillRequest {
@@ -79,7 +81,11 @@ export async function installSkill(deps: SkillInstallDeps, req: SkillRequest): P
   let files: Map<string, string>;
   let suggested: string;
   if (source.kind === "file") {
-    const bytes = await fetchBytes(source.url, { maxBytes: MAX_SKILL_FILE_CHARS * 4, timeoutMs: 30_000, fetch: guardedFetch(deps.fetch ?? fetch) });
+    const refused = await hostProblem(new URL(source.url), deps.resolve);
+    if (refused) throw new Error(refused);
+    const bytes = await fetchBytes(source.url, { maxBytes: MAX_SKILL_FILE_CHARS * 4, timeoutMs: 30_000, fetch: guardedFetch(deps.fetch ?? fetch, deps.resolve) }).catch((e: unknown) => {
+      throw e instanceof Error && e.cause instanceof HostRefused ? e.cause : e;
+    });
     let text: string;
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -93,7 +99,7 @@ export async function installSkill(deps: SkillInstallDeps, req: SkillRequest): P
     const staging = await mkdtemp(join(tmpdir(), "tropos-skill-"));
     try {
       const tree = join(staging, "tree");
-      await fetchTree(source, tree, { maxBytes: MAX_REPO_BYTES, ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}) });
+      await fetchTree(source, tree, { maxBytes: MAX_REPO_BYTES, ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}), ...(deps.resolve ? { resolve: deps.resolve } : {}) });
       const subdir = source.kind === "local" ? req.subdir : source.subdir;
       files = await readFolder(await folderIn(tree, subdir));
       suggested = folderName(source.kind === "local" ? source.path : source.url, subdir);

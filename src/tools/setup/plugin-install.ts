@@ -4,14 +4,15 @@
 // plugin that would run programs lands switched off, so turning it on is a second approval that shows what it runs.
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { mkdir, rename, rm, unlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { z } from "zod";
 import { readUserSettingsRaw, setAt, unsetAt, updateUserSettings } from "../../config/store";
 import { MANIFESTS, readPlugin, type LoadedPlugin } from "../../extensions/plugins";
+import { scanText } from "../../learning/threats";
 import { isInside } from "../../paths";
 import { fetchTree, folderIn } from "./fetch-tree";
-import { parseSource, subdirProblem } from "./sources";
+import { parseSource, subdirProblem, type Resolve } from "./sources";
 
 export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
 
@@ -19,6 +20,8 @@ export interface PluginOpsDeps {
   /** The Tropos home; plugins live in <home>/plugins. */
   home: string;
   cloneEnv?: NodeJS.ProcessEnv;
+  /** Looks a repository's host up before cloning; the system resolver by default. */
+  resolve?: Resolve;
   maxBytes?: number;
 }
 
@@ -131,6 +134,42 @@ function pluginFolder(dir: string, name: string | undefined, fallback: string): 
   return { dir: join(dir, rel), entry: name, listed: true };
 }
 
+/** The folders whose files sessions read as instructions: a plugin's skills, commands and agents. */
+const PROMPT_FOLDERS = ["skills", "commands", "agents"];
+
+/**
+ * Refuses a plugin whose prompt text fails the strict threat scan, the one skill.install applies: every text file under
+ * skills/, commands/ and agents/ (a skill's supporting files are read on demand too). Files that aren't text aren't
+ * prompt text and are left alone.
+ */
+async function scanPromptFiles(root: string): Promise<void> {
+  const walk = async (dir: string, rel: string): Promise<void> => {
+    let names: string[];
+    try {
+      names = (await readdir(dir)).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const path = join(dir, name);
+      const relPath = `${rel}/${name}`;
+      const info = await lstat(path);
+      if (info.isDirectory()) await walk(path, relPath);
+      else if (info.isFile()) {
+        let text: string;
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(path));
+        } catch {
+          continue;
+        }
+        const scan = scanText(text, { strict: true });
+        if (!scan.ok) throw new Error(`Refused: ${relPath} looks unsafe (${scan.reason}). A plugin's skills, commands and agents are loaded as instructions in later sessions, so I don't install one with injected instructions, secret exfiltration, fetch-and-run lines or hidden characters.`);
+      }
+    }
+  };
+  for (const folder of PROMPT_FOLDERS) await walk(join(root, folder), folder);
+}
+
 /** Installs a plugin into <home>/plugins/<name>. Throws a readable Error; a failure leaves nothing behind. */
 export async function installPlugin(deps: PluginOpsDeps, req: PluginRequest): Promise<InstalledPlugin> {
   const source = parseSource(req.source, req.subdir);
@@ -141,7 +180,7 @@ export async function installPlugin(deps: PluginOpsDeps, req: PluginRequest): Pr
   const staging = join(base, `.install-${randomBytes(6).toString("hex")}`);
   try {
     const tree = join(staging, "tree");
-    await fetchTree(source, tree, { maxBytes: deps.maxBytes ?? MAX_PLUGIN_BYTES, ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}) });
+    await fetchTree(source, tree, { maxBytes: deps.maxBytes ?? MAX_PLUGIN_BYTES, ...(deps.cloneEnv ? { cloneEnv: deps.cloneEnv } : {}), ...(deps.resolve ? { resolve: deps.resolve } : {}) });
     const subdir = source.kind === "local" ? req.subdir : source.subdir;
     // A manifest without a name: the plugin goes by its folder's (or repository's) name, as the loader would call it.
     const fallback = basename((subdir ?? (source.kind === "local" ? source.path : new URL(source.url).pathname)).replace(/\/+$/, "")).replace(/\.git$/, "");
@@ -151,6 +190,7 @@ export async function installPlugin(deps: PluginOpsDeps, req: PluginRequest): Pr
     if (!read.ok) throw new Error(`That plugin can't be installed: ${read.reason}.`);
     if (!read.manifest && !found.listed) throw new Error("That isn't a plugin: it has no plugin.json (.claude-plugin/plugin.json).");
     if (read.warnings.length) throw new Error(`That plugin can't be installed: ${read.warnings.join("; ")}.`);
+    await scanPromptFiles(found.dir);
     const name = read.plugin.name;
     const dest = join(base, name);
     if (findPlugin(deps.home, name) || existsSync(dest)) throw new Error(`A plugin named ${name} is already installed. Remove it first to install it again.`);

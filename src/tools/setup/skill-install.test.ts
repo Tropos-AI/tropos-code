@@ -24,12 +24,29 @@ function serve(files: Record<string, string>) {
   }) as unknown as typeof fetch;
 }
 
+/** A stub DNS: the public test hosts, and one name that points into the local network. */
+const DNS = async (host: string) => {
+  if (host === "example.com" || host === "raw.githubusercontent.com") return ["93.184.216.34"];
+  if (host === "wiki.lan.example") return ["10.0.0.7"];
+  throw new Error("ENOTFOUND");
+};
+
+test("a SKILL.md on a name that resolves into the local network is refused before it is fetched, and so is a redirect there", async () => {
+  await expect(installSkill(deps, { source: "https://wiki.lan.example/s/SKILL.md" })).rejects.toThrow(/local network/);
+  const hop = (async (url: string) => {
+    fetched.push(url);
+    return new Response("", { status: 302, headers: { location: "https://wiki.lan.example/s/SKILL.md" } });
+  }) as unknown as typeof fetch;
+  await expect(installSkill({ ...deps, fetch: hop }, { source: "https://example.com/s/SKILL.md" })).rejects.toThrow(/local network/);
+  expect(fetched).toEqual(["https://example.com/s/SKILL.md"]);
+});
+
 beforeEach(async () => {
   root = await makeTmpDir();
   home = join(root, "tropos");
   await mkdir(join(root, "user"), { recursive: true });
   fetched = [];
-  deps = { home, ledger: new Ledger(home), actor: "agent", cloneEnv: { HOME: join(root, "user"), PATH: process.env.PATH }, fetch: serve({}) };
+  deps = { home, ledger: new Ledger(home), actor: "agent", cloneEnv: { HOME: join(root, "user"), PATH: process.env.PATH }, fetch: serve({}), resolve: DNS };
 });
 afterEach(() => removeDir(root));
 

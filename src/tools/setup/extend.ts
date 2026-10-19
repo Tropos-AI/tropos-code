@@ -12,6 +12,7 @@ import { download } from "./download";
 import { editedServer, mcpServerProblem, SetupRefused, unshowable, unshowableText, type SetupAction, type SetupInput } from "./matrix";
 import { findPlugin, installPlugin, pluginRuns, removePlugin } from "./plugin-install";
 import { installSkill } from "./skill-install";
+import type { Resolve } from "./sources";
 
 /** What the tool lends these actions: the admin, the reload signal, the ledger wrapper, the vault. */
 export interface ExtendKit {
@@ -26,6 +27,7 @@ export interface ExtendKit {
   envFromVault: (env: Record<string, string>) => Record<string, string>;
   fetch?: typeof fetch;
   cloneEnv?: NodeJS.ProcessEnv;
+  resolve?: Resolve;
 }
 
 export const EXTEND_ACTIONS = ["mcp.edit", "mcp.remove", "mcp.list", "mcp.test", "plugin.install", "plugin.enable", "plugin.disable", "plugin.remove", "plugin.list", "skill.install", "download"] as const satisfies readonly SetupAction[];
@@ -93,7 +95,7 @@ export async function performExtend(action: ExtendAction, input: SetupInput, ctx
     case "plugin.install": {
       const source = need(input.source, "Say where the plugin is: its git URL, or a folder on this computer.");
       return kit.changing(settings("disabledPlugins"), `install plugin from ${source}`, async () => {
-        const p = await installPlugin({ home, ...(kit.cloneEnv ? { cloneEnv: kit.cloneEnv } : {}) }, { source, ...(input.name ? { name: input.name } : {}), ...(input.subdir ? { subdir: input.subdir } : {}) });
+        const p = await installPlugin({ home, ...(kit.cloneEnv ? { cloneEnv: kit.cloneEnv } : {}), ...(kit.resolve ? { resolve: kit.resolve } : {}) }, { source, ...(input.name ? { name: input.name } : {}), ...(input.subdir ? { subdir: input.subdir } : {}) });
         await kit.reload();
         const head = `Installed the plugin ${p.name} in ${p.root}.`;
         if (p.enabled) return `${head} It is on: new sessions load its commands, skills and agents.`;
@@ -134,7 +136,7 @@ export async function performExtend(action: ExtendAction, input: SetupInput, ctx
     case "skill.install": {
       const source = need(input.source, "Say where the skill is: the URL of its SKILL.md, or its git repository and folder.");
       const out = await installSkill(
-        { home, ledger: kit.ledger, actor: ctx.actor ?? "agent", ...(kit.fetch ? { fetch: kit.fetch } : {}), ...(kit.cloneEnv ? { cloneEnv: kit.cloneEnv } : {}) },
+        { home, ledger: kit.ledger, actor: ctx.actor ?? "agent", ...(kit.fetch ? { fetch: kit.fetch } : {}), ...(kit.cloneEnv ? { cloneEnv: kit.cloneEnv } : {}), ...(kit.resolve ? { resolve: kit.resolve } : {}) },
         { source, ...(input.name ? { name: input.name } : {}), ...(input.subdir ? { subdir: input.subdir } : {}) },
       );
       await kit.reload();
@@ -145,7 +147,7 @@ export async function performExtend(action: ExtendAction, input: SetupInput, ctx
       const out = await download(
         { url, ...(input.path ? { path: input.path } : {}), ...(input.overwrite ? { overwrite: true } : {}) },
         { cwd: ctx.cwd(), allowedDirs: ctx.allowedDirs },
-        { ...(kit.fetch ? { fetch: kit.fetch } : {}) },
+        { ...(kit.fetch ? { fetch: kit.fetch } : {}), ...(kit.resolve ? { resolve: kit.resolve } : {}) },
       );
       return `Downloaded ${url} to ${out.path}: ${out.size.toLocaleString("en-US")} bytes, sha256 ${out.sha256}.`;
     }

@@ -9,8 +9,7 @@ import { InstallError } from "../../install/errors";
 import { isInside } from "../../paths";
 import { inGitControlDir, isProjectSettingsFile } from "../../permissions/engine";
 import { resolveToolPath } from "../paths";
-import { cloneUrlProblem } from "./git-clone";
-import { guardedFetch, privateHostProblem } from "./sources";
+import { cloneUrlProblem, guardedFetch, HostRefused, hostProblem, privateHostProblem, type Resolve } from "./sources";
 
 export const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024;
 
@@ -29,6 +28,8 @@ export interface DownloadPlace {
 
 export interface DownloadOptions {
   fetch?: typeof fetch;
+  /** Looks each host up before it is fetched from; the system resolver by default. */
+  resolve?: Resolve;
   maxBytes?: number;
   timeoutMs?: number;
 }
@@ -83,10 +84,13 @@ export async function download(req: DownloadRequest, place: DownloadPlace, opts:
 
   const maxBytes = opts.maxBytes ?? MAX_DOWNLOAD_BYTES;
   const tooBig = () => new Refused(`${req.url} is bigger than ${maxBytes >= 1024 * 1024 ? mb(maxBytes) : `${maxBytes} bytes`}; nothing was saved.`);
-  const guarded = guardedFetch(opts.fetch ?? fetch);
+  // Every hop, the first URL included, is looked up before it is fetched (and before anything touches the disk).
+  const guarded = guardedFetch(opts.fetch ?? fetch, opts.resolve);
+  const first = await hostProblem(new URL(req.url), opts.resolve);
+  if (first) throw new Refused(first);
   const capped = async (url: string, init?: RequestInit): Promise<Response> => {
     const res = await guarded(url, init).catch((e: unknown) => {
-      throw e instanceof Error && e.message === privateHostProblem(new URL(url)) ? new Refused(e.message) : e;
+      throw e instanceof HostRefused ? new Refused(e.message) : e;
     });
     const declared = Number(res.headers.get("content-length"));
     if (res.status === 200 && Number.isFinite(declared) && declared > maxBytes) {
