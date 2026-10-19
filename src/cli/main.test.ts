@@ -56,6 +56,11 @@ describe("main", () => {
     expect((await listSessions(home, project))[0]!.title).toBe("say hi");
   });
 
+  test("a terminal session has TroposSetup", async () => {
+    const r = await cli(["-p", "hi"], [() => reply([textBlock("ok")])]);
+    expect(r.model.requests[0]!.tools.map((t) => t.name)).toContain("TroposSetup");
+  });
+
   test("the first session start migrates a legacy home and says so", async () => {
     await mkdir(join(home, "memories"), { recursive: true });
     await writeFile(join(home, "memories", "USER.md"), "Prefers tabs\n");

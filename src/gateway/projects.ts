@@ -40,7 +40,7 @@ This is the default project of your Tropos gateway: the folder a chat works in u
 Files the agent creates from Telegram land here. It is a git repository on purpose: the sandbox relies on the .git
 folder being there already.
 
-Add your own projects with \`tcode projects add <path>\`.
+Run tcode in any git repo and it's added as a project; or ask me to add one.
 `;
 
 /** Where a project list comes from; the gateway layers a one-off project over the file registry. */

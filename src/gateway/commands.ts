@@ -1,4 +1,5 @@
 // src/gateway/commands.ts — `tcode gateway install|uninstall|start|stop|restart`, `tcode projects …`, `tcode pairing …`.
+import { dashboardLink } from "./dashboard-link";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { GatewayCommand } from "../cli/args";
@@ -100,10 +101,11 @@ export async function runGatewayCommand(command: GatewayCommand, c: GatewayComma
         if (added) await setDefaultProject(home, added.id);
         const { unitPath, hint } = await installService({ home, env: c.env, execPath: c.execPath, scriptPath: c.scriptPath, userHome, service, git: c.git });
         c.out(`Gateway installed (${unitPath}) and started.\n`);
-        c.out(`Projects: chats start in ${added ? `${added.name} (${added.id})` : "the default workspace (~/.tropos/workspace)"}. Add more with: tcode projects add <path>\n`);
+        c.out(`Projects: chats start in ${added ? `${added.name} (${added.id})` : "the default workspace (~/.tropos/workspace)"}. Running tcode in a git repo adds it; or ask me to add one.\n`);
         if (hint) c.out(`${hint}\n`);
-        if (!telegramToken(await loadGatewayConfig(home), c.env)) {
-          c.out("No Telegram bot yet: connect one in the dashboard (tcode dashboard) or ask me to connect it.\n");
+        const config = await loadGatewayConfig(home);
+        if (!telegramToken(config, c.env)) {
+          c.out(`No Telegram bot yet: ask me to connect Telegram (paste the token from @BotFather), or open ${dashboardLink(config, "settings")}.\n`);
         }
         c.out("Logs: tcode logs · Status: tcode status\n");
         return 0;

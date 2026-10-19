@@ -193,6 +193,33 @@ describe("chat roles reach the session", () => {
     expect(await main(["pairing", "approve", "telegram", code], { out: () => {}, err: () => {}, env: { TROPOS_HOME: home }, cwd: dir })).toBe(0);
   }
 
+  test("the owner's chat has TroposSetup and SwitchProject, a guest's only SwitchProject; \"work on app\" moves the chat", async () => {
+    await mkdir(home, { recursive: true });
+    await addProject(home, { path: join(dir, "app") });
+    const gw = startGateway([
+      () => reply([toolUseBlock("s1", "SwitchProject", { project: "app" })], "tool_use"),
+      () => reply([textBlock("switched")]),
+      () => reply([textBlock("in app")]),
+      () => reply([textBlock("guest here")]),
+    ]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT);
+    await pair(GUEST);
+    server.pushMessage(CHAT, CHAT, "work on app");
+    await server.waitFor(() => server.textsTo(CHAT).includes("switched"));
+    const names = (i: number) => gw.model.requests[i]!.tools.map((t) => t.name);
+    expect(names(0)).toEqual(expect.arrayContaining(["TroposSetup", "SwitchProject", "Cron"]));
+    server.pushMessage(CHAT, CHAT, "and now?");
+    await server.waitFor(() => server.textsTo(CHAT).includes("in app"));
+    expect(Object.keys(await sessionsFile())).toContain(`telegram:${CHAT}@app`);
+    server.pushMessage(GUEST, GUEST, "hey");
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest here"));
+    expect(names(3)).toContain("SwitchProject");
+    expect(names(3)).not.toContain("TroposSetup");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("the owner's chat runs the background review; a guest's chat never does", async () => {
     await mkdir(home, { recursive: true });
     await Bun.write(join(home, "settings.json"), JSON.stringify({ learning: { interval: 2 } }));

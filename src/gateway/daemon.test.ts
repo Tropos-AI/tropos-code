@@ -15,6 +15,8 @@ import { loadGatewayConfig } from "./config";
 import type { HelloInfo } from "../web/protocol";
 import { dockerCheck, readGatewayState, type GatewayRun } from "./daemon";
 import { addProject, removeProject, setDefaultProject } from "./projects";
+import { TelegramApi } from "./telegram/api";
+import { FakeTelegramServer } from "../../test/helpers/telegram-fake-server";
 
 let dir: string;
 beforeEach(async () => {
@@ -161,6 +163,41 @@ describe("tcode gateway", () => {
     ws.close();
     stop();
     expect(await done).toBe(0);
+  });
+
+  test("startup without a channel offers to connect Telegram with the dashboard link", async () => {
+    await mkdir(join(dir, "project"));
+    const g = start();
+    while (!g.url()) await Bun.sleep(20);
+    const out = g.out.join("");
+    const port = new URL(g.url()!).port;
+    expect(out).toContain(`channels: none (ask me to connect Telegram, or open http://127.0.0.1:${port}/#/settings)`);
+    expect(out).not.toContain("gateway.json");
+    g.stop();
+    await g.done;
+  });
+
+  test("SIGUSR2 reloads the gateway: a token written after start brings Telegram up", async () => {
+    await mkdir(join(dir, "project"));
+    const server = new FakeTelegramServer();
+    try {
+      const listeners = process.listenerCount("SIGUSR2");
+      const g = start([], { seams: { telegramApi: new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} }), telegramOptions: { pollTimeoutSec: 1 } } });
+      while (!g.url()) await Bun.sleep(20);
+      expect(server.getUpdatesOffsets).toHaveLength(0);
+      // Without a handler SIGUSR2 would end this very process: check before sending it.
+      expect(process.listenerCount("SIGUSR2")).toBe(listeners + 1);
+      const home = join(dir, "home");
+      await saveGatewayConfig(home, { ...(await loadGatewayConfig(home)), telegram: { botToken: server.token } });
+      process.kill(process.pid, "SIGUSR2");
+      await server.waitFor(() => server.getUpdatesOffsets.length > 0);
+      g.stop();
+      await g.done;
+      // The listener goes with the gateway.
+      expect(process.listenerCount("SIGUSR2")).toBe(listeners);
+    } finally {
+      server.stop();
+    }
   });
 
   test("needs no workspace: it creates ~/.tropos/workspace with a .git and a README, and doesn't warn about it", async () => {

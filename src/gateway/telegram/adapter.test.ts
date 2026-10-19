@@ -554,6 +554,57 @@ describe("TelegramAdapter", () => {
     expect(sessions.opens).toBe(2);
   });
 
+  test("a project switched during a turn takes effect on the next message", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server, sessions } = await setup({ projects });
+    const open = sessions.open.bind(sessions);
+    let turns = 0;
+    sessions.open = async (key) => {
+      const s = (await open(key)) as FakeSession;
+      s.onPrompt = async (text, session) => {
+        // The first turn is the agent's SwitchProject call.
+        if (turns++ === 0) chosen.set(`telegram:${CHAT}`, "app");
+        session.emit(assistantEvent(`echo: ${text}`));
+        return "end_turn";
+      };
+      return s;
+    };
+    server.pushMessage(CHAT, CHAT, "work on app");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: work on app"));
+    expect(sessions.opens).toBe(1);
+    server.pushMessage(CHAT, CHAT, "next");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: next"));
+    expect(sessions.opens).toBe(2);
+  });
+
+  test("a message queued while the turn switched projects goes to the new project's session", async () => {
+    const { projects, chosen } = fakeProjects();
+    const { server, sessions } = await setup({ projects });
+    const open = sessions.open.bind(sessions);
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let turns = 0;
+    sessions.open = async (key) => {
+      const s = (await open(key)) as FakeSession;
+      s.onPrompt = async (text, session) => {
+        if (turns++ === 0) {
+          chosen.set(`telegram:${CHAT}`, "app");
+          await held;
+        }
+        session.emit(assistantEvent(`echo: ${text}`));
+        return "end_turn";
+      };
+      return s;
+    };
+    server.pushMessage(CHAT, CHAT, "work on app");
+    await server.waitFor(() => turns === 1);
+    server.pushMessage(CHAT, CHAT, "queued");
+    await Bun.sleep(50);
+    release();
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: queued"));
+    expect(sessions.opens).toBe(2);
+  });
+
   test("an unknown project and the current one are answered without switching", async () => {
     const { projects, chosen } = fakeProjects();
     const { server } = await setup({ projects });

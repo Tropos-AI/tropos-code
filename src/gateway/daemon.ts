@@ -51,6 +51,10 @@ import { homedir } from "node:os";
 import { createAdmin } from "../web/admin";
 import { AdminError } from "../web/admin/context";
 import { createCronTool } from "../tools/cron/cron-tool";
+import { createSetupTool } from "../tools/setup/setup-tool";
+import { dashboardLink } from "./dashboard-link";
+import { onReloadSignal } from "./reload-signal";
+import { chatSessionTools } from "./session-tools";
 import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
 import { createCuratorService } from "./curator-service";
@@ -308,13 +312,29 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       autonomy: () => ({ level: sessionAutonomy({ config: live, projectId, role, confined }), testCommands: pinnedTestCommands(live, projectId) }),
     });
     roles.set(key, role);
-    // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and the
-    // result comes back to this chat. Scheduled runs themselves (project:* sessions) cannot schedule more.
     const chatKey = parseSessionKey(key)?.chatKey;
-    if (chatKey && !chatKey.startsWith("project:")) {
-      // The owner's chats see every job; a guest's chat only its own.
-      sessionCtx.tools = [...sessionCtx.tools, createCronTool({ store: cronStore, seeAll: role === "owner", defaultDeliver: () => chatKey, origin: chatKey, runNow: (id) => cron.runNow(id) }) as (typeof sessionCtx.tools)[number]];
-    }
+    sessionCtx.tools = chatSessionTools(sessionCtx.tools, {
+      role,
+      chatKey,
+      // A chat can ask the agent to schedule work ("every weekday at 9, summarise the open PRs"); it asks first, and
+      // the result comes back to this chat. The owner's chats see every job; a guest's chat only its own.
+      cron: () => createCronTool({ store: cronStore, seeAll: role === "owner", defaultDeliver: () => chatKey, origin: chatKey, runNow: (id) => cron.runNow(id) }),
+      // Only the owner's own chat changes Tropos's setup; it asks every time (policy.ts) and the doctor stays read-only.
+      setup: () =>
+        createSetupTool({
+          home,
+          userHome,
+          who: { role, origin: "channel" },
+          admin,
+          ledger: sessionCtx.ext.ledger,
+          reload,
+          secrets: sessionCtx.secrets,
+          providers: sessionCtx.providers,
+          ...(chatKey ? { chatKey, selectProject: (id: string) => router.select(chatKey, id).then(() => {}) } : {}),
+          inGateway: true,
+        }),
+      projects: chatProjects,
+    });
     let session: SessionStore;
     let history: Awaited<ReturnType<typeof SessionStore.open>>["messages"] = [];
     let resumed = false;
@@ -439,6 +459,32 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   let webUrl: string | undefined;
   let webPort: number | undefined;
   let webProblem: string | undefined;
+  // One admin for the dashboard and the chats' TroposSetup: its changes reload this gateway in-process.
+  const admin = createAdmin({
+    home,
+    userHome,
+    env: run.env,
+    version,
+    execPath: process.execPath,
+    scriptPath: process.argv[1],
+    cwd: (await source.get(await source.defaultId()))?.path ?? home,
+    now: Date.now,
+    fetch,
+    gateway: {
+      // Starts the job and answers at once; a job that cannot start (already running, unknown) is reported.
+      runCronNow: async (id) => {
+        const started = cron.runNow(id);
+        started.catch(() => {});
+        await Promise.race([started.then(() => undefined), new Promise<void>((r) => setTimeout(r, 150))]).catch((e: unknown) => {
+          throw new AdminError(e instanceof Error ? e.message : "The job could not be started.");
+        });
+      },
+      reload,
+      devicesChanged: async () => {
+        await webServer?.recheckDevices();
+      },
+    },
+  });
   if (run.web !== false) {
     try {
       /**
@@ -453,8 +499,13 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           const opened = resume ? await SessionStore.open(home, localCtx.cwd, resume.sessionId) : undefined;
           const session = opened?.store ?? (await SessionStore.create(home, { cwd: localCtx.cwd, model: localCtx.settings.model, version, role: localCtx.role }));
           setSessionId(session.id);
-          // The dashboard is the owner's: its Cron tool sees every job and delivers to the owner's chat.
-          localCtx.tools = [...localCtx.tools, await ownerCronTool(home, { runNow: (id) => cron.runNow(id) })];
+          // The dashboard is the owner's: its Cron tool sees every job and delivers to the owner's chat, and it changes
+          // the setup as from the computer.
+          localCtx.tools = [
+            ...localCtx.tools,
+            await ownerCronTool(home, { runNow: (id) => cron.runNow(id) }),
+            createSetupTool({ home, userHome, who: { role: "owner", origin: "local" }, admin, ledger: localCtx.ext.ledger, reload, secrets: localCtx.secrets, providers: localCtx.providers, inGateway: true }),
+          ];
           const runtime = await createRuntime(localCtx, {
             session,
             history: opened?.messages ?? [],
@@ -516,34 +567,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       };
       // New tabs start in the default project (read again at each reload); a tab moves with project.select.
       chatHosts = await ProjectHosts.create({ get: (id) => source.get(id), defaultId: () => source.defaultId(), open: openDashboard });
-      // The one host create opened: the default project's.
-      const cwd = [...dashboardHosts.values()][0]!.cwd;
       const assets = run.seams?.assets ?? (await loadAssets());
-      const admin = createAdmin({
-        home,
-        userHome: homedir(),
-        env: run.env,
-        version,
-        execPath: process.execPath,
-        scriptPath: process.argv[1],
-        cwd,
-        now: Date.now,
-        fetch,
-        gateway: {
-          // Starts the job and answers at once; a job that cannot start (already running, unknown) is reported.
-          runCronNow: async (id) => {
-            const started = cron.runNow(id);
-            started.catch(() => {});
-            await Promise.race([started.then(() => undefined), new Promise<void>((r) => setTimeout(r, 150))]).catch((e: unknown) => {
-              throw new AdminError(e instanceof Error ? e.message : "The job could not be started.");
-            });
-          },
-          reload,
-          devicesChanged: async () => {
-            await webServer?.recheckDevices();
-          },
-        },
-      });
       // Browsers log in on the socket: device keys (hashed on disk) and the codes `tcode dashboard` issues.
       const devices = new DeviceStore({ path: devicesPath(home) });
       const server = await startWebServer({ host: chatHosts, admin, assets, devices, logins: loginCodesFor(home), port: run.seams?.webPort ?? live.webPort ?? DEFAULT_PORT, dev: run.dev,
@@ -584,6 +608,9 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     ownerChat: () => ownerChatKey(run.pairing),
   };
 
+  // Before state.json names this pid: SIGUSR2 without a handler would end the process. Another Tropos process (the
+  // terminal's TroposSetup, `tcode` commands) sends it after changing the config; it only triggers the reload.
+  const stopReloadSignal = onReloadSignal(() => void reload().catch((e: unknown) => run.err(`gateway: reload failed: ${e instanceof Error ? e.message : String(e)}\n`)));
   state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, ...(webProblem ? { webProblem } : {}), telegram: adapters.length > 0 };
   await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
@@ -603,7 +630,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     run.out(
       [
         `Tropos gateway running${oneOff ? ` in ${oneOff.path}` : ""}`,
-        adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : "  channels: none (connect Telegram in the dashboard: tcode dashboard, or ask me in the terminal)",
+        adapters.length > 0 ? `  channels: ${adapters.map((a) => a.name).join(", ")}` : `  channels: none (ask me to connect Telegram, or open ${dashboardLink({ webPort: webPort ?? live.webPort }, "settings")})`,
         `  projects: ${projects.map((p) => p.id).join(", ")} (default: ${await source.defaultId()})`,
         // No key in the address any more: a browser logs in on the page (`tcode dashboard` opens it logged in).
         webUrl ? `  web: ${webUrl} (open it with: tcode dashboard)` : "  web: off",
@@ -625,6 +652,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     await (run.until ? run.until({ webUrl, reload }) : untilSignal());
   } finally {
     stopping = true;
+    stopReloadSignal();
     stopReaper();
     await reloading.catch(() => {});
     await Promise.all(startedServices.map((s) => s.stop().catch(() => {})));

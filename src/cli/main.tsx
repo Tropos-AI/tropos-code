@@ -10,7 +10,11 @@ import { ModelPrefs } from "../config/model-prefs";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { resolveToolPath } from "../tools/paths";
 import { createTools } from "../tools/registry";
+import { homedir } from "node:os";
 import { SecretVault } from "../tools/setup/secrets";
+import { createSetupTool } from "../tools/setup/setup-tool";
+import { sessionAdmin } from "../tools/setup/session-admin";
+import { requestGatewayReload } from "../gateway/reload-signal";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
 import { autoRegisterProject } from "../gateway/projects";
@@ -297,6 +301,13 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   };
   // The owner's terminal can schedule too; results go to the owner's chat.
   ctx.tools = [...ctx.tools, await ownerCronTool(home)];
+  // And change Tropos's setup, through the dashboard's own handlers; a running gateway is told to reload by signal.
+  if (ctx.role === "owner") {
+    ctx.tools = [
+      ...ctx.tools,
+      createSetupTool({ home, userHome: homedir(), who: { role: ctx.role, origin: "local" }, admin: sessionAdmin(home, env, homedir()), ledger: ext.ledger, reload: () => requestGatewayReload(home), secrets: ctx.secrets, providers: router }),
+    ];
+  }
   try {
     return await runSession();
   } finally {

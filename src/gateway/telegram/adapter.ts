@@ -126,6 +126,8 @@ interface Chat {
   done: { files: Set<string>; commands: string[]; moreFiles: number; moreCommands: number; pending: Map<string, { name: string; input: unknown }> };
   /** The chat's project folder, to show changed files relative to it. */
   root: string | undefined;
+  /** The project this chat's session works in; when the agent switches it (SwitchProject), the session is left. */
+  projectId: string | undefined;
 }
 
 /** `/Project@MyBot arg` -> `project`. */
@@ -413,6 +415,7 @@ export class TelegramAdapter implements ChannelAdapter {
       heldNotices: [],
       done: { files: new Set(), commands: [], moreFiles: 0, moreCommands: 0, pending: new Map() },
       root: undefined,
+      projectId: (await this.projects?.current(key).catch(() => undefined))?.id,
     };
     chat.detach = session.attach({
       event: (event) => this.onEvent(chat, event),
@@ -654,7 +657,24 @@ export class TelegramAdapter implements ChannelAdapter {
       const note = turnEndNote(reason);
       if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
     }
+    if (await this.projectMoved(chat)) return;
     this.drain(chat);
+  }
+
+  /**
+   * The turn switched the chat's project (SwitchProject): this session is left (it stays resumable), and the next
+   * message, or one already queued, opens the new project's session.
+   */
+  private async projectMoved(chat: Chat): Promise<boolean> {
+    if (!this.projects || chat.projectId === undefined) return false;
+    const now = (await this.projects.current(`${CHANNEL}:${chat.chatId}`).catch(() => undefined))?.id;
+    if (now === undefined || now === chat.projectId || chat.running) return false;
+    const queued = chat.queue.splice(0);
+    this.dropChat(chat);
+    if (queued.length === 0 || this.stopped) return true;
+    const next = await this.chatFor(chat.chatId, chat.senderId);
+    if (next) for (const item of queued) this.enqueue(next, item);
+    return true;
   }
 
   /** Forgets the chat and what it queued; a later message that passes the approval check opens it afresh. */

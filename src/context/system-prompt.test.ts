@@ -122,3 +122,10 @@ test("the prompt tells the chief about specialists", () => {
   expect(SYSTEM_PROMPT).toContain("<specialists>");
   expect(SYSTEM_PROMPT).toContain("~/.tropos/agents/<name>/");
 });
+
+test("the prompt routes setup through TroposSetup and never to the config files", () => {
+  expect(SYSTEM_PROMPT).toContain("TroposSetup");
+  expect(SYSTEM_PROMPT).toContain("never edit settings.json or gateway.json yourself");
+  expect(SYSTEM_PROMPT).toContain("pass `secret:<n>` and never repeat a key");
+  expect(SYSTEM_PROMPT).toContain('"work on <name>" means SwitchProject');
+});

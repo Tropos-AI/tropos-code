@@ -53,6 +53,7 @@ describe("the built-in default project", () => {
     expect(project.path).toBe(join(home, "workspace"));
     expect(inited).toEqual([project.path]);
     expect(await readFile(join(project.path, "README.md"), "utf8")).toContain("Tropos");
+    expect(await readFile(join(project.path, "README.md"), "utf8")).toContain("Run tcode in any git repo and it's added as a project; or ask me to add one.");
 
     await writeFile(join(project.path, "README.md"), "mine");
     await ensureDefaultProject(home, { git: async () => {} });

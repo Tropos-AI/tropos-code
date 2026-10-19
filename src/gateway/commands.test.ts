@@ -89,7 +89,9 @@ describe("gateway install / status / uninstall", () => {
     expect(plist).toContain("<string>/bin/tcode</string>\n    <string>gateway</string>");
     expect(plist).toContain(`<key>WorkingDirectory</key>\n  <string>${home}</string>`);
     expect(res.calls.map((c) => c[0])).toEqual(["bootout", "bootstrap"]);
-    expect(res.out).toContain("No Telegram bot yet: connect one in the dashboard (tcode dashboard) or ask me to connect it.");
+    expect(res.out).toContain("No Telegram bot yet: ask me to connect Telegram (paste the token from @BotFather), or open http://127.0.0.1:4317/#/settings.");
+    expect(res.out).toContain("Running tcode in a git repo adds it; or ask me to add one.");
+    expect(res.out).not.toContain("tcode projects add");
     expect(res.out).not.toContain("gateway.json");
     expect((await loadGatewayConfig(home)).projects).toEqual([]);
   });
