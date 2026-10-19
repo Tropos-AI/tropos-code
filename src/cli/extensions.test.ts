@@ -313,14 +313,6 @@ test("reloadAgents picks up an agent file written after startup, in the same lis
   expect(list.find((a) => a.name === "george")?.emoji).toBe("🧭");
 });
 
-test("context extras: the setup reminder is appended last, only when there is one", async () => {
-  const ext = await load();
-  const extras = await contextExtras(ext, () => "", { home, scope: "main", reminder: "<setup-reminder>x</setup-reminder>" });
-  expect(extras.at(-1)).toBe("<setup-reminder>x</setup-reminder>");
-  expect(await contextExtras(ext, () => "", { home, scope: "main" })).toHaveLength(5);
-  expect(await contextExtras(ext, () => "", { home, scope: "main", reminder: "" })).toHaveLength(5);
-});
-
 async function putSpecialist(id: string, description: string, emoji = "🔍") {
   await put(
     join(home, "agents", id, "AGENT.md"),

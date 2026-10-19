@@ -221,6 +221,26 @@ describe("chat roles reach the session", () => {
     expect(await gw.done).toBe(0);
   });
 
+  test("the owner's chat hears a skipped setup step once and has Suggestion; a guest's chat neither", async () => {
+    await mkdir(home, { recursive: true });
+    await Bun.write(join(home, "onboarding.json"), JSON.stringify({ skipped: ["phone"] }));
+    const gw = startGateway([() => reply([textBlock("owner here")]), () => reply([textBlock("guest here")])]);
+    await server.waitFor(() => server.commands.length > 0);
+    await pair(CHAT);
+    await pair(GUEST);
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.textsTo(CHAT).includes("owner here"));
+    server.pushMessage(GUEST, GUEST, "hey");
+    await server.waitFor(() => server.textsTo(GUEST).includes("guest here"));
+    const first = (i: number) => JSON.stringify(gw.model.requests[i]!.messages[0]);
+    expect(first(0)).toContain("[setup:phone]");
+    expect(gw.model.requests[0]!.tools.map((t) => t.name)).toContain("Suggestion");
+    expect(first(1)).not.toContain("<suggestions>");
+    expect(gw.model.requests[1]!.tools.map((t) => t.name)).not.toContain("Suggestion");
+    gw.stop();
+    expect(await gw.done).toBe(0);
+  });
+
   test("the owner's chat runs the background review; a guest's chat never does", async () => {
     await mkdir(home, { recursive: true });
     await Bun.write(join(home, "settings.json"), JSON.stringify({ learning: { interval: 2 } }));

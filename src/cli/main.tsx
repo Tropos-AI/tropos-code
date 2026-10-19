@@ -1,5 +1,6 @@
 import { render } from "ink";
 import { ownerCronTool } from "../tools/cron/owner-cron";
+import { suggestionTool, withSuggestions } from "../suggest/wire";
 import type { Model } from "../api/model";
 import { ProviderRouter } from "../providers/router";
 import { MODES, type Mode } from "../config/constants";
@@ -386,6 +387,11 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     }
 
     const added = await autoRegisterProject(home, cwd);
+    // The owner's terminal hears suggestions too (print mode above stays free of them): the block, the Suggestion tool, and
+    // a watcher for this repo's pinned test commands when it is a registered project.
+    const registered = (await loadGatewayConfig(home).catch(() => undefined))?.projects.find((p) => p.path === cwd);
+    Object.assign(ctx, withSuggestions(ctx, { userHome: homedir(), projectId: registered?.id ?? added?.id ?? "default", testCommands: registered?.testCommands ?? [] }));
+    ctx.tools = [...ctx.tools, suggestionTool(home)];
     const runtime = await createRuntime(ctx, {
       startNotices: added ? [`Added this repo to your projects as "${added.id}", so chats can work on it too. Don't want it there? Ask me to remove it.`] : undefined,
       session,

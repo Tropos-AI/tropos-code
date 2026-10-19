@@ -222,8 +222,8 @@ test("no subagent gets a hub-only tool", () => {
   expect(filterTools(list, { tools: ["Read", "Cron", "AgentManage"] }).map((t) => t.name)).toEqual(["Read"]);
 });
 
-test("no subagent or specialist ever gets TroposSetup or SwitchProject", () => {
-  expect(filterTools([tool("Read"), tool("TroposSetup"), tool("SwitchProject")], { tools: ["*"] }).map((t) => t.name)).toEqual(["Read"]);
+test("no subagent or specialist ever gets TroposSetup, SwitchProject or Suggestion", () => {
+  expect(filterTools([tool("Read"), tool("TroposSetup"), tool("SwitchProject"), tool("Suggestion")], { tools: ["*"] }).map((t) => t.name)).toEqual(["Read"]);
   expect(filterTools([tool("Read"), tool("TroposSetup")], { tools: ["Read", "TroposSetup"] }).map((t) => t.name)).toEqual(["Read"]);
 });
 

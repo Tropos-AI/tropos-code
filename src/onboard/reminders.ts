@@ -1,9 +1,7 @@
-// src/onboard/reminders.ts — a step the owner skipped in setup is mentioned once, by the agent, in the owner's own
-// interactive session. Only cheap reads decide whether it is still undone (no doctor, no network).
+// src/onboard/reminders.ts — which steps the owner skipped in setup are still undone, and which were already raised.
+// The agent raises each once, as a `setup:*` suggestion (src/suggest). Only cheap reads decide (no doctor, no network).
 import { bootstrapPending } from "../context/identity";
-import type { SessionRole } from "../gateway/types";
 import type { OnboardStepId } from "../web/admin/api";
-import { REMINDER_TOPICS } from "./copy";
 import { phoneEnabled, registeredProjectCount, STEP_ORDER, telegramState, type OnboardDeps } from "./engine";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
 
@@ -46,23 +44,4 @@ export async function openSkippedSteps(deps: OnboardDeps, known: { serviceInstal
 export async function markReminded(home: string, id: OnboardStepId): Promise<void> {
   const prior = (await readOnboardingFlags(home)).reminded ?? [];
   if (!prior.includes(id)) await updateOnboardingFlags(home, { reminded: [...prior, id] });
-}
-
-export function setupReminderContext(id: OnboardStepId): string {
-  return `<setup-reminder>
-During setup the user skipped ${REMINDER_TOPICS[id] ?? id}.
-Mention it once, at a natural pause or at the end of a reply, in one short sentence (for example: "You can reach me from your phone too; want to set up Telegram?"). Never instead of answering. If they want it, tell them to run \`tcode onboard\` or open Setup in the dashboard. Don't bring it up again.
-</setup-reminder>`;
-}
-
-/** The next reminder for the owner's interactive session, or "". It is marked as shown before it is returned. */
-export async function takeSetupReminder(deps: OnboardDeps, who: { role: SessionRole; interactive: boolean }): Promise<string> {
-  if (who.role !== "owner" || !who.interactive) return "";
-  const flags = await readOnboardingFlags(deps.home);
-  const reminded = new Set(flags.reminded ?? []);
-  const open = new Set(await openSkippedSteps(deps));
-  const next = REMINDABLE.find((id) => open.has(id) && !reminded.has(id));
-  if (!next) return "";
-  await markReminded(deps.home, next);
-  return setupReminderContext(next);
 }

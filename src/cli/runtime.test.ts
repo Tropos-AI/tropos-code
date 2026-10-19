@@ -558,6 +558,14 @@ describe("learning and identity", () => {
     expect(await ctx.subagents.deps!.contextText()).not.toContain("<worktree>");
   });
 
+  test("the test watcher sees the main agent's events", async () => {
+    await setup([text("a")]);
+    const seen: string[] = [];
+    const { agent } = await agentFor({ ctx: { ...ctx, testWatch: { observe: (e) => void seen.push(e.type) } } });
+    await agent.run("hi", signal());
+    expect(seen).toContain("turn_end");
+  });
+
   test("subagents get the agent's own notes but not the user profile or the identity", async () => {
     const model = await setup([text("a")]);
     await ctx.ext.notes!.add("user", "Prefers bun");

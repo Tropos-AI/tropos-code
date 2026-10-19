@@ -10,17 +10,17 @@ const tool = (name: string): AnyTool =>
 
 const fakeProjects = {} as ChatProjects;
 
-test("owner chats get TroposSetup and SwitchProject; guests only SwitchProject; scheduled runs neither", () => {
+test("owner chats get TroposSetup, Suggestion and SwitchProject; guests only SwitchProject; scheduled runs neither", () => {
   const names = (o: Parameters<typeof chatSessionTools>[1]) => chatSessionTools([], o).map((t) => t.name);
-  const tools = { cron: () => tool("Cron"), setup: () => tool("TroposSetup"), projects: fakeProjects };
-  expect(names({ role: "owner", chatKey: "telegram:1", ...tools })).toEqual(["Cron", "TroposSetup", "SwitchProject"]);
+  const tools = { cron: () => tool("Cron"), setup: () => tool("TroposSetup"), suggestion: () => tool("Suggestion"), projects: fakeProjects };
+  expect(names({ role: "owner", chatKey: "telegram:1", ...tools })).toEqual(["Cron", "TroposSetup", "Suggestion", "SwitchProject"]);
   expect(names({ role: "guest", chatKey: "telegram:2", ...tools })).toEqual(["Cron", "SwitchProject"]);
   expect(names({ role: "scheduled", chatKey: "project:app", ...tools })).toEqual([]);
   expect(names({ role: "guest", chatKey: "project:app:guest", ...tools })).toEqual([]);
 });
 
 test("a heartbeat run gets neither Cron nor TroposSetup, even as the owner", () => {
-  const names = chatSessionTools([tool("Read")], { role: "owner", chatKey: "heartbeat:owner", cron: () => tool("Cron"), setup: () => tool("TroposSetup"), projects: fakeProjects }).map((t) => t.name);
+  const names = chatSessionTools([tool("Read")], { role: "owner", chatKey: "heartbeat:owner", cron: () => tool("Cron"), setup: () => tool("TroposSetup"), suggestion: () => tool("Suggestion"), projects: fakeProjects }).map((t) => t.name);
   expect(names).toEqual(["Read"]);
 });
 

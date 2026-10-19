@@ -4,7 +4,7 @@ import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Agent, hookContext } from "../agent/agent";
-import type { PermissionPrompt } from "../agent/events";
+import type { AgentEvent, PermissionPrompt } from "../agent/events";
 import { serializeAsks } from "../agent/subagent";
 import type { Model } from "../api/model";
 import type { Effort, Mode } from "../config/constants";
@@ -43,8 +43,6 @@ import type { AnyTool, ToolContext } from "../tools/types";
 import type { ListTopic } from "../ui/commands";
 import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSection, ProviderControl, Runtime } from "../ui/runtime";
 import type { Theme } from "../ui/theme";
-import { makeOnboardDeps } from "../onboard/engine";
-import { takeSetupReminder } from "../onboard/reminders";
 import type { SecretVault } from "../tools/setup/secrets";
 import { requestGatewayReload } from "../gateway/reload-signal";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
@@ -84,6 +82,8 @@ export interface AppContext {
   secrets?: SecretVault;
   /** Extra context blocks for the main agent's first message (each producer appends its own), before the nonce block. */
   contextBlocks?: () => Promise<string[]>;
+  /** Owner sessions only: sees the agent's events to note whether a project's pinned test commands pass (src/suggest). */
+  testWatch?: { observe(e: AgentEvent): void };
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -202,10 +202,6 @@ export function makeAgent(
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
   const nonce = () => harnessNonce(opts.session().id);
-  // Resolved once per agent, so the reminder rides one context build and is marked as shown exactly once.
-  let reminder: Promise<string> | undefined;
-  const setupReminder = () =>
-    (reminder ??= takeSetupReminder(makeOnboardDeps({ home: ctx.home, env: ctx.env }), { role: ctx.role, interactive: Boolean(opts.interactive) }).catch(() => ""));
   const contextFor = (scope: "main" | "subagent") => async () =>
     buildContextText(await loadMemory(ctx.cwd, ctx.home), await environmentBlock(ctx.cwd, { shell: ctx.shell }), [
       ...(await contextExtras(ctx.ext, (skills) => skillListing(skills), {
@@ -213,7 +209,7 @@ export function makeAgent(
         scope,
         bootstrap: opts.interactive,
         // Guests can't use specialists, so they don't hear of them.
-        ...(scope === "main" ? { reminder: await setupReminder(), specialists: ctx.role !== "guest" } : {}),
+        ...(scope === "main" ? { specialists: ctx.role !== "guest" } : {}),
       })),
       ...(scope === "main" ? ((await ctx.contextBlocks?.()) ?? []) : []),
       nonceBlock(nonce()),
@@ -343,6 +339,7 @@ export function makeAgent(
           // Timed against compaction; models without a known window (other providers) assume 128k.
           else if (event.type === "usage") learning.onUsage(event.contextTokens, flushWindow(config().model));
         }
+        ctx.testWatch?.observe(event);
         opts.ui.emit(event);
       },
       hooks: opts.hooks,

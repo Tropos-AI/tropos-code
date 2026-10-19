@@ -57,6 +57,7 @@ import { createSetupTool } from "../tools/setup/setup-tool";
 import { dashboardLink } from "./dashboard-link";
 import { onReloadSignal } from "./reload-signal";
 import { chatSessionTools } from "./session-tools";
+import { suggestionTool, withSuggestions } from "../suggest/wire";
 import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
 import { createCuratorService } from "./curator-service";
@@ -329,10 +330,12 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
     const { ctx: base, setSessionId } = await pc.newSessionContext();
     // Read on every permission decision, from the live config; guests stay at ask (sessionAutonomy).
-    const sessionCtx = channelContext(base, backend, {
+    const channel = channelContext(base, backend, {
       role,
       autonomy: () => ({ level: sessionAutonomy({ config: live, projectId, role, confined }), testCommands: pinnedTestCommands(live, projectId) }),
     });
+    // The owner's chats hear suggestions too (the terminal's reminders never reached them); a guest's never do.
+    const sessionCtx = role === "owner" ? withSuggestions(channel, { userHome, projectId, testCommands: pinnedTestCommands(live, projectId) }) : channel;
     roles.set(key, role);
     const chatKey = parseSessionKey(key)?.chatKey;
     sessionCtx.tools = chatSessionTools(sessionCtx.tools, {
@@ -355,6 +358,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           ...(chatKey ? { chatKey, selectProject: (id: string) => router.select(chatKey, id).then(() => {}) } : {}),
           inGateway: true,
         }),
+      suggestion: () => suggestionTool(home),
       projects: chatProjects,
     });
     let session: SessionStore;
@@ -523,7 +527,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
         const { pc, release } = await contexts.acquire(project);
         try {
           const { ctx: sessionCtx, setSessionId } = await pc.newSessionContext();
-          const localCtx = gatewayHosted(sessionCtx);
+          const localCtx = withSuggestions(gatewayHosted(sessionCtx), { userHome, projectId: project.id, testCommands: pinnedTestCommands(live, project.id) });
           const opened = resume ? await SessionStore.open(home, localCtx.cwd, resume.sessionId) : undefined;
           const session = opened?.store ?? (await SessionStore.create(home, { cwd: localCtx.cwd, model: localCtx.settings.model, version, role: localCtx.role }));
           setSessionId(session.id);
@@ -532,6 +536,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           localCtx.tools = [
             ...localCtx.tools,
             await ownerCronTool(home, { runNow: (id) => cron.runNow(id) }),
+            suggestionTool(home),
             createSetupTool({ home, userHome, who: { role: "owner", origin: "local" }, admin, ledger: localCtx.ext.ledger, reload, secrets: localCtx.secrets, providers: localCtx.providers, inGateway: true }),
           ];
           const runtime = await createRuntime(localCtx, {

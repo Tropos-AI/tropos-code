@@ -5,8 +5,7 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { BOOTSTRAP_TEXT, saveIdentity } from "../context/identity";
 import { addProject } from "../gateway/projects";
 import { finish } from "./engine";
-import { readOnboardingFlags } from "./flags";
-import { openSkippedSteps, setupReminderContext, takeSetupReminder } from "./reminders";
+import { openSkippedSteps } from "./reminders";
 import { fakeService, testDeps } from "./testing";
 
 let root: string;
@@ -23,33 +22,6 @@ beforeEach(async () => {
 });
 afterEach(() => removeDir(root));
 
-const owner = { role: "owner" as const, interactive: true };
-
-test("a skipped step that is still open is reminded once, then never again", async () => {
-  const deps = testDeps(home);
-  await finish(deps, { skipped: ["telegram", "phone"] });
-  expect(await takeSetupReminder(deps, owner)).toContain("Telegram, so they can talk to you from their phone");
-  expect(await takeSetupReminder(deps, owner)).toContain("phone access");
-  expect(await takeSetupReminder(deps, owner)).toBe("");
-  expect((await readOnboardingFlags(home)).reminded).toEqual(["telegram", "phone"]);
-});
-
-test("the reminder text is the specified block", () => {
-  expect(setupReminderContext("service")).toStartWith("<setup-reminder>\nDuring setup the user skipped running in the background");
-  expect(setupReminderContext("service")).toEndWith("Don't bring it up again.\n</setup-reminder>");
-});
-
-test("guests, scheduled runs and print mode get nothing; a step done since is not reminded", async () => {
-  const deps = testDeps(home);
-  await finish(deps, { skipped: ["projects"] });
-  for (const who of [{ role: "guest", interactive: true }, { role: "scheduled", interactive: false }, { role: "owner", interactive: false }] as const) {
-    expect(await takeSetupReminder(deps, who)).toBe("");
-  }
-  expect((await readOnboardingFlags(home)).reminded).toBeUndefined();
-  await addProject(home, { path: appDir }, { userHome });
-  expect(await takeSetupReminder(deps, owner)).toBe("");
-});
-
 test("openSkippedSteps lists only skipped steps still undone, in step order", async () => {
   const deps = testDeps(home);
   await mkdir(join(home, "workspace"), { recursive: true });
@@ -61,4 +33,12 @@ test("openSkippedSteps lists only skipped steps still undone, in step order", as
   expect(await openSkippedSteps(deps, { serviceInstalled: true })).toEqual(["projects"]);
   const withService = testDeps(home, { service: fakeService({ installed: true }) });
   expect(await openSkippedSteps(withService)).toEqual(["projects"]);
+});
+
+test("a step done since being skipped is no longer open", async () => {
+  const deps = testDeps(home);
+  await finish(deps, { skipped: ["projects"] });
+  expect(await openSkippedSteps(deps)).toEqual(["projects"]);
+  await addProject(home, { path: appDir }, { userHome });
+  expect(await openSkippedSteps(deps)).toEqual([]);
 });
