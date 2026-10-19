@@ -6,26 +6,9 @@ Each release's notes on GitHub are its section of this file.
 
 ## [Unreleased]
 
-### Fixed
+## [0.5.4] - 2026-10-19
 
-- In the terminal, a message gets an answer again: since 0.5.0 the first turn of every interactive session kept
-  gathering its context and never reached the model.
-- Esc interrupts a turn while it is still getting ready, not only once the model is answering.
-- After `/model` or `/effort`, the header names the model and effort in use.
-- Stopping a command or background job on macOS no longer leaves behind a child it was starting at that moment.
-
-### Security
-
-- Read, Write, Edit, Grep and downloads check the file again once it is open: if a folder on its way was swapped for
-  a link in the meantime, nothing is read or written. Nothing is truncated before that check, and missing folders are
-  created one at a time.
-- A guest's Docker container stops whatever a command left running as soon as it ends, and the guest's commands and
-  the file tools take turns.
-- Confined chat commands can no longer read shell and REPL histories, other coding agents' folders, Vault, Terraform
-  and 1Password CLI credentials, or the `.env` files of your other projects.
-- `tcode doctor` notes what the Autonomous level allows: network access and reads outside the secret list.
-
-## [0.5.3] - 2026-10-19
+Version 0.5.3 was tagged but never published; its changes are part of this release.
 
 ### Added
 
@@ -39,8 +22,24 @@ Each release's notes on GitHub are its section of this file.
 
 ### Fixed
 
+- In the terminal, a message gets an answer again: since 0.5.0 the first turn of every interactive session kept
+  gathering its context and never reached the model.
+- Esc interrupts a turn while it is still getting ready, not only once the model is answering.
+- After `/model` or `/effort`, the header names the model and effort in use.
+- Stopping a command or background job on macOS no longer leaves behind a child it was starting at that moment.
 - No stale "Updated to" notice after a newer manual install; `tcode gateway` says when there is nothing to start.
 - The help for `tcode gateway`, `tcode install`, `tcode update` and `tcode onboard` describes what the commands do.
+
+### Security
+
+- Read, Write, Edit, Grep and downloads check the file again once it is open: if a folder on its way was swapped for
+  a link in the meantime, nothing is read or written. Nothing is truncated before that check, and missing folders are
+  created one at a time.
+- A guest's Docker container stops whatever a command left running as soon as it ends, and the guest's commands and
+  the file tools take turns.
+- Confined chat commands can no longer read shell and REPL histories, other coding agents' folders, Vault, Terraform
+  and 1Password CLI credentials, or the `.env` files of your other projects.
+- `tcode doctor` notes what the Autonomous level allows: network access and reads outside the secret list.
 
 ## [0.5.2] - 2026-10-19
 
@@ -149,8 +148,8 @@ Each release's notes on GitHub are its section of this file.
 - The first release: an agentic coding CLI with a native, signed installer (`install.sh`), verified atomic installs,
   background updates through `latest` and `stable` channels, and rollback.
 
-[Unreleased]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.3...HEAD
-[0.5.3]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.2...v0.5.3
+[Unreleased]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.2...v0.5.4
 [0.5.2]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Tropos-AI/tropos-code/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Tropos-AI/tropos-code/compare/v0.4.1...v0.5.0

@@ -234,7 +234,7 @@ class DemoServer {
 
   private hello(): HelloInfo {
     return {
-      version: "0.5.3-demo",
+      version: "0.5.4-demo",
       cwd: CWD,
       sessionId: this.sessionId,
       modes: ["default", "acceptEdits", "plan"],

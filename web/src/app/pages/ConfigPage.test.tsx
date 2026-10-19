@@ -36,7 +36,7 @@ function view(over: Partial<ConfigView["value"]> = {}, file: ConfigView["file"] 
     file,
     path: `/home/me/.tropos/${file}.json`,
     schema,
-    value: { model: "claude-opus", maxTurns: 20, version: "0.5.3", permissions: { allow: ["Bash(git status)"] }, env: { PATH_EXTRA: "/opt/bin", TOKEN: "••••" }, hooks: { PreToolUse: [] }, ...over },
+    value: { model: "claude-opus", maxTurns: 20, version: "0.5.4", permissions: { allow: ["Bash(git status)"] }, env: { PATH_EXTRA: "/opt/bin", TOKEN: "••••" }, hooks: { PreToolUse: [] }, ...over },
   };
 }
 
@@ -90,7 +90,7 @@ describe("ConfigPanel form", () => {
     expect(screen.getByLabelText("env name 1")).toBeTruthy();
     expect(screen.getByLabelText("hooks").tagName).toBe("TEXTAREA");
     expect(screen.getByText("read-only")).toBeTruthy();
-    expect(screen.getByText("0.5.3").tagName).toBe("P");
+    expect(screen.getByText("0.5.4").tagName).toBe("P");
     expect(screen.getByText("/home/me/.tropos/settings.json")).toBeTruthy();
     expect(screen.getByText("Not saved in this session")).toBeTruthy();
   });
