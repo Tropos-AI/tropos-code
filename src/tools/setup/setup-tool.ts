@@ -7,7 +7,7 @@ import { createProject } from "../../gateway/projects";
 import { recordSetupChange, type Ledger } from "../../learning/ledger";
 import type { ProviderControl } from "../../ui/runtime";
 import type { Admin } from "../../web/admin";
-import type { ProactiveView } from "../../web/admin/api";
+import type { DoctorReport, ProactiveView, ServiceInfo } from "../../web/admin/api";
 import { AdminError } from "../../web/admin/context";
 import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
@@ -36,6 +36,15 @@ export interface SetupToolDeps {
 }
 
 export const SEND_AGAIN = "Send that key again; I only hold it for 30 minutes.";
+const NO_UNDO_CONNECT = "Disconnect it instead.";
+const NO_UNDO = "This can't be undone.";
+
+function doctorText(r: DoctorReport): string {
+  const { ok, info, warn, error } = r.summary;
+  const head = `Doctor: ${ok} ok, ${warn} warning${warn === 1 ? "" : "s"}, ${error} error${error === 1 ? "" : "s"}${info ? `, ${info} note${info === 1 ? "" : "s"}` : ""}.`;
+  const lines = r.findings.filter((f) => f.level !== "ok").map((f) => `- [${f.level}] ${f.id}: ${f.message}${f.fixable ? " (has a fix)" : ""}`);
+  return [head, ...lines].join("\n");
+}
 const SECRET_REF = /^secret:\d+$/;
 
 type Json = Record<string, unknown>;
@@ -79,18 +88,51 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
     const result = await work();
     try {
       const after = await snapshot();
+      let recorded = 0;
       for (const { file, paths } of touched) {
         for (const path of paths) {
           const b = getAt(before[file], path);
           const a = getAt(after[file], path);
           if (sameJson(b ?? null, a ?? null)) continue;
           await recordSetupChange(ledger, { actor: ctx.actor ?? "agent", path: configFile(home, file).path, configPath: path, action: input.action, summary, before: b, after: a, ...(noUndo ? { noUndo } : {}) });
+          recorded++;
         }
       }
+      // A change that can't be undone is still on the record, even when the config files show no difference.
+      if (!recorded && noUndo && touched[0]) await note(input, ctx, summary, noUndo, touched[0].file);
     } catch {
-      return `${result} (It couldn't be recorded for undo.)`;
+      return `${result} (It couldn't be recorded in the change history.)`;
     }
     return result;
+  }
+
+  /** Records an action that isn't a config value (a restart, a provider key in the credentials store). */
+  async function note(input: SetupInput, ctx: ToolContext, summary: string, noUndo: string, file: ConfigFileName = "gateway"): Promise<void> {
+    await recordSetupChange(ledger, { actor: ctx.actor ?? "agent", path: configFile(home, file).path, action: input.action, summary, noUndo });
+  }
+
+  /** Records first, so the entry exists even when the restart ends this process. */
+  async function noted(input: SetupInput, ctx: ToolContext, summary: string, noUndo: string): Promise<string> {
+    try {
+      await note(input, ctx, summary, noUndo);
+      return "";
+    } catch {
+      return " (It couldn't be recorded in the change history.)";
+    }
+  }
+
+  /**
+   * Restarts the service. Inside the gateway it answers first: the restart ends this very process, and with it the
+   * chat turn that asked for it.
+   */
+  async function restart(): Promise<string> {
+    const delay = deps.restartDelayMs ?? (deps.inGateway ? 3000 : 0);
+    if (deps.inGateway || delay > 0) {
+      (deps.setTimer ?? setTimeout)(() => void deps.admin.handle("service.restart", undefined).catch(() => {}), delay);
+      return `Restarting the background service ${delay >= 1000 ? `in ${Math.round(delay / 1000)} seconds` : "now"}; I'll be back right after.`;
+    }
+    await deps.admin.handle("service.restart", undefined);
+    return "Restarted the background service.";
   }
 
   /** A pasted key: a ref is taken from the vault (once); a raw value (a format the vault didn't know) is used as is. */
@@ -209,8 +251,62 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
           return out.before === out.after ? `Autonomy is already ${out.after}.` : `Autonomy lowered: ${out.before} → ${out.after}.`;
         }, noUndo);
       }
-      default:
-        return refuse("That isn't available yet.");
+      case "telegram.connect": {
+        const token = secretValue(need(input.secret, "Paste the bot token from @BotFather, then ask me again."), taken);
+        return changing(gatewayPaths("telegram"), input, ctx, "connect Telegram", async () => {
+          const info = (await admin.handle("channels.telegram.set", { token })) as { bot?: { username?: string } };
+          const bot = info?.bot?.username ? ` as @${info.bot.username}` : "";
+          return `Telegram is connected${bot}. Message the bot to reach me there.`;
+        }, NO_UNDO_CONNECT);
+      }
+      case "telegram.disconnect":
+        return changing(gatewayPaths("telegram"), input, ctx, "disconnect Telegram", async () => {
+          await admin.handle("channels.telegram.clear", undefined);
+          return "Telegram is disconnected.";
+        });
+      case "provider.connect": {
+        const id = need(input.provider, "Say which provider the key is for.");
+        const providers = deps.providers ?? refuse(`I can't connect a provider from here. Open ${link("settings/models")} to connect it.`);
+        const key = secretValue(need(input.secret, "Paste the API key, then ask me again."), taken);
+        await providers.connect(id, key);
+        let models: string[];
+        try {
+          models = await providers.models(id, AbortSignal.timeout(20_000));
+        } catch (e) {
+          // A key the provider refuses must not stay saved.
+          await providers.disconnect(id).catch(() => false);
+          return refuse(`${id} did not accept that key (${messageOf(e)}), so I removed it. Check the key and send it again.`);
+        }
+        const recorded = await noted(input, ctx, `connect provider ${id}`, NO_UNDO_CONNECT);
+        return `Connected ${id}: ${models.length} model${models.length === 1 ? "" : "s"} available.${recorded}`;
+      }
+      case "doctor.run": {
+        // Read-only on every surface: fixes are one finding at a time, through doctor.fix.
+        const report = (await admin.handle("doctor.run", { fix: false })) as DoctorReport;
+        return doctorText(report);
+      }
+      case "doctor.fix": {
+        const id = need(input.finding, "Say which finding to fix (its id from doctor.run).");
+        const out = (await admin.handle("doctor.fix", { id })) as { ok: boolean; message: string };
+        const recorded = await noted(input, ctx, `doctor fix ${id}`, NO_UNDO);
+        if (!out.ok) return refuse(`${out.message}${recorded}`);
+        return `${out.message}${recorded}`;
+      }
+      case "service.restart": {
+        const status = (await admin.handle("service.status", undefined)) as ServiceInfo;
+        if (!status.installed) return refuse(`The background service isn't installed. Open ${link("settings")} to install it.`);
+        const recorded = await noted(input, ctx, "restart the service", NO_UNDO);
+        return `${await restart()}${recorded}`;
+      }
+      case "tropos.update": {
+        const out = (await admin.handle("update.run", undefined)) as { ok: boolean; from: string; to?: string; message: string };
+        if (!out.ok) return refuse(out.message);
+        const recorded = await noted(input, ctx, `update Tropos ${out.from} → ${out.to ?? out.from}`, NO_UNDO);
+        if (out.to === undefined || out.to === out.from) return `${out.message}${recorded}`;
+        const status = (await admin.handle("service.status", undefined)) as ServiceInfo;
+        if (!status.running) return `${out.message} Start tcode again to use ${out.to}.${recorded}`;
+        return `${out.message} ${await restart()}${recorded}`;
+      }
     }
   }
 
@@ -226,6 +322,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       const p = describeSetupChange(input, readSetupState(home));
       const notes: string[] = [];
       if (input.action === "project.create" && deps.chatKey) notes.push("This chat switches to it.");
+      if (input.action === "telegram.disconnect" && deps.who.origin === "channel") notes.push("You won't reach me on Telegram until it's connected again.");
       return notes.length ? { ...p, text: `${p.text}\n${notes.join("\n")}` } : p;
     },
     async run(input, ctx): Promise<ToolOutput> {

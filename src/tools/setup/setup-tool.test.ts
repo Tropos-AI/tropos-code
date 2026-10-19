@@ -7,6 +7,7 @@ import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { loadGatewayConfig } from "../../gateway/config";
 import { Ledger } from "../../learning/ledger";
 import { createAdmin, type Admin } from "../../web/admin";
+import type { ProviderControl } from "../../ui/runtime";
 import { toolKind } from "../types";
 import { SecretVault } from "./secrets";
 import { createSetupTool, type SetupToolDeps } from "./setup-tool";
@@ -14,6 +15,7 @@ import { createSetupTool, type SetupToolDeps } from "./setup-tool";
 const LOCAL = { role: "owner", origin: "local" } as const;
 const CHAT = { role: "owner", origin: "channel" } as const;
 const KEY = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawQ";
 
 let root: string;
 let home: string;
@@ -23,6 +25,8 @@ let calls: [string, unknown][];
 let answers: Record<string, (p: unknown) => unknown>;
 let admin: Admin;
 let reloads: number;
+let vault: SecretVault;
+let providers: ProviderControl & { models: ProviderControl["models"]; connected: [string, string][]; disconnected: string[] };
 let tool: ReturnType<typeof createSetupTool>;
 
 // The real admin over a throwaway home, recording every call; `answers` stands in for what reaches outside (Telegram,
@@ -35,8 +39,26 @@ beforeEach(async () => {
   await mkdir(userHome, { recursive: true });
   ledger = new Ledger(home);
   calls = [];
-  answers = {};
+  // Nothing here may reach the real service manager, updater or doctor.
+  answers = {
+    "service.status": () => ({ manager: "launchd", installed: true, running: true, logPath: "/x.log" }),
+    "service.restart": () => ({ manager: "launchd", installed: true, running: true }),
+    "update.run": () => ({ ok: true, from: "1.0.0", to: "1.0.0", message: "Already up to date." }),
+    "doctor.run": () => ({ findings: [{ id: "config.drift", area: "config", level: "warn", message: "settings.json drifted", fixable: true }], summary: { ok: 3, info: 0, warn: 1, error: 0, fixed: 0 } }),
+    "doctor.fix": () => ({ ok: true, message: "Fixed." }),
+    "channels.telegram.set": () => ({ connected: true }),
+  };
   reloads = 0;
+  vault = new SecretVault();
+  vault.seal(KEY);
+  providers = {
+    connected: [],
+    disconnected: [],
+    status: async () => [],
+    connect: async (id, key) => void providers.connected.push([id, key]),
+    disconnect: async (id) => (providers.disconnected.push(id), true),
+    models: async () => ["m1", "m2"],
+  };
   const real = createAdmin({
     home,
     userHome,
@@ -61,7 +83,7 @@ beforeEach(async () => {
 afterEach(() => removeDir(root));
 
 function deps(over: Partial<SetupToolDeps> = {}): SetupToolDeps {
-  return { home, userHome, who: LOCAL, admin, ledger, reload: async () => void reloads++, ...over };
+  return { home, userHome, who: LOCAL, admin, ledger, reload: async () => void reloads++, secrets: vault, providers, ...over };
 }
 
 const text = (out: { content: unknown }) => String(out.content);
@@ -179,4 +201,115 @@ test("an admin failure comes back as an error with secrets scrubbed", async () =
 
 test("the preview is the before → after of the change", () => {
   expect(tool.preview!({ action: "model.set", model: "openai/gpt-5" })!.text).toContain("→ openai/gpt-5");
+});
+
+// ---- Task 7: Telegram, provider keys, doctor, restart and update
+
+test("telegram.connect takes the sealed token, never shows it, and is not undoable", async () => {
+  const v = new SecretVault();
+  v.seal(TOKEN);
+  const out = await createSetupTool(deps({ secrets: v })).run({ action: "telegram.connect", secret: "secret:1" }, makeToolContext());
+  expect(calls).toContainEqual(["channels.telegram.set", { token: TOKEN }]);
+  expect(JSON.stringify(out)).not.toContain(TOKEN);
+  expect(v.peek("secret:1")).toBeUndefined();
+  expect((await ledger.list(1))[0]!.noUndo).toBe("Disconnect it instead.");
+  expect(await readFile(ledger.file, "utf8")).not.toContain(TOKEN);
+});
+
+test("an expired or unknown ref asks for the token again", async () => {
+  const out = await tool.run({ action: "telegram.connect", secret: "secret:9" }, makeToolContext());
+  expect(out).toMatchObject({ isError: true });
+  expect(String(out.content)).toContain("Send that key again");
+  expect(calls).toEqual([]);
+});
+
+test("a raw token (a format the vault didn't know) is used but never repeated, even in an error", async () => {
+  answers["channels.telegram.set"] = (p) => {
+    throw new Error(`Telegram did not accept ${(p as { token: string }).token}`);
+  };
+  const out = await tool.run({ action: "telegram.connect", secret: TOKEN }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(JSON.stringify(out)).not.toContain(TOKEN);
+});
+
+test("telegram.disconnect clears the token; in a chat the preview warns that the chat goes quiet", async () => {
+  await tool.run({ action: "telegram.disconnect" }, makeToolContext());
+  expect(calls).toContainEqual(["channels.telegram.clear", undefined]);
+  expect(createSetupTool(deps({ who: CHAT })).preview!({ action: "telegram.disconnect" })!.text).toContain("You won't reach me on Telegram until it's connected again.");
+  expect(tool.preview!({ action: "telegram.disconnect" })!.text).not.toContain("You won't reach me");
+});
+
+test("provider.connect checks the key by listing models and removes a rejected one", async () => {
+  providers.models = async () => {
+    throw new Error("401");
+  };
+  const out = await tool.run({ action: "provider.connect", provider: "anthropic", secret: "secret:1" }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(providers.disconnected).toEqual(["anthropic"]);
+  expect(JSON.stringify(out)).not.toContain(KEY);
+});
+
+test("provider.connect with a good key connects it and is recorded as not undoable", async () => {
+  const out = await tool.run({ action: "provider.connect", provider: "anthropic", secret: "secret:1" }, makeToolContext());
+  expect(out.isError).toBeFalsy();
+  expect(providers.connected).toEqual([["anthropic", KEY]]);
+  expect(JSON.stringify(out)).not.toContain(KEY);
+  expect((await ledger.list(1))[0]!.noUndo).toBe("Disconnect it instead.");
+  expect(await readFile(ledger.file, "utf8")).not.toContain(KEY);
+});
+
+test("doctor.run never fixes; doctor.fix runs one finding locally", async () => {
+  const report = await tool.run({ action: "doctor.run" }, makeToolContext());
+  expect(calls).toContainEqual(["doctor.run", { fix: false }]);
+  expect(String(report.content)).toContain("config.drift");
+  expect(await ledger.list()).toEqual([]);
+  await tool.run({ action: "doctor.fix", finding: "config.drift" }, makeToolContext());
+  expect(calls).toContainEqual(["doctor.fix", { id: "config.drift" }]);
+  expect((await ledger.list(1))[0]!.noUndo).toBe("This can't be undone.");
+});
+
+test("in a chat doctor.run is still read-only", async () => {
+  await createSetupTool(deps({ who: CHAT })).run({ action: "doctor.run" }, makeToolContext());
+  expect(calls).toEqual([["doctor.run", { fix: false }]]);
+});
+
+test("inside the gateway, restart answers first and restarts after the delay", async () => {
+  const timers: [() => void, number][] = [];
+  const out = await createSetupTool(deps({ inGateway: true, restartDelayMs: 3000, setTimer: (fn, ms) => timers.push([fn, ms]) })).run({ action: "service.restart" }, makeToolContext());
+  expect(String(out.content)).toContain("Restarting");
+  expect(timers.map(([, ms]) => ms)).toEqual([3000]);
+  expect(calls.some(([m]) => m === "service.restart")).toBe(false);
+  timers[0]![0]();
+  await Bun.sleep(0);
+  expect(calls.some(([m]) => m === "service.restart")).toBe(true);
+  expect((await ledger.list(1))[0]!.noUndo).toBe("This can't be undone.");
+});
+
+test("inside the gateway the restart delay defaults to 3 seconds", async () => {
+  const timers: number[] = [];
+  await createSetupTool(deps({ inGateway: true, setTimer: (_fn, ms) => timers.push(ms) })).run({ action: "service.restart" }, makeToolContext());
+  expect(timers).toEqual([3000]);
+});
+
+test("a restart without the service installed points to the dashboard", async () => {
+  answers["service.status"] = () => ({ manager: "launchd", installed: false, running: false, logPath: "/x.log" });
+  const out = await tool.run({ action: "service.restart" }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(String(out.content)).toContain("The background service isn't installed. Open http://");
+  expect(calls.some(([m]) => m === "service.restart")).toBe(false);
+});
+
+test("tropos.update runs the update and restarts a running service", async () => {
+  answers["update.run"] = () => ({ ok: true, from: "0.4.1", to: "0.5.0", message: "Updated." });
+  answers["service.status"] = () => ({ manager: "launchd", installed: true, running: true });
+  await tool.run({ action: "tropos.update" }, makeToolContext());
+  expect(calls.map(([m]) => m)).toEqual(expect.arrayContaining(["update.run", "service.restart"]));
+  expect((await ledger.list(1))[0]!.noUndo).toBe("This can't be undone.");
+});
+
+test("a failed update does not restart anything", async () => {
+  answers["update.run"] = () => ({ ok: false, from: "0.4.1", message: "No network." });
+  const out = await tool.run({ action: "tropos.update" }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(calls.some(([m]) => m === "service.restart")).toBe(false);
 });
