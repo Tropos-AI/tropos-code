@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { resolveAgentModel } from "../agent/subagent";
 import { errorText } from "../error-text";
 import { Ledger } from "../learning/ledger";
 import { agentsDir, isInside } from "../paths";
@@ -24,7 +25,10 @@ const schema = z.object({
   description: z.string().optional().describe("create/update: one line saying what the agent does and when to use it (the Agent tool lists it)."),
   prompt: z.string().optional().describe("create/update: the role contract, with the sections ## Purpose, ## Not my job, ## Report and ## Escalate when."),
   tools: z.array(z.string()).optional().describe('create/update: the tools it may use, e.g. ["Read", "Grep", "Glob", "WebFetch"]; omit for all tools.'),
-  model: z.string().optional().describe('create/update: a model id or alias (opus, sonnet, haiku); omit to use the session\'s model.'),
+  model: z
+    .string()
+    .optional()
+    .describe('create/update: its default model, an alias (opus, sonnet, haiku), a full id or <provider>/<model>; omit to use the session\'s model, "inherit" to go back to it.'),
   emoji: z.string().optional().describe("create/update: one emoji shown next to its name."),
   autonomy: z.enum(AUTONOMY_LEVELS).optional().describe("create/update: how freely it acts on its own (ask, balanced, autonomous); omit to follow the session's."),
 });
@@ -91,7 +95,12 @@ export interface AgentManageOptions {
   ledger?: Ledger;
   /** Called after a change, so the session's agent list (and the Agent tool) sees it at once. */
   onChange?(): Promise<void> | void;
+  /** Why a model can't be used now (unknown provider, no key), or null; checked before a model is saved. */
+  checkModel?(model: string): Promise<string | null>;
 }
+
+/** "inherit" (or nothing) means the session's model: the saved model is removed. */
+const inherits = (model: string): boolean => model.trim() === "" || model.trim().toLowerCase() === "inherit";
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
@@ -120,7 +129,15 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
     if (input.action === "create") {
       const made = await createSpecialist(
         opts.home,
-        { id: input.name, description: input.description ?? "", prompt: input.prompt ?? "", emoji: input.emoji, model: input.model, tools: input.tools, autonomy: input.autonomy },
+        {
+          id: input.name,
+          description: input.description ?? "",
+          prompt: input.prompt ?? "",
+          emoji: input.emoji,
+          model: input.model !== undefined && !inherits(input.model) ? input.model : undefined,
+          tools: input.tools,
+          autonomy: input.autonomy,
+        },
         common,
       );
       await opts.onChange?.();
@@ -141,7 +158,7 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
       ...(input.emoji !== undefined ? { emoji: input.emoji } : {}),
-      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.model !== undefined ? { model: inherits(input.model) ? null : input.model } : {}),
       // An empty list means every tool, as for single-file agents.
       ...(input.tools !== undefined ? { tools: input.tools.length > 0 ? input.tools : null } : {}),
       ...(input.autonomy !== undefined ? { autonomy: input.autonomy } : {}),
@@ -163,7 +180,8 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
       "Each lives in ~/.tropos/agents/<name>/ with its own role contract, memory, journal and skills, and is started with the Agent tool (subagent_type = its name). " +
       "create: needs description (one line the chief routes on) and prompt, a role contract with these sections:\n" +
       `${ROLE_CONTRACT_TEMPLATE}\n` +
-      "tools: the fewest that do the job (a subset of yours); model: omit to use yours. update: changes only the fields given and saves a new revision. " +
+      "tools: the fewest that do the job (a subset of yours); model: omit to use yours, or update it when the user wants this agent on another model from now on (\"make the researcher use sonnet\"). " +
+      "update: changes only the fields given and saves a new revision. " +
       "archive: retires one (never deleted). delete: only for single-file agents (~/.tropos/agents/<name>.md).",
     schema,
     summarize: (input) =>
@@ -185,6 +203,10 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
       }
       if (ctx.approvedPaths !== undefined && !ctx.approvedPaths.includes(path)) return fail(`${path} changed after it was approved; nothing was written. Try again.`);
       if (BUILTIN_AGENTS.some((b) => b.name === input.name)) return fail(`${input.name} is a built-in agent; pick another name.`);
+      if (input.model !== undefined && !inherits(input.model) && (input.action === "create" || input.action === "update")) {
+        const why = await opts.checkModel?.(resolveAgentModel(input.model.trim(), ""));
+        if (why) return fail(`Not saved: ${input.model} can't be used: ${why}`);
+      }
       if (!plain) {
         try {
           return await runSpecialist(input, path, actor);
@@ -208,6 +230,7 @@ export function createAgentManageTool(opts: AgentManageOptions): AnyTool {
           ...Object.fromEntries(Object.entries({ description: input.description, prompt: input.prompt, tools: input.tools, model: input.model, emoji: input.emoji }).filter(([, v]) => v !== undefined)),
         };
         if (fields.emoji !== undefined) fields.emoji = fields.emoji.trim();
+        if (input.model !== undefined && inherits(input.model)) delete fields.model;
         const why = fieldsProblem(fields);
         if (why) return fail(why);
         const after = renderAgentFile(input.name, fields as Fields);

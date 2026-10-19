@@ -90,7 +90,9 @@ test("specialistRoster lists active specialists with the chief's guidance", asyn
   await writeSpecialist("reviewer", FIELDS);
   const [s] = await loadSpecialists(home);
   expect(specialistRoster([specialistAgent(s!)])).toBe(
-    "<specialists>\nSpecialists you lead. Delegate with the Agent tool (subagent_type: the id) when one fits; do it yourself when none does; never delegate what the user asked you personally to decide.\n- 🔍 reviewer: reviews pull requests\n</specialists>",
+    "<specialists>\nSpecialists you lead. Delegate with the Agent tool (subagent_type: the id) when one fits; do it yourself when none does; never delegate what the user asked you personally to decide. " +
+      "Each runs on its own model when one is shown, else on yours; pass model on the Agent call to pick a cheaper, faster or stronger one for a task, or the one the user names.\n- 🔍 reviewer: reviews pull requests\n</specialists>",
   );
+  expect(specialistRoster([specialistAgent({ ...s!, model: "sonnet" })])).toContain("- 🔍 reviewer: reviews pull requests (model: sonnet)");
   expect(specialistRoster(BUILTIN_AGENTS)).toBe("");
 });

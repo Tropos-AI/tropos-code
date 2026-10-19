@@ -76,8 +76,9 @@ describe("runSubagent", () => {
     const c = ctx();
     const out = await runSubagent({ ...def, model: "haiku", tools: ["Read"] }, "find a", d, c);
     expect(out.isError).toBeUndefined();
-    expect(out.content).toBe("Found it in src/a.ts.\n\n(explore · 1 tool use · 2 turns)");
-    expect(out.summary).toBe("1 tool use");
+    // A run on a model of its own names it.
+    expect(out.content).toBe("Found it in src/a.ts.\n\n(explore · 1 tool use · 2 turns · claude-haiku-5-5)");
+    expect(out.summary).toBe("1 tool use · claude-haiku-5-5");
     expect(c.progressed).toEqual(["Read src/a.ts"]);
     const req = d.model.requests[0]!;
     expect(req.model).toBe("claude-haiku-5-5");

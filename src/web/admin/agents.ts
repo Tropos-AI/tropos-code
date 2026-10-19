@@ -12,7 +12,11 @@ import {
   updateSpecialist,
   type SpecialistChange,
 } from "../../agents/store";
+import { resolveAgentModel } from "../../agent/subagent";
 import { DEFAULT_MODEL } from "../../config/constants";
+import { readSettingsFile } from "../../config/settings";
+import { modelProblem } from "../../providers/model-check";
+import { ProviderRouter } from "../../providers/router";
 import { readUserSettingsRaw } from "../../config/store";
 import { loadIdentity } from "../../context/identity";
 import { Ledger, sha256 } from "../../learning/ledger";
@@ -79,6 +83,16 @@ async function viewOf(ctx: AdminContext, ledger: Ledger, spec: Specialist): Prom
   };
 }
 
+/** A model typed on the page must be one the providers can serve now, as when the chief saves one. */
+async function checkModel(ctx: AdminContext, model: string): Promise<void> {
+  const id = resolveAgentModel(model.trim(), "");
+  if (!id) return; // "inherit": the chief's model
+  const settings = await readSettingsFile(join(ctx.home, "settings.json")).catch(() => null);
+  const router = new ProviderRouter({ home: ctx.home, env: ctx.env, settings: settings?.providers ?? {} });
+  const why = modelProblem(id, await router.status());
+  if (why) throw new AdminError(`Not saved: ${why}`);
+}
+
 export function agentsHandlers(ctx: AdminContext): AdminHandlers {
   const ledger = new Ledger(ctx.home);
 
@@ -116,8 +130,9 @@ export function agentsHandlers(ctx: AdminContext): AdminHandlers {
 
   return {
     "agents.roster": () => roster(),
-    "agents.update": (p) => {
+    "agents.update": async (p) => {
       if (!Number.isInteger(p?.revision) || typeof p.changes !== "object" || p.changes === null) throw new AdminError("Nothing to change.");
+      if (typeof p.changes.model === "string") await checkModel(ctx, p.changes.model);
       return act(() => updateSpecialist(ctx.home, idOf(p.id), change(p.changes), { ...opts, expectedRevision: p.revision }));
     },
     "agents.setPaused": (p) => act(() => updateSpecialist(ctx.home, idOf(p?.id), { paused: p.paused === true }, opts)),

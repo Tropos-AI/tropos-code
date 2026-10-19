@@ -201,8 +201,9 @@ export function specialistRoster(agents: AgentDefinition[]): string {
   if (live.length === 0) return "";
   return [
     "<specialists>",
-    "Specialists you lead. Delegate with the Agent tool (subagent_type: the id) when one fits; do it yourself when none does; never delegate what the user asked you personally to decide.",
-    ...live.map((a) => `- ${agentLabel(a)}: ${a.description}`),
+    "Specialists you lead. Delegate with the Agent tool (subagent_type: the id) when one fits; do it yourself when none does; never delegate what the user asked you personally to decide. " +
+      "Each runs on its own model when one is shown, else on yours; pass model on the Agent call to pick a cheaper, faster or stronger one for a task, or the one the user names.",
+    ...live.map((a) => `- ${agentLabel(a)}: ${a.description}${a.model ? ` (model: ${a.model})` : ""}`),
     "</specialists>",
   ].join("\n");
 }

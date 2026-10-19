@@ -76,3 +76,14 @@ test("the description carries the handoff guidance, and run passes the call's de
   await tool.run({ description: "review the PR", prompt: "p" }, makeToolContext());
   expect(tasks).toEqual(["review the PR"]);
 });
+
+test("an optional model is passed to the run, described, and shown in the summary", async () => {
+  const seen: Array<string | undefined> = [];
+  const tool = createAgentTool(agents, async (_def, _prompt, _ctx, _task, model) => (seen.push(model), { content: "ok" }));
+  await tool.run({ description: "d", prompt: "p", subagent_type: "explore", model: "haiku" }, makeToolContext());
+  await tool.run({ description: "d", prompt: "p" }, makeToolContext());
+  expect(seen).toEqual(["haiku", undefined]);
+  expect(toInputSchema(tool.schema).properties).toHaveProperty("model");
+  expect(tool.description).toContain("pass model");
+  expect(tool.summarize({ description: "find", prompt: "x", subagent_type: "explore", model: "haiku" })).toBe("explore: find (haiku)");
+});

@@ -16,6 +16,8 @@ export interface DelegationRun {
   durationMs: number;
   costUsd?: number;
   cwd: string;
+  /** The model the run used (logged since 0.5.2). */
+  model?: string;
 }
 
 export const MAX_RUNS_KEPT = 2000;

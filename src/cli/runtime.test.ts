@@ -286,6 +286,9 @@ describe("extensions in the runtime", () => {
     await agent.run("two", signal());
     expect((ctx.model as FakeModel).requests.map((r) => r.model)).toEqual(["claude-haiku-5-5", "claude-opus-5-5"]);
     expect(ctx.subagents.deps).toBeDefined();
+    // A helper's model is checked against the session's providers (none has a key here).
+    expect(await ctx.subagents.deps!.checkModel!("openai/gpt-5.5")).toContain("OpenAI isn't connected");
+    expect(await ctx.subagents.deps!.checkModel!("claude-sonnet-5-5")).toBeNull();
   });
 
   test("an aborted expansion stops: no ask on a dead signal, no output after the abort", async () => {

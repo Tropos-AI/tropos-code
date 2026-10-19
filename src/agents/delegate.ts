@@ -2,7 +2,6 @@
 import { join } from "node:path";
 import { INTERRUPTED } from "../agent/agent";
 import { filterTools, HUB_ONLY_TOOLS, resolveAgentModel, runSubagent, subagentSystem, type SubagentDeps, type SubagentRun } from "../agent/subagent";
-import { isAnthropicModelId } from "../config/settings";
 import { agentLabel } from "../extensions/agents";
 import { loadSkills, skillListing, type Skill } from "../extensions/skills";
 import type { ExecBackend } from "../exec/backend";
@@ -51,6 +50,8 @@ export interface SpecialistDeps extends SubagentDeps {
   learn: boolean;
   notice(text: string): void;
   background(work: Promise<void>): void;
+  /** Why a model can't be used now (unknown provider, no key), or null; unset means every model is tried as is. */
+  checkModel?(model: string): Promise<string | null>;
 }
 
 /**
@@ -115,12 +116,36 @@ export function capAutonomy(ctx: PermissionContext, level: Autonomy | undefined)
   return { ...ctx, autonomy: { ...ctx.autonomy, level: stricter } };
 }
 
-const providerOf = (model: string): string => (isAnthropicModelId(model) ? "anthropic" : model.split("/")[0]!);
+/**
+ * The model a delegated run uses: the call's `requested` model, else the agent's saved one, else the chief's.
+ * Any provider will do: the session's model is a ProviderRouter, which sends each request where its id points.
+ */
+export function specialistModel(spec: Pick<Specialist, "model">, parentModel: string, requested?: string): string {
+  return resolveAgentModel(requested?.trim() || spec.model, parentModel);
+}
 
-/** The specialist's own model, but only on the chief's provider: the chief's client can't call another. */
-export function specialistModel(spec: Pick<Specialist, "model">, parentModel: string): string {
-  const wanted = resolveAgentModel(spec.model, parentModel);
-  return providerOf(wanted) === providerOf(parentModel) ? wanted : parentModel;
+/**
+ * The model for one delegated run, or the tool error the chief gets instead. A guest can't choose (the owner pays);
+ * a model other than the chief's is checked against the providers first, so a missing key is a clear error.
+ */
+export async function delegateModel(
+  name: string,
+  saved: string | undefined,
+  requested: string | undefined,
+  deps: Pick<SpecialistDeps, "role" | "config" | "checkModel">,
+): Promise<{ model: string } | { error: ToolOutput }> {
+  if (requested?.trim() && deps.role === "guest") {
+    return { error: { content: "Only the owner can pick a model for a helper; call it again without model.", isError: true } };
+  }
+  const parent = deps.config().model;
+  const model = specialistModel({ model: saved }, parent, requested);
+  if (model === parent) return { model };
+  const why = await deps.checkModel?.(model);
+  if (!why) return { model };
+  const fix = requested?.trim()
+    ? `Call it again without model to use ${resolveAgentModel(saved, parent)}, or with another model.`
+    : `That is its saved model: pass model to use another for this task, or change it with AgentManage.`;
+  return { error: { content: `Can't run ${name} on ${model}: ${why} ${fix}`, isError: true } };
 }
 
 /** At most `max` specialists run at once; later ones wait in order. */
@@ -280,8 +305,13 @@ export async function runSpecialist(
   deps: SpecialistDeps,
   ctx: ToolContext,
   slots: SpecialistSlots,
+  /** The model the chief picked for this run (the Agent call's `model`). */
+  requested?: string,
 ): Promise<ToolOutput> {
   if (deps.role === "guest") return { content: "Specialists aren't available in this chat.", isError: true };
+  const chosen = await delegateModel(spec.id, spec.model, requested, deps);
+  if ("error" in chosen) return chosen.error;
+  const { model } = chosen;
   if (slots.running >= slots.max) ctx.progress?.(`waiting: ${slots.max} specialists are running`);
   const release = await slots.acquire(ctx.signal);
   if (!release) return { content: INTERRUPTED, isError: true };
@@ -293,7 +323,7 @@ export async function runSpecialist(
     const permissions = (): PermissionContext => specialistPermissions(deps.permissions(), spec, rules, asks, deps.role);
     let logged: Promise<void> = Promise.resolve();
     const out = await runSubagent(
-      { ...spec, prompt: `${SPECIALIST_RULES}\n\n${spec.prompt.trim()}`, model: specialistModel(spec, deps.config().model) },
+      { ...spec, prompt: `${SPECIALIST_RULES}\n\n${spec.prompt.trim()}`, model },
       prompt,
       { ...deps, tools: kit.tools, contextText: kit.contextText, permissions },
       ctx,
@@ -308,9 +338,10 @@ export async function runSpecialist(
           durationMs: run.durationMs,
           ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
           cwd: ctx.cwd(),
+          model,
         };
         logged = recordRun(deps.home, entry).catch(() => {});
-        startSpecialistReview(spec, kit, run, deps, { ctx, permissions, model: specialistModel(spec, deps.config().model) });
+        startSpecialistReview(spec, kit, run, deps, { ctx, permissions, model });
       },
     );
     await logged;

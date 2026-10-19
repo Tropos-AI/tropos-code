@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { runSubagent } from "../agent/subagent";
 import { isSpecialist, loadAllAgents, specialistRoster } from "../agents/specialists";
-import { runSpecialist, SpecialistSlots, type SpecialistDeps } from "../agents/delegate";
+import { delegateModel, runSpecialist, SpecialistSlots, type SpecialistDeps } from "../agents/delegate";
 import { recordRun } from "../agents/runs";
 import { HOOK_EVENTS, type HooksSetting, type Settings } from "../config/settings";
 import { createAgentManageTool } from "../extensions/agent-manage";
@@ -211,12 +211,14 @@ export function sessionTools(
   // One set of slots per session: the cap of parallel specialists counts across all Agent calls.
   const slots = new SpecialistSlots();
   tools.push(
-    createAgentTool(ext.agents, (def, prompt, ctx, task) => {
+    createAgentTool(ext.agents, async (def, prompt, ctx, task, requested) => {
       const deps = opts.holder.deps;
-      if (!deps) return Promise.resolve({ content: "Subagents aren't available yet in this session.", isError: true });
-      if (isSpecialist(def)) return runSpecialist(def, prompt, task, deps, ctx, slots);
+      if (!deps) return { content: "Subagents aren't available yet in this session.", isError: true };
+      if (isSpecialist(def)) return runSpecialist(def, prompt, task, deps, ctx, slots, requested);
+      const chosen = await delegateModel(def.name, def.model, requested, deps);
+      if ("error" in chosen) return chosen.error;
       let logged: Promise<void> = Promise.resolve();
-      return runSubagent(def, prompt, deps, ctx, (run) => {
+      return runSubagent({ ...def, model: chosen.model }, prompt, deps, ctx, (run) => {
         logged = recordRun(opts.home, {
           ts: new Date().toISOString(),
           agent: def.name,
@@ -227,6 +229,7 @@ export function sessionTools(
           durationMs: run.durationMs,
           ...(run.costUsd !== undefined ? { costUsd: run.costUsd } : {}),
           cwd: ctx.cwd(),
+          model: chosen.model,
         }).catch(() => {});
       }).then(async (out) => {
         await logged;
@@ -238,7 +241,15 @@ export function sessionTools(
   if (ext.daily) tools.push(createDailyNoteTool(ext.daily));
   tools.push(createSessionSearchTool({ home: opts.home, cwd: opts.cwd, currentSessionId: opts.sessionId, index: ext.searchIndex }));
   tools.push(createSkillManageTool({ home: opts.home, ledger: ext.ledger, tracker: ext.tracker }));
-  tools.push(createAgentManageTool({ home: opts.home, ledger: ext.ledger, onChange: ext.reloadAgents }));
+  tools.push(
+    createAgentManageTool({
+      home: opts.home,
+      ledger: ext.ledger,
+      onChange: ext.reloadAgents,
+      // The session's provider check, set by makeAgent; before that, a model is saved as given.
+      checkModel: async (model) => (await opts.holder.deps?.checkModel?.(model)) ?? null,
+    }),
+  );
   tools.push(
     createIdentityTool({
       home: opts.home,

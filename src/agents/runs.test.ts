@@ -48,6 +48,7 @@ test("task is clipped to 120 chars; result drops the footer and keeps 200 chars"
   await recordRun(home, run({ task: "t".repeat(300) }));
   expect((await readRuns(home))[0]!.task).toHaveLength(120);
   expect(runResult("All done.\n\n(reviewer · 3 tool uses · 4 turns)")).toBe("All done.");
+  expect(runResult("All done.\n\n(reviewer · 3 tool uses · 4 turns · deepseek/deepseek-chat)")).toBe("All done.");
   expect(runResult("x".repeat(500))).toHaveLength(200);
   expect(runResult("(a note) in text")).toBe("(a note) in text");
 });

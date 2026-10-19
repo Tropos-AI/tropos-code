@@ -11,7 +11,8 @@ import { compileRules, decide, type PermissionContext } from "../permissions/eng
 import { agentsDir, journalDir, workspaceFile } from "../paths";
 import { defineTool, type AnyTool } from "../tools/types";
 import type { ExecBackend } from "../exec/backend";
-import { capAutonomy, execAsks, specialistPermissions, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
+import { ProviderRouter } from "../providers/router";
+import { capAutonomy, delegateModel, execAsks, specialistPermissions, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
 import { readRuns } from "./runs";
 import type { Specialist } from "./specialists";
 
@@ -33,7 +34,7 @@ let spec: Specialist;
 let deps: SpecialistDeps;
 const ctx = () => makeToolContext({ root: "/repo" });
 
-function makeDeps(model: FakeModel): SpecialistDeps {
+function makeDeps(model: SpecialistDeps["model"]): SpecialistDeps {
   return {
     model,
     tools: CHIEF_TOOLS.map(tool),
@@ -136,11 +137,76 @@ test("capAutonomy keeps the stricter level of P2's policy and its pinned tests",
   expect(capAutonomy(base, "autonomous").autonomy).toBeUndefined();
 });
 
-test("specialistModel: its own model on the chief's provider, otherwise the chief's", () => {
+test("specialistModel: the call's model, else its own, else the chief's, on any provider", () => {
   expect(specialistModel({ model: "haiku" }, "claude-opus-5-5")).toBe("claude-haiku-5-5");
-  expect(specialistModel({ model: "haiku" }, "deepseek/deepseek-chat")).toBe("deepseek/deepseek-chat");
-  expect(specialistModel({ model: "deepseek/other" }, "deepseek/deepseek-chat")).toBe("deepseek/other");
+  // The session's model is a ProviderRouter: another provider's model is reachable from any chief.
+  expect(specialistModel({ model: "haiku" }, "deepseek/deepseek-chat")).toBe("claude-haiku-5-5");
+  expect(specialistModel({ model: "deepseek/other" }, "claude-opus-5-5")).toBe("deepseek/other");
   expect(specialistModel({}, "deepseek/deepseek-chat")).toBe("deepseek/deepseek-chat");
+  expect(specialistModel({ model: "haiku" }, "claude-opus-5-5", "openai/gpt-5.5")).toBe("openai/gpt-5.5");
+  expect(specialistModel({}, "claude-opus-5-5", "sonnet")).toBe("claude-sonnet-5-5");
+  expect(specialistModel({ model: "haiku" }, "claude-opus-5-5", "inherit")).toBe("claude-opus-5-5");
+  expect(specialistModel({ model: "haiku" }, "claude-opus-5-5", " ")).toBe("claude-haiku-5-5");
+});
+
+describe("a model picked for one run", () => {
+  test("the call's model runs, is shown in the result and is logged with the run", async () => {
+    const model = new FakeModel([() => reply([textBlock("done")])]);
+    const out = await runSpecialist({ ...spec, model: "haiku" }, "go", "go", makeDeps(model), ctx(), new SpecialistSlots(), "sonnet");
+    expect(model.requests[0]!.model).toBe("claude-sonnet-5-5");
+    expect(out.content).toEndWith("· claude-sonnet-5-5)");
+    expect(out.summary).toContain("claude-sonnet-5-5");
+    expect((await readRuns(home))[0]).toMatchObject({ agent: "reviewer", model: "claude-sonnet-5-5" });
+  });
+
+  test("without one, the run log names the model it used", async () => {
+    await runSpecialist(spec, "go", "go", deps, ctx(), new SpecialistSlots());
+    expect((await readRuns(home))[0]).toMatchObject({ model: "claude-opus-5-5" });
+  });
+
+  test("a model the providers can't serve is a tool error the chief can act on; nothing runs", async () => {
+    const model = new FakeModel([() => reply([textBlock("never")])]);
+    const checked: string[] = [];
+    const slots = new SpecialistSlots();
+    const d: SpecialistDeps = { ...makeDeps(model), checkModel: async (id) => (checked.push(id), id.startsWith("openai/") ? "OpenAI isn't connected (no API key)." : null) };
+    const out = await runSpecialist(spec, "go", "go", d, ctx(), slots, "openai/gpt-5.5");
+    expect(out).toEqual({ content: "Can't run reviewer on openai/gpt-5.5: OpenAI isn't connected (no API key). Call it again without model to use claude-opus-5-5, or with another model.", isError: true });
+    expect(model.requests).toHaveLength(0);
+    expect(slots.running).toBe(0);
+    expect(await readRuns(home)).toEqual([]);
+    // A saved model that no longer works says where it came from.
+    const saved = await runSpecialist({ ...spec, model: "openai/gpt-5.5" }, "go", "go", d, ctx(), slots);
+    expect(saved.content).toContain("its saved model");
+    expect(saved.content).toContain("AgentManage");
+    // The chief's own model is never re-checked.
+    checked.length = 0;
+    await runSpecialist(spec, "go", "go", { ...d, model: new FakeModel([() => reply([textBlock("ok")])]) }, ctx(), slots, "claude-opus-5-5");
+    expect(checked).toEqual([]);
+  });
+
+  test("delegateModel: guests can't pick a model; the check runs only for another model", async () => {
+    const d: SpecialistDeps = { ...deps, checkModel: async () => "no" };
+    expect(await delegateModel("reviewer", undefined, undefined, d)).toEqual({ model: "claude-opus-5-5" });
+    expect(await delegateModel("reviewer", "haiku", undefined, { ...deps, checkModel: async () => null })).toEqual({ model: "claude-haiku-5-5" });
+    expect(await delegateModel("reviewer", undefined, "haiku", { ...deps, role: "guest" })).toEqual({
+      error: { content: "Only the owner can pick a model for a helper; call it again without model.", isError: true },
+    });
+    expect(await delegateModel("reviewer", undefined, "haiku", d)).toMatchObject({ error: { isError: true } });
+  });
+
+  test("cross-provider: a specialist on another provider's model reaches that provider through the router", async () => {
+    const calls: Array<{ url: string; model: string }> = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, model: JSON.parse(String(init.body)).model });
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "from deepseek" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+    }) as unknown as typeof fetch;
+    const anthropic = new FakeModel([]);
+    const router = new ProviderRouter({ home, env: { DEEPSEEK_API_KEY: "k" }, settings: {}, fetch: fetchImpl, anthropic: () => anthropic });
+    const out = await runSpecialist(spec, "go", "go", makeDeps(router as never), ctx(), new SpecialistSlots(), "deepseek/deepseek-chat");
+    expect(out.content).toStartWith("from deepseek");
+    expect(calls).toEqual([{ url: "https://api.deepseek.com/chat/completions", model: "deepseek-chat" }]);
+    expect(anthropic.requests).toHaveLength(0);
+  });
 });
 
 test("at most 4 run at once: the 5th waits for a free slot; an abort while waiting gives up", async () => {
