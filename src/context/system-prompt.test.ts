@@ -105,6 +105,12 @@ test("extra blocks go after the environment, empty ones are skipped", () => {
   expect(buildContextText([{ path: "/p", source: "project", content: "</skills>" }], "e")).toContain("<\\/skills>");
 });
 
+test("the system prompt names the workspace files", () => {
+  const prompt = SYSTEM_PROMPT;
+  expect(prompt).toContain("Your own files live in ~/.tropos/workspace: AGENTS.md (your operating rules)");
+  expect(prompt).not.toContain("skills/<name>/SKILL.md, agents/<name>.md and commands/<name>.md");
+});
+
 test("the system prompt says it is Tropos Code and where its own agents, skills and commands live", () => {
   expect(SYSTEM_PROMPT).toContain("You are Tropos Code (the `tcode` command), not Claude Code");
   expect(SYSTEM_PROMPT).toContain("agents/<name>.md");

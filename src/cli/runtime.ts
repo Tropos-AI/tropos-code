@@ -443,12 +443,12 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         title: "Skills",
         subtitle: plural(ext.skills.length, "skill"),
         sections: [
-          { title: "Yours (~/.tropos/skills)", items: bySource("user") },
-          { title: "Learned on its own (~/.tropos/skills-learned)", items: bySource("learned") },
+          { title: "Yours (~/.tropos/workspace/skills)", items: bySource("user") },
+          { title: "Learned on its own (~/.tropos/workspace/skills-learned)", items: bySource("learned") },
           { title: "This project", items: bySource("project") },
           { title: "Plugins", items: bySource("plugin") },
         ].filter((section) => section.items.length > 0),
-        empty: "No skills yet. Ask me to make one, or I'll write them as I learn what you need.",
+        empty: "No skills yet. Add one at ~/.tropos/workspace/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
       };
     }
     case "agents":

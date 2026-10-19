@@ -36,7 +36,7 @@ export interface Settings {
   lsp: boolean | Record<string, CommandToolSetting>;
   /** Shadow-git snapshots of the work tree before each turn, for /undo and /redo. */
   snapshots: boolean;
-  /** The Memory tool and its notes in ~/.tropos/memories. */
+  /** The Memory tool and its notes in ~/.tropos/workspace (USER.md, MEMORY.md). */
   memory: boolean;
   /** Plugins under ~/.tropos/plugins that stay off. */
   disabledPlugins: string[];

@@ -13,7 +13,7 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
     subtitle: "7 skills",
     sections: [
       {
-        title: "Yours (~/.tropos/skills)",
+        title: "Yours (~/.tropos/workspace/skills)",
         items: [
           {
             key: "frontend-design",
@@ -23,21 +23,21 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
             detail: [
               "Distinctive, intentional UI that doesn't read as a template.\nPicks a style direction, a palette and a type pairing before writing any markup.",
               "When: building a new page or reshaping an existing one",
-              `${HOME}/.tropos/skills/frontend-design/SKILL.md`,
+              `${HOME}/.tropos/workspace/skills/frontend-design/SKILL.md`,
             ],
           },
           {
             key: "pdf",
             label: "pdf",
             hint: "Read, fill and merge PDF forms with pdftk and qpdf.",
-            detail: ["Read, fill and merge PDF forms with pdftk and qpdf.", "When: the task mentions a .pdf file", `${HOME}/.tropos/skills/pdf/SKILL.md`],
+            detail: ["Read, fill and merge PDF forms with pdftk and qpdf.", "When: the task mentions a .pdf file", `${HOME}/.tropos/workspace/skills/pdf/SKILL.md`],
           },
           {
             key: "release-notes",
             label: "release-notes",
             hint: "Draft release notes from the commits since the last tag.",
             aside: "/release-notes · you only",
-            detail: ["Draft release notes from the commits since the last tag. Groups by feat/fix and links PRs.", `${HOME}/.tropos/skills/release-notes/SKILL.md`],
+            detail: ["Draft release notes from the commits since the last tag. Groups by feat/fix and links PRs.", `${HOME}/.tropos/workspace/skills/release-notes/SKILL.md`],
           },
         ],
       },
@@ -82,7 +82,7 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
         ],
       },
     ],
-    empty: "No skills yet. Add one at ~/.tropos/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
+    empty: "No skills yet. Add one at ~/.tropos/workspace/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
   },
   agents: {
     title: "Agents",
@@ -247,7 +247,7 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
             hint: "learned on its own",
             aside: "2026-10-14 14:02",
             status: "ok",
-            detail: ["patch by review", `${HOME}/.tropos/skills/bun-testing/SKILL.md`, "2026-10-14T14:02:11.000Z"],
+            detail: ["patch by review", `${HOME}/.tropos/workspace/skills/bun-testing/SKILL.md`, "2026-10-14T14:02:11.000Z"],
           },
           {
             key: "l2",
@@ -255,7 +255,7 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
             hint: "learned on its own",
             aside: "2026-10-14 13:40",
             status: "ok",
-            detail: ["add by review", `${HOME}/.tropos/memories/USER.md`, "2026-10-14T13:40:52.000Z"],
+            detail: ["add by review", `${HOME}/.tropos/workspace/USER.md`, "2026-10-14T13:40:52.000Z"],
           },
           {
             key: "l1",
@@ -263,7 +263,7 @@ export const DEMO_PANELS: Record<ListTopic, PanelData> = {
             hint: "you asked",
             aside: "2026-10-13 18:21",
             status: "ok",
-            detail: ["write by agent", `${HOME}/.tropos/IDENTITY.md`, "2026-10-13T18:21:07.000Z"],
+            detail: ["write by agent", `${HOME}/.tropos/workspace/IDENTITY.md`, "2026-10-13T18:21:07.000Z"],
           },
         ],
       },

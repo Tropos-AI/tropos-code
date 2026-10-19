@@ -225,7 +225,7 @@ describe("extensions in the runtime", () => {
     expect((await rt2.panel("memory")).empty).toBe("Memory is off. Turn it on in the dashboard's settings (tcode dashboard).");
     const emptySkills = await rt2.panel("skills");
     expect(emptySkills.sections).toEqual([]);
-    expect(emptySkills.empty).toBe("No skills yet. Ask me to make one, or I'll write them as I learn what you need.");
+    expect(emptySkills.empty).toBe("No skills yet. Add one at ~/.tropos/workspace/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.");
     const emptyHooks = await rt2.panel("hooks");
     expect(emptyHooks.sections).toEqual([]);
     expect(emptyHooks.empty).toBe("No hooks. Add them in the dashboard (tcode dashboard → Extensions).");

@@ -28,7 +28,7 @@ const SKILLS: PanelData = {
     },
     { title: "This project", items: [{ key: "pdf", label: "pdf", hint: "Fill PDF forms", detail: ["Fill PDF forms", "/repo/.tropos/skills/pdf/SKILL.md"] }] },
   ],
-  empty: "No skills yet. Add one at ~/.tropos/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
+  empty: "No skills yet. Add one at ~/.tropos/workspace/skills/<name>/SKILL.md or .tropos/skills/<name>/SKILL.md.",
 };
 
 beforeEach(() => stubMatchMedia());
@@ -103,7 +103,7 @@ describe("SkillsPage", () => {
   test("shows the panel's empty text as an empty state", async () => {
     await mountPage(SkillsPage, { panel: () => ({ ...SKILLS, sections: [] }) });
     expect(await screen.findByText("No skills yet")).toBeTruthy();
-    expect(screen.getByText("~/.tropos/skills/<name>/SKILL.md").tagName).toBe("CODE");
+    expect(screen.getByText("~/.tropos/workspace/skills/<name>/SKILL.md").tagName).toBe("CODE");
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
 

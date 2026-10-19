@@ -143,21 +143,21 @@ test("end to end over the WebSocket: create, list, verify, restore dry run, dele
 });
 
 test("restore: a backup with files that run code is refused without trustCode, and the dry run lists them", async () => {
-  await writeText(join(kit.home, "skills", "s", "SKILL.md"), "do things\n");
+  await writeText(join(kit.home, "workspace", "skills", "s", "SKILL.md"), "do things\n");
   const h = backupHandlers(kit.ctx);
   const made = await h["backup.create"]!(undefined);
-  await writeText(join(kit.home, "skills", "s", "SKILL.md"), "changed\n");
+  await writeText(join(kit.home, "workspace", "skills", "s", "SKILL.md"), "changed\n");
   kit.clock.now += 60_000;
 
   const dry = await h["backup.restore"]!({ name: made.name, dryRun: true });
-  expect(dry.risky.map((r) => r.path)).toEqual(["skills/s/SKILL.md"]);
+  expect(dry.risky.map((r) => r.path)).toEqual(["workspace/skills/s/SKILL.md"]);
   expect(dry.risky[0]!.why).toBeTruthy();
 
-  await expect(h["backup.restore"]!({ name: made.name })).rejects.toThrow(/skills\/s\/SKILL\.md/);
+  await expect(h["backup.restore"]!({ name: made.name })).rejects.toThrow(/workspace\/skills\/s\/SKILL\.md/);
   await expect(h["backup.restore"]!({ name: made.name, trustCode: false })).rejects.toThrow(/can run code/);
-  expect(await readFile(join(kit.home, "skills", "s", "SKILL.md"), "utf8")).toBe("changed\n");
+  expect(await readFile(join(kit.home, "workspace", "skills", "s", "SKILL.md"), "utf8")).toBe("changed\n");
 
   const done = await h["backup.restore"]!({ name: made.name, trustCode: true });
-  expect(done.risky.map((r) => r.path)).toEqual(["skills/s/SKILL.md"]);
-  expect(await readFile(join(kit.home, "skills", "s", "SKILL.md"), "utf8")).toBe("do things\n");
+  expect(done.risky.map((r) => r.path)).toEqual(["workspace/skills/s/SKILL.md"]);
+  expect(await readFile(join(kit.home, "workspace", "skills", "s", "SKILL.md"), "utf8")).toBe("do things\n");
 });

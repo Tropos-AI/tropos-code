@@ -15,7 +15,7 @@ export interface HelloInfo {
   commands: ExtraCommand[];
   /** The session's saved history, for historyToTranscript. */
   history: MessageParam[];
-  /** The agent's own name and emoji (~/.tropos/IDENTITY.md); empty until it has one. */
+  /** The agent's own name and emoji (~/.tropos/workspace/IDENTITY.md); empty until it has one. */
   identity?: { name?: string; emoji?: string };
   /** The project this tab's chat works in; only the background service's dashboard serves more than one. */
   project?: { id: string; name: string };

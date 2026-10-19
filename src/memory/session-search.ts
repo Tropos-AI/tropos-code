@@ -88,7 +88,7 @@ async function candidateFiles(home: string, dirs: string[], source: SearchSource
       for (const s of await sessionPaths(dir)) await add({ kind: "session", id: s.id, path: s.path, project: dir });
     }
     if (source !== "sessions") {
-      const notes = join(dir, "notes");
+      const notes = join(dir, "notes"); // LEGACY_LAYOUT: old per-project notes until the migration imports them
       for (const name of await readdir(notes).catch(() => [] as string[])) {
         const date = DAY_FILE.exec(name)?.[1];
         if (date) await add({ kind: "note", id: date, path: join(notes, name), project: dir });

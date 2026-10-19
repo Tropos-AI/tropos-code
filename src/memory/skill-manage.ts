@@ -249,7 +249,7 @@ export function createSkillManageTool(opts: SkillManageOptions): AnyTool {
     name: "SkillManage",
     kind: "edit",
     description:
-      "Create and maintain your own reusable skills in the user's skill folder (~/.tropos/skills/<name>/SKILL.md). " +
+      "Create and maintain your own reusable skills in the user's skill folder (~/.tropos/workspace/skills/<name>/SKILL.md). " +
       "Use it when you worked out a procedure worth reusing in later sessions. " +
       "create: content is the full SKILL.md, starting with frontmatter that has a description saying what it does and when " +
       "to use it, followed by concise step-by-step instructions; fails if the skill exists. " +

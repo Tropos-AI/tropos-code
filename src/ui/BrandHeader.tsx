@@ -34,7 +34,7 @@ export function BrandHeader({
   effort: string;
   cwd: string;
   width?: number;
-  /** The agent's own name and emoji (~/.tropos/IDENTITY.md), shown above the product name. */
+  /** The agent's own name and emoji (~/.tropos/workspace/IDENTITY.md), shown above the product name. */
   identity?: { name?: string; emoji?: string };
 }) {
   const theme = useTheme();

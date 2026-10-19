@@ -227,7 +227,7 @@ async function diskFiles(dir: string): Promise<DiskFile[]> {
     }
   };
   for (const s of await sessionPaths(dir)) await add(s.path, "session", s.id, MAX_SESSION_BYTES);
-  const notes = join(dir, "notes");
+  const notes = join(dir, "notes"); // LEGACY_LAYOUT: old per-project notes until the migration imports them
   for (const name of await readdir(notes).catch(() => [] as string[])) {
     const date = DAY_FILE.exec(name)?.[1];
     if (date) await add(join(notes, name), "note", date, MAX_SESSION_BYTES);

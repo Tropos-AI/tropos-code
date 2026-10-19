@@ -96,7 +96,7 @@ export interface Runtime {
   undo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
   /** Reverts the latest learned change that is not undone yet (or the one with `id`). */
   undoLearned(id?: string): Promise<{ ok: true; summary: string } | { ok: false; reason: string }>;
-  /** The agent's name and emoji from ~/.tropos/IDENTITY.md, for headers (re-read when the Identity tool saves). */
+  /** The agent's name and emoji from ~/.tropos/workspace/IDENTITY.md, for headers (re-read when the Identity tool saves). */
   identity(): { name?: string; emoji?: string };
   redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
   /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */
