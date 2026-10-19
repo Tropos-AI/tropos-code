@@ -6,7 +6,7 @@ import type { ChatAutonomy, ChatProjects, ChatWorktrees, WorktreeAction, Worktre
 import { OWNER_ONLY_FINISH } from "../worktrees";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
-import { CLAIM_REPLY, SECRET_REMOVED_NOTE, TelegramAdapter } from "./adapter";
+import { CLAIM_REPLY, NON_TEXT_REPLY, SECRET_REMOVED_NOTE, TelegramAdapter } from "./adapter";
 import { OWNER_GREETING, OwnerClaimStore, type OwnerCandidateView } from "../owner-claim";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
@@ -748,16 +748,16 @@ describe("TelegramAdapter", () => {
     await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("/project")));
   });
 
-  test("a photo from an approved sender gets one plain reply; a stranger's photo gets nothing", async () => {
+  test("a file that is neither text nor an image gets one plain reply; a stranger's file gets nothing", async () => {
     const { server, sessions, pairing } = await setup();
-    server.pushNonText(CHAT, CHAT, "photo");
-    await server.waitFor(() => server.textsTo(CHAT).includes("I can only read text for now."));
-    // An album is many messages: one reply.
-    server.pushNonText(CHAT, CHAT, "photo");
+    server.pushNonText(CHAT, CHAT, "voice");
+    await server.waitFor(() => server.textsTo(CHAT).includes(NON_TEXT_REPLY));
+    // Several files are many messages: one reply.
+    server.pushNonText(CHAT, CHAT, "document");
     server.pushNonText(CHAT, CHAT, "voice");
     server.pushMessage(CHAT, CHAT, "/start");
     await server.waitFor(() => server.textsTo(CHAT).length >= 2);
-    expect(server.textsTo(CHAT)).toEqual(["I can only read text for now.", HELP_TEXT]);
+    expect(server.textsTo(CHAT)).toEqual([NON_TEXT_REPLY, HELP_TEXT]);
     expect(sessions.opens).toBe(1);
 
     const stranger = await setup({ approved: false });

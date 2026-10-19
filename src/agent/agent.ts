@@ -1,6 +1,8 @@
 // src/agent/agent.ts
 import Anthropic from "@anthropic-ai/sdk";
 import { describeError } from "../api/errors";
+import type { Attachment } from "../attachments/attachments";
+import { attachmentBlocks } from "../attachments/validate";
 import { errorText } from "../error-text";
 import type { Message, Model } from "../api/model";
 import { contextTokens, messageCostUsd } from "../api/pricing";
@@ -134,9 +136,9 @@ export class Agent {
     this.messages = [...history];
   }
 
-  /** Never rejects: a failure while preparing or running the turn ends it with reason "error". */
-  async run(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
-    const reason = await this.runTurn(prompt, signal);
+  /** Never rejects: a failure while preparing or running the turn ends it with reason "error". `attachments` were validated by the caller. */
+  async run(prompt: string, signal: AbortSignal, attachments: Attachment[] = []): Promise<TurnEndReason> {
+    const reason = await this.runTurn(prompt, signal, attachments);
     try {
       this.opts.endTurn?.(reason, this.messages);
     } catch {
@@ -145,9 +147,9 @@ export class Agent {
     return reason;
   }
 
-  private async runTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
+  private async runTurn(prompt: string, signal: AbortSignal, attachments: Attachment[]): Promise<TurnEndReason> {
     try {
-      const blocked = await this.startUserTurn(prompt, signal);
+      const blocked = await this.startUserTurn(prompt, signal, attachments);
       return blocked ?? (await this.loop(signal));
     } catch (err) {
       return this.failTurn(err);
@@ -164,7 +166,7 @@ export class Agent {
    * Records the user message (context block, reminders, UserPromptSubmit hook output).
    * Returns "blocked" when a hook refused the prompt; otherwise undefined.
    */
-  private async startUserTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason | undefined> {
+  private async startUserTurn(prompt: string, signal: AbortSignal, attachments: Attachment[] = []): Promise<TurnEndReason | undefined> {
     // A previous run may have ended with tool_use blocks that never got results; close them first.
     const repair = danglingToolResults(this.messages);
     if (repair) await this.push(repair);
@@ -181,7 +183,7 @@ export class Agent {
       }
       hookTexts = out.additionalContext;
     }
-    const content: Anthropic.Beta.BetaTextBlockParam[] = [];
+    const content: Array<Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam> = [];
     if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
     const mode = this.opts.permissions().mode;
     const reminder = modeReminder(this.lastMode, mode);
@@ -189,7 +191,9 @@ export class Agent {
     if (reminder) content.push({ type: "text", text: reminder });
     for (const text of this.opts.startTurn?.() ?? []) content.push({ type: "text", text });
     if (hookTexts.length > 0) content.push({ type: "text", text: hookContext("UserPromptSubmit", hookTexts, this.opts.nonce?.()) });
-    content.push({ type: "text", text: prompt });
+    content.push(...attachmentBlocks(attachments));
+    // The API rejects an empty text block: a message of images alone has none.
+    if (prompt || attachments.length === 0) content.push({ type: "text", text: prompt });
     await this.push({ role: "user", content });
     return undefined;
   }
@@ -322,6 +326,7 @@ export class Agent {
           {
             onText: (delta) => emit({ type: "text", delta }),
             onThinking: (delta) => emit({ type: "thinking", delta }),
+            onNotice: (text) => emit({ type: "notice", level: "warn", text }),
           },
           signal,
         );

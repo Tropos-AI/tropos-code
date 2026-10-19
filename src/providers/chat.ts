@@ -1,6 +1,7 @@
 // src/providers/chat.ts — Anthropic-format history to and from the OpenAI Chat Completions format.
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Message } from "../api/model";
+import { imageNote } from "../attachments/attachments";
 import type { MessageParam } from "../session/store";
 import { toolInputSchema } from "../tools/schema";
 import type { AnyTool } from "../tools/types";
@@ -14,9 +15,12 @@ export interface ChatToolCall {
   extra_content?: { google: { thought_signature: string } };
 }
 
+/** A user message with images is a list of parts; one without stays a plain string. */
+export type ChatContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export type ChatMessage =
   | { role: "system"; content: string }
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | ChatContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ChatToolCall[]; reasoning_content?: string; reasoning?: string }
   | { role: "tool"; tool_call_id: string; content: string };
 
@@ -47,16 +51,23 @@ function fallbackText(block: Block): string | null {
   return null;
 }
 
+/** The data URL of an inline (base64) image block, or null for any other block. */
+export function imageDataUrl(block: Block): string | null {
+  if (block.type !== "image" || block.source.type !== "base64") return null;
+  return `data:${block.source.media_type};base64,${block.source.data}`;
+}
+
 /**
  * Converts the session history. Tool results become `tool` messages placed straight after the
  * assistant message that asked for them, as Chat Completions requires. `keepReasoning` sends
  * reasoning back, in the field it arrived in (else `reasoningField`), for providers that need it
- * during a tool-call loop. Gemini thought signatures always go back on their tool calls.
+ * during a tool-call loop. Gemini thought signatures always go back on their tool calls. The user's
+ * images go as image_url parts, or as a note when `images` is false (a model without vision).
  */
 export function toChatMessages(
   system: string,
   history: MessageParam[],
-  opts: { keepReasoning?: boolean; reasoningField?: ReasoningField } = {},
+  opts: { keepReasoning?: boolean; reasoningField?: ReasoningField; images?: boolean } = {},
 ): ChatMessage[] {
   const out: ChatMessage[] = [{ role: "system", content: system }];
   for (const message of history) {
@@ -91,16 +102,27 @@ export function toChatMessages(
       continue;
     }
     const text: string[] = [];
+    const parts: ChatContentPart[] = [];
+    const flushText = () => {
+      if (text.length) parts.push({ type: "text", text: text.splice(0).join("\n\n") });
+    };
     for (const block of blocks) {
       if (block.type === "tool_result") {
         const content = toolResultText(block.content);
         out.push({ role: "tool", tool_call_id: block.tool_use_id, content: block.is_error ? `Error: ${content}` : content || "(no output)" });
-      } else {
-        const t = fallbackText(block);
-        if (t) text.push(t);
+        continue;
       }
+      const url = opts.images === false ? null : imageDataUrl(block);
+      if (url) {
+        flushText();
+        parts.push({ type: "image_url", image_url: { url } });
+        continue;
+      }
+      const t = block.type === "image" ? imageNote() : fallbackText(block);
+      if (t) text.push(t);
     }
-    if (text.length) out.push({ role: "user", content: text.join("\n\n") });
+    flushText();
+    if (parts.length) out.push({ role: "user", content: parts.some((p) => p.type === "image_url") ? parts : parts.map((p) => (p as { text: string }).text).join("\n\n") });
   }
   return out;
 }

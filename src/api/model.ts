@@ -19,6 +19,8 @@ export interface TurnRequest {
 export interface StreamHandlers {
   onText(delta: string): void;
   onThinking(delta: string): void;
+  /** Something the user should know about this request, e.g. that the model got a note in place of their images. */
+  onNotice?(text: string): void;
 }
 
 export interface Model {

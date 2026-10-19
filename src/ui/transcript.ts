@@ -1,10 +1,12 @@
 // src/ui/transcript.ts
 import type { AgentEvent, ToolStatus } from "../agent/events";
+import { parseAttachmentText, type Attachment } from "../attachments/attachments";
 import type { MessageParam } from "../session/store";
 import type { ToolOutput } from "../tools/types";
 
 export type TranscriptItem =
-  | { id: string; kind: "user"; text: string }
+  /** `attachments`: images and files sent with the message; absent when there are none. */
+  | { id: string; kind: "user"; text: string; attachments?: Attachment[] }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thinking"; text: string }
   | {
@@ -67,8 +69,8 @@ function pushDone(t: Transcript, item: NewItem): Transcript {
   return { ...made.t, done: [...made.t.done, made.item] };
 }
 
-export function addUser(t: Transcript, text: string): Transcript {
-  return pushDone(flush(t), { kind: "user", text });
+export function addUser(t: Transcript, text: string, attachments: Attachment[] = []): Transcript {
+  return pushDone(flush(t), { kind: "user", text, ...(attachments.length > 0 ? { attachments } : {}) });
 }
 
 export function addNotice(t: Transcript, level: "info" | "warn" | "error", text: string): Transcript {
@@ -159,15 +161,25 @@ export function historyToTranscript(messages: MessageParam[]): Transcript {
       }
       continue;
     }
+    // The user's files and images go with the typed text that follows them (or alone, when nothing was typed).
+    let attached: Attachment[] = [];
     for (const block of m.content) {
-      if (m.role === "user" && block.type === "text" && !isInjected(block.text)) {
-        t = addUser(t, displayedUserText(block.text));
+      const file = m.role === "user" && block.type === "text" ? parseAttachmentText(block.text) : null;
+      if (file) {
+        attached.push({ kind: "text", ...file });
+      } else if (m.role === "user" && block.type === "image" && block.source.type === "base64") {
+        const n = attached.filter((a) => a.kind === "image").length + 1;
+        attached.push({ kind: "image", name: `image ${n}`, mediaType: block.source.media_type, data: block.source.data });
+      } else if (m.role === "user" && block.type === "text" && !isInjected(block.text)) {
+        t = addUser(t, displayedUserText(block.text), attached);
+        attached = [];
       } else if (m.role === "assistant" && block.type === "text") {
         t = pushDone(t, { kind: "assistant", text: block.text });
       } else if (m.role === "assistant" && block.type === "tool_use") {
         t = pushDone(t, { kind: "tool", toolUseId: block.id, name: block.name, summary: summarizeInput(block.input), input: block.input, status: "done" });
       }
     }
+    if (attached.length > 0) t = addUser(t, "", attached);
   }
   return t;
 }

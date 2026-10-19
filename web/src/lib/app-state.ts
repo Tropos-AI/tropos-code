@@ -1,6 +1,7 @@
 // web/src/lib/app-state.ts — the web app's state and its pure reducer. No React, no sockets: every input (server
 // messages, connection changes, local prompts, the clock) arrives as an action, so it is all unit-testable.
 import type { PermissionPrompt } from "@core/agent/events";
+import type { Attachment } from "@core/attachments/attachments";
 import { addTurnDone, addUser, emptyTranscript, flush, historyToTranscript, reduce, type Transcript } from "@core/ui/transcript";
 import type { HelloInfo, ServerMessage, SessionState } from "@core/web/protocol";
 
@@ -33,6 +34,8 @@ export interface Toast {
 export interface QueuedMessage {
   id: number;
   text: string;
+  /** Images and files sent with it; absent when there are none. */
+  attachments?: Attachment[];
 }
 
 export interface AppState {
@@ -63,7 +66,7 @@ export type AppAction =
   | { type: "connection"; status: ConnectionStatus; attempt: number }
   | { type: "server"; message: ServerMessage; now: number }
   /** This tab sent a prompt: show it at once (the server does not echo user messages). */
-  | { type: "prompt_sent"; text: string; now: number }
+  | { type: "prompt_sent"; text: string; attachments?: Attachment[]; now: number }
   /** This tab answered an ask; the server's ask_closed may follow and is then a no-op. */
   | { type: "ask_answered"; id: number }
   | { type: "toast"; tone: ToastTone; title: string; description?: string }
@@ -72,7 +75,7 @@ export type AppAction =
   | { type: "prompt_unsent"; itemId: string }
   | { type: "sending"; sending: boolean }
   /** `front` puts it back at the head (a refused prompt keeps its place). Adding unpauses the queue, as in the terminal. */
-  | { type: "queue_add"; text: string; front?: boolean }
+  | { type: "queue_add"; text: string; attachments?: Attachment[]; front?: boolean }
   | { type: "queue_remove"; id: number }
   | { type: "queue_clear" }
   | { type: "queue_pause"; paused: boolean };
@@ -120,7 +123,7 @@ function onServer(state: AppState, message: ServerMessage, now: number): AppStat
       return { ...state, session: message.state, turn: null, transcript: flush(state.transcript) };
     }
     case "user":
-      return { ...state, transcript: addUser(state.transcript, message.text), turn: state.turn ?? { startedAt: now } };
+      return { ...state, transcript: addUser(state.transcript, message.text, message.attachments), turn: state.turn ?? { startedAt: now } };
     case "event": {
       const event = message.event;
       let transcript = reduce(state.transcript, event);
@@ -180,7 +183,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case "server":
       return onServer(state, action.message, action.now);
     case "prompt_sent":
-      return { ...state, transcript: addUser(state.transcript, action.text), turn: state.turn ?? { startedAt: action.now } };
+      return { ...state, transcript: addUser(state.transcript, action.text, action.attachments), turn: state.turn ?? { startedAt: action.now } };
     case "ask_answered":
       return removeAsk(state, action.id);
     case "toast": {
@@ -201,8 +204,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return state.sending === action.sending ? state : { ...state, sending: action.sending };
     case "queue_add": {
       const text = action.text.trim();
-      if (!text) return state;
-      const item: QueuedMessage = { id: state.queueSeq + 1, text };
+      const attachments = action.attachments ?? [];
+      if (!text && attachments.length === 0) return state;
+      const item: QueuedMessage = { id: state.queueSeq + 1, text, ...(attachments.length > 0 ? { attachments } : {}) };
       const queue = action.front ? [item, ...state.queue] : [...state.queue, item];
       return { ...state, queue, queueSeq: item.id, queuePaused: action.front ? state.queuePaused : false };
     }

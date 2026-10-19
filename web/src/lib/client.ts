@@ -1,7 +1,7 @@
 // web/src/lib/client.ts — the browser side of the `tcode web` protocol (src/web/protocol.ts): one WebSocket, typed RPCs,
 // permission answers, and reconnection with backoff. No React here; lib/store.ts subscribes to it.
 import type { PermissionAnswer } from "@core/agent/events";
-import { AUTH_CLOSE_CODE, WS_PATH, type ClientMessage, type RpcMap, type RpcMethod, type ServerMessage } from "@core/web/protocol";
+import { AUTH_CLOSE_CODE, LOGIN_TIMEOUT_CLOSE_CODE, WS_PATH, type ClientMessage, type RpcMap, type RpcMethod, type ServerMessage } from "@core/web/protocol";
 import type { AdminMethod, AdminParams, AdminResult } from "@core/web/admin/api";
 
 import type { Credentials } from "@/lib/credentials";
@@ -117,6 +117,8 @@ export class TcodeClient {
   /** A one-time key or code waiting for a socket that has no device key. */
   private loginValue: string | undefined;
   private loginWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  /** The last code sent, so a login timeout that closes the socket before the answer doesn't lose it. */
+  private inFlightLogin: string | undefined;
 
   constructor(options: ClientOptions = {}) {
     this.url = options.url;
@@ -246,8 +248,9 @@ export class TcodeClient {
     return true;
   }
 
-  private open(): void {
-    this.setStatus(this.attempt === 0 ? "connecting" : "reconnecting");
+  /** `silent`: a fresh socket behind the login screen (the server's login timeout); the status is left as it is. */
+  private open(silent = false): void {
+    if (!silent) this.setStatus(this.attempt === 0 ? "connecting" : "reconnecting");
     let socket: SocketLike;
     try {
       socket = this.makeSocket(this.url ?? defaultSocketUrl());
@@ -288,6 +291,13 @@ export class TcodeClient {
       this.socket = null;
       this.authed = false;
       this.stopAuthTimer();
+      if ((event as { code?: number } | null)?.code === LOGIN_TIMEOUT_CLOSE_CODE && !this.stopped) {
+        // Nobody logged in on this socket for a while: a new one takes its place unseen. A code still on its way is
+        // sent again on it, and login() keeps waiting for its answer.
+        if (this.loginWaiter && this.inFlightLogin !== undefined) this.loginValue = this.inFlightLogin;
+        this.open(true);
+        return;
+      }
       this.failPending("connection lost");
       if ((event as { code?: number } | null)?.code === AUTH_CLOSE_CODE && this.credentials) {
         // Logged out from another device: forget the key and show the login screen; login() reconnects on demand.
@@ -343,6 +353,7 @@ export class TcodeClient {
   }
 
   private sendLogin(socket: SocketLike, value: string): void {
+    this.inFlightLogin = value;
     this.send(socket, { t: "login", value, name: this.deviceName() });
   }
 

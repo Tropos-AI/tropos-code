@@ -4,6 +4,8 @@ import type { Agent } from "../agent/agent";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import { agentActivity, follow, type ActivityRun, type AgentActivity } from "../agents/activity";
 import { contextWindow } from "../api/pricing";
+import type { Attachment } from "../attachments/attachments";
+import { AttachmentError, validateAttachments } from "../attachments/validate";
 import { EFFORTS, MODES, type Effort, type Mode } from "../config/constants";
 import { errorText } from "../error-text";
 import { completeFile } from "../ui/complete";
@@ -269,7 +271,14 @@ export class WebHost {
       case "prompt": {
         const p = params as RpcMap["prompt"]["params"];
         const command = p?.command && typeof p.command.name === "string" ? { name: p.command.name, args: typeof p.command.args === "string" ? r.sealSecrets(p.command.args) : "" } : null;
-        if (!command && (typeof p?.text !== "string" || !p.text.trim())) throw new RpcError("Nothing to send.");
+        let attachments: Attachment[];
+        try {
+          // A key pasted into a file is sealed like one typed in the message.
+          attachments = validateAttachments(p?.attachments).map((a) => (a.kind === "text" ? { ...a, text: r.sealSecrets(a.text) } : a));
+        } catch (err) {
+          throw err instanceof AttachmentError ? new RpcError(err.message) : err;
+        }
+        if (!command && (typeof p?.text !== "string" || (!p.text.trim() && attachments.length === 0))) throw new RpcError("Nothing to send.");
         this.needIdle();
         this.turnStartedAt = Date.now();
         try {
@@ -285,17 +294,18 @@ export class WebHost {
               model = expansion.model ?? model;
             }
             const display = typeof p.display === "string" ? r.sealSecrets(p.display) : (command ? `/${command.name}${command.args ? ` ${command.args}` : ""}` : text);
-            this.broadcast({ t: "user", text: display }, origin);
+            this.broadcast({ t: "user", text: display, ...(attachments.length > 0 ? { attachments } : {}) }, origin);
             // The terminal's ↑ history includes what was sent from the browser.
-            r.recordInput(display);
+            if (display) r.recordInput(display);
             r.setTurnModel(model);
             // The dashboard's Agents page shows this turn while it runs, wherever the chat is.
             const live = { run: this.activity.start({ kind: "chief", agent: r.identity().name || "Tropos", model: model ?? r.state().model, sessionId: r.sessionId(), chat: this.chat }), reply: "" };
             this.live = live;
             let ended = { ok: false, result: ENDED.error };
             try {
-              const direct = command ? null : (r.directCall?.(text) ?? null);
-              const reason = direct ? await this.agent.runDirect(text, direct.call, direct.reply, signal) : await this.agent.run(text, signal);
+              // A specialist called directly gets only text: a message with attachments goes to the agent, which sees them.
+              const direct = command || attachments.length > 0 ? null : (r.directCall?.(text) ?? null);
+              const reason = direct ? await this.agent.runDirect(text, direct.call, direct.reply, signal) : await this.agent.run(text, signal, attachments);
               ended = reason === "end_turn" || reason === "max_tokens" ? { ok: true, result: live.reply || "Done." } : { ok: false, result: ENDED[reason] };
               return reason;
             } finally {

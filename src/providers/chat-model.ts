@@ -18,6 +18,8 @@ export interface ChatCapabilities {
   reasoningField?: "reasoning_content" | "reasoning";
   /** Extra request fields, e.g. OpenRouter's usage accounting. */
   extraBody?: Record<string, unknown>;
+  /** False when the provider's models can't read images: they get a note in each one's place. Unset: try, and fall back. */
+  vision?: boolean;
   headers?: Record<string, string>;
 }
 
@@ -117,12 +119,12 @@ export async function post(endpoint: ChatEndpoint, path: string, body: unknown, 
 }
 
 /** The request body for one turn; `model` is the provider's own id (without the "provider/" prefix). */
-export function chatBody(endpoint: ChatEndpoint, model: string, req: TurnRequest): Record<string, unknown> {
+export function chatBody(endpoint: ChatEndpoint, model: string, req: TurnRequest, images = true): Record<string, unknown> {
   const caps = endpoint.capabilities;
   const tools = toChatTools(req.tools);
   return {
     model,
-    messages: toChatMessages(req.system, req.messages, { keepReasoning: caps.keepReasoning, reasoningField: caps.reasoningField }),
+    messages: toChatMessages(req.system, req.messages, { keepReasoning: caps.keepReasoning, reasoningField: caps.reasoningField, images }),
     ...(tools.length ? { tools } : {}),
     stream: true,
     ...(caps.streamUsage ? { stream_options: { include_usage: true } } : {}),
@@ -159,6 +161,46 @@ export async function postWithEffortFallback(
   }
 }
 
+/** Models that refused images; from then on they get a note in each image's place. */
+const noVision = new Set<string>();
+
+function hasUserImages(messages: TurnRequest["messages"]): boolean {
+  return messages.some((m) => m.role === "user" && typeof m.content !== "string" && m.content.some((b) => b.type === "image" && b.source.type === "base64"));
+}
+
+/** A rejection that says the model can't take images (OpenRouter answers 404 when no route of a model does). */
+function refusedImages(err: unknown): boolean {
+  return err instanceof ProviderError && [400, 404, 415, 422].includes(err.status ?? 0) && /image|vision|multi-?modal/i.test(err.message);
+}
+
+/**
+ * Sends a turn whose history may hold the user's images: `post(true)` sends them, `post(false)` a note in their place.
+ * A model known to be without vision gets the note at once; one that refuses them gets it on a second try, and is
+ * remembered. The user is told when the turn they just sent had images the model won't see.
+ */
+export async function postWithImageFallback(
+  req: TurnRequest,
+  vision: boolean | undefined,
+  handlers: StreamHandlers,
+  post: (images: boolean) => Promise<Response>,
+): Promise<Response> {
+  if (!hasUserImages(req.messages)) return post(true);
+  const notice = () =>
+    handlers.onNotice?.(`${req.model} can't see images, so it got a note in their place. To have them looked at, switch to a model that can (any Claude model does).`);
+  if (vision === false || noVision.has(req.model)) {
+    if (hasUserImages(req.messages.slice(-1))) notice();
+    return post(false);
+  }
+  try {
+    return await post(true);
+  } catch (err) {
+    if (!refusedImages(err)) throw err;
+    noVision.add(req.model);
+    notice();
+    return post(false);
+  }
+}
+
 export class ChatCompletionsModel implements Model {
   constructor(
     private readonly endpoint: ChatEndpoint,
@@ -168,10 +210,12 @@ export class ChatCompletionsModel implements Model {
   /** `req.model` is the full id ("deepseek/deepseek-chat"); the provider gets the part after the prefix. */
   async send(req: TurnRequest, handlers: StreamHandlers, signal: AbortSignal): Promise<Message> {
     const model = req.model.slice(req.model.indexOf("/") + 1);
-    const body = chatBody(this.endpoint, model, req);
     const effortKeys = Object.keys(this.endpoint.capabilities.effort?.(req.effort, model) ?? {});
-    const fallback = effortKeys.length ? Object.fromEntries(Object.entries(body).filter(([k]) => !effortKeys.includes(k))) : null;
-    const res = await postWithEffortFallback(this.endpoint, "/chat/completions", body, fallback, req.model, signal, this.fetchImpl);
+    const res = await postWithImageFallback(req, this.endpoint.capabilities.vision, handlers, (images) => {
+      const body = chatBody(this.endpoint, model, req, images);
+      const fallback = effortKeys.length ? Object.fromEntries(Object.entries(body).filter(([k]) => !effortKeys.includes(k))) : null;
+      return postWithEffortFallback(this.endpoint, "/chat/completions", body, fallback, req.model, signal, this.fetchImpl);
+    });
     if (!res.body) throw new ProviderError(`${this.endpoint.name} sent an empty response.`, res.status, true);
     const acc = new ChatAccumulator(req.model, handlers);
     for await (const chunk of sseJson(res.body)) {

@@ -1,6 +1,7 @@
 // src/web/protocol.ts — messages between the dashboard server and the browser app. No Node imports: the client imports this too.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import type { ActivityEvent, ActivitySnapshot } from "../agents/activity";
+import type { Attachment, PromptAttachment } from "../attachments/attachments";
 import type { Effort, Mode } from "../config/constants";
 import type { MessageParam } from "../session/store";
 import type { ExtraCommand, ListTopic } from "../ui/commands";
@@ -73,7 +74,8 @@ export interface RpcMap {
    * may ask permission) and runs the result, all in one busy period so no other tab's prompt slips in
    * between; `text` is then ignored. An expansion that fails or is cancelled rejects with its reason.
    */
-  prompt: { params: { text: string; display?: string; model?: string; command?: { name: string; args: string } }; result: TurnEndReason };
+  /** `attachments`: images and text files sent with the text (src/attachments); the text may then be empty. */
+  prompt: { params: { text: string; display?: string; model?: string; command?: { name: string; args: string }; attachments?: PromptAttachment[] }; result: TurnEndReason };
   expand: { params: { name: string; args: string }; result: CommandExpansion };
   interrupt: { params: undefined; result: null };
   setMode: { params: Mode; result: null };
@@ -144,7 +146,7 @@ export type ServerMessage =
   | { t: "login_failed"; reason: "invalid" | "locked" }
   | { t: "hello"; server: HelloInfo }
   /** A prompt another tab sent, shown as the user's message (the sending tab already shows it; the agent stream has none). */
-  | { t: "user"; text: string }
+  | { t: "user"; text: string; attachments?: Attachment[] }
   | { t: "event"; event: AgentEvent }
   | { t: "state"; state: SessionState }
   | { t: "ask"; id: number; prompt: PermissionPrompt }
@@ -161,6 +163,8 @@ export type ServerMessage =
 export const WS_PATH = "/ws";
 /** The close code of a socket whose device was logged out: the browser forgets its key and shows the login screen. */
 export const AUTH_CLOSE_CODE = 4401;
+/** The close code of a socket that didn't log in in time: the browser reconnects silently, the login screen stays as it is. */
+export const LOGIN_TIMEOUT_CLOSE_CODE = 4408;
 /** The localStorage entry that holds this browser's device key. */
 export const DEVICE_KEY_STORAGE = "tropos.deviceKey";
 export const DEFAULT_PORT = 4317;

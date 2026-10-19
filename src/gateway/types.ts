@@ -1,5 +1,6 @@
 // src/gateway/types.ts — the contracts between the gateway's parts. Type-only: no runtime imports.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
+import type { PromptAttachment } from "../attachments/attachments";
 import type { PanelData } from "../ui/runtime";
 import type { SessionState } from "../web/protocol";
 import type { Autonomy, GatewayConfig } from "./config";
@@ -24,8 +25,11 @@ export interface ChatSink {
 /** One chat's conversation with the agent, as a channel sees it. */
 export interface ChatSession {
   readonly key: string;
-  /** Runs one turn. Rejects with an Error whose message is "busy" while another turn runs. */
-  prompt(text: string): Promise<TurnEndReason>;
+  /**
+   * Runs one turn. Rejects with an Error whose message is "busy" while another turn runs, and with an RpcError naming
+   * the reason when an attachment is refused (src/attachments/validate.ts).
+   */
+  prompt(text: string, attachments?: PromptAttachment[]): Promise<TurnEndReason>;
   /**
    * Runs `/name args` (a custom command or user-invocable skill) as one turn. Rejects with "busy" like `prompt`, and
    * with a UserFacingError carrying the reason when the command can't run (an unknown name, say).

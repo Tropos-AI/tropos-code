@@ -202,17 +202,11 @@ describe("logging in", () => {
 
   test("login while locked says so", async () => {
     const { base } = await start();
-    const raw = rawSocket(base);
-    for (let i = 0; i < GLOBAL_MAX_FAILURES; i++) {
-      raw.send({ t: "login", value: String(100000 + i), name: "x" });
-      await raw.next((m) => m.t === "login_failed" && raw.messages.length === i + 1);
-    }
+    // One socket per guess: a socket is closed after a few wrong ones (MAX_FAILED_LOGINS); the lock counts them all.
+    for (let i = 0; i < GLOBAL_MAX_FAILURES; i++) expect(await rawLogin(base, String(100000 + i), "x")).toMatchObject({ t: "login_failed" });
     const good = await logins.issueCode();
-    raw.send({ t: "login", value: good, name: "x" });
-    await raw.next((m) => raw.messages.length === GLOBAL_MAX_FAILURES + 1);
-    expect(raw.messages.at(-1)).toEqual({ t: "login_failed", reason: "locked" });
+    expect(await rawLogin(base, good, "x")).toEqual({ t: "login_failed", reason: "locked" });
     expect((await devices.list()).length).toBe(1);
-    raw.ws.close();
   });
 
   test("revoked device: recheckDevices closes its socket with 4401", async () => {

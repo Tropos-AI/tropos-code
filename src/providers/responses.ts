@@ -5,8 +5,9 @@ import { clampEffort } from "./registry";
 import type { MessageParam } from "../session/store";
 import { toolInputSchema } from "../tools/schema";
 import type { AnyTool } from "../tools/types";
-import { MalformedToolCallError, safeToolId, sseJson } from "./chat";
-import { ProviderError, postWithEffortFallback, type ChatEndpoint } from "./chat-model";
+import { imageNote } from "../attachments/attachments";
+import { MalformedToolCallError, imageDataUrl, safeToolId, sseJson } from "./chat";
+import { ProviderError, postWithEffortFallback, postWithImageFallback, type ChatEndpoint } from "./chat-model";
 import { foreignThinking, readForeign } from "./reasoning";
 
 type Block = Exclude<MessageParam["content"], string>[number];
@@ -26,20 +27,36 @@ function blockText(block: Block): string | null {
   return typeof b.text === "string" ? b.text : null;
 }
 
+type InputPart = { type: "input_text"; text: string } | { type: "input_image"; image_url: string };
+
 /**
  * Session history as Responses input items. Reasoning items this API returned earlier go back
  * verbatim (encrypted, since nothing is stored server-side); Anthropic's own thinking is dropped.
+ * The user's images go as input_image parts, or as a note when `images` is false (no vision).
  */
-export function toResponsesInput(history: MessageParam[]): ResponsesInputItem[] {
+export function toResponsesInput(history: MessageParam[], opts: { images?: boolean } = {}): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
   for (const message of history) {
     const blocks: Block[] = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
     const text: string[] = [];
+    /** Set once the message has an image: its text then travels as parts around it. */
+    const parts: InputPart[] = [];
     const flushText = () => {
-      if (text.length) items.push({ role: message.role, content: text.splice(0).join("\n\n") });
+      if (!text.length && !parts.length) return;
+      if (!parts.length) return void items.push({ role: message.role, content: text.splice(0).join("\n\n") });
+      if (text.length) parts.push({ type: "input_text", text: text.splice(0).join("\n\n") });
+      items.push({ role: message.role, content: parts.splice(0) });
     };
     for (const block of blocks) {
-      if (block.type === "thinking") {
+      const url = message.role === "user" && opts.images !== false ? imageDataUrl(block) : null;
+      if (url) {
+        if (text.length) parts.push({ type: "input_text", text: text.splice(0).join("\n\n") });
+        parts.push({ type: "input_image", image_url: url });
+        continue;
+      }
+      if (block.type === "image" && message.role === "user") {
+        text.push(imageNote());
+      } else if (block.type === "thinking") {
         for (const item of readForeign(block)?.data.items ?? []) items.push(item as Record<string, unknown>);
       } else if (block.type === "redacted_thinking") {
         continue;
@@ -74,12 +91,17 @@ export interface ResponsesOptions {
   efforts?: readonly Effort[];
 }
 
-export function responsesBody(model: string, req: TurnRequest, opts: ResponsesOptions): { body: Record<string, unknown>; withoutReasoning: Record<string, unknown> } {
+export function responsesBody(
+  model: string,
+  req: TurnRequest,
+  opts: ResponsesOptions,
+  images = true,
+): { body: Record<string, unknown>; withoutReasoning: Record<string, unknown> } {
   const tools = toResponsesTools(req.tools);
   const base: Record<string, unknown> = {
     model,
     instructions: req.system,
-    input: toResponsesInput(req.messages),
+    input: toResponsesInput(req.messages, { images }),
     ...(tools.length ? { tools } : {}),
     stream: true,
     store: false,
@@ -215,8 +237,10 @@ export class ResponsesModel implements Model {
 
   async send(req: TurnRequest, handlers: StreamHandlers, signal: AbortSignal): Promise<Message> {
     const model = req.model.slice(req.model.indexOf("/") + 1);
-    const { body, withoutReasoning } = responsesBody(model, req, this.opts);
-    const res = await postWithEffortFallback(this.endpoint, "/responses", body, withoutReasoning, req.model, signal, this.fetchImpl);
+    const res = await postWithImageFallback(req, this.endpoint.capabilities.vision, handlers, (images) => {
+      const { body, withoutReasoning } = responsesBody(model, req, this.opts, images);
+      return postWithEffortFallback(this.endpoint, "/responses", body, withoutReasoning, req.model, signal, this.fetchImpl);
+    });
     if (!res.body) throw new ProviderError(`${this.endpoint.name} sent an empty response.`, res.status, true);
     const acc = new ResponsesAccumulator(req.model, handlers);
     for await (const event of sseJson(res.body)) acc.push(event as ResponsesEvent);
