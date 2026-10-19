@@ -8,7 +8,8 @@ import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, ChatWorkt
 import { OWNER_ONLY_FINISH } from "../worktrees";
 import { OWNER_GREETING, candidateFrom, type OwnerClaimStore } from "../owner-claim";
 import { findSecrets } from "../../tools/setup/secrets";
-import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
+import { MAX_IMAGE_BYTES, MAX_IMAGES, sniffImage, type PromptAttachment } from "../../attachments/attachments";
+import { TelegramError, type TelegramApi, type TgCallbackQuery, type TgMessage, type TgUpdate } from "./api";
 import {
   assistantText,
   BOT_COMMANDS,
@@ -47,7 +48,11 @@ const AUTONOMY_USAGE = "Use /autonomy, /autonomy ask or /autonomy balanced.";
 const LOGIN_REFUSAL = "Only the owner can log in a browser from here.";
 const LOGIN_NO_OWNER = "Pick the owner first: Settings → Channels & devices on the dashboard.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
+const IMAGE_TOO_BIG = `That image is over ${MAX_IMAGE_BYTES / (1024 * 1024)} MB. Send a smaller one.`;
+const IMAGE_DOWNLOAD_FAILED = "I couldn't download that image from Telegram. Try sending it again.";
 
+/** The reply to a file that is neither text nor an image (a voice note, a PDF …). */
+export const NON_TEXT_REPLY = "I can read text and images, but not this kind of file yet.";
 export const SECRET_REMOVED_NOTE = "I removed that message so the key doesn't stay in this chat. I'm holding it for this conversation only.";
 export const CLAIM_REPLY = "Got it. Go back to the setup on your computer and confirm it's you.";
 
@@ -77,6 +82,30 @@ export interface TelegramAdapterOptions {
   backoffBaseMs?: number;
   backoffMaxMs?: number;
   pollTimeoutSec?: number;
+  /** How long the photos of an album are collected into one turn after the last arrived. Default 1500. */
+  mediaGroupWaitMs?: number;
+}
+
+/** An image a message carries: a photo (its largest size that fits) or an image sent as a document. */
+interface ImageRef {
+  fileId: string;
+  name: string;
+  size?: number;
+}
+
+function imageOf(msg: TgMessage): ImageRef | null {
+  if (msg.photo?.length) {
+    const sizes = [...msg.photo].sort((a, b) => a.width * a.height - b.width * b.height);
+    const largest = sizes.at(-1)!;
+    // Telegram offers several sizes; the largest that fits the cap, or the largest (refused as too big).
+    const pick = largest.file_size !== undefined && largest.file_size > MAX_IMAGE_BYTES ? (sizes.filter((s) => s.file_size !== undefined && s.file_size <= MAX_IMAGE_BYTES).at(-1) ?? largest) : largest;
+    return { fileId: pick.file_id, name: "photo.jpg", ...(pick.file_size !== undefined ? { size: pick.file_size } : {}) };
+  }
+  if (msg.document?.mime_type?.startsWith("image/")) {
+    const d = msg.document;
+    return { fileId: d.file_id, name: d.file_name || "image", ...(d.file_size !== undefined ? { size: d.file_size } : {}) };
+  }
+  return null;
 }
 
 interface AskEntry {
@@ -112,8 +141,8 @@ class Outbox {
   }
 }
 
-/** One thing waiting to run: a message, or a `/name args` skill or command. */
-type QueueItem = { text: string } | { command: string; args: string };
+/** One thing waiting to run: a message (with any images it carried), or a `/name args` skill or command. */
+type QueueItem = { text: string; attachments?: PromptAttachment[] } | { command: string; args: string };
 
 interface Chat {
   chatId: number;
@@ -189,8 +218,11 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly opening = new Map<string, Promise<Chat | undefined>>();
   /** Sender id -> pairing code already shown, so a code is sent once. */
   private readonly notified = new Map<string, string>();
-  /** Chat id -> when "I can only read text" was last said there. */
+  /** Chat id -> when NON_TEXT_REPLY was last said there. */
   private readonly nonTextRepliedAt = new Map<number, number>();
+  private readonly mediaGroupWaitMs: number;
+  /** Albums being collected (`<chat id>:<media_group_id>`): their photos become one turn. */
+  private readonly albums = new Map<string, { chat: Chat; text: string; attachments: PromptAttachment[]; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(opts: TelegramAdapterOptions) {
     this.api = opts.api;
@@ -207,6 +239,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.backoffBaseMs = opts.backoffBaseMs ?? 1000;
     this.backoffMaxMs = opts.backoffMaxMs ?? 30_000;
     this.pollTimeoutSec = opts.pollTimeoutSec ?? 30;
+    this.mediaGroupWaitMs = opts.mediaGroupWaitMs ?? 1500;
     this.logFn = opts.log ?? (() => {});
   }
 
@@ -234,6 +267,8 @@ export class TelegramAdapter implements ChannelAdapter {
     this.abort.abort();
     await this.loop;
     this.loop = undefined;
+    for (const album of this.albums.values()) clearTimeout(album.timer);
+    this.albums.clear();
     for (const chat of this.chats.values()) {
       for (const [id, ask] of chat.asks) {
         if (ask.settled) continue;
@@ -316,12 +351,14 @@ export class TelegramAdapter implements ChannelAdapter {
     // Setup listens for the owner and there is none yet: someone approved earlier may be the one opening the link.
     if (msg.text !== undefined && (await this.recordClaim(msg, async () => (await this.pairing.owner()) === null))) return;
     if (msg.text === undefined) {
-      // One reply per chat per 10 s (an album is many messages), and none for a group's service messages.
+      const image = imageOf(msg);
+      if (image) return this.handleImage(msg, senderId, image);
+      // One reply per chat per 10 s (several files arrive as many messages), and none for a group's service messages.
       const now = Date.now();
       if (msg.chat.type !== "private" || now - (this.nonTextRepliedAt.get(msg.chat.id) ?? 0) < NON_TEXT_REPLY_GAP_MS) return;
       if (this.nonTextRepliedAt.size >= MAX_UNPAIRED_MEMORY) this.nonTextRepliedAt.clear();
       this.nonTextRepliedAt.set(msg.chat.id, now);
-      await this.reply(msg.chat.id, "I can only read text for now.");
+      await this.reply(msg.chat.id, NON_TEXT_REPLY);
       return;
     }
     const text = msg.text.trim();
@@ -354,6 +391,54 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
     this.enqueue(chat, { text });
+  }
+
+  /** A photo or image file from an approved sender: downloaded (same caps as the dashboard) and sent with its caption. */
+  private async handleImage(msg: TgMessage, senderId: string, image: ImageRef): Promise<void> {
+    const caption = (msg.caption ?? "").trim();
+    if (caption && findSecrets(caption).length > 0) await this.removeSecretMessage(msg);
+    let attachment: PromptAttachment;
+    try {
+      attachment = await this.downloadImage(image);
+    } catch (e) {
+      this.log("image download failed", e);
+      await this.reply(msg.chat.id, e instanceof UserFacingError ? e.message : IMAGE_DOWNLOAD_FAILED);
+      return;
+    }
+    const chat = await this.chatFor(msg.chat.id, senderId);
+    if (!chat) return;
+    if (!msg.media_group_id) return this.enqueue(chat, { text: caption, attachments: [attachment] });
+    // An album arrives as one message per photo: collect them into one turn, sent once no more arrive.
+    const key = `${msg.chat.id}:${msg.media_group_id}`;
+    const album = this.albums.get(key) ?? { chat, text: "", attachments: [], timer: undefined as unknown as ReturnType<typeof setTimeout> };
+    clearTimeout(album.timer);
+    album.attachments.push(attachment);
+    if (caption) album.text = album.text ? `${album.text}\n${caption}` : caption;
+    const send = () => {
+      if (this.albums.get(key) !== album) return;
+      this.albums.delete(key);
+      this.enqueue(album.chat, { text: album.text, attachments: album.attachments });
+    };
+    this.albums.set(key, album);
+    if (album.attachments.length >= MAX_IMAGES) return send();
+    album.timer = setTimeout(send, this.mediaGroupWaitMs);
+  }
+
+  /** Throws a UserFacingError for an image that is too big or isn't one; any other error is a failed download. */
+  private async downloadImage(image: ImageRef): Promise<PromptAttachment> {
+    if (image.size !== undefined && image.size > MAX_IMAGE_BYTES) throw new UserFacingError(IMAGE_TOO_BIG);
+    const file = await this.api.getFile(image.fileId, this.abort.signal);
+    if (file.size !== undefined && file.size > MAX_IMAGE_BYTES) throw new UserFacingError(IMAGE_TOO_BIG);
+    let bytes: Uint8Array;
+    try {
+      bytes = await this.api.downloadFile(file.path, MAX_IMAGE_BYTES, this.abort.signal);
+    } catch (e) {
+      if (e instanceof TelegramError && e.status === 413) throw new UserFacingError(IMAGE_TOO_BIG);
+      throw e;
+    }
+    const mediaType = sniffImage(bytes);
+    if (!mediaType) throw new UserFacingError(`${image.name} isn't a PNG, JPEG, GIF or WebP image.`);
+    return { name: image.name, mediaType, data: Buffer.from(bytes).toString("base64") };
   }
 
   /** Deletes the message that held a key and says so; the session still gets the text, and its host seals it. */
@@ -704,7 +789,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
   private async runTurn(chat: Chat, item: QueueItem): Promise<void> {
     chat.errorSent = false;
-    if ("text" in item) chat.taskTitle ??= oneLine(redactSecrets(item.text), 72);
+    if ("text" in item && item.text) chat.taskTitle ??= oneLine(redactSecrets(item.text), 72);
     // Another client's turn may be in flight (busy): keep what it has recorded so far.
     if (!chat.session.state().busy) {
       this.resetDone(chat);
@@ -713,7 +798,7 @@ export class TelegramAdapter implements ChannelAdapter {
     let reason: TurnEndReason | undefined;
     let busy = false;
     try {
-      reason = "text" in item ? await chat.session.prompt(item.text) : await chat.session.command(item.command, item.args);
+      reason = "text" in item ? await chat.session.prompt(item.text, item.attachments) : await chat.session.command(item.command, item.args);
     } catch (e) {
       if (e instanceof Error && e.message === "busy") {
         // Another client's turn is running on this session: keep the text first in line until it ends.

@@ -1,5 +1,6 @@
 // test/helpers/telegram-fakes.ts — in-memory fakes of the gateway contracts, for adapter tests.
 import type { AgentEvent, PermissionAnswer, PermissionPrompt, TurnEndReason } from "../../src/agent/events";
+import type { PromptAttachment } from "../../src/attachments/attachments";
 import type { SessionState } from "../../src/web/protocol";
 import type { PanelData } from "../../src/ui/runtime";
 import type { ChatSession, ChatSink, Pairing, PairedSender, PairingChallenge, SessionProvider } from "../../src/gateway/types";
@@ -36,8 +37,12 @@ export class FakeSession implements ChatSession {
 
   constructor(readonly key: string) {}
 
-  async prompt(text: string): Promise<TurnEndReason> {
+  /** The attachments of each prompt, in order (undefined for one without). */
+  readonly promptAttachments: Array<PromptAttachment[] | undefined> = [];
+
+  async prompt(text: string, attachments?: PromptAttachment[]): Promise<TurnEndReason> {
     this.prompts.push(text);
+    this.promptAttachments.push(attachments);
     return this.onPrompt(text, this);
   }
   async command(name: string, args: string): Promise<TurnEndReason> {

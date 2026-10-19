@@ -8,6 +8,14 @@ const MessageSchema = z.object({
   chat: ChatSchema,
   from: UserSchema.optional(),
   text: z.string().optional(),
+  /** A photo's sizes, smallest first. */
+  photo: z.array(z.object({ file_id: z.string(), width: z.number(), height: z.number(), file_size: z.number().optional() })).optional(),
+  /** A file sent as a document (an uncompressed image, a PDF …). */
+  document: z.object({ file_id: z.string(), file_name: z.string().optional(), mime_type: z.string().optional(), file_size: z.number().optional() }).optional(),
+  /** A photo's or document's text. */
+  caption: z.string().optional(),
+  /** Shared by the messages of one album. */
+  media_group_id: z.string().optional(),
   /** Unix seconds when the message was sent. */
   date: z.number().optional(),
 });
@@ -153,6 +161,47 @@ export class TelegramApi {
     const parsed = z.object({ username: z.string().optional(), first_name: z.string().optional() }).safeParse(await this.call("getMe", {}, signal));
     if (!parsed.success) throw new TelegramError("getMe: unexpected response", 200, "unexpected response");
     return { username: parsed.data.username ?? "", name: parsed.data.first_name ?? "" };
+  }
+
+  /** Where a file sent to the bot can be downloaded from, and its size when Telegram knows it. */
+  async getFile(fileId: string, signal?: AbortSignal): Promise<{ path: string; size?: number }> {
+    const parsed = z.object({ file_path: z.string(), file_size: z.number().optional() }).safeParse(await this.call("getFile", { file_id: fileId }, signal));
+    if (!parsed.success) throw new TelegramError("getFile: unexpected response", 200, "unexpected response");
+    return { path: parsed.data.file_path, ...(parsed.data.file_size !== undefined ? { size: parsed.data.file_size } : {}) };
+  }
+
+  /** Downloads a file getFile named; stops with a 413 TelegramError once it passes `maxBytes`. The URL holds the token: errors never do. */
+  async downloadFile(path: string, maxBytes: number, signal?: AbortSignal): Promise<Uint8Array> {
+    const tooBig = () => new TelegramError(`downloadFile: the file is over ${maxBytes} bytes`, 413, "too big");
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${this.baseUrl}/file/bot${this.token}/${path.split("/").map(encodeURIComponent).join("/")}`, { signal });
+    } catch (e) {
+      const msg = this.redact(e instanceof Error ? e.message : String(e));
+      throw new TelegramError(`downloadFile failed: ${msg}`, 0, msg);
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      throw new TelegramError(`downloadFile failed (${res.status})`, res.status, res.statusText);
+    }
+    if (Number(res.headers.get("content-length") ?? 0) > maxBytes) {
+      await res.body?.cancel().catch(() => {});
+      throw tooBig();
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of (res.body ?? new ReadableStream<Uint8Array>()) as unknown as AsyncIterable<Uint8Array>) {
+      total += chunk.length;
+      if (total > maxBytes) throw tooBig();
+      chunks.push(chunk);
+    }
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   }
 
   async setMyCommands(commands: { command: string; description: string }[]): Promise<void> {

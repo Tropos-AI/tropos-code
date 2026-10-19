@@ -62,6 +62,42 @@ export class FakeTelegramServer {
     this.push({ message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: "private" }, from: { id: fromId, first_name: "T" }, [field]: media, date: 1 } });
   }
 
+  /** Files that getFile and the download URL serve, by file_id. `reportedSize` is what getFile claims (default: the real size). */
+  readonly files = new Map<string, { path: string; bytes: Uint8Array; reportedSize?: number }>();
+  /** Every file download, by path. */
+  readonly downloads: string[] = [];
+
+  addFile(fileId: string, bytes: Uint8Array, reportedSize?: number): void {
+    this.files.set(fileId, { path: `photos/${fileId}.bin`, bytes, reportedSize });
+  }
+
+  /** A photo as Telegram sends it: several sizes, smallest first; the last is `fileId`. */
+  pushPhoto(chatId: number, fromId: number, opts: { fileId: string; caption?: string; mediaGroupId?: string; fileSize?: number }): void {
+    const photo = [
+      { file_id: `${opts.fileId}-thumb`, width: 90, height: 60 },
+      { file_id: opts.fileId, width: 1280, height: 853, ...(opts.fileSize !== undefined ? { file_size: opts.fileSize } : {}) },
+    ];
+    this.push({
+      message: {
+        message_id: this.nextMessageId++ + 5000,
+        chat: { id: chatId, type: "private" },
+        from: { id: fromId, first_name: "T" },
+        photo,
+        ...(opts.caption !== undefined ? { caption: opts.caption } : {}),
+        ...(opts.mediaGroupId ? { media_group_id: opts.mediaGroupId } : {}),
+        date: 1,
+      },
+    });
+  }
+
+  /** A file sent as a document (uncompressed). */
+  pushDocument(chatId: number, fromId: number, opts: { fileId: string; fileName?: string; mimeType?: string; caption?: string }): void {
+    const document = { file_id: opts.fileId, ...(opts.fileName ? { file_name: opts.fileName } : {}), ...(opts.mimeType ? { mime_type: opts.mimeType } : {}) };
+    this.push({
+      message: { message_id: this.nextMessageId++ + 5000, chat: { id: chatId, type: "private" }, from: { id: fromId, first_name: "T" }, document, ...(opts.caption !== undefined ? { caption: opts.caption } : {}), date: 1 },
+    });
+  }
+
   pushCallback(fromId: number, chatId: number, messageId: number, data: string): void {
     this.push({ callback_query: { id: `cb${this.nextUpdateId}`, from: { id: fromId, first_name: "T" }, message: { message_id: messageId, chat: { id: chatId, type: "private" } }, data } });
   }
@@ -101,6 +137,14 @@ export class FakeTelegramServer {
   }
 
   private async handle(req: Request): Promise<Response> {
+    const download = /^\/file\/bot([^/]+)\/(.+)$/.exec(new URL(req.url).pathname);
+    if (download) {
+      if (decodeURIComponent(download[1] as string) !== this.token) return new Response("Unauthorized", { status: 401 });
+      const path = decodeURIComponent(download[2] as string);
+      this.downloads.push(path);
+      const file = [...this.files.values()].find((f) => f.path === path);
+      return file ? new Response(new Blob([file.bytes as Uint8Array<ArrayBuffer>])) : new Response("Not Found", { status: 404 });
+    }
     const m = /^\/bot([^/]+)\/(\w+)$/.exec(new URL(req.url).pathname);
     if (!m || decodeURIComponent(m[1] as string) !== this.token) return Response.json({ ok: false, error_code: 401, description: "Unauthorized" }, { status: 401 });
     const body = (await req.json()) as Record<string, any>;
@@ -151,6 +195,11 @@ export class FakeTelegramServer {
       case "answerCallbackQuery":
         this.answered.push({ id: String(body.callback_query_id), text: body.text });
         return this.json(true);
+      case "getFile": {
+        const file = this.files.get(String(body.file_id));
+        if (!file) return Response.json({ ok: false, error_code: 400, description: "Bad Request: invalid file_id" }, { status: 400 });
+        return this.json({ file_id: body.file_id, file_path: file.path, file_size: file.reportedSize ?? file.bytes.length });
+      }
       case "getMe":
         return this.json({ id: 1, is_bot: true, first_name: "Tropos", username: "tropos_bot" });
       case "setMyCommands":
