@@ -377,6 +377,48 @@ describe("AnimatedIcon", () => {
   });
 });
 
+describe("a calm pace", () => {
+  // The pack's own timings (0.55 s replay, 0.62 s hover) felt hurried; the defaults are now about 1.8 times longer.
+  test("a click replays the motion for about a second, not half of one", async () => {
+    render(createElement("button", { type: "button" }, createElement(AnimatedIcon, { name: "send" }), "Send"));
+    const button = screen.getByRole("button");
+    const host = button.querySelector("[data-slot=animated-icon]")!;
+    await act(async () => void fireEvent.click(button));
+    expect(host.getAttribute("data-animated")).toBe("true");
+    await act(() => wait(650));
+    expect(host.getAttribute("data-animated")).toBe("true");
+    await until(() => expect(host.hasAttribute("data-animated")).toBe(false));
+  });
+
+  test("hover feedback on a plain icon plays for about a second", async () => {
+    render(createElement("button", { type: "button" }, createElement(CojeevIcon, { name: "copy" }), "Copy"));
+    const button = screen.getByRole("button");
+    const svg = svgOf(button);
+    await act(async () => void fireEvent.pointerEnter(button, { pointerType: "mouse" }));
+    expect(svg.dataset.iconFeedback).toBe("hover");
+    await act(() => wait(750));
+    expect(svg.dataset.iconFeedback).toBe("hover");
+    await until(() => expect(svg.dataset.iconFeedback).toBeUndefined());
+  });
+
+  test("reduced motion still means no motion at all", async () => {
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({ ...matchMedia.call(window, query), matches: query.includes("reduce"), addEventListener() {}, removeEventListener() {} })) as typeof window.matchMedia;
+    try {
+      render(createElement("button", { type: "button" }, createElement(CojeevIcon, { name: "copy" }), createElement(AnimatedIcon, { name: "send" }), "Send"));
+      const button = screen.getByRole("button");
+      await act(async () => {
+        fireEvent.pointerEnter(button, { pointerType: "mouse" });
+        fireEvent.click(button);
+      });
+      expect(svgOf(button).dataset.iconFeedback).toBeUndefined();
+      expect(button.querySelector("[data-slot=animated-icon]")!.hasAttribute("data-animated")).toBe(false);
+    } finally {
+      window.matchMedia = matchMedia;
+    }
+  });
+});
+
 describe("StateChevron", () => {
   test("controlled: rotates by `open` and direction; forwards refs", () => {
     const ref = createRef<HTMLSpanElement>();

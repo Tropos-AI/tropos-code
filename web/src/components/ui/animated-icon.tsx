@@ -216,12 +216,15 @@ const serverSnapshot_UseReducedMotion=()=>false
 function useReducedMotion(){return useSyncExternalStore(subscribe,snapshot_UseReducedMotion,serverSnapshot_UseReducedMotion)}
 
 // ---- registry/cojeev/motion/choreography.ts (inlined) ----
-/** The shared rhythm. Durations and stagger are seconds, matching Motion's API. */
+/**
+ * The shared rhythm. Durations and stagger are seconds, matching Motion's API. Tropos runs it calmer than the pack:
+ * springs at a third of its stiffness (about 1.7 times slower) with the same damping ratio, so they don't bounce more.
+ */
 const motionTokens = {
   spring: {
-    responsive: { type: "spring", stiffness: 360, damping: 32, mass: .85 },
-    expressive: { type: "spring", stiffness: 260, damping: 22, mass: 1 },
-    gentle: { type: "spring", stiffness: 180, damping: 28, mass: 1 },
+    responsive: { type: "spring", stiffness: 120, damping: 18.5, mass: .85 },
+    expressive: { type: "spring", stiffness: 87, damping: 12.7, mass: 1 },
+    gentle: { type: "spring", stiffness: 60, damping: 16, mass: 1 },
   },
   ease: { enter: [.2, .8, .2, 1], exit: [.4, 0, 1, 1], settle: [.2, .65, .25, 1] },
   duration: { quick: .16, enter: .32, exit: .18 },
@@ -295,6 +298,8 @@ function createMotionLane(initial: number, render: (value: number) => void) {
 }
 
 // ---- registry/cojeev/ui/icon.tsx (inlined) ----
+/** Default icon motion lengths (s): about 1.8 times the pack's 0.62 / 0.48 / 0.55 / 0.5, for a calm pace. */
+const ICON_PACE = { hover: 1.1, press: .85, replay: 1, draw: .9 } as const;
 const lucideIconNames: string[]=[]
 // Small authored additions share the pack's 24px stroke geometry.
 const extraPaths: Record<string, string[]> = {
@@ -707,7 +712,7 @@ function useIconFeedback(host:React.RefObject<SVGSVGElement|null>, enabled:boole
       stop();kind=next;
       const computed=getComputedStyle(svg);baseScale=computed.scale;baseRotate=computed.rotate;
       active=true;svg.dataset.iconFeedback=kind;
-      const seconds=duration!==undefined&&Number.isFinite(duration)?Math.max(.08,Math.min(duration,10)):next==="press"?.48:.62;
+      const seconds=duration!==undefined&&Number.isFinite(duration)?Math.max(.08,Math.min(duration,10)):next==="press"?ICON_PACE.press:ICON_PACE.hover;
       const timing=ease==="gentle"?[.22,.72,.22,1] as const:ease==="settle"?[...motionTokens.ease.settle] as const:ease??"linear";
       lane.jump(0);lane.to(1,{duration:seconds,ease:timing},restore);
     };
@@ -749,7 +754,7 @@ function Icon({name,size="default",className,draw,feedback=true,treatment="outli
     if(!draw||quiet||!drawn||!host.current)return;
     const painter=createIconMotionPainter(host.current,name,1,p=>({glyph:{draw:p}}));
     const lane=createMotionLane(0,painter.paint);
-    lane.jump(0);lane.to(1,{duration:.5,ease:[.2,.8,.2,1]},painter.restore);
+    lane.jump(0);lane.to(1,{duration:ICON_PACE.draw,ease:[.2,.8,.2,1]},painter.restore);
     return()=>{lane.dispose();painter.restore()};
   },[draw,quiet,name,drawn]);
   const resolved=canonicalIcon(name);
@@ -810,7 +815,7 @@ function AnimatedIconImpl({name,preset="auto",active,amplitude=1,duration,ease="
   const seconds=duration!==undefined&&Number.isFinite(duration)?Math.max(.08,Math.min(duration,10)):undefined;
   React.useEffect(()=>{
     if(!replayActive)return;
-    const timer=setTimeout(()=>setReplayActive(false),(seconds??.55)*1000);
+    const timer=setTimeout(()=>setReplayActive(false),(seconds??ICON_PACE.replay)*1000);
     return()=>clearTimeout(timer);
   },[replay,replayActive,seconds]);
   React.useEffect(()=>{
@@ -865,7 +870,8 @@ function AnimatedIconImpl({name,preset="auto",active,amplitude=1,duration,ease="
     const looping=intent==="spin"||(intent==="semantic"&&(name==="loader"||name==="loader-circle"));
     lane.jump(0);
     const timing=looping?"linear":ease==="gentle"?([.22,.72,.22,1] as const):ease==="settle"?([.2,.8,.2,1] as const):ease;
-    lane.to(1,{duration:seconds??(looping?1.35:.55),ease:timing,repeat:looping?Infinity:0},painter.restore);
+    // A loader's spin is a progress cue, not feedback: it keeps its pace.
+    lane.to(1,{duration:seconds??(looping?1.35:ICON_PACE.replay),ease:timing,repeat:looping?Infinity:0},painter.restore);
     return ()=>{lane.dispose();painter.restore()};
   },[intent,running,name,amount,seconds,ease,active,replay]);
   return <span ref={host} data-slot="animated-icon" data-preset={intent} data-icon-replay={replay||undefined} data-animated={(running&&intent!=="none")||undefined} className="v-animated-icon">
