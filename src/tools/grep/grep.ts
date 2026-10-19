@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { holdSandbox, openVerified, type VerifiedFile } from "../file-guard";
@@ -159,7 +159,9 @@ async function runRipgrep(
 async function readSearched(file: string, within: readonly string[] | undefined, isDenied?: (path: string) => boolean): Promise<Buffer | null> {
   let opened: VerifiedFile;
   try {
-    opened = await openVerified(file, "read", { within });
+    // A file the walk found opens at its real path, which must still lie inside the searched folder (`within`). A file
+    // named as the search path was resolved already: it opens as named, with its leaf never followed.
+    opened = within === undefined ? await openVerified(file, "read") : await openVerified(await realpath(file), "read", { within });
   } catch {
     return null;
   }

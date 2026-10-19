@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { renameSync, symlinkSync } from "node:fs";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { busyBackend, recordingBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
@@ -186,6 +186,41 @@ describe("Grep (fallback): a folder swapped for a link mid-search", () => {
       };
       const out = await createGrepTool({ rgPath: null }).run({ pattern: "TOKEN", output_mode: "content" }, makeToolContext({ root: project, isDenied }));
       expect(swapped).toBe(true);
+      expect(String(out.content)).not.toContain("hunter2");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
+  test("a linked file inside the project is searched through the file it points at, named or found by the walk", async () => {
+    const root = await realpath(await makeTmpDir());
+    try {
+      await mkdir(join(root, "real"));
+      await writeFile(join(root, "real", "notes.txt"), "needle\n");
+      await symlink(join(root, "real", "notes.txt"), join(root, "alias.txt"));
+      const grep = createGrepTool({ rgPath: null });
+      expect((await grep.run({ pattern: "needle", path: "alias.txt" }, makeToolContext({ root }))).content).toBe(join(root, "real", "notes.txt"));
+      // Like ripgrep, the walk doesn't follow links: the file is found once, where it really is.
+      expect((await grep.run({ pattern: "needle" }, makeToolContext({ root }))).content).toBe(join(root, "real", "notes.txt"));
+    } finally {
+      await removeDir(root);
+    }
+  });
+
+  test("a file named as the search path that turns into a link after the check is not read through it", async () => {
+    const root = await realpath(await makeTmpDir());
+    try {
+      await mkdir(join(root, "project"));
+      await mkdir(join(root, "outside"));
+      await writeFile(join(root, "project", "notes.txt"), "decoy\n");
+      await writeFile(join(root, "outside", "secret.txt"), "TOKEN=hunter2\n");
+      // The deny check runs after the path was resolved: the moment a racing command would swap the file for a link.
+      const isDenied = (p: string) => {
+        renameSync(join(root, "project", "notes.txt"), join(root, "project", "notes.old"));
+        symlinkSync(join(root, "outside", "secret.txt"), join(root, "project", "notes.txt"));
+        return p.endsWith("never");
+      };
+      const out = await createGrepTool({ rgPath: null }).run({ pattern: "TOKEN", path: "notes.txt", output_mode: "content" }, makeToolContext({ root: join(root, "project"), isDenied }));
       expect(String(out.content)).not.toContain("hunter2");
     } finally {
       await removeDir(root);

@@ -66,12 +66,12 @@ export const chatExecCheck: Check = {
         out.push(
           finding("chat.exec.autonomous", "info", "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied", {
             detail:
-              "Keys, tokens, shell histories, and the .env files in the top two folder levels of your other projects stay unreadable; other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+              "Keys, tokens, shell histories and your other projects' .env files stay unreadable (on Linux, the ones in their top two folder levels when the chat starts); other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
           }),
         );
       }
       // Such a project is denied whole rather than searched in part: say so, since it can surprise.
-      for (const project of tooBigToSearch(ownerProjects(config, env.home))) {
+      for (const project of env.platform === "linux" ? tooBigToSearch(ownerProjects(config, env.home)) : []) {
         out.push(finding("chat.exec.env-scan", "info", `Chats in other projects can't read ${project} at all: it has too many folders to search for .env files`));
       }
     } else if (needsUnconfinedConsent(config, null)) {

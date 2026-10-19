@@ -2,7 +2,7 @@
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
 import { type Dirent, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentsDir, isInside, worktreesDir } from "../paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
@@ -31,7 +31,7 @@ export const SECRET_PATHS: readonly string[] = [
   ".cargo/credentials",
   ".cargo/credentials.toml",
   ".vault-token",
-  ".terraform.d",
+  ".terraform.d/credentials.tfrc.json",
   ".config/op",
   // Other coding agents: their sign-ins and past sessions.
   ".claude",
@@ -125,59 +125,91 @@ export interface ConfinementPaths {
    */
   instructionFiles: string[];
   /**
-   * The `.env` files of the owner's other projects, or a whole project too big to search (see otherProjectSecrets):
-   * unreadable, files and folders alike. Denied after the read carve-outs, since the default project, inside one, is
-   * usually one of those projects.
+   * The owner's other projects (real roots): their `.env` files are unreadable. The macOS profile matches them by
+   * pattern, at any depth and including ones created later; bwrap can only hide files that exist (otherProjectSecrets).
+   * Never a project that lies inside the session's or holds it (a monorepo root, the repo a worktree belongs to):
+   * those are the session's own files. One that holds the user's home is in otherProjectsShallow instead.
+   */
+  otherProjects: string[];
+  /**
+   * Other projects that hold the user's home (a registered `/`, say): only their `.env` files up to two folders below
+   * the root are denied, and never in the session's own project, since a pattern at any depth there would cover every
+   * project of the user's.
+   */
+  otherProjectsShallow: string[];
+  /**
+   * Concrete paths to deny besides that: the real targets of linked `.env` files (both platforms) and, on Linux, the
+   * `.env` files found, or a whole project too big to search. Denied after the read carve-outs, since the default
+   * project, inside one, is usually one of those projects.
    */
   otherProjectSecrets: string[];
   platform: NodeJS.Platform;
 }
 
-/** `.env`, `.env.local`, `.env.production` …, and direnv's `.envrc`. */
+/** `.env`, `.env.local`, `.env.production` …, and direnv's `.envrc`; not the templates (ENV_TEMPLATE) committed with them. */
 const ENV_FILE = /^\.env(\..+)?$|^\.envrc$/;
+const ENV_TEMPLATE = /^\.env\.(example|sample|template)$/i;
 /** How far below a project's root its `.env` files are looked for: `apps/web/.env` is found. */
 const ENV_SCAN_DEPTH = 2;
-/** Folders the search reads in one project; a project with more is denied whole instead (otherProjectSecrets). */
+/** Folders the search reads in one project; on Linux a project with more is denied whole instead (otherProjectSecrets). */
 export const ENV_SCAN_DIRS = 2_000;
-/** Folders a project denied whole is still searched for linked `.env` files, whose targets lie outside it. */
-const ENV_LINK_SCAN_DIRS = 200;
+/** Folders searched for linked `.env` files on macOS, where only their targets need listing. */
+const ENV_LINK_SCAN_DIRS = 500;
 const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", ".venv", "venv", "vendor", "target"]);
 
-/**
- * The `.env` files in the owner's other projects (a project inside the session's own is part of it, and the session's
- * project is never searched, even when it lies inside another one). Real paths: a linked `.env` is denied where it
- * points. Each project has its own search; one with more folders than that reads is denied whole (wholeProject), so a
- * file is never missed for lack of time. Found when the confinement is built, so a file created later in another
- * project isn't covered until the next session. `keep` are folders that must stay readable (the project, temp, the
- * cache): a link target holding one is never denied.
- */
-function otherProjectSecrets(project: string, others: readonly string[], userHome: string, keep: readonly string[]): string[] {
-  const found: string[] = [];
-  for (const other of others) {
-    const root = real(other);
-    if (root === project || isInside(root, project)) continue;
-    const scan = envScan(root, project, ENV_SCAN_DIRS, false);
-    found.push(...(scan.complete ? scan.found : wholeProject(root, project, userHome, keep)));
-  }
-  return unique(found).filter((path) => !isInside(path, project));
+/** The other projects whose `.env` files are denied: real roots, without the session's own, its parents or children. */
+function otherProjectRoots(project: string, others: readonly string[], userHome: string): { deep: string[]; shallow: string[] } {
+  const roots = unique(others.map(real)).filter((root) => !isInside(root, project));
+  return {
+    deep: roots.filter((root) => !isInside(project, root) && !isInside(userHome, root)),
+    shallow: roots.filter((root) => isInside(userHome, root)),
+  };
 }
 
-/** The projects (real paths) a confined chat elsewhere can't read at all, because they have too many folders to search. */
+/**
+ * The concrete `.env` paths to deny in the other projects. Real paths: a linked `.env` is denied where it points. On
+ * macOS a pattern covers the files themselves, so only linked ones are looked for (the targets lie elsewhere); on
+ * Linux every file is, and a project with more folders than the search reads is denied whole, so a file is never
+ * missed for lack of time. Found when the confinement is built: on Linux a file created later in another project isn't
+ * covered until the next session.
+ */
+function otherProjectSecrets(roots: readonly string[], shallow: readonly string[], project: string, platform: NodeJS.Platform): string[] {
+  const found: string[] = [];
+  // A project holding the home can't be denied whole: on Linux, a search that can't finish refuses the sandbox. On
+  // macOS a pattern covers the files there, and only where linked ones point is listed.
+  for (const root of platform === "darwin" ? shallow : []) found.push(...envScan(root, ENV_LINK_SCAN_DIRS, true, project).found);
+  for (const root of platform === "darwin" ? [] : shallow) {
+    const scan = envScan(root, ENV_SCAN_DIRS, false, project);
+    if (!scan.complete) throw new ConfinementError(`${root} is registered as a project but holds your home folder, and has too many folders to search for .env files; remove it from your projects.`);
+    found.push(...scan.found);
+  }
+  for (const root of roots) {
+    if (platform === "darwin") {
+      found.push(...envScan(root, ENV_LINK_SCAN_DIRS, true).found);
+      continue;
+    }
+    const scan = envScan(root, ENV_SCAN_DIRS, false);
+    found.push(...(scan.complete ? scan.found : [root, ...envScan(root, ENV_LINK_SCAN_DIRS, true).found]));
+  }
+  return unique(found);
+}
+
+/** The projects (real paths) a confined chat elsewhere on Linux can't read at all: too many folders to search. */
 export function tooBigToSearch(projects: readonly string[]): string[] {
-  return unique(projects.map(real)).filter((root) => !envScan(root, undefined, ENV_SCAN_DIRS, false).complete);
+  return unique(projects.map(real)).filter((root) => !envScan(root, ENV_SCAN_DIRS, false).complete);
 }
 
 /**
  * One project's `.env` files (real paths), reading at most `maxDirs` folders; `complete` is false when it had more.
  * With `linksOnly`, only `.env` files that are links (to somewhere else) are collected.
  */
-function envScan(root: string, project: string | undefined, maxDirs: number, linksOnly: boolean): { found: string[]; complete: boolean } {
+function envScan(root: string, maxDirs: number, linksOnly: boolean, skip?: string): { found: string[]; complete: boolean } {
   const found: string[] = [];
   // Level by level, names in order: a cut-short search has still covered the levels nearest the root.
   const queue: [string, number][] = [[root, 0]];
   for (let dirs = 0; queue.length > 0; ) {
     const [dir, depth] = queue.shift()!;
-    if (project !== undefined && isInside(dir, project)) continue;
+    if (skip !== undefined && isInside(dir, skip)) continue;
     if (++dirs > maxDirs) return { found, complete: false };
     let entries: Dirent[];
     try {
@@ -189,56 +221,12 @@ function envScan(root: string, project: string | undefined, maxDirs: number, lin
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name)) queue.push([path, depth + 1]);
-      } else if (ENV_FILE.test(entry.name) && ((entry.isFile() && !linksOnly) || (entry.isSymbolicLink() && isFile(path)))) {
+      } else if (ENV_FILE.test(entry.name) && !ENV_TEMPLATE.test(entry.name) && ((entry.isFile() && !linksOnly) || (entry.isSymbolicLink() && isFile(path)))) {
         found.push(real(path));
       }
     }
   }
   return { found, complete: true };
-}
-
-/**
- * Denies a whole other project: its root, or, when the session's project lies inside it, everything in it except the
- * folders that lead down to the session's project. The sandbox follows links, so what a link there points at is
- * denied too: a linked `.env` near the top (a small search of its own), and an entry linked into the home folder, where
- * secrets live, unless that target holds something in `keep`. A link to a system folder (a toolchain) stays readable.
- */
-function wholeProject(root: string, project: string, userHome: string, keep: readonly string[]): string[] {
-  const out: string[] = [];
-  const entries: string[] = [];
-  const list = (dir: string): string[] => {
-    try {
-      return readdirSync(dir).map((name) => join(dir, name));
-    } catch {
-      return []; // unreadable to the owner, so to the command as well
-    }
-  };
-  if (!isInside(project, root)) {
-    out.push(root);
-    entries.push(...list(root));
-  } else {
-    for (let dir = root; dir !== project; ) {
-      const next = join(dir, relative(dir, project).split(sep)[0]!);
-      entries.push(...list(dir).filter((path) => path !== next));
-      dir = next;
-    }
-    out.push(...entries);
-  }
-  for (const entry of entries) {
-    if (!isLink(entry)) continue;
-    const target = real(entry);
-    if (isInside(target, userHome) && !keep.some((dir) => isInside(dir, target))) out.push(target);
-  }
-  out.push(...envScan(root, project, ENV_LINK_SCAN_DIRS, true).found);
-  return out;
-}
-
-function isLink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
 }
 
 function isFile(path: string): boolean {
@@ -277,6 +265,7 @@ export function confinementPaths(opts: {
   // inside the denied `~/.tropos`, so the builders carve it back out for read and write (like the workspace).
   // Residual: a project at `~` makes the host caches under it writable through the project itself.
   const home = real(opts.home);
+  const { deep, shallow } = otherProjectRoots(project, opts.otherProjects ?? [], userHome);
   const paths: ConfinementPaths = {
     project,
     writable: unique(writable),
@@ -289,10 +278,11 @@ export function confinementPaths(opts: {
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
-    otherProjectSecrets: [],
+    otherProjects: deep,
+    otherProjectsShallow: shallow,
+    otherProjectSecrets: otherProjectSecrets(deep, shallow, project, platform),
     platform,
   };
-  paths.otherProjectSecrets = otherProjectSecrets(project, opts.otherProjects ?? [], userHome, [project, paths.cacheDir, ...paths.writable]);
   // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.
   // The specialists' folders too: their notes and skills are the chief's as much as the journal is.
   if (opts.protectInstructions) requireSingleLinks([...paths.instructionFiles, ...paths.ownFiles, real(agentsDir(opts.home))]);
