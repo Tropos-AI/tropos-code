@@ -248,6 +248,7 @@ export function makeAgent(
             prompt,
             signal,
             overrides: { SkillManage: learnedSkills },
+            home: ctx.home,
           });
           agent?.addCost(result.costUsd);
           return result;

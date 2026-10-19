@@ -1,5 +1,9 @@
 // src/learning/review.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
+import { renderSpecialistFile } from "../agents/specialists";
 import { z } from "zod";
 import { FakeModel, reply, textBlock, toolUseBlock } from "../../test/helpers/fake-model";
 import { makeToolContext } from "../../test/helpers/tool-context";
@@ -818,16 +822,70 @@ describe("the review and specialists", () => {
   const ctx = makeToolContext();
 
   test("it may create and update specialists, never delete or archive them", async () => {
-    const [gated] = reviewToolGate([agentManage]);
+    const [gated] = reviewToolGate([agentManage], REVIEW_ALLOWED_TOOLS, {}, { home: "/nowhere" });
     expect(await gated!.run({ action: "archive", name: "x" }, ctx)).toEqual({ content: "Specialists can only be created or updated during the learning review.", isError: true });
     expect((await gated!.run({ action: "delete", name: "x" }, ctx)).isError).toBe(true);
-    expect((await gated!.run({ action: "create", name: "x" }, ctx)).content).toBe("create done");
-    expect((await gated!.run({ action: "update", name: "x" }, ctx)).isError).toBeUndefined();
     const ask = (action: string) => reviewAskPermission({ toolName: "AgentManage", input: { action, name: "x" } } as unknown as PermissionPrompt);
     expect(ask("delete").kind).toBe("deny");
     expect(ask("archive").kind).toBe("deny");
     expect(ask("create").kind).toBe("allow");
     expect(ask("update").kind).toBe("allow");
+  });
+
+  describe("unattended changes are narrow", () => {
+    let home: string;
+    beforeEach(async () => {
+      home = await makeTmpDir();
+      const put = async (id: string, createdBy: "user" | "review" | "chief") => {
+        await mkdir(join(home, "agents", id), { recursive: true });
+        await writeFile(join(home, "agents", id, "AGENT.md"), renderSpecialistFile({ name: id, description: "d", prompt: "## Purpose\nx", createdBy, createdAt: 1, revision: 1 }));
+      };
+      await put("mine", "user");
+      await put("made", "review");
+      await put("chiefs", "chief");
+      await writeFile(join(home, "agents", "plain.md"), "---\nname: plain\ndescription: d\n---\nx");
+    });
+    afterEach(() => removeDir(home));
+    const tool = () => {
+      const base = (name: string) => ({ ...agentManage, name }) as AnyTool;
+      const [gated] = reviewToolGate([agentManage, base("Read"), base("Bash"), base("Agent"), base("Cron")], REVIEW_ALLOWED_TOOLS, {}, { home });
+      return gated!;
+    };
+    const refused = async (input: Record<string, unknown>) => {
+      const out = await tool().run(input as never, ctx);
+      expect(out.isError).toBe(true);
+      expect(String(out.content)).toStartWith("Not done:");
+    };
+
+    test("create: only a new name, with a non-empty subset of the chief's tools minus hub-only, no autonomy above ask", async () => {
+      expect((await tool().run({ action: "create", name: "pr-reviewer", tools: ["Read", "Bash"] } as never, ctx)).isError).toBeUndefined();
+      expect((await tool().run({ action: "create", name: "pr-reviewer", tools: ["Read"], autonomy: "ask" } as never, ctx)).isError).toBeUndefined();
+      await refused({ action: "create", name: "mine", tools: ["Read"] });
+      await refused({ action: "create", name: "plain", tools: ["Read"] });
+      await refused({ action: "create", name: "general-purpose", tools: ["Read"] });
+      await refused({ action: "create", name: "new-one" });
+      await refused({ action: "create", name: "new-one", tools: [] });
+      await refused({ action: "create", name: "new-one", tools: ["Read", "Write"] });
+      await refused({ action: "create", name: "new-one", tools: ["Read", "Cron"] });
+      await refused({ action: "create", name: "new-one", tools: ["Agent"] });
+      await refused({ action: "create", name: "new-one", tools: ["Read"], autonomy: "autonomous" });
+    });
+
+    test("update: description and role contract of its own or the chief's specialists only", async () => {
+      expect((await tool().run({ action: "update", name: "made", description: "better", prompt: "## Purpose\ny" } as never, ctx)).isError).toBeUndefined();
+      expect((await tool().run({ action: "update", name: "chiefs", description: "better" } as never, ctx)).isError).toBeUndefined();
+      await refused({ action: "update", name: "mine", description: "x" });
+      await refused({ action: "update", name: "plain", description: "x" });
+      await refused({ action: "update", name: "nobody", description: "x" });
+      for (const extra of [{ tools: ["Read", "Bash"] }, { autonomy: "autonomous" }, { model: "opus" }, { emoji: "🔍" }]) {
+        await refused({ action: "update", name: "made", description: "x", ...extra });
+      }
+    });
+
+    test("without a home nothing is changed", async () => {
+      const [bare] = reviewToolGate([agentManage]);
+      expect((await bare!.run({ action: "create", name: "x", tools: ["Read"] } as never, ctx)).isError).toBe(true);
+    });
   });
 
   test("a specialist creation is announced on its own line first", () => {

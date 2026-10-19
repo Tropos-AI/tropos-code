@@ -3,6 +3,12 @@
 // the conversation and saves what is worth keeping to memory and skills; near the context limit, a flush
 // review writes the session's durable state to the daily note before compaction loses it; and when the session
 // ends with unreviewed work, a final review does both.
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { HUB_ONLY_TOOLS } from "../agent/subagent";
+import { loadSpecialists } from "../agents/specialists";
+import { BUILTIN_AGENTS } from "../extensions/agents";
+import { agentsDir } from "../paths";
 import { Agent, type AgentHooks } from "../agent/agent";
 import type { PermissionAnswer, PermissionPrompt, TurnEndReason } from "../agent/events";
 import { COMPACTION_TRIGGER_TOKENS, type Model } from "../api/model";
@@ -319,7 +325,10 @@ export function reviewToolGate(
   allowed: readonly string[] = REVIEW_ALLOWED_TOOLS,
   /** Implementations swapped in under the same name and schema, e.g. a SkillManage that writes to skills-learned. */
   overrides: Record<string, Pick<AnyTool, "subject" | "run">> = {},
+  /** What the unattended AgentManage is checked against; without `home` it refuses everything. */
+  specialists: { home?: string } = {},
 ): AnyTool[] {
+  const chiefTools = tools.map((t) => t.name);
   return tools.map((original) => {
     const swap = Object.hasOwn(overrides, original.name) ? overrides[original.name] : undefined;
     const tool = swap ? wrap(original, { kind: original.kind, subject: swap.subject, run: swap.run }) : original;
@@ -338,7 +347,11 @@ export function reviewToolGate(
         return wrap(tool, {
           kind: tool.kind,
           subject: (input, cwd) => tool.subject(input, cwd),
-          run: (input, ctx) => (mayManageSpecialist(input) ? tool.run(input, ctx) : Promise.resolve({ content: SPECIALIST_ACTIONS_REFUSAL, isError: true })),
+          run: async (input, ctx) => {
+            if (!mayManageSpecialist(input)) return { content: SPECIALIST_ACTIONS_REFUSAL, isError: true };
+            const problem = await unattendedSpecialistProblem(input, specialists.home, chiefTools);
+            return problem ? { content: `Not done: ${problem}`, isError: true } : tool.run(input, ctx);
+          },
         });
       }
       if (tool.name !== "SkillManage") return tool;
@@ -389,6 +402,45 @@ function consolidates(input: unknown): boolean {
   return action === "add" || action === "replace";
 }
 
+interface ManageInput {
+  action?: string;
+  name?: string;
+  description?: string;
+  prompt?: string;
+  tools?: string[];
+  model?: string;
+  emoji?: string;
+  autonomy?: string;
+}
+
+/**
+ * What the unattended review may do with specialists: create a NEW one with a narrow, explicit tool list and no
+ * autonomy of its own, or reword the description and role contract of one it (or the chief) made. Widening tools,
+ * raising autonomy, changing the model, or touching a user-made specialist or a plain agent needs the owner.
+ * Returns the reason it refuses, or undefined.
+ */
+async function unattendedSpecialistProblem(input: unknown, home: string | undefined, chiefTools: string[]): Promise<string | undefined> {
+  const i = (typeof input === "object" && input !== null ? input : {}) as ManageInput;
+  if (!home || typeof i.name !== "string") return "the review can't check this specialist.";
+  const known = (await loadSpecialists(home).catch(() => [])).find((s) => s.id === i.name);
+  const taken = known !== undefined || existsSync(join(agentsDir(home), `${i.name}.md`)) || BUILTIN_AGENTS.some((b) => b.name === i.name);
+  if (i.action === "create") {
+    if (taken) return `an agent named ${i.name} already exists; update it instead, or pick another name.`;
+    const allowed = chiefTools.filter((t) => !HUB_ONLY_TOOLS.has(t));
+    if (!i.tools || i.tools.length === 0) return "a specialist created by the review must list its tools (the fewest that do the job).";
+    const bad = i.tools.find((t) => !allowed.includes(t));
+    if (bad) return `${bad} isn't a tool a specialist may have.`;
+    if (i.autonomy !== undefined && i.autonomy !== "ask") return "a specialist created by the review can't set its own autonomy; the owner can raise it.";
+    return undefined;
+  }
+  if (!known || known.archived) return `no active specialist named ${i.name}; plain agents and the owner's own agents are changed only by the owner.`;
+  if (known.createdBy === "user") return `${i.name} was made by the owner; only the owner changes it.`;
+  if (i.tools !== undefined || i.model !== undefined || i.autonomy !== undefined || i.emoji !== undefined) {
+    return "the review may only reword a specialist's description and role contract; tools, model, autonomy and emoji are the owner's to change.";
+  }
+  return undefined;
+}
+
 function mayManageSpecialist(input: unknown): boolean {
   const action = typeof input === "object" && input !== null ? (input as { action?: unknown }).action : undefined;
   return action === "create" || action === "update";
@@ -426,6 +478,8 @@ export interface RunReviewAgentOptions {
   overrides?: Record<string, Pick<AnyTool, "subject" | "run">>;
   /** The tools the review may run; default REVIEW_ALLOWED_TOOLS. */
   allowed?: readonly string[];
+  /** The Tropos home, to check specialist changes against; without it the review changes none. */
+  home?: string;
 }
 
 const REVIEW_MAX_TURNS = 16;
@@ -440,7 +494,7 @@ export async function runReviewAgent(opts: RunReviewAgentOptions): Promise<Revie
   const agent = new Agent(
     {
       model: opts.model,
-      tools: reviewToolGate(opts.tools, opts.allowed ?? REVIEW_ALLOWED_TOOLS, opts.overrides),
+      tools: reviewToolGate(opts.tools, opts.allowed ?? REVIEW_ALLOWED_TOOLS, opts.overrides, { home: opts.home }),
       system: opts.system,
       config: opts.config,
       // Always "default": plan mode would refuse the review's own writes, and bypass/acceptEdits would skip

@@ -20,6 +20,8 @@ const HARNESS_TAGS = [
   "file",
   "identity",
   "bootstrap",
+  "specialists",
+  "delegations",
 ];
 const TAG = new RegExp(`<(?=\\s*\\/?\\s*(?:${HARNESS_TAGS.join("|")})(?![\\w-]))`, "gi");
 
