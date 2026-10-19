@@ -4,7 +4,7 @@ import { basename, resolve } from "node:path";
 import { isInside } from "../paths";
 
 /** Files and directories only Tropos creates in its home: one of them must be there before an explicit TROPOS_HOME is deleted. */
-export const KNOWN_TROPOS_ENTRIES = ["settings.json", "gateway.json", "credentials.json", "identity.json", "IDENTITY.md", "SOUL.md", "TROPOS.md", "models.json", "index.db", "memories", "skills", "gateway", "projects", "workspace", "backups", "history.jsonl", "learning"];
+export const KNOWN_TROPOS_ENTRIES = ["settings.json", "gateway.json", "credentials.json", "identity.json", "IDENTITY.md", "SOUL.md", "TROPOS.md", "models.json", "index.db", "memories", "skills", "skills-learned", "agents", "layout.json", "gateway", "projects", "workspace", "backups", "history.jsonl", "learning"];
 
 const NAMED_LIKE_TROPOS = /^\.?tropos([-_.].*)?$/i;
 

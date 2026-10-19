@@ -56,7 +56,10 @@ export function classifyRisky(files: { path: string }[], read: (path: string) =>
     else if (path === "gateway.json") why = gatewayWhy(read(path));
     else if (path === "gateway/pairing.json") why = "the list of people allowed to talk to the gateway";
     else if (path.startsWith("gateway/cron/")) why = "scheduled prompts that run on their own";
-    else if (path.startsWith("skills/")) why = "a skill: instructions (and possibly scripts) the agent follows";
+    else if (/^workspace\/skills(-learned)?\//.test(path)) why = "a skill: instructions (and possibly scripts) the agent follows";
+    else if (path.startsWith("agents/")) why = "a subagent: instructions the agent can start";
+    else if (path === "workspace/SOUL.md" || path === "workspace/IDENTITY.md" || path === "workspace/AGENTS.md") why = "instructions the agent follows in every session";
+    else if (path.startsWith("skills/") || path.startsWith("skills-learned/")) why = "a skill: instructions (and possibly scripts) the agent follows";
     else if (path.startsWith("plugins/")) why = "a plugin: code and instructions the agent loads";
     else if (path === "SOUL.md" || path === "TROPOS.md" || path === "IDENTITY.md") why = "instructions the agent follows in every session";
     if (why) out.push({ path, why });

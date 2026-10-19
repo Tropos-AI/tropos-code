@@ -1,6 +1,7 @@
 // src/backup/plan.ts — which files of TROPOS_HOME go into a backup.
 import { lstat, readdir, readlink } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { workspaceOwnPaths } from "../home/layout";
 import { unsafeLinkTarget } from "./manifest";
 import { MAX_ENTRY_BYTES } from "./tar";
 
@@ -33,10 +34,13 @@ const TOP_FILES = ["settings.json", "gateway.json", "models.json", "identity.jso
 const NEVER = new Set(["node_modules", ".cache", "cache", ".DS_Store"]);
 const NEVER_SUFFIX = [".tmp", ".lock", ".partial"];
 
+const OWN_FILES_LABEL = "workspace/ (Tropos's own files: AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, BOOTSTRAP.md, memory/, skills/, skills-learned/)";
+
 export const EXCLUDED_ALWAYS = ["index.db*", "snapshots/", "gateway/token", "gateway/devices.json", "gateway/login-codes.json", "gateway/gateway.log", "gateway/state.json", "backups/", "settings.json.bak*", "caches (cache/, .cache/, node_modules/)", "*.tmp, *.lock"];
 
 export function describeSelection(sel: BackupSelection): { includes: string[]; excludes: string[] } {
-  const includes = [...TOP_FILES, "gateway/pairing.json", "gateway/cron/", "memories/", "skills/"];
+  // LEGACY_LAYOUT: memories/, skills/, skills-learned/ and projects/*/notes/ go along while a home may still hold them.
+  const includes = [...TOP_FILES, "gateway/pairing.json", "gateway/cron/", "memories/", "skills/", "skills-learned/", "SOUL.imported.md", "projects/*/notes/", "agents/"];
   const excludes = [...EXCLUDED_ALWAYS];
   if (sel.secrets) includes.push("credentials.json");
   else excludes.push("credentials.json", "secret values inside settings.json and gateway.json");
@@ -48,7 +52,11 @@ export function describeSelection(sel: BackupSelection): { includes: string[]; e
   if (!sel.quick) includes.push("plugins/", "learning/");
   else excludes.push("plugins/", "learning/");
   if (sel.workspace) includes.push("workspace/");
-  else excludes.push("workspace/");
+  else {
+    // The chief lives in workspace/ and always goes along; the user's own files there only when asked.
+    includes.push(OWN_FILES_LABEL);
+    excludes.push("workspace/ (your other files there)");
+  }
   return { includes, excludes };
 }
 
@@ -87,7 +95,14 @@ async function walk(root: string, rel: string, out: PlanEntry[], skipped: Backup
 export async function planBackup(home: string, sel: BackupSelection): Promise<BackupPlan> {
   const entries: PlanEntry[] = [];
   const skipped: BackupPlan["skipped"] = [];
-  const roots = [...TOP_FILES, "gateway/pairing.json", "gateway/cron", "memories", "skills"];
+  // LEGACY_LAYOUT: the old roots (memories, skills, skills-learned, SOUL.imported.md, project notes) are walked while they exist.
+  const roots = [...TOP_FILES, "gateway/pairing.json", "gateway/cron", "memories", "skills", "skills-learned", "SOUL.imported.md", "agents"];
+  // The chief's own files and the old project notes are memory, not sessions: they go along whatever `sessions` says.
+  if (!sel.workspace) roots.push(...workspaceOwnPaths(home).map((p) => relative(home, p)));
+  const wholeProjects = sel.sessions && !sel.quick;
+  if (!wholeProjects) {
+    for (const key of await readdir(join(home, "projects")).catch(() => [] as string[])) roots.push(`projects/${key}/notes`);
+  }
   if (sel.secrets) roots.push("credentials.json");
   const bulky = !sel.quick;
   if (sel.sessions && bulky) roots.push("projects", "history.jsonl", "gateway/sessions.json", "gateway/chats.json");

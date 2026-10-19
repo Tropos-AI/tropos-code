@@ -8,7 +8,7 @@ import type { ServiceManager } from "../../service/types";
 import { createUninstall, defaultDeps } from "./uninstall";
 import { makeFixture, type Fixture } from "./lifecycle-fixture";
 import type { LifecycleContext } from "./types";
-import type { UninstallDeps } from "../../uninstall";
+import { dataDirProblem, type UninstallDeps } from "../../uninstall";
 
 let f: Fixture;
 let layout: Layout;
@@ -250,6 +250,11 @@ describe("data scope", () => {
     const ok = { ...f.ctx, home: mine, env: { ...f.ctx.env, TROPOS_HOME: mine } };
     expect(await runWith(["--data", "--yes"], fakeService(), ok)).toBe(0);
     expect(await exists(mine)).toBe(false);
+
+    // a home holding only agents/ (or skills-learned/) is Tropos data too
+    const agentsOnly = join(f.root, "agents-only");
+    await write(join(agentsOnly, "agents", "r.md"), "x");
+    expect(await dataDirProblem({ home: agentsOnly, userHome: f.ctx.userHome, explicit: true })).toBeUndefined();
   });
 
   test("a failed backup stops the deletion", async () => {

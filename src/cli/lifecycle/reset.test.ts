@@ -40,6 +40,9 @@ beforeEach(async () => {
     "projects/k/settings.json": "{}",
     "memories/m.md": "m",
     "workspace/code.ts": "code",
+    "workspace/USER.md": "about the user",
+    "workspace/memory/2026-10-16.md": "journal",
+    "agents/r.md": "agent",
     "backups/older.tar.gz": "old",
   };
   for (const [p, c] of Object.entries(files)) {
@@ -67,6 +70,17 @@ describe("tcode reset", () => {
     for (const p of ["settings.json", "credentials.json", "gateway/pairing.json", "gateway/sessions.json", "gateway/chats.json", "projects/k/s.jsonl"]) expect(await exists(h(p))).toBe(false);
     expect(await exists(h("projects/k/settings.json"))).toBe(true);
     for (const p of ["memories/m.md", "gateway/cron/jobs.json", "workspace/code.ts"]) expect(await exists(h(p))).toBe(true);
+  });
+
+  test("the default reset scope keeps the journal, the chief's files and notes (memory, not sessions)", async () => {
+    await mkdir(h("projects/k/notes"), { recursive: true });
+    await writeFile(h("projects/k/notes/2026-10-15.md"), "note");
+    const { resetTargets } = await import("./reset");
+    const targets = await resetTargets(f.ctx.home, "config+creds+sessions");
+    expect(targets.filter((t) => t.startsWith(h("workspace")) || t.startsWith(h("agents")))).toEqual([]);
+    expect(await run(["--yes"])).toBe(0);
+    for (const p of ["workspace/USER.md", "workspace/memory/2026-10-16.md", "agents/r.md"]) expect(await exists(h(p))).toBe(true);
+    expect(await exists(h("projects/k/s.jsonl"))).toBe(false);
   });
 
   test("full: everything but earlier backups; the new backup is outside the home and holds the workspace", async () => {

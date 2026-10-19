@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, lstat, mkdir, readFile, readdir, readlink, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { BackupError, classifyRisky, createBackup, listBackups, parseParts, readManifest, restoreBackup, verifyBackup, type ProgressEvent } from "./index";
+import { BackupError, classifyRisky, createBackup, listBackups, parseParts, partOf, readManifest, restoreBackup, verifyBackup, type ProgressEvent } from "./index";
+import { describeSelection, planBackup } from "./plan";
 import { buildTarGz, readTarGz } from "./tar";
 
 const TRUST = { trustCode: true } as const;
@@ -512,5 +513,82 @@ describe("archive limits", () => {
     const late = join(root, "late.tar.gz");
     await writeFile(late, buildTarGz([{ name: "tropos-home/x", data: "x" }, { name: "manifest.json", data: m }]));
     expect(await readManifest(late)).toBeUndefined();
+  });
+});
+
+describe("the home layout with the chief inside workspace/", () => {
+  const seed = async () => {
+    for (const [rel, text] of Object.entries({
+      "workspace/USER.md": "u",
+      "workspace/AGENTS.md": "a",
+      "workspace/app.ts": "code",
+      "workspace/memory/2026-10-16.md": "j",
+      "workspace/skills/a/SKILL.md": "s",
+      "workspace/skills-learned/b/SKILL.md": "l",
+      "agents/r.md": "agent",
+      "skills-learned/c/SKILL.md": "old learned",
+      "SOUL.imported.md": "imported",
+      "projects/k/notes/2026-10-15.md": "note",
+    })) await put(rel, text);
+  };
+  const sel = { quick: true, sessions: false, secrets: false, workspace: false };
+
+  test("a default backup holds the chief's files but not the user's other workspace files", async () => {
+    await seed();
+    const plan = await planBackup(home, sel);
+    const rels = plan.entries.map((e) => e.rel);
+    for (const r of ["workspace/USER.md", "workspace/AGENTS.md", "workspace/memory/2026-10-16.md", "workspace/skills/a/SKILL.md", "workspace/skills-learned/b/SKILL.md", "agents/r.md", "skills-learned/c/SKILL.md", "SOUL.imported.md", "projects/k/notes/2026-10-15.md"]) expect(rels).toContain(r);
+    expect(rels).not.toContain("workspace/app.ts");
+    expect(plan.includes).toEqual(expect.arrayContaining(["workspace/ (Tropos's own files: AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, BOOTSTRAP.md, memory/, skills/, skills-learned/)", "agents/"]));
+    expect(plan.excludes).toContain("workspace/ (your other files there)");
+  });
+
+  test("with workspace on, everything is there and nothing is listed twice", async () => {
+    await seed();
+    const rels = (await planBackup(home, { ...sel, workspace: true, sessions: true, quick: false })).entries.map((e) => e.rel);
+    expect(rels).toContain("workspace/app.ts");
+    expect(new Set(rels).size).toBe(rels.length);
+    expect(describeSelection({ ...sel, workspace: true }).excludes).not.toContain("workspace/ (your other files there)");
+    // sessions on does not drag notes in twice either
+    expect(rels.filter((r) => r === "projects/k/notes/2026-10-15.md")).toHaveLength(1);
+  });
+
+  test("partOf knows the new layout", () => {
+    expect(partOf("workspace/SOUL.md")).toBe("identity");
+    expect(partOf("workspace/AGENTS.md")).toBe("identity");
+    expect(partOf("workspace/BOOTSTRAP.md")).toBe("identity");
+    expect(partOf("workspace/USER.md")).toBe("memory");
+    expect(partOf("workspace/MEMORY.md")).toBe("memory");
+    expect(partOf("workspace/memory/2026-10-16.md")).toBe("memory");
+    expect(partOf("workspace/imported-claude.md")).toBe("memory");
+    expect(partOf("workspace/skills/a/SKILL.md")).toBe("skills");
+    expect(partOf("workspace/skills-learned/b/SKILL.md")).toBe("skills");
+    expect(partOf("skills-learned/c/SKILL.md")).toBe("skills");
+    expect(partOf("agents/r.md")).toBe("agents");
+    expect(partOf("projects/k/notes/2026-10-15.md")).toBe("memory");
+    expect(partOf("projects/k/s1.jsonl")).toBe("sessions");
+    expect(partOf("workspace/app.ts")).toBe("workspace");
+    expect(partOf("memories/USER.md")).toBe("memory");
+    expect(parseParts(["agents"])).toEqual(["agents"]);
+  });
+
+  test("restoring the chief's instructions, skills and subagents is flagged as risky", () => {
+    const risky = classifyRisky(
+      ["workspace/AGENTS.md", "workspace/SOUL.md", "workspace/IDENTITY.md", "workspace/skills/a/SKILL.md", "workspace/skills-learned/b/SKILL.md", "agents/r.md", "workspace/USER.md", "workspace/memory/x.md"].map((path) => ({ path })),
+      () => undefined,
+    );
+    expect(risky.map((r) => r.path)).toEqual(["workspace/AGENTS.md", "workspace/SOUL.md", "workspace/IDENTITY.md", "workspace/skills/a/SKILL.md", "workspace/skills-learned/b/SKILL.md", "agents/r.md"]);
+    expect(risky[0]?.why).toMatch(/every session/);
+    expect(risky[3]?.why).toMatch(/^a skill/);
+    expect(risky[5]?.why).toMatch(/^a subagent/);
+  });
+
+  test("gateway/devices.json and login-codes.json stay out of a backup that includes the workspace", async () => {
+    await seed();
+    await put("gateway/devices.json", "{}");
+    await put("gateway/login-codes.json", "{}");
+    const rels = (await planBackup(home, { ...sel, workspace: true })).entries.map((e) => e.rel);
+    expect(rels).not.toContain("gateway/devices.json");
+    expect(rels).not.toContain("gateway/login-codes.json");
   });
 });

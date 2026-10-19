@@ -6,7 +6,7 @@ export const ARCHIVE_PREFIX = "tropos-home";
 export const MANIFEST_NAME = "manifest.json";
 export const FORMAT = "tropos-backup";
 
-export const PARTS = ["config", "credentials", "identity", "sessions", "memory", "skills", "plugins", "learning", "gateway", "workspace"] as const;
+export const PARTS = ["config", "credentials", "identity", "sessions", "memory", "skills", "plugins", "learning", "gateway", "workspace", "agents"] as const;
 export type BackupPart = (typeof PARTS)[number];
 
 export const manifestSchema = z.object({
@@ -55,10 +55,21 @@ export function unsafeLinkTarget(relOfLink: string, target: string): string | un
   return undefined;
 }
 
+/** What a path directly under workspace/ is: the chief's own files by kind, anything else is the user's project. */
+function workspacePart(name: string): BackupPart {
+  if (["SOUL.md", "IDENTITY.md", "AGENTS.md", "BOOTSTRAP.md"].includes(name)) return "identity";
+  if (name === "USER.md" || name === "MEMORY.md" || name === "memory" || /^imported-.*\.md$/.test(name)) return "memory";
+  if (name === "skills" || name === "skills-learned") return "skills";
+  return "workspace";
+}
+
 export function partOf(rel: string): BackupPart {
   const top = rel.split("/")[0]!;
   // projects/<key>/settings.json is the user's per-project settings (permission rules), not a session.
   if (/^projects\/[^/]+\/settings\.json$/.test(rel)) return "config";
+  // Old project notes are memory too (LEGACY_LAYOUT).
+  if (/^projects\/[^/]+\/notes\//.test(rel)) return "memory";
+  if (top === "workspace") return workspacePart(rel.split("/")[1] ?? "");
   switch (top) {
     case "credentials.json":
       return "credentials";
@@ -73,13 +84,14 @@ export function partOf(rel: string): BackupPart {
     case "memories":
       return "memory";
     case "skills":
+    case "skills-learned": // LEGACY_LAYOUT
       return "skills";
+    case "agents":
+      return "agents";
     case "plugins":
       return "plugins";
     case "learning":
       return "learning";
-    case "workspace":
-      return "workspace";
     case "gateway":
       return rel === "gateway/sessions.json" || rel === "gateway/chats.json" ? "sessions" : "gateway";
     default:
