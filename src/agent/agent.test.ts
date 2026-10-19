@@ -64,6 +64,7 @@ function harness(steps: Step[], over: {
     ownFiles?: string[];
     role?: "owner" | "guest";
     confine?: boolean;
+    contextText?: AgentOptions["contextText"];
   } = {}): Harness {
   const model = new FakeModel(steps);
   const events: AgentEvent[] = [];
@@ -95,7 +96,7 @@ function harness(steps: Step[], over: {
       ((rule) => {
         allowedAlways.push(rule);
       }),
-    contextText: async () => "<context>\nctx\n</context>",
+    contextText: over.contextText ?? (async () => "<context>\nctx\n</context>"),
     persist:
       over.persist ??
       (async (m) => {
@@ -367,6 +368,16 @@ describe("Agent", () => {
     setTimeout(() => controller.abort(), 20);
     expect(await run(h, "go", controller.signal)).toBe("aborted");
     expect(h.agent.messages).toHaveLength(1);
+  });
+
+  test("abort while the context is still being built ends the turn without a model request", async () => {
+    const controller = new AbortController();
+    const h = harness([() => reply([textBlock("too late")])], { contextText: () => new Promise<string>(() => {}) });
+    setTimeout(() => controller.abort(), 20);
+    expect(await run(h, "go", controller.signal)).toBe("aborted");
+    expect(h.model.requests).toHaveLength(0);
+    expect(h.agent.messages).toHaveLength(0);
+    expect(h.events.at(-1)).toEqual({ type: "turn_end", reason: "aborted" });
   });
 
   test("max turns", async () => {

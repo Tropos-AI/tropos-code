@@ -105,6 +105,19 @@ function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolO
   });
 }
 
+/** Settles with the work's value, or with undefined as soon as the signal aborts (the work is left behind). */
+function untilAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve, reject) => {
+    const stop = () => resolve(undefined);
+    if (signal.aborted) {
+      work.catch(() => {});
+      return stop();
+    }
+    signal.addEventListener("abort", stop, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+  });
+}
+
 /** The tool's preview for a permission prompt; a preview that throws is left out, never the prompt. */
 function previewOf(tool: AnyTool, input: unknown): { preview?: { header: string; text: string } } {
   try {
@@ -184,7 +197,15 @@ export class Agent {
       hookTexts = out.additionalContext;
     }
     const content: Array<Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam> = [];
-    if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
+    if (this.messages.length === 0) {
+      // Esc must work while the context is still being gathered; nothing has been recorded yet, so nothing is left behind.
+      const context = await untilAbort(this.opts.contextText(), signal);
+      if (context === undefined) {
+        this.emit({ type: "turn_end", reason: "aborted" });
+        return "aborted";
+      }
+      content.push({ type: "text", text: context });
+    }
     const mode = this.opts.permissions().mode;
     const reminder = modeReminder(this.lastMode, mode);
     this.lastMode = mode;
