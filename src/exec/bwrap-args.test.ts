@@ -1,7 +1,7 @@
 // src/exec/bwrap-args.test.ts
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { confinedFixtureBase } from "../../test/helpers/tmp";
 import { join } from "node:path";
 import { bwrapArgs, hostServiceMasks, hostServicePaths } from "./bwrap-args";
 import { ConfinementError, confinementPaths } from "./confinement-paths";
@@ -10,7 +10,7 @@ let fx: string;
 let userHome: string;
 let project: string;
 beforeEach(() => {
-  fx = realpathSync(mkdtempSync(join(tmpdir(), "tropos-bwrap-")));
+  fx = realpathSync(mkdtempSync(join(confinedFixtureBase(), "tropos-bwrap-")));
   userHome = join(fx, "home");
   project = join(fx, "proj");
   for (const d of [join(userHome, ".ssh"), join(userHome, ".tropos", "workspace"), join(project, ".git", "hooks"), join(project, ".husky"), join(project, ".tropos"), join(fx, "tmp")]) mkdirSync(d, { recursive: true });
@@ -35,7 +35,7 @@ test("the namespace is fresh with only inet networking and the root read-only", 
 
 let svc: string;
 beforeAll(() => {
-  svc = realpathSync(mkdtempSync(join(tmpdir(), "tropos-svc-")));
+  svc = realpathSync(mkdtempSync(join(confinedFixtureBase(), "tropos-svc-")));
 });
 afterAll(() => rmSync(svc, { recursive: true, force: true }));
 

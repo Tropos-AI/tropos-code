@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { confinedFixtureBase } from "../../test/helpers/tmp";
 import { join } from "node:path";
 import { ConfinedBackend, confinedBackend, confinementAvailable, detectConfinement, TRUSTED_PATH, unconfinedBackend } from "./confined";
 import { ConfinementError } from "./confinement-paths";
@@ -26,7 +26,7 @@ const collect = (child: ChildProcess) =>
 
 /** A fake user home and project under a fresh temp dir; nothing here touches the real home. */
 const fixture = () => {
-  const fx = realpathSync(mkdtempSync(join(tmpdir(), "tropos-confined-")));
+  const fx = realpathSync(mkdtempSync(join(confinedFixtureBase(), "tropos-confined-")));
   const userHome = join(fx, "home");
   const project = join(fx, "proj");
   const outside = join(fx, "outside");

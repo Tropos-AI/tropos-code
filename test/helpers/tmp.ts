@@ -12,3 +12,9 @@ export async function makeTmpDir(prefix = "tropos-test-"): Promise<string> {
 export async function removeDir(dir: string): Promise<void> {
   await rm(dir, { recursive: true, force: true });
 }
+
+/** A parent for fixtures that must lie outside the sandbox's always-writable /tmp (on Linux, tmpdir() is /tmp). */
+export function confinedFixtureBase(): string {
+  const t = realpathSync(tmpdir());
+  return t === "/tmp" || t.startsWith("/tmp/") ? "/var/tmp" : t;
+}
