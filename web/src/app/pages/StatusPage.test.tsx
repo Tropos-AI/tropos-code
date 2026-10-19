@@ -98,7 +98,10 @@ describe("StatusPage", () => {
     await screen.findByText(/Checks finished: 1 ok, 0 info, 1 warning, 1 error\./);
     fireEvent.click(screen.getByRole("button", { name: "Run deep checks" }));
     await waitFor(() => expect(socket.callsOf("doctor.run").length).toBe(3));
-    fireEvent.click(screen.getByRole("button", { name: "Fix all safe issues" }));
+    // The buttons stay disabled until the deep run's answer lands; a click before that is ignored.
+    const fixAll = screen.getByRole("button", { name: "Fix all safe issues" }) as HTMLButtonElement;
+    await waitFor(() => expect(fixAll.disabled).toBe(false));
+    fireEvent.click(fixAll);
     await waitFor(() => expect(socket.callsOf("doctor.run").length).toBe(4));
     expect(socket.callsOf("doctor.run").slice(1).map((c) => c.params)).toEqual([undefined, { deep: true }, { fix: true }]);
   });
