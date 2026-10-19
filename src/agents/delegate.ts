@@ -4,6 +4,7 @@ import { INTERRUPTED } from "../agent/agent";
 import { filterTools, HUB_ONLY_TOOLS, resolveAgentModel, runSubagent, subagentSystem, type SubagentDeps } from "../agent/subagent";
 import { isAnthropicModelId } from "../config/settings";
 import { loadSkills, skillListing, type Skill } from "../extensions/skills";
+import type { ExecBackend } from "../exec/backend";
 import type { Autonomy } from "../gateway/config";
 import type { SessionRole } from "../gateway/types";
 import { workspaceOwnPaths } from "../home/layout";
@@ -47,8 +48,7 @@ export interface SpecialistDeps extends SubagentDeps {
 
 /**
  * Read and edit denials for everything the chief keeps private (all of P5's workspaceOwnPaths) and for other
- * specialists' folders. Bash is not covered by path rules: under default rules it asks, and a specialist's
- * saves to its own stores ask too, because the permissions it gets carry no owner role.
+ * specialists' folders. Path rules don't see inside shell commands: see `execAsks` for how Bash is held back.
  */
 export function specialistDenyRules(home: string, spec: Specialist, others: string[]): Rule[] {
   const paths = [
@@ -65,6 +65,18 @@ export function specialistDenyRules(home: string, spec: Specialist, others: stri
     ...others.filter((dir) => dir !== spec.dir).map((dir) => `${dir}/**`),
   ];
   return [...new Set(paths)].flatMap((p) => [parseRule(`Read(${p})`), parseRule(`Edit(${p})`)]);
+}
+
+/**
+ * Rules that make every exec tool (Bash and any other tool of kind "exec") ask, whatever the autonomy level.
+ * Used when the shell isn't confined (terminal, dashboard, an unconfined host chat): there a command such as
+ * `cat ~/.tropos/workspace/USER.md` would reach the chief's files, which the file-tool deny rules can't see.
+ * A confined or docker backend keeps the capped autonomy: the chief's files are masked inside it.
+ */
+export function execAsks(exec: ExecBackend | undefined, tools: AnyTool[]): Rule[] {
+  if (exec && exec.kind !== "local") return [];
+  const names = new Set(["Bash", ...tools.filter((t) => t.kind === "exec").map((t) => t.name)]);
+  return [...names].map((n) => parseRule(n));
 }
 
 const ORDER: readonly Autonomy[] = ["ask", "balanced", "autonomous"];
@@ -195,9 +207,10 @@ export async function runSpecialist(
     const others = (await loadSpecialists(deps.home)).filter((s) => s.id !== spec.id).map((s) => s.dir);
     const rules = specialistDenyRules(deps.home, spec, others);
     const kit = await specialistKit(spec, deps, ctx.cwd());
+    const asks = execAsks(ctx.exec, kit.tools);
     const permissions = (): PermissionContext => {
       const base = deps.permissions();
-      return capAutonomy({ ...base, rules: { ...base.rules, deny: [...base.rules.deny, ...rules] } }, spec.autonomy);
+      return capAutonomy({ ...base, rules: { ...base.rules, deny: [...base.rules.deny, ...rules], ask: [...base.rules.ask, ...asks] } }, spec.autonomy);
     };
     let logged: Promise<void> = Promise.resolve();
     const out = await runSubagent(

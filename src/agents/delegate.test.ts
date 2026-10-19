@@ -10,7 +10,8 @@ import { Ledger } from "../learning/ledger";
 import { compileRules, decide, type PermissionContext } from "../permissions/engine";
 import { agentsDir, journalDir, workspaceFile } from "../paths";
 import { defineTool, type AnyTool } from "../tools/types";
-import { capAutonomy, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
+import type { ExecBackend } from "../exec/backend";
+import { capAutonomy, execAsks, runSpecialist, SPECIALIST_BLOCKED_TOOLS, specialistDenyRules, specialistKit, specialistModel, SpecialistSlots, type SpecialistDeps } from "./delegate";
 import { readRuns } from "./runs";
 import type { Specialist } from "./specialists";
 
@@ -199,4 +200,24 @@ test("a failing run is recorded as not ok and still frees the slot", async () =>
   expect(out.isError).toBe(true);
   expect(slots.running).toBe(0);
   expect((await readRuns(home))[0]).toMatchObject({ ok: false });
+});
+
+test("execAsks: an unconfined shell always asks for a specialist, a confined or docker one follows the capped level", () => {
+  const pc = (ask: ReturnType<typeof execAsks>): PermissionContext => ({
+    ...withRules([]),
+    rules: { allow: [], ask, deny: [] },
+    autonomy: { level: "autonomous", testCommands: [] },
+  });
+  const cat = { toolName: "Bash", kind: "exec" as const, command: `cat ${workspaceFile(home, "USER.md")}`, paths: [] };
+  const tools = [tool("Bash")];
+  for (const exec of [undefined, { kind: "local" } as ExecBackend]) {
+    expect(decide(cat, pc(execAsks(exec, tools))).behavior).toBe("ask");
+  }
+  for (const kind of ["confined", "docker"] as const) {
+    const asks = execAsks({ kind } as ExecBackend, tools);
+    expect(asks).toEqual([]);
+    expect(decide(cat, pc(asks)).behavior).toBe("allow");
+  }
+  const mcp = { ...tool("mcp__x__run"), kind: "exec" as const } as AnyTool;
+  expect(decide({ toolName: "mcp__x__run", kind: "exec", paths: [] }, pc(execAsks(undefined, [mcp]))).behavior).toBe("ask");
 });
