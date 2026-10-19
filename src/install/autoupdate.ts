@@ -47,9 +47,10 @@ export function nextCheckAfter(now: Date, failures: number): Date {
   return new Date(now.getTime() + Math.min(CHECK_INTERVAL_MS * 2 ** failures, MAX_INTERVAL_MS));
 }
 
+/** "Updated to X", once, and only while X is what is installed: a later manual install makes an older notice stale. */
 export function announcement(state: InstallState): string | null {
   const a = state.autoUpdate;
-  return a.lastUpdated && !a.announced ? `Updated to ${a.lastUpdated}` : null;
+  return a.lastUpdated && !a.announced && a.lastUpdated === state.current ? `Updated to ${a.lastUpdated}` : null;
 }
 
 /** Detached `tcode update --background` with the minimal environment; output appended to update.log. */

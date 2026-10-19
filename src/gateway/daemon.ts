@@ -168,7 +168,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   // Before anything is read or written: a second gateway would poll the same bot and rewrite the first one's state.
   const lock = await acquireGatewayLock(run.home);
   if (!lock.ok) {
-    run.err(`The gateway is already running (pid ${lock.pid}). Use \`tcode status\`.\n`);
+    run.err(`The gateway is already running in the background (pid ${lock.pid}); there is nothing to start. Open it with \`tcode dashboard\`, restart it with \`tcode gateway restart\`.\n`);
     return 1;
   }
   try {

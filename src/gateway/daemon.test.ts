@@ -73,7 +73,7 @@ describe("tcode gateway", () => {
     while (!first.url()) await Bun.sleep(20);
     const second = start();
     expect(await second.done).toBe(1);
-    expect(second.err.join("")).toContain(`The gateway is already running (pid ${process.pid}). Use \`tcode status\`.`);
+    expect(second.err.join("")).toContain(`The gateway is already running in the background (pid ${process.pid}); there is nothing to start.`);
     // The refused one left the running gateway's state alone.
     expect((await readGatewayState(join(dir, "home")))?.pid).toBe(process.pid);
     first.stop();

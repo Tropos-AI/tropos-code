@@ -52,9 +52,14 @@ describe("throttle and backoff", () => {
 
 describe("announcement", () => {
   test("once after an update", () => {
-    const s = { ...emptyState(), autoUpdate: { ...emptyState().autoUpdate, lastUpdated: "1.2.0", announced: false } };
+    const s = { ...emptyState(), current: "1.2.0", autoUpdate: { ...emptyState().autoUpdate, lastUpdated: "1.2.0", announced: false } };
     expect(announcement(s)).toBe("Updated to 1.2.0");
     expect(announcement({ ...s, autoUpdate: { ...s.autoUpdate, announced: true } })).toBeNull();
+  });
+
+  test("never for an older update once a newer version was installed by hand", () => {
+    const s = { ...emptyState(), current: "1.3.0", autoUpdate: { ...emptyState().autoUpdate, lastUpdated: "1.2.0", announced: false } };
+    expect(announcement(s)).toBeNull();
   });
 });
 
