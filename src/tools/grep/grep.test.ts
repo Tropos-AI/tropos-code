@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { renameSync, symlinkSync } from "node:fs";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { busyBackend, recordingBackend } from "../../../test/helpers/swap-backend";
 import { makeToolContext } from "../../../test/helpers/tool-context";
@@ -187,6 +187,21 @@ describe("Grep (fallback): a folder swapped for a link mid-search", () => {
       const out = await createGrepTool({ rgPath: null }).run({ pattern: "TOKEN", output_mode: "content" }, makeToolContext({ root: project, isDenied }));
       expect(swapped).toBe(true);
       expect(String(out.content)).not.toContain("hunter2");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
+  test("a linked file inside the project is searched through the file it points at, named or found by the walk", async () => {
+    const root = await realpath(await makeTmpDir());
+    try {
+      await mkdir(join(root, "real"));
+      await writeFile(join(root, "real", "notes.txt"), "needle\n");
+      await symlink(join(root, "real", "notes.txt"), join(root, "alias.txt"));
+      const grep = createGrepTool({ rgPath: null });
+      expect((await grep.run({ pattern: "needle", path: "alias.txt" }, makeToolContext({ root }))).content).toBe(join(root, "real", "notes.txt"));
+      // Like ripgrep, the walk doesn't follow links: the file is found once, where it really is.
+      expect((await grep.run({ pattern: "needle" }, makeToolContext({ root }))).content).toBe(join(root, "real", "notes.txt"));
     } finally {
       await removeDir(root);
     }

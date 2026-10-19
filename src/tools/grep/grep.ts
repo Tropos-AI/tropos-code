@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { holdSandbox, openVerified, type VerifiedFile } from "../file-guard";
@@ -159,7 +159,8 @@ async function runRipgrep(
 async function readSearched(file: string, within: readonly string[] | undefined, isDenied?: (path: string) => boolean): Promise<Buffer | null> {
   let opened: VerifiedFile;
   try {
-    opened = await openVerified(file, "read", { within });
+    // The file's real path, as the walk checked it: opening the name would refuse a linked file (the leaf isn't followed).
+    opened = await openVerified(await realpath(file), "read", { within });
   } catch {
     return null;
   }
