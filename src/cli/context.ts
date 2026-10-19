@@ -8,6 +8,7 @@ import { SettingsError, loadSettings, settingsPaths } from "../config/settings";
 import { compileRules } from "../permissions/engine";
 import { ProviderRouter } from "../providers/router";
 import { resolveToolPath } from "../tools/paths";
+import { SecretVault } from "../tools/setup/secrets";
 import { createTools } from "../tools/registry";
 import { VERSION } from "../version";
 import { loadExtensions, sessionTools, type SubagentHolder } from "./extensions";
@@ -94,7 +95,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     const holder: SubagentHolder = {};
     let current = "";
     return {
-      ctx: { ...ctx, subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
+      ctx: { ...ctx, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
       setSessionId: (id) => {
         current = id;
       },

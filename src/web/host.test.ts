@@ -20,6 +20,29 @@ const provider = (key: ProviderStatus["key"]): ProviderStatus => ({
   baseURL: "https://d",
 });
 
+describe("secrets", () => {
+  const TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1";
+  test("a prompt's secrets are sealed before the agent, the transcript, the input history and other tabs see them", async () => {
+    const { host, runtime } = setup({}, [() => reply([textBlock("ok")])]);
+    const otherTab: ServerMessage[] = [];
+    host.attach((m) => otherTab.push(m));
+    const origin = (_m: ServerMessage) => {};
+    await host.call("prompt", { text: `token ${TOKEN}`, display: `show ${TOKEN}` }, origin);
+    expect(JSON.stringify(runtime.model.requests)).not.toContain(TOKEN);
+    expect(JSON.stringify(runtime.history())).not.toContain(TOKEN);
+    expect(JSON.stringify(runtime.inputs)).not.toContain(TOKEN);
+    expect(JSON.stringify(otherTab)).not.toContain(TOKEN);
+    expect(JSON.stringify(otherTab)).toContain("[secret:");
+    expect(runtime.secrets.take("secret:1")?.value).toBe(TOKEN);
+  });
+  test("a slash command's arguments are sealed too", async () => {
+    const { host, runtime, seen } = setup({ expand: async (_n, args) => ({ ok: true, prompt: `do ${args}` }) }, [() => reply([textBlock("ok")])]);
+    await host.call("prompt", { command: { name: "x", args: TOKEN } });
+    expect(JSON.stringify(seen)).not.toContain(TOKEN);
+    expect(JSON.stringify(runtime.model.requests)).not.toContain(TOKEN);
+  });
+});
+
 describe("settings RPCs", () => {
   test("mode, model and effort change and are broadcast; bad values are refused", async () => {
     const { host, runtime, seen } = setup();

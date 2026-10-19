@@ -139,6 +139,11 @@ export class TelegramApi {
     });
   }
 
+  /** Removes a message from the chat (a bot may delete a user's message in a private chat within 48 hours). */
+  async deleteMessage(chatId: number | string, messageId: number): Promise<void> {
+    await this.call("deleteMessage", { chat_id: chatId, message_id: messageId });
+  }
+
   async answerCallbackQuery(id: string, text?: string): Promise<void> {
     await this.call("answerCallbackQuery", { callback_query_id: id, ...(text ? { text } : {}) });
   }

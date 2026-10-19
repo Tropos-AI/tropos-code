@@ -5,7 +5,7 @@ import { AutonomyError, RAISE_REFUSED } from "../autonomy";
 import type { ChatAutonomy, ChatProjects } from "../types";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
-import { CLAIM_REPLY, TelegramAdapter } from "./adapter";
+import { CLAIM_REPLY, SECRET_REMOVED_NOTE, TelegramAdapter } from "./adapter";
 import type { OwnerCandidateView } from "../owner-claim";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
 import { HELP_TEXT } from "./render";
@@ -212,6 +212,27 @@ describe("TelegramAdapter", () => {
     await server.waitFor(() => server.textsTo(CHAT).includes("echo: again"));
     expect(sessions.opens).toBe(1);
     expect(session().prompts).toEqual(["hello", "again"]);
+  });
+
+  test("an approved sender's message holding a key is deleted from the chat and still reaches the session", async () => {
+    const { server, session, logs } = await setup();
+    const token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1";
+    server.pushMessage(CHAT, CHAT, `use ${token}`);
+    await server.waitFor(() => server.deleted.length === 1);
+    expect(server.deleted[0]!.chatId).toBe(CHAT);
+    expect(server.textsTo(CHAT)).toContain(SECRET_REMOVED_NOTE);
+    await server.waitFor(() => session()?.prompts.length === 1);
+    expect(logs.join("\n")).not.toContain(token);
+  });
+
+  test("a message that can't be deleted is still answered, and the log never holds the text", async () => {
+    const { server, session, logs, api } = await setup();
+    api.deleteMessage = async () => {
+      throw new Error("too old");
+    };
+    server.pushMessage(CHAT, CHAT, "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345");
+    await server.waitFor(() => session()?.prompts.length === 1);
+    expect(logs.join("\n")).not.toContain("sk-ant");
   });
 
   test("when the session can't start, the chat is told why if it's safe to say, and nothing runs", async () => {

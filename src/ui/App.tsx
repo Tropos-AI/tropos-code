@@ -308,7 +308,8 @@ export function App({ runtime }: { runtime: Runtime }) {
 
   const submit = useCallback(
     async (text: string) => {
-      const trimmed = text.trim();
+      // Sealed first: the queue, the ↑ history and the transcript only ever see the placeholder.
+      const trimmed = runtime.sealSecrets(text.trim());
       if (!trimmed) return;
       runtime.recordInput(trimmed);
       setQueuePaused(false);

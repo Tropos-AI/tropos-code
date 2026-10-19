@@ -232,13 +232,14 @@ export class WebHost {
     switch (method) {
       case "prompt": {
         const p = params as RpcMap["prompt"]["params"];
-        const command = p?.command && typeof p.command.name === "string" ? { name: p.command.name, args: typeof p.command.args === "string" ? p.command.args : "" } : null;
+        const command = p?.command && typeof p.command.name === "string" ? { name: p.command.name, args: typeof p.command.args === "string" ? r.sealSecrets(p.command.args) : "" } : null;
         if (!command && (typeof p?.text !== "string" || !p.text.trim())) throw new RpcError("Nothing to send.");
         this.needIdle();
         this.turnStartedAt = Date.now();
         try {
           return (await this.exclusive(async (signal) => {
-            let text = p.text;
+            // Before anything records or shows the text: a pasted key must not reach the model, the transcript or other tabs.
+            let text = typeof p.text === "string" ? r.sealSecrets(p.text) : p.text;
             let model = typeof p.model === "string" ? p.model : undefined;
             if (command) {
               const expansion = await r.expandCommand(command.name, command.args, this.ui, signal);
@@ -247,7 +248,7 @@ export class WebHost {
               text = expansion.prompt;
               model = expansion.model ?? model;
             }
-            const display = p.display ?? (command ? `/${command.name}${command.args ? ` ${command.args}` : ""}` : text);
+            const display = typeof p.display === "string" ? r.sealSecrets(p.display) : (command ? `/${command.name}${command.args ? ` ${command.args}` : ""}` : text);
             this.broadcast({ t: "user", text: display }, origin);
             // The terminal's ↑ history includes what was sent from the browser.
             r.recordInput(display);
@@ -267,7 +268,7 @@ export class WebHost {
       case "expand": {
         const p = params as RpcMap["expand"]["params"];
         if (typeof p?.name !== "string") throw new RpcError("Which command?");
-        return (await this.exclusive((signal) => r.expandCommand(p.name, typeof p.args === "string" ? p.args : "", this.ui, signal))) as RpcMap[M]["result"];
+        return (await this.exclusive((signal) => r.expandCommand(p.name, typeof p.args === "string" ? r.sealSecrets(p.args) : "", this.ui, signal))) as RpcMap[M]["result"];
       }
       case "interrupt":
         this.controller?.abort();

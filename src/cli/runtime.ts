@@ -45,6 +45,7 @@ import type { AgentUi, CommandExpansion, ModelPrefsControl, PanelData, PanelSect
 import type { Theme } from "../ui/theme";
 import { makeOnboardDeps } from "../onboard/engine";
 import { takeSetupReminder } from "../onboard/reminders";
+import type { SecretVault } from "../tools/setup/secrets";
 import { contextExtras, createHookRunner, extraCommands, postWrite, type Extensions, type SubagentHolder } from "./extensions";
 
 const STORE_TOOL_NAMES: ReadonlySet<string> = new Set(STORE_TOOLS);
@@ -78,6 +79,8 @@ export interface AppContext {
   exec?: ExecBackend;
   /** A chat's autonomy level, read on every decision so a change applies to the open session; unset, everything asks as before. */
   autonomy?: () => AutonomyPolicy;
+  /** Keys and tokens pasted into this session, held out of the transcript and the model's sight. */
+  secrets?: SecretVault;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -784,6 +787,7 @@ export async function createRuntime(
       return out.ok ? { ok: true, summary: `${out.entry.kind}: ${out.entry.summary}` } : out;
     },
     identity: () => identity,
+    sealSecrets: (text) => (ctx.secrets ? ctx.secrets.seal(text).text : text),
     // Guests never reach specialists; ctx.ext.agents holds only the active, unpaused ones.
     directCall: (text) => (ctx.role === "guest" ? null : mentionCall(text, ctx.ext.agents.flatMap((a) => (isSpecialist(a) ? [a] : [])))),
     start: async (notice) => {

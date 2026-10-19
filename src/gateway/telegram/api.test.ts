@@ -46,6 +46,12 @@ describe("TelegramApi", () => {
     expect(server.answered[0]).toEqual({ id: "id1", text: "ok" });
   });
 
+  test("deleteMessage posts chat and message ids", async () => {
+    const { server, api } = setup();
+    await api.deleteMessage(42, 7);
+    expect(server.deleted).toEqual([{ chatId: 42, messageId: 7 }]);
+  });
+
   test("retries after a 429 with retry_after", async () => {
     const { server, api } = setup();
     server.rateLimitNextSend = 1;

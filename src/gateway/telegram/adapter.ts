@@ -6,6 +6,7 @@ import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "..
 import type { SessionState } from "../../web/protocol";
 import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
 import { candidateFrom, type OwnerClaimStore } from "../owner-claim";
+import { findSecrets } from "../../tools/setup/secrets";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
   assistantText,
@@ -41,6 +42,7 @@ const LOGIN_REFUSAL = "Only the owner can log in a browser from here.";
 const LOGIN_NO_OWNER = "Pick the owner first: Settings → Channels & devices on the dashboard.";
 const NON_TEXT_REPLY_GAP_MS = 10_000;
 
+export const SECRET_REMOVED_NOTE = "I removed that message so the key doesn't stay in this chat. I'm holding it for this conversation only.";
 export const CLAIM_REPLY = "Got it. Go back to the setup on your computer and confirm it's you.";
 
 export interface TelegramAdapterOptions {
@@ -303,6 +305,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     const text = msg.text.trim();
     if (!text) return;
+    if (findSecrets(text).length > 0) await this.removeSecretMessage(msg);
     // Before the session is opened: switching away from a project whose session can't start must still work.
     if (text.startsWith("/") && /^project(s)?$/.test(commandWord(text))) {
       await this.handleProjectCommand(msg.chat.id, text);
@@ -330,6 +333,17 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
     this.enqueue(chat, { text });
+  }
+
+  /** Deletes the message that held a key and says so; the session still gets the text, and its host seals it. */
+  private async removeSecretMessage(msg: TgMessage): Promise<void> {
+    try {
+      await this.api.deleteMessage(msg.chat.id, msg.message_id);
+    } catch (e) {
+      // The error names the method, never the text.
+      this.log("deleting a message that held a key failed", e);
+    }
+    await this.reply(msg.chat.id, SECRET_REMOVED_NOTE);
   }
 
   /** True when setup is listening and this private message was recorded as a candidate (and answered once per sender). */

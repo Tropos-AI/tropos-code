@@ -4,6 +4,7 @@ import { Agent } from "../../src/agent/agent";
 import type { Effort, Mode } from "../../src/config/constants";
 import { compileRules } from "../../src/permissions/engine";
 import type { MessageParam, SessionSummary } from "../../src/session/store";
+import { SecretVault } from "../../src/tools/setup/secrets";
 import { defineTool, type AnyTool } from "../../src/tools/types";
 import { DARK } from "../../src/ui/theme";
 import type { ExtraCommand, ListTopic } from "../../src/ui/commands";
@@ -43,12 +44,14 @@ export function fakeRuntime(
 ): Runtime & {
   model: FakeModel;
   inputs: string[];
+  secrets: SecretVault;
   turnModels: Array<string | undefined>;
   described: ListTopic[];
   /** The options of every shutdown call, in order. */
   shutdowns: Array<Parameters<Runtime["shutdown"]>[0]>;
 } {
   const model = new FakeModel(steps);
+  const secrets = new SecretVault();
   let state = { model: "claude-opus-5-5", effort: "high" as Effort, mode: over.mode ?? ("default" as Mode) };
   let history: MessageParam[] = [];
   const inputs: string[] = [];
@@ -78,6 +81,8 @@ export function fakeRuntime(
       return { title: `about ${what}`, sections: [{ items: [{ key: "a", label: `${what} item`, hint: "hint", status: "ok" as const, detail: ["detail line"] }] }] };
     },
     modelPrefs: over.modelPrefs ?? { get: async () => ({ recent: [], favorites: [] }), recordUse: async () => {}, toggleFavorite: async () => true },
+    secrets,
+    sealSecrets: (text) => secrets.seal(text).text,
     undo: over.undo ?? (async () => ({ ok: false, reason: "Nothing to undo." })),
     redo: async () => ({ ok: true, files: [] }),
     undoLearned: over.undoLearned ?? (async () => ({ ok: false, reason: "Nothing learned to undo." })),

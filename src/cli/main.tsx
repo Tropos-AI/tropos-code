@@ -10,6 +10,7 @@ import { ModelPrefs } from "../config/model-prefs";
 import { SessionStore, listSessions, type MessageParam } from "../session/store";
 import { resolveToolPath } from "../tools/paths";
 import { createTools } from "../tools/registry";
+import { SecretVault } from "../tools/setup/secrets";
 import { App } from "../ui/App";
 import { resolveTheme } from "../ui/theme";
 import { autoRegisterProject } from "../gateway/projects";
@@ -292,6 +293,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     env,
     modelPrefs: new ModelPrefs(home),
     role: "owner",
+    secrets: new SecretVault(),
   };
   // The owner's terminal can schedule too; results go to the owner's chat.
   ctx.tools = [...ctx.tools, await ownerCronTool(home)];

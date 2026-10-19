@@ -100,6 +100,8 @@ export interface Runtime {
   /** The agent's name and emoji from ~/.tropos/workspace/IDENTITY.md, for headers (re-read when the Identity tool saves). */
   identity(): { name?: string; emoji?: string };
   redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
+  /** Replaces pasted keys and tokens with placeholders the session's vault holds; the text unchanged when there is no vault. */
+  sealSecrets(text: string): string;
   /** The call behind an `@<specialist> message`; null for a guest session or any other text. */
   directCall?(text: string): DirectCall | null;
   /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */

@@ -19,6 +19,8 @@ export class FakeTelegramServer {
   readonly token = "123456:SECRET-fake-token";
   readonly sent: SentMessage[] = [];
   readonly answered: { id: string; text?: string }[] = [];
+  /** Every deleteMessage call. */
+  readonly deleted: { chatId: number; messageId: number }[] = [];
   readonly getUpdatesOffsets: number[] = [];
   commands: { command: string; description: string }[] = [];
   /** The next N getUpdates calls fail with HTTP 500. */
@@ -138,6 +140,9 @@ export class FakeTelegramServer {
         msg.edits.push({ text: String(body.text), replyMarkup: body.reply_markup });
         return this.json(true);
       }
+      case "deleteMessage":
+        this.deleted.push({ chatId: Number(body.chat_id), messageId: Number(body.message_id) });
+        return this.json(true);
       case "answerCallbackQuery":
         this.answered.push({ id: String(body.callback_query_id), text: body.text });
         return this.json(true);
