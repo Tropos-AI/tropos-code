@@ -6,7 +6,7 @@ import { parseAllowedSigners } from "../../src/install/sshsig";
 
 const root = join(import.meta.dir, "../..");
 
-describe("published key fingerprint (spec §8.1)", () => {
+describe("published key fingerprint", () => {
   test("README and docs/install.md list the fingerprint of every pinned key", async () => {
     const keys = parseAllowedSigners(await readFile(join(root, "release/allowed_signers"), "utf8"));
     const readme = await readFile(join(root, "README.md"), "utf8");

@@ -1,5 +1,5 @@
 // test/install/key-rotation.test.ts
-// Spec §6.1: phase 1 trusts {K1, K2} while signing with K1; phase 2 signs with K2; clients that trust only K1
+// Phase 1 trusts {K1, K2} while signing with K1; phase 2 signs with K2; clients that trust only K1
 // must refuse K2 releases with the reinstall hint; a third key is never accepted. The old-installer gate
 // (release.yml smoke-public b) is exactly "an install.sh that trusts only K1 fails on a K2 release".
 import { afterEach, describe, expect, test } from "bun:test";
@@ -13,7 +13,7 @@ import { handoffBinary, makeSandbox } from "./helpers/sh-runner";
 let f: EngineFixture;
 afterEach(() => f?.close());
 
-describe("key rotation K1 → K2 (spec §6.1, layer 9)", () => {
+describe("key rotation K1 → K2", () => {
   test("tcode: K1-only clients refuse K2 releases with the reinstall hint; phase-1 clients accept both; K3 never", async () => {
     f = await makeEngineFixture(); // f.key is K1
     const k2 = await makeTestKey(f.root, "k2");

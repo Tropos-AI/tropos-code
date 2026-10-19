@@ -1,4 +1,4 @@
-# scripts/release/manifest.awk — validates a canonical Tropos manifest (spec §5.3) and prints the fields of one platform.
+# scripts/release/manifest.awk — validates a canonical Tropos manifest and prints the fields of one platform.
 # Usage: awk -v want=<platform> -f manifest.awk manifest.json
 # Prints version= (and sha256=, size=, zst_sha256=, zst_size= when want is set); exits 1 on any deviation.
 # Callers must first check that the file contains only newline and printable ASCII (0x20-0x7E) and ends with a

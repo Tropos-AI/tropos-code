@@ -31,7 +31,7 @@ export type CheckDecision = { check: true } | { check: false; reason: string };
 
 const truthy = (v: string | undefined) => v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
 
-/** Spec §11 "When". A nextCheck more than 48 h ahead means the clock moved back; it counts as due. */
+/** Whether a background check is due. A nextCheck more than 48 h ahead means the clock moved back; it counts as due. */
 export function shouldCheck(i: AutoUpdateInputs): CheckDecision {
   if (!i.native) return { check: false, reason: "not-native" };
   if (i.print) return { check: false, reason: "print-mode" };
@@ -124,14 +124,14 @@ async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: 
 }
 
 /**
- * `tcode update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always
+ * `tcode update --background`: never waits for the lock, only moves forward, records the check. Always
  * resolves, with the version it moved to (null when nothing changed).
  */
 export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<string | null> {
   try {
     return await backgroundUpdate(deps, channel);
   } catch {
-    // the detached updater must never crash (spec §11)
+    // the detached updater must never crash
     return null;
   }
 }
@@ -153,12 +153,12 @@ async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<str
   let ok = true;
   let updatedTo: string | null = null;
   try {
-    // A local build the user installed is theirs to replace: no background update ever touches it (spec §9).
+    // A local build the user installed is theirs to replace: no background update ever touches it.
     if (deps.runningVersion !== undefined && !(await isManaged(deps.layout, deps.runningVersion))) {
       log(`running ${deps.runningVersion}, an unmanaged local build; background updates are off for it`);
       return null;
     }
-    // Recovery logs its actions through deps.log; a fatal recovery stops the run before anything is installed (A11).
+    // Recovery logs its actions through deps.log; a fatal recovery stops the run before anything is installed.
     const run = await updateChannel(deps, channel, { wait: false, background: true });
     if (!run) {
       log("another Tropos install is running; skipping this check");

@@ -1,4 +1,4 @@
-# .github/workflows/release.yml — privileged, defined on main (spec §6.2, §7.3). Treats everything from the tag as data.
+# .github/workflows/release.yml — privileged, defined on main. Treats everything from the tag as data.
 # No job that can read the signing key or holds a write token (including CHANNELS_WRITE_TOKEN) executes a binary,
 # script or dependency from the tag; test/install/workflow-policy.test.ts enforces this.
 name: release
@@ -39,13 +39,13 @@ jobs:
           token: ""
       - run: bun install --frozen-lockfile
       - run: sudo apt-get install -y zstd unzip
-      - name: Provenance (A4)
+      - name: Provenance
         id: prov
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_INPUT: ${{ inputs.tag }}
         run: bun scripts/release/check-provenance.ts --out release-inputs.zip >> "$GITHUB_OUTPUT"
-      - name: Unpack release-inputs into a fresh directory, refusing unsafe entries (ruling 2)
+      - name: Unpack release-inputs into a fresh directory, refusing unsafe entries
         run: |
           mkdir inputs
           unzip -Z1 release-inputs.zip >zip-names || { echo "release-inputs.zip cannot be listed"; exit 1; }
@@ -58,7 +58,7 @@ jobs:
           unzip -Z release-inputs.zip >zip-listing || { echo "release-inputs.zip cannot be listed"; exit 1; }
           if grep -q '^l' zip-listing; then echo "release-inputs.zip contains a symlink"; exit 1; fi
           unzip -q release-inputs.zip -d inputs
-      - name: Check every input against SHA256SUMS (A4)
+      - name: Check every input against SHA256SUMS
         run: bun scripts/release/check-provenance.ts --verify-inputs inputs
       - name: Compress, round-trip and write the manifest
         env:
@@ -75,7 +75,7 @@ jobs:
           rm -f assets/.roundtrip
           cp inputs/install.sh assets/install.sh
           sh scripts/release/make-manifest.sh "$VERSION" "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" assets > assets/manifest.json
-          # Ruling 1: newline and printable ASCII only, ending in a newline, before awk reads it (some awks stop at NUL).
+          # Newline and printable ASCII only, ending in a newline, before awk reads it (some awks stop at NUL).
           LC_ALL=C tr -d '\012\040-\176' <assets/manifest.json >manifest.bad || exit 1
           [ ! -s "manifest.bad" ] || { echo "assets/manifest.json has bytes outside printable ASCII"; exit 1; }
           [ "$(tail -c 1 assets/manifest.json | od -An -c | tr -d ' ')" = '\n' ] || { echo "assets/manifest.json does not end with a newline"; exit 1; }
@@ -123,13 +123,13 @@ jobs:
         with:
           name: to-sign
           path: to-sign
-      - name: Refuse to sign without a pinned key (A5)
+      - name: Refuse to sign without a pinned key
         run: grep -Eq '^tropos-release ssh-ed25519 ' release/allowed_signers || { echo "release/allowed_signers has no key"; exit 1; }
       - name: Sign and verify
         env:
           KEY: ${{ secrets.TROPOS_RELEASE_SIGNING_KEY }}
         run: |
-          # Ruling 1: the same byte check as install.sh before manifest.awk reads the file.
+          # The same byte check as install.sh before manifest.awk reads the file.
           LC_ALL=C tr -d '\012\040-\176' <to-sign/manifest.json >"$RUNNER_TEMP/manifest.bad" || exit 1
           [ ! -s "$RUNNER_TEMP/manifest.bad" ] || { echo "to-sign/manifest.json has bytes outside printable ASCII"; exit 1; }
           [ "$(tail -c 1 to-sign/manifest.json | od -An -c | tr -d ' ')" = '\n' ] || { echo "to-sign/manifest.json does not end with a newline"; exit 1; }
@@ -204,7 +204,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
-      - name: Authenticated download of the draft's assets (executes nothing — A12)
+      - name: Authenticated download of the draft's assets (executes nothing)
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir draft
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -234,7 +234,7 @@ jobs:
           [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
           [ "$("$HOME/.local/bin/tropos" --version)" = "$VERSION (Tropos Code)" ]
 
-  # Decision D2: no job container; the install runs in docker run alpine:3.22 as an unprivileged user.
+  # No job container; the install runs in docker run alpine:3.22 as an unprivileged user.
   smoke-draft-musl:
     needs: [prepare, fetch-draft]
     strategy:
@@ -276,7 +276,7 @@ jobs:
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
 
   # previousRelease reads channels/latest and channels/stable through the API with this repository's read-only token, so
-  # Tropos-AI/tropos-code-channels must stay public (ruling 5); a private one makes this job fail, never skip gate c.
+  # Tropos-AI/tropos-code-channels must stay public; a private one makes this job fail, never skip gate c.
   previous:
     needs: [prepare, publish]
     runs-on: ubuntu-24.04
@@ -333,7 +333,7 @@ jobs:
           HOME="$(mktemp -d)"; export HOME
           curl -fsSL "https://github.com/$R/releases/download/$OLD_TAG/install.sh" | sh -s -- "$VERSION"
           [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
-      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public (ruling 5).
+      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public.
       - name: c) the stable binary installs the new release
         if: needs.previous.outputs.stable != ''
         run: |
@@ -346,7 +346,7 @@ jobs:
           "$HOME/.local/bin/tropos" install "$VERSION"
           [ "$("$HOME/.local/bin/tcode" --version)" = "$VERSION (Tropos Code)" ]
 
-  # Decision D2: no job container; each gate runs in a fresh docker run alpine:3.22 as an unprivileged user.
+  # No job container; each gate runs in a fresh docker run alpine:3.22 as an unprivileged user.
   smoke-public-musl:
     needs: [prepare, previous]
     strategy:
@@ -401,7 +401,7 @@ jobs:
       - name: b) the published installer verifies the new release
         if: needs.previous.outputs.installer_tag != ''
         run: sh "$RUNNER_TEMP/gate.sh" b
-      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public (ruling 5).
+      # c) STABLE comes from channels/stable; Tropos-AI/tropos-code-channels must stay public.
       - name: c) the stable binary installs the new release
         if: needs.previous.outputs.stable != ''
         run: sh "$RUNNER_TEMP/gate.sh" c

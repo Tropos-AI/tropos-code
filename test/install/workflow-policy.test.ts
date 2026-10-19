@@ -1,5 +1,5 @@
 // test/install/workflow-policy.test.ts
-// R4.1: no code from the release tag runs where the signing key or a write token is available (spec §6.2).
+// No code from the release tag runs where the signing key or a write token is available.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -109,7 +109,7 @@ const ALLOW: Record<string, Record<string, true | RegExp[]>> = {
   "channels-health.yml:repair": { ...MAIN_GUARD, bun: [/^bun scripts\/release\/promote\.ts check --repair$/] },
 };
 
-describe("workflow policy (R4.1)", () => {
+describe("workflow policy", () => {
   test.each(ALL)("%s pins every action by full commit SHA", async (name) => {
     const wf = await load(name);
     for (const job of Object.values(wf.jobs)) for (const step of job.steps) if (step.uses) expect(step.uses).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
@@ -220,7 +220,7 @@ describe("workflow policy (R4.1)", () => {
     }
   });
 
-  test("smoke jobs are read-only and get draft assets from fetch-draft (A12)", async () => {
+  test("smoke jobs are read-only and get draft assets from fetch-draft", async () => {
     const wf = await load("release.yml");
     for (const [n, j] of Object.entries(wf.jobs)) if (n.startsWith("smoke-")) expect(writes(j)).toBe(false);
     expect(writes(wf.jobs["fetch-draft"]!)).toBe(true);
@@ -252,8 +252,8 @@ describe("workflow policy (R4.1)", () => {
   });
 });
 
-describe("controller rulings (task 28)", () => {
-  // Permissions ruling: contents: read on tropos-code everywhere except the jobs that write the draft, publish it,
+describe("permissions, environments and stage order", () => {
+  // Contents: read on tropos-code everywhere except the jobs that write the draft, publish it,
   // or mark GitHub latest (promote.ts latest and check --repair do that themselves).
   const PERMISSIONS: Record<string, Record<string, Record<string, string>>> = {
     "release.yml": {
@@ -279,12 +279,12 @@ describe("controller rulings (task 28)", () => {
   };
   const SECRETS: Record<string, string> = { "release-signing": "TROPOS_RELEASE_SIGNING_KEY", "channels-write": "CHANNELS_WRITE_TOKEN" };
 
-  test.each(PRIVILEGED)("%s: every job's permissions are exactly the ruled set", async (name) => {
+  test.each(PRIVILEGED)("%s: every job's permissions are exactly the expected set", async (name) => {
     const wf = await load(name);
     expect(Object.fromEntries(Object.entries(wf.jobs).map(([n, j]) => [n, j.permissions]))).toEqual(PERMISSIONS[name]!);
   });
 
-  test.each(PRIVILEGED)("%s: protected environments are exactly the ruled set, and secrets appear only there", async (name) => {
+  test.each(PRIVILEGED)("%s: protected environments are exactly the expected set, and secrets appear only there", async (name) => {
     const wf = await load(name);
     const envs = Object.fromEntries(Object.entries(wf.jobs).flatMap(([n, j]) => (j.environment === undefined ? [] : [[n, j.environment]])));
     expect(envs).toEqual(ENVIRONMENTS[name]!);
@@ -294,7 +294,7 @@ describe("controller rulings (task 28)", () => {
     }
   });
 
-  test.each(PRIVILEGED)("%s: every channel write runs in channels-write with the channels repository and token (D1-B)", async (name) => {
+  test.each(PRIVILEGED)("%s: every channel write runs in channels-write with the channels repository and token", async (name) => {
     const wf = await load(name);
     let channelWriters = 0;
     for (const [n, j] of Object.entries(wf.jobs)) {
@@ -322,7 +322,7 @@ describe("controller rulings (task 28)", () => {
     expect(runs(release.jobs["promote-latest"]!)).toMatch(/promote\.ts latest /);
   });
 
-  test.each(ALL)("%s: no job container — musl jobs run actions on the host and Bun in docker run alpine:3.22 (D2)", async (name) => {
+  test.each(ALL)("%s: no job container — musl jobs run actions on the host and Bun in docker run alpine:3.22", async (name) => {
     const wf = await load(name);
     for (const [n, j] of Object.entries(wf.jobs)) {
       expect({ job: n, container: j.container }).toEqual({ job: n, container: undefined });
@@ -342,7 +342,7 @@ describe("controller rulings (task 28)", () => {
     expect(await musl("ci.yml")).toEqual(["installer-musl"]);
   });
 
-  test("release.yml runs the manifest byte check before every manifest.awk run (ruling 1)", async () => {
+  test("release.yml runs the manifest byte check before every manifest.awk run", async () => {
     const wf = await load("release.yml");
     let checked = 0;
     for (const [n, j] of Object.entries(wf.jobs)) {
@@ -364,7 +364,7 @@ describe("controller rulings (task 28)", () => {
     expect(checked).toBeGreaterThanOrEqual(2); // prepare and sign
   });
 
-  test("prepare unzips into a fresh directory behind the zip-slip guard, then verifies inputs, then writes the manifest (ruling 2)", async () => {
+  test("prepare unzips into a fresh directory behind the zip-slip guard, then verifies inputs, then writes the manifest", async () => {
     const steps = (await load("release.yml")).jobs.prepare!.steps;
     const at = (re: RegExp) => steps.findIndex((s) => re.test(s.run ?? ""));
     const unpack = at(/unzip -Z1 release-inputs\.zip/);
@@ -376,7 +376,7 @@ describe("controller rulings (task 28)", () => {
     expect(steps[unpack]!.run).toMatch(/^mkdir inputs$/m);
   });
 
-  test("release-build collects assets from the repo root into a fresh directory and never test-builds (ruling 3)", async () => {
+  test("release-build collects assets from the repo root into a fresh directory and never test-builds", async () => {
     const build = (await load("release-build.yml")).jobs.build!;
     const lines = runs(build).split("\n");
     const collect = lines.findIndex((l) => l.trim() === 'sh scripts/release/collect-assets.sh dist "${GITHUB_REF_NAME#v}" release-inputs');
@@ -387,7 +387,7 @@ describe("controller rulings (task 28)", () => {
     for (const name of ["release-build.yml", "release.yml"]) expect(await text(name)).not.toContain("--test-build");
   });
 
-  test.each([...PRIVILEGED, "release-build.yml"])("%s: setup-bun never uses its executable cache and never holds the token (fix 1)", async (name) => {
+  test.each([...PRIVILEGED, "release-build.yml"])("%s: setup-bun never uses its executable cache and never holds the token", async (name) => {
     const wf = await load(name);
     let seen = 0;
     for (const [n, j] of Object.entries(wf.jobs)) {
@@ -400,7 +400,7 @@ describe("controller rulings (task 28)", () => {
     expect(seen).toBeGreaterThan(0);
   });
 
-  test.each(["release-build.yml", "ci.yml"])("%s: every musl Bun zip is checked against its pinned sha256 before unzip (fix 2)", async (name) => {
+  test.each(["release-build.yml", "ci.yml"])("%s: every musl Bun zip is checked against its pinned sha256 before unzip", async (name) => {
     const BUN_ZIP_SHA256: Record<string, string> = {
       "bun-linux-x64-musl": "83b5f12fd258dd8d4fdcaea65ede954366aa717dab399e20093ecab280d54e7a",
       "bun-linux-aarch64-musl": "576300ce33ff16ffcd455bf178c2f095f9df845c6cc3d0284ba1c96ca0e80473",
@@ -424,12 +424,12 @@ describe("controller rulings (task 28)", () => {
     expect(downloads).toBeGreaterThan(0);
   });
 
-  test("prepare's only inline code is the manifest parser from main's src/install/manifest (fix 4)", async () => {
+  test("prepare's only inline code is the manifest parser from main's src/install/manifest", async () => {
     const lines = runs((await load("release.yml")).jobs.prepare!).split("\n").filter((l) => /\bbun -e\b/.test(l));
     expect(lines.map((l) => l.trim())).toEqual([`bun -e 'import { parseManifest } from "./src/install/manifest"; parseManifest(new Uint8Array(await Bun.file("assets/manifest.json").arrayBuffer()))'`]);
   });
 
-  test("release.yml keeps the spec's stage order and never marks a release latest before promotion (fix 5)", async () => {
+  test("release.yml keeps its stage order and never marks a release latest before promotion", async () => {
     const wf = await load("release.yml");
     expect((wf.jobs.prepare as Job & { if?: string }).if).toBe("github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'");
     expect(Object.fromEntries(Object.entries(wf.jobs).map(([n, j]) => [n, needsOf(j)]))).toEqual({
@@ -450,7 +450,7 @@ describe("controller rulings (task 28)", () => {
     expect(cmds("publish")).toEqual([expect.stringMatching(/ --draft=false --latest=false$/)]);
   });
 
-  test.each(PRIVILEGED)("%s: job and step conditions are exactly the ruled ones, and nothing continues on error (re-review)", async (name) => {
+  test.each(PRIVILEGED)("%s: job and step conditions are exactly the expected ones, and nothing continues on error", async (name) => {
     const IFS: Record<string, Record<string, string | undefined>> = {
       "release.yml": { prepare: "github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'" },
       "promote.yml": {},
@@ -476,7 +476,7 @@ describe("controller rulings (task 28)", () => {
     }
   });
 
-  test.each(PRIVILEGED)("%s uses only the four first-party actions, each at its pinned commit (re-review)", async (name) => {
+  test.each(PRIVILEGED)("%s uses only the four first-party actions, each at its pinned commit", async (name) => {
     const ACTIONS: Record<string, string> = {
       "actions/checkout": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
       "oven-sh/setup-bun": "0c5077e51419868618aeaa5fe8019c62421857d6",
@@ -493,13 +493,13 @@ describe("controller rulings (task 28)", () => {
     }
   });
 
-  test("ci.yml keeps the shellcheck step and covers collect-assets.sh (ruling 4)", async () => {
+  test("ci.yml keeps the shellcheck step and covers collect-assets.sh", async () => {
     const wf = await load("ci.yml");
     const all = Object.values(wf.jobs).flatMap((j) => j.steps.map((s) => (s.run ?? "").trim()));
     expect(all).toContain("shellcheck -s sh install.sh scripts/release/make-manifest.sh scripts/release/collect-assets.sh");
   });
 
-  test("release.yml documents that the channels repository must stay public where previous/smoke c read it (ruling 5)", async () => {
+  test("release.yml documents that the channels repository must stay public where previous/smoke c read it", async () => {
     const t = await text("release.yml");
     expect(t.match(/Tropos-AI\/tropos-code-channels must stay public/g)?.length).toBeGreaterThanOrEqual(2);
   });
@@ -548,7 +548,7 @@ function makeZip(entries: Array<{ name: string; data: string; symlink?: boolean 
   return new Uint8Array(Buffer.concat([...local, ...central, new Uint8Array(end.buffer)]));
 }
 
-describe.skipIf(!Bun.which("unzip"))("the prepare job's zip-slip guard (ruling 2)", () => {
+describe.skipIf(!Bun.which("unzip"))("the prepare job's zip-slip guard", () => {
   const INPUTS = ["install.sh", "SHA256SUMS", ...["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "linux-x64-musl", "linux-arm64-musl"].map((p) => `tropos-${p}`)];
   let dir: string;
   afterEach(() => removeDir(dir));
@@ -594,7 +594,7 @@ describe.skipIf(!Bun.which("unzip"))("the prepare job's zip-slip guard (ruling 2
   });
 });
 
-describe("release.yml draft: only gh's \"release not found\" counts as no release (M1)", () => {
+describe("release.yml draft: only gh's \"release not found\" counts as no release", () => {
   const dirs: string[] = [];
   afterEach(async () => {
     for (const d of dirs.splice(0)) await removeDir(d);

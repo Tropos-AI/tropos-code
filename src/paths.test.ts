@@ -95,7 +95,7 @@ describe("safeWhich", () => {
   });
 });
 
-describe("C6 layout paths", () => {
+describe("workspace layout paths", () => {
   test("the workspace holds the chief's files; agents stay at the root", () => {
     expect(workspaceDir("/h")).toBe("/h/workspace");
     expect(workspaceFile("/h", "USER.md")).toBe("/h/workspace/USER.md");

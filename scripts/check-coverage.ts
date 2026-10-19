@@ -18,7 +18,7 @@ export const EXEMPT: Record<string, string> = {
   "src/cli/lifecycle/types.ts": "type-only module",
   "src/doctor/types.ts": "type-only module",
   "src/service/types.ts": "type-only module",
-  "src/install/build-flags.ts": "test-build branches run only in compiled e2e binaries (amendment A3)",
+  "src/install/build-flags.ts": "test-build branches run only in compiled e2e binaries",
 };
 
 /** Every non-test source file under src/, as repo-relative paths. */

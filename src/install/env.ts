@@ -1,5 +1,5 @@
 // src/install/env.ts
-/** The only variables background updates and health checks receive (spec §11, amendment A8). */
+/** The only variables background updates and health checks receive. */
 export const ENV_ALLOW_LIST: readonly string[] = [
   "HOME",
   "PATH",

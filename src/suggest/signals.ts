@@ -1,5 +1,5 @@
 // src/suggest/signals.ts — what is worth suggesting to the owner right now, and the <suggestions> block that tells the
-// agent. Setup signals come from P4's reminders (src/onboard/reminders.ts), never from a second detection.
+// agent. Setup signals come from the onboarding reminders (src/onboard/reminders.ts), never from a second detection.
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { neutraliseHarnessTags } from "../context/tags";

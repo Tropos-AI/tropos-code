@@ -14,7 +14,7 @@ const QUARANTINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const QUARANTINE_RE = /^\.corrupt-(.+)-(\d+)$/;
 
 /**
- * Spec §10.5. Deletes only managed versions outside the keep set, and only while holding their exclusive
+ * Deletes only managed versions outside the keep set, and only while holding their exclusive
  * version lock, which no running session shares. Unmanaged files and `.unmanaged-*` are never touched.
  */
 export async function cleanup(s: EngineSession): Promise<string[]> {

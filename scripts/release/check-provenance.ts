@@ -1,6 +1,6 @@
 // scripts/release/check-provenance.ts
 // Before anything is signed: was this artifact built by release-build.yml, from a version tag of this repository,
-// at the exact tagged commit, which is on main — and is it byte-for-byte what GitHub recorded? (spec §7.3, A4)
+// at the exact tagged commit, which is on main — and is it byte-for-byte what GitHub recorded?
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PLATFORMS } from "../../src/install/platform";

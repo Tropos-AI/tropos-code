@@ -59,7 +59,7 @@ async function healthCheckOnce(bin: string, version: string, env: NodeJS.Process
 }
 
 /**
- * `<bin> --version` must exit 0 printing exactly "<v> (Tropos Code)\n" within the timeout (spec §10.2).
+ * `<bin> --version` must exit 0 printing exactly "<v> (Tropos Code)\n" within the timeout.
  * A run that cannot reach a verdict is retried once before it is reported as "unknown".
  */
 export async function defaultHealthCheck(bin: string, version: string, env: NodeJS.ProcessEnv = process.env, timeoutMs = HEALTH_TIMEOUT_MS, spawn: typeof Bun.spawn = Bun.spawn): Promise<HealthResult> {

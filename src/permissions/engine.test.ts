@@ -110,7 +110,7 @@ describe("decide — rules", () => {
   });
 });
 
-describe("decide — fix round 1", () => {
+describe("decide — wrappers, interpreters and bare rules", () => {
   const holes = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
   test("redirect and path-qualified wrapper forms of a denied command are denied", () => {
     expect(decide(bash("2>&1 rm x"), holes).behavior).toBe("deny");
@@ -177,7 +177,7 @@ describe("decide — fix round 1", () => {
   });
 });
 
-describe("decide — final review fixes", () => {
+describe("decide — path-qualified words, Unicode spaces and writes inside .git", () => {
   const deny = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
   test("deny rules see through path-qualified command words", () => {
     expect(decide(bash("/bin/rm -rf x"), deny).behavior).toBe("deny");

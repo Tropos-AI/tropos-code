@@ -1,4 +1,4 @@
-// src/gateway/projects.ts — the project registry (spec §2.4): the built-in `default` project plus the ones in gateway.json.
+// src/gateway/projects.ts — the project registry: the built-in `default` project plus the ones in gateway.json.
 import { existsSync } from "node:fs";
 import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";

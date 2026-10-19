@@ -82,7 +82,7 @@ describe("startNativeSession", () => {
     expect(r).toMatchObject({ kind: "native", holdsLock: true, announcement: null, updateSpawned: false });
   });
 
-  test("an unmanaged local build never spawns a background update, even when one is due (I3)", async () => {
+  test("an unmanaged local build never spawns a background update, even when one is due", async () => {
     f = await makeEngineFixture();
     await writeFile(versionPath(f.layout, "1.0.0"), "local build");
     await symlink(versionPath(f.layout, "1.0.0"), f.layout.binLink);

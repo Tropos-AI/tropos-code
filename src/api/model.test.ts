@@ -12,7 +12,7 @@ const base: TurnRequest = {
 };
 
 describe("buildParams", () => {
-  test("request defaults from the spec", () => {
+  test("request defaults", () => {
     const p = buildParams(base);
     expect(p.model).toBe("claude-opus-5-5");
     expect(p.max_tokens).toBe(MAX_TOKENS);

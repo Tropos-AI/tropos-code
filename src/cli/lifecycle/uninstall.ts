@@ -1,4 +1,4 @@
-// src/cli/lifecycle/uninstall.ts — `tcode uninstall`: remove the service, the binary and (only if asked) the data (spec §2.3).
+// src/cli/lifecycle/uninstall.ts — `tcode uninstall`: remove the service, the binary and (only if asked) the data.
 import { parseArgs } from "node:util";
 import { resolveLayout } from "../../install/layout";
 import { serviceManager } from "../../service";

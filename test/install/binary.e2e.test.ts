@@ -44,7 +44,7 @@ async function exec(bin: string, args: string[], extraEnv: Record<string, string
 }
 
 describe("production binary", () => {
-  test("contains no test-build hooks (amendment A3)", async () => {
+  test("contains no test-build hooks", async () => {
     const bytes = Buffer.from(await Bun.file(prodBin).arrayBuffer());
     for (const marker of ["TROPOS_TEST_RELEASES_BASE", "TROPOS_TEST_SIGNERS", "TROPOS_TEST_BUILD"]) expect(bytes.includes(marker)).toBe(false);
   });

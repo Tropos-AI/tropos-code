@@ -1,4 +1,4 @@
-// src/home/layout.ts — the old home layout -> the C6 layout: the table, the one-release read fallback, and layout.json.
+// src/home/layout.ts — the old home layout -> the workspace layout: the table, the one-release read fallback, and layout.json.
 import { lstatSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";

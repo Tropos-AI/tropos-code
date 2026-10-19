@@ -43,7 +43,7 @@ async function placeSymlink(dir: string, target: string, link: string): Promise<
   }
 }
 
-/** New symlink beside the old one, then rename over it: there is never a moment without `tcode` (spec §10.3 step 7). */
+/** New symlink beside the old one, then rename over it: there is never a moment without `tcode`. */
 export async function switchLink(l: Layout, version: string): Promise<void> {
   await placeSymlink(l.binDir, versionPath(l, version), l.binLink);
   await syncAliases(l);

@@ -1,6 +1,6 @@
 // web/src/components/pages/settings/autonomy-panel.tsx — Settings › Autonomy: how freely chats (Telegram, phones) act.
 // One global level, an optional override per project, and the test commands a project may run unasked. It talks to
-// P2's autonomy.get/set/confirmTests. A chat can only lower the level; raising is done here, which is why the
+// the admin API's autonomy.get/set/confirmTests. A chat can only lower the level; raising is done here, which is why the
 // "run unconfined" consent is asked in this panel before anything is sent.
 import { useEffect, useState } from "react";
 

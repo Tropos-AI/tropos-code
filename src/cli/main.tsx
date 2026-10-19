@@ -117,7 +117,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
           const loaded = (await loadSettings(settingsPaths(cwd, troposHome(env)))).settings;
           settings = { autoUpdates: loaded.autoUpdates, autoUpdatesChannel: loaded.autoUpdatesChannel };
         } catch (e) {
-          // A background update never fails loudly (spec 11): it falls back to defaults.
+          // A background update never fails loudly: it falls back to defaults.
           if (!(e instanceof SettingsError)) throw e;
           if (!(cmd.kind === "update" && cmd.background)) {
             err(`tcode: ${e.message}\n`);

@@ -1,4 +1,4 @@
-// web/src/components/chat/tool-meta.ts — which icon a tool card shows (spec §5 "Tool call card").
+// web/src/components/chat/tool-meta.ts — which icon a tool card shows.
 import { parseMcpName } from "@core/ui/tool-view";
 
 import type { IconName } from "@/components/ui/icon";

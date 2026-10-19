@@ -1,4 +1,4 @@
-# .github/workflows/release-build.yml — unprivileged: runs at the tag, no secrets, read-only token (spec §7.2).
+# .github/workflows/release-build.yml — unprivileged: runs at the tag, no secrets, read-only token.
 name: release-build
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
           token: ""
       - run: bun install --frozen-lockfile
       - run: bun run build:all
-      - name: Collect release inputs into a fresh directory (ruling 3)
+      - name: Collect release inputs into a fresh directory
         run: |
           mkdir release-inputs
           sh scripts/release/collect-assets.sh dist "${GITHUB_REF_NAME#v}" release-inputs
@@ -76,7 +76,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: TROPOS_TEST_BINARY="$PWD/release-inputs/tropos-$PLATFORM" bun test --timeout 20000 test/install
 
-  # Decision D2: no job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
+  # No job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
   test-musl:
     needs: build
     strategy:
@@ -94,7 +94,7 @@ jobs:
         with:
           name: release-inputs
           path: release-inputs
-      - name: Bun for musl (decision D2)
+      - name: Bun for musl
         env:
           BUNZIP: ${{ matrix.bunzip }}
           BUNSHA: ${{ matrix.bunsha }}

@@ -1,6 +1,6 @@
 // src/onboard/engine.ts — what the setup wizard (terminal and web) knows and does. The steps' state is read from the
 // real machine; every outside effect (network, Docker, the service manager, the clock) comes in through OnboardDeps,
-// so the tests run against temp homes and fakes (control-plane spec §1, §2.6).
+// so the tests run against temp homes and fakes.
 import Anthropic from "@anthropic-ai/sdk";
 import { join } from "node:path";
 import { DEFAULT_MODEL } from "../config/constants";

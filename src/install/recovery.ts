@@ -6,7 +6,7 @@ import { checkHealthy, checkVerified, isManaged, listManagedVersions, type Healt
 
 export interface RecoveryReport {
   actions: string[];
-  /** Set when no verified version can be active (amendment A11: rollback and background updates fail with it). */
+  /** Set when no verified version can be active (rollback and background updates fail with it). */
   fatal: string | null;
 }
 
@@ -39,7 +39,7 @@ async function pickFallback(s: EngineSession, exclude: ReadonlySet<string>): Pro
   return { version: null, inconclusive };
 }
 
-/** First Healthy of: current, pending.to, pending.from, previous, then other managed versions newest first (spec §10.6). */
+/** First Healthy of: current, pending.to, pending.from, previous, then other managed versions newest first. */
 export async function selectFallback(s: EngineSession, exclude: ReadonlySet<string> = new Set()): Promise<string | null> {
   return (await pickFallback(s, exclude)).version;
 }
@@ -51,7 +51,7 @@ export async function dropLink(s: EngineSession): Promise<boolean> {
 }
 
 /**
- * Never activates a version that is not Healthy; never deletes files (spec §10.6). Runs under the install lock.
+ * Never activates a version that is not Healthy; never deletes files. Runs under the install lock.
  * Only a missing/unverified file or a health check that ran and failed counts as broken; a health check that could
  * not be run leaves the active version and the state alone and is reported.
  */
@@ -93,7 +93,7 @@ export async function recover(s: EngineSession, read: ReadStateResult): Promise<
   };
 
   if (link.kind === "foreign") {
-    // Not ours: never switched or removed (spec §4.4); only the bookkeeping is settled.
+    // Not ours: never switched or removed; only the bookkeeping is settled.
     const pending = read.kind === "ok" && read.state.pending !== null;
     if (read.kind === "corrupt" || pending) {
       if (read.kind === "corrupt") note(`install state was unreadable (${read.reason}); rebuilt it`);

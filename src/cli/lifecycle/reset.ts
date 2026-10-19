@@ -1,4 +1,4 @@
-// src/cli/lifecycle/reset.ts — `tcode reset`: put ~/.tropos back to a chosen earlier state (spec §2.3), like openclaw's reset --scope.
+// src/cli/lifecycle/reset.ts — `tcode reset`: put ~/.tropos back to a chosen earlier state, like openclaw's reset --scope.
 import { lstat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";

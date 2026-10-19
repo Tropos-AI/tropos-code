@@ -94,7 +94,7 @@ export function ghClient(repo: string, token?: string, io: { run?: GhRunner; fet
   };
 }
 
-/** Verifies with `ssh-keygen -Y verify` against the given allowed_signers file (spec §4.3); then reads version and commit. */
+/** Verifies with `ssh-keygen -Y verify` against the given allowed_signers file; then reads version and commit. */
 export function sshVerifyManifest(signersPath: string) {
   return async (bytes: Uint8Array, signature: string): Promise<{ version: string; commit: string } | null> => {
     const dir = await mkdtemp(join(tmpdir(), "verify-"));

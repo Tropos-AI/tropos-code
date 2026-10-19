@@ -1,4 +1,4 @@
-// src/web/admin/api.ts — the host-level admin API of `tcode web` and the gateway (spec §2.7). No Node imports: the
+// src/web/admin/api.ts — the host-level admin API of `tcode web` and the gateway. No Node imports: the
 // browser app imports this too. Each area's methods live in their own interface so the pieces that implement and use
 // them can be written side by side; AdminMap is their union. Secrets are write-only: nothing here returns a key.
 

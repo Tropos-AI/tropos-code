@@ -30,7 +30,7 @@ export const COMMAND = "tcode";
 /** The command's name before 0.3.0, kept as an alias. */
 export const LEGACY_COMMAND = "tropos";
 
-/** Spec §9. XDG variables count only when absolute; install.sh applies the same rule. */
+/** XDG variables count only when absolute; install.sh applies the same rule. */
 export function resolveLayout(env: NodeJS.ProcessEnv = process.env, home?: string): Layout {
   const h = home ?? (env.HOME && isAbsolute(env.HOME) ? env.HOME : homedir());
   const xdg = (name: string, fallback: string) => {
@@ -110,7 +110,7 @@ export function currentUser(): DirOwner {
  * A real directory owned by the user, never world-writable, and group-writable only when the group is the
  * user's own user-private group (name equals the user's name). A shared primary group such as macOS `staff`
  * is refused: every local user is a member, so group write would let them replace installed binaries.
- * Spec §10.3 with amendment A1 (Ubuntu's umask 002 and user-private groups). Fails closed on unknown names.
+ * This allows Ubuntu's umask 002 with user-private groups. Fails closed on unknown names.
  */
 export async function checkSafeDir(path: string, user: DirOwner = currentUser()): Promise<void> {
   let st;

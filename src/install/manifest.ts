@@ -59,7 +59,7 @@ const manifestSchema = z
 
 const integrity = (message: string) => new InstallError("integrity", message);
 
-/** The one canonical byte form (spec §5.3): fixed key and platform order, two-space indent, LF, one final newline. */
+/** The one canonical byte form: fixed key and platform order, two-space indent, LF, one final newline. */
 export function serializeManifest(m: Manifest): string {
   const platforms: Record<string, unknown> = {};
   for (const p of PLATFORMS) {
@@ -94,11 +94,11 @@ export function parseManifest(bytes: Uint8Array): Manifest {
   return manifest;
 }
 
-/** Verifies the signature with the pinned keys, then parses (spec §4.3). */
+/** Verifies the signature with the pinned keys, then parses. */
 export function verifyManifest(bytes: Uint8Array, signature: string, trusted: readonly TrustedKey[] = TRUSTED_KEYS): VerifiedManifest {
   const result = verifySshSig({ message: bytes, armoredSignature: signature, namespace: NAMESPACE_MANIFEST, principal: SIGNER_PRINCIPAL, trusted });
   if (!result.ok) {
-    // Spec §6.1: a binary that predates a key rotation cannot verify new releases and must be reinstalled.
+    // A binary that predates a key rotation cannot verify new releases and must be reinstalled.
     const hint = result.reason.startsWith("signed by an untrusted key") ? "; if the Tropos release key was rotated, reinstall with install.sh" : "";
     throw integrity(`manifest signature rejected: ${result.reason}${hint}`);
   }

@@ -20,7 +20,7 @@ test("an existing Docker install reads as it is: docker, ask, not yet chosen in 
   expect(await readChatSettings(testDeps(home))).toMatchObject({ autonomy: "ask", backend: "docker", explicit: false, confinement: "sandbox-exec" });
 });
 
-test("saving Balanced on a confined machine writes chat.autonomy and backend host through P2's setters, and marks it chosen", async () => {
+test("saving Balanced on a confined machine writes chat.autonomy and backend host through the gateway's setters, and marks it chosen", async () => {
   await saveChatSettings(testDeps(home), { autonomy: "balanced", backend: "host" });
   expect(await chat()).toEqual({ autonomy: "balanced", backend: "host" });
   expect((await readChatSettings(testDeps(home))).explicit).toBe(true);
@@ -56,7 +56,7 @@ test("bwrapInstallCommand takes the first package manager found, in order", () =
   expect(bwrapInstallCommand(() => null)).toBeNull();
 });
 
-test("AutonomyLevel and C3 Autonomy are the same union", () => {
+test("AutonomyLevel and the gateway's Autonomy are the same union", () => {
   const a: Autonomy = "balanced" as AutonomyLevel;
   const b: AutonomyLevel = a;
   expect(b).toBe("balanced");

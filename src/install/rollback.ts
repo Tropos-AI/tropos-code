@@ -6,7 +6,7 @@ import { linkResolvesTo, readLink, switchLink } from "./link";
 import { dropLink, selectFallback } from "./recovery";
 import { checkHealthy, listManagedVersions } from "./verify";
 
-/** Spec §10.7: only to a Healthy `previous`; the version rolled back from is skipped by background updates. */
+/** Only to a Healthy `previous`; the version rolled back from is skipped by background updates. */
 export async function rollback(deps: EngineDeps, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
   const run = await withInstallLock(deps, { wait: true, ...hooks }, async (s, recovery) => {
     if (recovery.fatal) throw new InstallError("integrity", recovery.fatal);

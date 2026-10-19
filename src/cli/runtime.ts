@@ -64,7 +64,7 @@ export interface AppContext {
   providers: ProviderControl;
   shell: string;
   localSettingsPath: string;
-  /** Commands, skills, agents, hooks, MCP, snapshots, formatters, memory (phase 2). */
+  /** Commands, skills, agents, hooks, MCP, snapshots, formatters, memory. */
   ext: Extensions;
   /** Recent and favorite models for the /model picker. */
   modelPrefs: ModelPrefsControl;

@@ -11,7 +11,7 @@ const now = new Date("2026-10-13T12:00:00Z");
 const base: AutoUpdateInputs = { env: {}, native: true, print: false, stdinTTY: true, stdoutTTY: true, autoUpdates: true, state: null, now };
 const withNext = (iso: string | null) => ({ ...emptyState(), autoUpdate: { ...emptyState().autoUpdate, nextCheck: iso } });
 
-describe("shouldCheck (spec §11)", () => {
+describe("shouldCheck", () => {
   test("due on a native interactive session", () => {
     expect(shouldCheck(base)).toEqual({ check: true });
   });

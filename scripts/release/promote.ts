@@ -1,6 +1,6 @@
 // scripts/release/promote.ts
-// Convergent promotion of channel pointers and GitHub's latest release (spec §7.4–7.6).
-// Runs only from a checkout of main in a job that executes no code from the release tag (spec §6.2).
+// Convergent promotion of channel pointers and GitHub's latest release.
+// Runs only from a checkout of main in a job that executes no code from the release tag.
 // Imports nothing but src/install/version.ts (no dependencies), so privileged jobs need no `bun install`.
 import { compareVersions, isVersion } from "../../src/install/version";
 
@@ -50,7 +50,7 @@ function parseRecord(bytes: Uint8Array | null): VerifiedRecord | null {
   }
 }
 
-/** Decision D1-B: `verified-<x>.json` on the mutable channels release. */
+/** `verified-<x>.json` on the mutable channels release. */
 export function recordsOnChannelsRelease(channels: GitHubClient): VerificationRecords {
   return {
     read: async (v) => parseRecord(await channels.readAsset("channels", `verified-${v}.json`)),
@@ -74,7 +74,7 @@ export interface PromoteDeps {
 type Slot = "latest" | "latest.bak" | "stable" | "stable.bak";
 type Channel = "latest" | "stable";
 const READ_BACK_ATTEMPTS = 10;
-const READ_BACK_DELAY_MS = 3000; // decision D6: at least twice the observed --clobber gap
+const READ_BACK_DELAY_MS = 3000; // at least twice the observed --clobber gap
 
 /** A definite "not verified" answer; transport and API errors are never one (they propagate). */
 class NotVerified extends Error {}
@@ -146,7 +146,7 @@ async function isVerifiedRelease(d: PromoteDeps, x: string): Promise<boolean> {
   return record !== null && record.version === x && record.commit === commit;
 }
 
-/** `promote.ts latest <x>` — every step checks its own effect first, so re-running resumes (spec §7.4). */
+/** `promote.ts latest <x>` — every step checks its own effect first, so re-running resumes. */
 export async function promoteLatest(d: PromoteDeps, x: string): Promise<void> {
   const { commit } = await validateRelease(d, x);
   if (!(await d.channels.getRelease("channels"))) {
@@ -178,7 +178,7 @@ export async function promoteLatest(d: PromoteDeps, x: string): Promise<void> {
   }
 }
 
-/** `promote.ts stable <x>` (spec §7.4). */
+/** `promote.ts stable <x>`. */
 export async function promoteStable(d: PromoteDeps, x: string): Promise<void> {
   const { commit } = await validateRelease(d, x);
   const record = await d.records.read(x);
@@ -194,7 +194,7 @@ export async function promoteStable(d: PromoteDeps, x: string): Promise<void> {
 }
 
 /**
- * `promote.ts check [--repair]` (spec §7.4): never points a slot at an unverified release, never lowers a verified slot.
+ * `promote.ts check [--repair]`: never points a slot at an unverified release, never lowers a verified slot.
  * Every slot is judged before anything is repaired, so an error while judging changes nothing.
  */
 export async function checkChannels(d: PromoteDeps, repair: boolean): Promise<{ ok: boolean; problems: string[]; repaired: string[] }> {
@@ -251,7 +251,7 @@ export async function checkChannels(d: PromoteDeps, repair: boolean): Promise<{ 
 }
 
 /**
- * For smoke-public b/c (spec §7.3 step 7). b tests the installer users currently get: the release promoted to
+ * For smoke-public b/c. b tests the installer users currently get: the release promoted to
  * channels/latest, which promotion makes GitHub latest. It is read from channels, not from GitHub's latest flag,
  * because the API can name a release published with --latest=false as latest (spike D6a; seen again in the
  * 2026-10-14 dry run for a second release), which would skip b. b is skipped when nothing is promoted yet or the
@@ -279,7 +279,7 @@ if (import.meta.main) {
     console.error("GITHUB_REPOSITORY is not set");
     process.exit(64);
   }
-  // Spec §7.1: writes to the channels repository use only CHANNELS_WRITE_TOKEN, never the ambient token.
+  // Writes to the channels repository use only CHANNELS_WRITE_TOKEN, never the ambient token.
   const writesChannels = command === "latest" || command === "stable" || (command === "check" && arg === "--repair");
   const channelsToken = process.env.CHANNELS_WRITE_TOKEN || undefined;
   if (writesChannels && !channelsToken) {
@@ -287,7 +287,7 @@ if (import.meta.main) {
     process.exit(1);
   }
   const { ghClient, sshVerifyManifest } = await import("./github");
-  // Decision D1-B: slots and verification records live on the channels repository; tropos-code releases are immutable.
+  // Slots and verification records live on the channels repository; tropos-code releases are immutable.
   const channelsRepo = process.env.CHANNELS_REPOSITORY || "Tropos-AI/tropos-code-channels";
   const main: GitHubClient = {
     ...ghClient(repo),

@@ -86,7 +86,7 @@ describe("checkSafeDir", () => {
     await checkSafeDir(dir, user);
   });
 
-  test("accepts group-writable dir owned by the user's primary group (Ubuntu umask 002, amendment A1)", async () => {
+  test("accepts group-writable dir owned by the user's primary group (Ubuntu umask 002)", async () => {
     await chmod(dir, 0o775);
     const st = await stat(dir);
     await checkSafeDir(dir, { uid: user.uid, gid: st.gid, user: "alice", group: "alice" });

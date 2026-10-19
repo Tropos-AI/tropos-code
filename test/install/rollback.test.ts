@@ -11,7 +11,7 @@ import { makeEngineFixture, type EngineFixture } from "./helpers/engine";
 let f: EngineFixture;
 afterEach(() => f?.close());
 
-describe("rollback (spec §10.7)", () => {
+describe("rollback", () => {
   test("switches to previous and skips the version rolled back from", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
@@ -33,7 +33,7 @@ describe("rollback (spec §10.7)", () => {
     expect(e.message).toStartWith("no verified previous version to roll back to");
   });
 
-  test("a corrupted previous version is never activated (R6.3)", async () => {
+  test("a corrupted previous version is never activated", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     await f.release("1.1.0");
@@ -83,7 +83,7 @@ describe("rollback (spec §10.7)", () => {
     expect(await f.state()).toMatchObject({ current: "1.1.0", pending: null, skip: { "1.0.0": "health-check" } });
   });
 
-  test("an inconclusive post-switch check keeps the rollback target active (75), never drops the link (residual I1)", async () => {
+  test("an inconclusive post-switch check keeps the rollback target active (75), never drops the link", async () => {
     await twoVersions();
     let switched = false;
     const health = async (b: string, v: string) => {

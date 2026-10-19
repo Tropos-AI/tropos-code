@@ -210,7 +210,7 @@ export class ConfinedBackend implements ExecBackend {
 
   /**
    * Whether a command this backend started may still run something; forgets the ones that are over. Tracked by
-   * process group. Residual (ruled): on macOS a process that calls setsid leaves its group, so it can outlive this
+   * process group. Residual: on macOS a process that calls setsid leaves its group, so it can outlive this
    * tracking and plant after the baseline is re-taken; the writable-link rule and the profile's .git write denies
    * still apply to it. On Linux the pid namespace ends with bwrap.
    */

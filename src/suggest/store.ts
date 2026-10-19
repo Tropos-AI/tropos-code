@@ -71,7 +71,7 @@ export class SuggestionStore {
       if (outcome === "mentioned") s.mentioned[id] = now;
       else s.declined[id] = now; // taking a suggestion is done with it, like saying no
     });
-    // P4's `reminded` list stays the one record of a setup step being raised, so a step is never raised twice.
+    // The onboarding `reminded` list stays the one record of a setup step being raised, so a step is never raised twice.
     if (id.startsWith(SETUP_PREFIX)) await markReminded(this.home, id.slice(SETUP_PREFIX.length) as OnboardStepId);
   }
 

@@ -1,4 +1,4 @@
-// web/src/components/chat/PermissionModal.tsx — asks before a tool runs (spec §5 "Permission prompt"), like the terminal's
+// web/src/components/chat/PermissionModal.tsx — asks before a tool runs, like the terminal's
 // PermissionDialog: an Interior Modal that a backdrop click cannot dismiss, a preview of exactly what will run with hidden
 // characters made visible, and three answers — 1 Yes, 2 Yes and don't ask again (only when a rule is offered and nothing
 // is hidden), 3 No with optional feedback. Esc means No. Keys are ignored for a moment after a prompt appears so typing

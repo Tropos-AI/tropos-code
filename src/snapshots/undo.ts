@@ -19,7 +19,7 @@ interface RedoEntry {
 }
 
 /**
- * The per-session undo/redo stacks over a SnapshotStore. History is append-only (spec §2.3): undo
+ * The per-session undo/redo stacks over a SnapshotStore. History is append-only: undo
  * reverts files, never messages, and the model hears about it through a one-shot reminder.
  */
 export class UndoManager {

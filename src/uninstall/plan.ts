@@ -65,7 +65,7 @@ export async function inspectLink(l: Layout, link: string): Promise<LinkVerdict>
   return inVersions ? { kind: "ours", target: raw } : { kind: "foreign", why: `points to ${raw}, not into ${l.versions}` };
 }
 
-/** Shell startup files that may carry the installer's PATH block (spec §2.2). */
+/** Shell startup files that may carry the installer's PATH block. */
 export function rcFileCandidates(userHome: string, env: NodeJS.ProcessEnv): string[] {
   const list = [".zshrc", ".zprofile", ".bashrc", ".profile", ".bash_profile", ".bash_login", ".config/fish/config.fish"].map((p) => join(userHome, p));
   const zdot = env.ZDOTDIR;

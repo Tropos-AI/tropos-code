@@ -84,7 +84,7 @@ const { values } = parseArgs({
 
 const define: Record<string, string> = {
   "process.env.NODE_ENV": '"production"',
-  // Production builds compile the test hooks out (src/install/build-flags.ts, amendment A3).
+  // Production builds compile the test hooks out (src/install/build-flags.ts).
   TROPOS_TEST_BUILD: values["test-build"] ? "true" : "false",
 };
 if (values["test-signers"] && !values["test-build"]) throw new Error("--test-signers only makes sense with --test-build");

@@ -17,7 +17,7 @@ beforeAll(async () => {
 afterAll(() => removeDir(dir));
 
 describe("manifest", () => {
-  test("serializeManifest is the canonical form of spec §5.3", () => {
+  test("serializeManifest is the canonical form", () => {
     const text = serializeManifest(sampleManifest());
     const lines = text.split("\n");
     expect(lines.length).toBe(69); // 68 lines + the empty string after the final newline

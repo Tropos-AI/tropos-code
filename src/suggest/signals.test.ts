@@ -16,7 +16,7 @@ const EMPTY = { declined: {}, mentioned: {}, tests: {} };
 test("a skipped setup step is suggested once, ever", () => {
   expect(computeSignals(FACTS, EMPTY, NOW).map((s) => s.id)).toEqual(["setup:telegram"]);
   expect(computeSignals(FACTS, { ...EMPTY, mentioned: { "setup:telegram": NOW - 90 * DAY } }, NOW)).toEqual([]);
-  expect(computeSignals({ ...FACTS, setupOpen: [] }, EMPTY, NOW)).toEqual([]); // reminded (P4's list) or done since
+  expect(computeSignals({ ...FACTS, setupOpen: [] }, EMPTY, NOW)).toEqual([]); // reminded (the onboarding list) or done since
 });
 
 test("declined signals never come back; others come back after a week", () => {
@@ -38,7 +38,7 @@ test("failing tests, a routine without jobs, and at most three", () => {
   expect(computeSignals({ ...FACTS, setupOpen: [], journalDays: 4, cronJobs: 0 }, EMPTY, NOW)).toEqual([]);
 });
 
-test("setup text comes from P4's reminder topics", () => {
+test("setup text comes from the onboarding reminder topics", () => {
   expect(computeSignals(FACTS, EMPTY, NOW)[0]!.text).toContain("Telegram, so they can talk to you from their phone");
 });
 

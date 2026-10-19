@@ -7,7 +7,7 @@ export const SIGNER_PRINCIPAL = "tropos-release";
 export const NAMESPACE_MANIFEST = "tropos-manifest";
 export const NAMESPACE_INSTALLER = "tropos-installer";
 
-/** release/allowed_signers, embedded at build time. There is no runtime override (spec §4.2). */
+/** release/allowed_signers, embedded at build time. There is no runtime override. */
 export const ALLOWED_SIGNERS_TEXT: string = allowedSigners;
 
 /** Empty until the key ceremony; an empty set makes every verification fail closed. */

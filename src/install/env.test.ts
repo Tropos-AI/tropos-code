@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { minimalEnv } from "./env";
 
 describe("minimalEnv", () => {
-  test("keeps only the allow-list (spec §11, amendment A8)", () => {
+  test("keeps only the allow-list", () => {
     const env = minimalEnv({
       HOME: "/h",
       PATH: "/bin",

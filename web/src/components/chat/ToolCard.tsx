@@ -1,5 +1,5 @@
 // web/src/components/chat/ToolCard.tsx — one tool call: a white card with the tool's icon, `Title(args)` from
-// @core/ui/tool-view, a status dot, and its result (spec §5 "Tool call card").
+// @core/ui/tool-view, a status dot, and its result.
 import { memo, useMemo, type ReactNode } from "react";
 
 import type { TranscriptItem } from "@core/ui/transcript";

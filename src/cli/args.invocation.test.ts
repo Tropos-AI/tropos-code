@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { CLI_CASES, parseOutcome } from "../../test/helpers/cli-cases";
 import { CliError, matchSubcommand, parseCli, parseInvocation } from "./args";
 
-describe("parseInvocation keeps every existing invocation (spec §12.2)", () => {
+describe("parseInvocation keeps every existing invocation", () => {
   for (const c of CLI_CASES) {
     const becomes = c.note.includes("(becomes a subcommand)");
     test(`${JSON.stringify(c.argv)} — ${becomes ? "subcommand" : "unchanged"}`, () => {
@@ -67,7 +67,7 @@ describe("subcommand shapes", () => {
     }
   });
 
-  test("-- keeps argv unchanged for the existing parser (amendment A2)", () => {
+  test("-- keeps argv unchanged for the existing parser", () => {
     expect(parseInvocation(["--", "-p"])).toEqual({ kind: "session", options: parseCli(["--", "-p"]) });
   });
 

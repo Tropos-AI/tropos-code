@@ -8,7 +8,7 @@ export interface CliCase {
 
 const ID = "3f2b8c1e-9a4d-4e2f-8b1c-0d9e8f7a6b5c";
 
-/** Every invocation shape we promise to keep (spec §12.2). Never remove a case; only add. */
+/** Every invocation shape we promise to keep. Never remove a case; only add. */
 export const CLI_CASES: readonly CliCase[] = [
   { argv: [], note: "no arguments" },
   { argv: ["hello"], note: "one-word prompt" },

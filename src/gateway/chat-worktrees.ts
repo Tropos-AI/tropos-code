@@ -1,4 +1,4 @@
-// src/gateway/chat-worktrees.ts — a chat in a registered repo works in its own git worktree (spec §2.6); the owner
+// src/gateway/chat-worktrees.ts — a chat in a registered repo works in its own git worktree; the owner
 // finishes the task with buttons: merge, open a PR, keep the branch or discard it.
 import { existsSync } from "node:fs";
 import type { AppContext } from "../cli/runtime";

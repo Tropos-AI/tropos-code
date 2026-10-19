@@ -1,4 +1,4 @@
-// src/gateway/worktrees.ts — git worktrees for chat work (spec §2.6): a chat in a registered repo edits a copy under
+// src/gateway/worktrees.ts — git worktrees for chat work: a chat in a registered repo edits a copy under
 // ~/.tropos/worktrees/<project>/<task> on its own branch, and the owner then merges, opens a PR, keeps or discards it.
 import { randomBytes } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";

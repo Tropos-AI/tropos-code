@@ -1,7 +1,7 @@
 // scripts/release/targets.ts
 import type { Platform } from "../../src/install/platform";
 
-/** Release platform → Bun compile target (spec §5.1). Order matches PLATFORMS. */
+/** Release platform → Bun compile target. Order matches PLATFORMS. */
 export const RELEASE_TARGETS: Record<Platform, Bun.Build.CompileTarget> = {
   "darwin-arm64": "bun-darwin-arm64",
   "darwin-x64": "bun-darwin-x64",

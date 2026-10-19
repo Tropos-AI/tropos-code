@@ -28,7 +28,7 @@ function ctx(overrides: Partial<CommandContext> = {}) {
   return { c, out, err };
 }
 
-describe("oneTimeInstallNotice (spec §11)", () => {
+describe("oneTimeInstallNotice", () => {
   test.each([
     ["stable", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 'stable', switch the update channel to 'stable' in the dashboard (tcode dashboard).`],
     ["1.2.3", { autoUpdates: true, autoUpdatesChannel: "latest" }, `Background updates follow the 'latest' channel and may move you to a newer version. To stay on 1.2.3, turn background updates off in the dashboard (tcode dashboard).`],
@@ -47,7 +47,7 @@ describe("runInstallCommand", () => {
     expect(out.join("")).toStartWith("Usage: tcode rollback");
   });
 
-  test("not a native install: exit 73 (R1.4)", async () => {
+  test("not a native install: exit 73", async () => {
     f = await makeEngineFixture();
     const { c, err } = ctx({ execPath: "/usr/local/bin/bun" });
     for (const cmd of [{ kind: "update", background: false, alias: "update" }, { kind: "rollback" }, { kind: "install", force: false }] as const) {
@@ -92,7 +92,7 @@ describe("runInstallCommand", () => {
   });
 });
 
-describe("runInstallCommand fix round 1", () => {
+describe("runInstallCommand exit codes and messages", () => {
   const bg = { kind: "update", background: true, alias: "update" } as const;
   const fg = { kind: "update", background: false, alias: "update" } as const;
 
@@ -168,7 +168,7 @@ describe("runInstallCommand fix round 1", () => {
   });
 });
 
-describe("commands hold the in-use lock of the version they run from (I2, spec §10.1)", () => {
+describe("commands hold the in-use lock of the version they run from", () => {
   test("install <current> --force on a damaged current, run from it: busy, file untouched, points to install.sh", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["0.9.0", "1.0.0"], current: "1.0.0", previous: "0.9.0", link: "1.0.0" });
@@ -258,7 +258,7 @@ describe("after an update", () => {
   });
 });
 
-describe("recovery reporting (D2, M5)", () => {
+describe("recovery reporting", () => {
   test("recovery actions are printed even when the command then fails", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.0.0", link: "1.1.0" });
@@ -269,7 +269,7 @@ describe("recovery reporting (D2, M5)", () => {
     expect(err.join("")).toContain(`tcode: adopted 1.1.0, which ${f.layout.binLink} points to\n`);
   });
 
-  test("install and update print the fatal recovery condition and carry on (A11)", async () => {
+  test("install and update print the fatal recovery condition and carry on", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0"], current: "1.0.0", link: "1.0.0" });
     await appendFile(versionPath(f.layout, "1.0.0"), "damage");

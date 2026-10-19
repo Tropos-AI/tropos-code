@@ -1,4 +1,4 @@
-// web/src/components/chat/ModelPicker.tsx — "Select model" (spec §5 "Model picker"), the web twin of src/ui/ModelPicker:
+// web/src/components/chat/ModelPicker.tsx — "Select model", the web twin of src/ui/ModelPicker:
 // rows from @core/ui/model-list (Favorites, Recent, one section per ready provider; one ranked list while searching),
 // every ready provider's models loading in parallel, a star per row, effort on Interior Slider Detents. The search field
 // is a combobox over the listbox: ↑↓ move, Enter picks, Ctrl+F stars, Esc clears the search, then closes.

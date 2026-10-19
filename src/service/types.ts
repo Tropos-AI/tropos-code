@@ -1,4 +1,4 @@
-// src/service/types.ts — running the gateway as a background service (spec §2.5).
+// src/service/types.ts — running the gateway as a background service.
 export interface ServiceSpec {
   /** The command the service runs, e.g. ["/home/u/.local/bin/tcode", "gateway"]. */
   programArguments: string[];

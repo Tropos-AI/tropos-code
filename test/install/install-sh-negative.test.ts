@@ -57,7 +57,7 @@ describe("signature and manifest (fail closed)", () => {
     await nothingInstalled(sb.home);
   });
 
-  test("an empty pinned key set rejects a valid signature (A5)", async () => {
+  test("an empty pinned key set rejects a valid signature", async () => {
     const sb = await makeSandbox({ signers: "# no keys yet\n", base: srv.base });
     expect((await sb.run(["1.0.0"])).code).toBe(65);
   });
@@ -102,7 +102,7 @@ describe("binary integrity", () => {
     expect(r.stdout).toContain("downloading the uncompressed binary");
   });
 
-  test("an asset larger than the manifest says is cut off by the file-size limit (R8.2)", async () => {
+  test("an asset larger than the manifest says is cut off by the file-size limit", async () => {
     const r1 = await makeFixtureRelease({ version: "1.0.0", key, dir: root, binary: handoffBinary() });
     srv.put("v1.0.0", asset, Buffer.concat([r1.binary, new Uint8Array(8 * 1024 * 1024)]));
     srv.put("v1.0.0", `${asset}.zst`, "junk");
@@ -129,7 +129,7 @@ describe("network and channels", () => {
     expect((await (await sandbox()).run(["1.0.0"])).code).toBe(69);
   });
 
-  test("stable with both slots missing fails clearly (R7.3)", async () => {
+  test("stable with both slots missing fails clearly", async () => {
     srv.setLatest("v1.0.0");
     const r = await (await sandbox()).run(["stable"]);
     expect(r.code).toBe(69);
@@ -137,7 +137,7 @@ describe("network and channels", () => {
     expect(srv.requests.some((p) => p.includes("/download/v"))).toBe(false);
   }, 60_000);
 
-  test("latest with both slots missing and no GitHub latest release fails the same way (R7.3)", async () => {
+  test("latest with both slots missing and no GitHub latest release fails the same way", async () => {
     const sb = await sandbox();
     const r = await sb.run();
     expect(r.code).toBe(69);
@@ -147,14 +147,14 @@ describe("network and channels", () => {
     await nothingInstalled(sb.home);
   }, 60_000);
 
-  test("latest with the server down says the server could not be reached (R7.3)", async () => {
+  test("latest with the server down says the server could not be reached", async () => {
     srv.stop();
     const r = await (await sandbox()).run();
     expect(r.code).toBe(69);
     expect(r.stderr).toContain("could not be reached");
   }, 60_000);
 
-  test("an explicit version works before any promotion (R7.3)", async () => {
+  test("an explicit version works before any promotion", async () => {
     expect((await (await sandbox()).run(["1.0.0"])).code).toBe(0);
   });
 });
@@ -204,7 +204,7 @@ describe("dependencies and platform", () => {
     expect((await (await sandbox()).run(args)).code).toBe(64);
   });
 
-  test("an explicit empty argument is a usage error, not latest (spec 8.2 step 1)", async () => {
+  test("an explicit empty argument is a usage error, not latest", async () => {
     srv.put("channels", "latest", "1.0.0\n");
     const sb = await sandbox();
     const r = await sb.run([""]);

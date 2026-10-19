@@ -8,7 +8,7 @@ import type { RemoteDeps } from "./remote";
 import { emptyState, readState, writeState, type InstallState } from "./state";
 import type { HealthCheck, VerifyContext } from "./verify";
 
-/** Named points where tests kill the process to prove crash consistency (spec §13 layer 4). Not reachable from the CLI. */
+/** Named points where tests kill the process to prove crash consistency. Not reachable from the CLI. */
 export type CrashPoint = "after-download" | "after-rename" | "after-pending" | "after-swap" | "after-state" | "mid-cleanup";
 
 export interface EngineDeps extends RemoteDeps {
@@ -17,7 +17,7 @@ export interface EngineDeps extends RemoteDeps {
   health: HealthCheck;
   /** The running binary's version; recorded in the install lock for "who holds it" messages. */
   selfVersion: string;
-  /** The native version this process runs from and holds the in-use lock of (spec §10.1); unset for `install --self` and dev runs. */
+  /** The native version this process runs from and holds the in-use lock of; unset for `install --self` and dev runs. */
   runningVersion?: string;
   user?: DirOwner;
   flock?: FlockFn;
@@ -65,7 +65,7 @@ export interface LockedRun<T> {
   recovery: RecoveryReport;
 }
 
-/** Every engine operation: safe directories, install lock, state, recovery — then `fn` (spec §10.3 step 1). */
+/** Every engine operation: safe directories, install lock, state, recovery — then `fn`. */
 export interface LockOptions {
   wait: boolean;
   onWait?: (holder: LockInfo | null) => void;

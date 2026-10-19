@@ -1,5 +1,5 @@
 // test/install/helpers/crash-child.ts
-// Runs one engine operation in its own process and SIGKILLs itself at config.crashAt (spec §13 layer 4).
+// Runs one engine operation in its own process and SIGKILLs itself at config.crashAt.
 import { readFileSync } from "node:fs";
 import { cleanup } from "../../../src/install/cleanup";
 import { withInstallLock, type EngineDeps } from "../../../src/install/engine";

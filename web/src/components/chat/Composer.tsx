@@ -1,4 +1,4 @@
-// web/src/components/chat/Composer.tsx — the message box pinned under the transcript (spec §5 "Composer"): an
+// web/src/components/chat/Composer.tsx — the message box pinned under the transcript: an
 // auto-growing textarea in a well, `/` command and `@` file suggestions, the queue, send ⇄ interrupt, the permission
 // mode and a hint row. Enter sends, Shift+Enter adds a line; while a turn runs, sending queues.
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";

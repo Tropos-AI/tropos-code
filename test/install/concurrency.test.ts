@@ -17,7 +17,7 @@ async function child(op: "install" | "cleanup", target?: string): Promise<{ code
   return { code, result: JSON.parse(out.trim().split("\n").at(-1)!) };
 }
 
-describe("concurrency (spec §13 layer 3)", () => {
+describe("concurrency", () => {
   test("two installs at once: one installs, the other waits and finds nothing to do", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
@@ -28,7 +28,7 @@ describe("concurrency (spec §13 layer 3)", () => {
     expect(await readLink(f.layout)).toEqual({ kind: "ours", version: "1.0.0" });
   });
 
-  test("cleanup keeps a version another process is running, and removes it once that process exits (R5.4)", async () => {
+  test("cleanup keeps a version another process is running, and removes it once that process exits", async () => {
     f = await makeEngineFixture();
     for (const v of ["0.7.0", "0.8.0", "0.9.0", "1.0.0"]) await f.release(v);
     for (const v of ["0.7.0", "0.8.0", "0.9.0"]) await installTarget(f.deps, v, false);

@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/release/make-manifest.sh <version> <commit> <build-date> <assets-dir>
-# Prints the canonical manifest (spec §5.3) for tropos-<platform> and tropos-<platform>.zst in <assets-dir>.
-# Runs only from a checkout of main (spec §6.2). The caller validates the output with manifest.awk and manifest.ts.
+# Prints the canonical manifest for tropos-<platform> and tropos-<platform>.zst in <assets-dir>.
+# Runs only from a checkout of main. The caller validates the output with manifest.awk and manifest.ts.
 set -eu
 [ $# -eq 4 ] || { echo "usage: make-manifest.sh <version> <commit> <build-date> <assets-dir>" >&2; exit 64; }
 version=$1 commit=$2 build_date=$3 dir=$4

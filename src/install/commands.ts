@@ -47,7 +47,7 @@ export function productionEngineDeps(env: NodeJS.ProcessEnv, version: string, lo
   };
 }
 
-/** Spec §11 "One-time installs". */
+/** The notice for a one-time install of a channel or version other than the one background updates follow. */
 export function oneTimeInstallNotice(target: string, settings: CommandContext["settings"]): string | null {
   if (!settings.autoUpdates || target === settings.autoUpdatesChannel) return null;
   const lead = `Background updates follow the '${settings.autoUpdatesChannel}' channel and may move you to a newer version.`;
@@ -67,7 +67,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
   const log = (line: string) => {
     if (background) ctx.out(`${new Date().toISOString()} ${line}\n`);
   };
-  // Printed as soon as recovery has run, so its actions show even when the command then fails (A11: install and
+  // Printed as soon as recovery has run, so its actions show even when the command then fails (install and
   // update also print the fatal condition and carry on; rollback fails with it, which the catch below prints).
   const report = (r: RecoveryReport) => {
     for (const a of r.actions) ctx.err(`tcode: ${a}\n`);
@@ -84,7 +84,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
     // reporting it "missing" (install --self links tcode itself).
     if (cmd.kind !== "install-self") await migrateCommandLink(deps.layout);
     if (cmd.kind === "install-self") {
-      // Runs from install.sh's temporary folder: there is no installed version of ours to hold (spec §10.1).
+      // Runs from install.sh's temporary folder: there is no installed version of ours to hold.
       const run = await installSelf(deps, { kind: "self", execPath: ctx.execPath, manifestPath: cmd.manifest, signaturePath: cmd.signature, compiledVersion: ctx.version }, hooks);
       ctx.out(`Installed Tropos Code ${run.value.version}.\n`);
       return 0;
@@ -93,7 +93,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
     if (running === null) {
       throw new InstallError("local", "not a native install; install with install.sh");
     }
-    // Spec §10.1: like any session, a command holds the in-use lock of the version it runs from, so neither its
+    // Like any session, a command holds the in-use lock of the version it runs from, so neither its
     // own cleanup nor a damaged-file replacement can remove the binary that is running.
     await ensureLayout(deps.layout, deps.user);
     const inUse = await lockVersionShared(deps.layout, running, { flock: deps.flock });
