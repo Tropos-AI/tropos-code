@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { Ledger } from "../learning/ledger";
@@ -153,4 +153,38 @@ test("undo with nothing recorded says so", async () => {
 
 test("createdByFor maps actors", () => {
   expect([createdByFor("agent"), createdByFor("review"), createdByFor("user")]).toEqual(["chief", "review", "user"]);
+});
+
+test("a symlinked .archive or revisions folder is refused and the outside is left untouched", async () => {
+  const outside = await makeTmpDir();
+  try {
+    await createSpecialist(home, INPUT, opts());
+    await symlink(outside, join(home, "agents", ".archive"));
+    await expect(archiveSpecialist(home, "reviewer", opts())).rejects.toThrow(SpecialistError);
+    expect(existsSync(join(home, "agents", "reviewer", "AGENT.md"))).toBe(true);
+    expect(await readdir(outside)).toEqual([]);
+    await expect(restoreSpecialist(home, "x", opts())).rejects.toThrow(SpecialistError);
+
+    await symlink(outside, join(home, "agents", "reviewer", "revisions"));
+    await expect(updateSpecialist(home, "reviewer", { model: "haiku" }, opts())).rejects.toThrow(SpecialistError);
+    expect(await readdir(outside)).toEqual([]);
+    expect((await loadSpecialists(home)).find((s) => s.id === "reviewer")!.revision).toBe(1);
+  } finally {
+    await removeDir(outside);
+  }
+});
+
+test("undoing an archive never reads or removes through a symlinked archive entry", async () => {
+  const outside = await makeTmpDir();
+  try {
+    await createSpecialist(home, INPUT, opts());
+    const dir = await archiveSpecialist(home, "reviewer", { ...opts(), now: new Date("2026-10-16T00:00:00Z") });
+    await writeFile(join(outside, "keep.md"), "keep");
+    await rm(dir, { recursive: true });
+    await symlink(outside, dir);
+    await undoSpecialist(home, "reviewer", ledger);
+    expect(await readFile(join(outside, "keep.md"), "utf8")).toBe("keep");
+  } finally {
+    await removeDir(outside);
+  }
 });
