@@ -36,6 +36,16 @@ function collect(child: ChildProcess) {
     child.once("close", (code) => resolve({ out, err, code }));
   });
 }
+/**
+ * SIGKILLs a command's process group until its output closes. On macOS one signal to a group misses a child that its
+ * shell is forking at that moment, and that child (a `sleep 30`) would hold the output open past the test's timeout.
+ */
+async function stop(backend: DockerBackend, child: ChildProcess, closed: Promise<unknown>) {
+  for (;;) {
+    backend.signal(child, "SIGKILL");
+    if (await Promise.race([closed.then(() => true), Bun.sleep(100).then(() => false)])) return;
+  }
+}
 async function until(check: () => boolean, ms = 10_000) {
   const end = Date.now() + ms;
   while (!check()) {
@@ -247,7 +257,7 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     const child = backend.spawn({ shell: "/bin/sh", script: "echo x > .git/commondir; sleep 30", cwd: ws, env: {} });
     const result = collect(child);
     await until(() => existsSync(join(ws, ".git", "commondir")));
-    backend.signal(child, "SIGKILL"); // the escalation path: the wrapper dies before its own check
+    await stop(backend, child, result); // the escalation path: the wrapper dies before its own check
     const r = await result;
     expect(r.code).not.toBe(0);
     expect(r.err).toContain(COMMONDIR_TAMPERED);
@@ -263,7 +273,7 @@ describe("DockerBackend commondir check (fake docker client)", () => {
       await other.close(); // the fake `rm -f` leaves the command running
       expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
     } finally {
-      if (child.pid) process.kill(-child.pid, "SIGKILL");
+      await stop(other, child, result);
     }
     // close() acted first, so the child's own check finds nothing; the message close() found is still reported.
     const r = await result;
@@ -275,7 +285,7 @@ describe("DockerBackend commondir check (fake docker client)", () => {
     const child = backend.spawn({ shell: "/bin/sh", script, cwd: ws, env: {} });
     const result = collect(child);
     await until(() => existsSync(join(ws, ".git", "commondir")));
-    backend.signal(child, "SIGKILL"); // the wrapper dies before its own check, so only the host can report
+    await stop(backend, child, result); // the wrapper dies before its own check, so only the host can report
     const r = await result;
     expect(r.err.split(COMMONDIR_TAMPERED).length - 1).toBe(2); // the command's fake line, then the host's real one
     expect(existsSync(join(ws, ".git", "commondir"))).toBe(false);
@@ -400,8 +410,7 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
     const before = sweeps().length;
     expect(await backend.quiesce()).toContain("still running");
     expect(sweeps().length).toBe(before);
-    if (child.pid) process.kill(-child.pid, "SIGKILL");
-    await done;
+    await stop(backend, child, done);
     expect(await backend.quiesce()).toBeUndefined();
     expect(sweeps().length).toBe(before + 1);
   });
@@ -494,8 +503,7 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
     expect(hold.ok).toBe(false);
     expect(hold.ok ? "" : hold.reason).toContain("background job");
     expect(hold.ok ? "" : hold.reason).toContain("KillShell");
-    if (child.pid) process.kill(-child.pid, "SIGKILL");
-    await done;
+    await stop(backend, child, done);
     (await held(backend)).release();
   });
 
@@ -523,8 +531,7 @@ describe("DockerBackend stops what a guest's commands leave running (fake docker
     const hold = await pending;
     expect(hold.ok).toBe(false);
     expect(hold.ok ? "" : hold.reason).toContain("Interrupted");
-    if (child.pid) process.kill(-child.pid, "SIGKILL");
-    await done;
+    await stop(backend, child, done);
   });
 
   test("an owner's container holds nothing back: a command runs while a file tool works", async () => {

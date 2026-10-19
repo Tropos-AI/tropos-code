@@ -89,6 +89,8 @@ export interface ChannelAdapter {
   stop(): Promise<void>;
   /** Sends text to a chat of this channel (`chatKey` is `<name>:<id>`), e.g. a scheduled job's result. */
   deliver?(chatKey: string, text: string): Promise<void>;
+  /** Drops what a chat has queued and lets go of it (its sender was revoked or demoted); its next message opens it afresh. */
+  forget?(chatKey: string): void;
 }
 
 /** What a channel needs to show and change the project a chat is working in. */

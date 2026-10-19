@@ -1,6 +1,6 @@
 // src/ui/ModelPicker.tsx — /model without an argument: search every connected provider's models, keep favorites and recents, set effort.
 import { Box, Text, useInput } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Effort } from "../config/constants";
 import type { ProviderStatus } from "../providers/router";
 import { Pane } from "./design/Pane";
@@ -46,7 +46,9 @@ export function ModelPicker({ control, prefs, currentModel, effort: initialEffor
   const [query, setQuery] = useState("");
   const [chosen, setChosen] = useState<{ key: string; id: string } | null>(null);
   const [effort, setEffort] = useState<Effort>(initialEffort);
-  const [busy, setBusy] = useState(false);
+  // A ref, not state: a key that arrives after a save has settled but before React re-renders must not be dropped,
+  // and two keys in one burst must not both start a save.
+  const busy = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -92,31 +94,31 @@ export function ModelPicker({ control, prefs, currentModel, effort: initialEffor
 
   const pick = async () => {
     if (!model) return;
-    setBusy(true);
+    busy.current = true;
     try {
       await prefs.recordUse(model.id);
     } catch {
       // Not being able to remember a recent model must not block switching to it.
     }
-    setBusy(false);
+    busy.current = false;
     onPick(model.id, effort);
   };
 
   const toggleFavorite = async () => {
     if (!model) return;
-    setBusy(true);
+    busy.current = true;
     try {
       await prefs.toggleFavorite(model.id);
       setSaved(await prefs.get());
     } catch {
       // Same as above: favorites are optional.
     } finally {
-      setBusy(false);
+      busy.current = false;
     }
   };
 
   useInput((ch, key) => {
-    if (busy) return;
+    if (busy.current) return;
     if (key.escape) {
       if (query) {
         setQuery("");

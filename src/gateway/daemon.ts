@@ -121,6 +121,8 @@ export interface GatewayRun {
     git?: (dir: string) => Promise<void>;
     /** Turns the self-update watcher on (even for a run from source) with these fakes. */
     selfUpdate?: Partial<Pick<SelfUpdateDeps, "linked" | "supervised" | "checkForUpdates" | "schedule">>;
+    /** How often revoked senders' sessions and jobs are looked for (default 5 s). */
+    reapEveryMs?: number;
   };
 }
 
@@ -744,14 +746,14 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
     );
     // A revoked sender's open sessions and scheduled jobs stop within a few seconds.
     const reaper = setInterval(() => {
-      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k, opts) => pool.close(k, opts), isApproved: (c, s) => run.pairing.isApproved(c, s), isOwner: (c, s) => run.pairing.isOwner(c, s), roleOf: (k) => roles.get(k), cron: cronStore, log: (m) => run.err(`gateway: revocation: ${m}\n`) })
+      reapRevoked({ sessionKeys: () => pool.keys(), closeSession: (k, opts) => pool.close(k, opts), isApproved: (c, s) => run.pairing.isApproved(c, s), isOwner: (c, s) => run.pairing.isOwner(c, s), roleOf: (k) => roles.get(k), cron: cronStore, log: (m) => run.err(`gateway: revocation: ${m}\n`), forgetChat: (k) => adapters.forEach((a) => a.forget?.(k)) })
         .then((r) => {
           if (r.sessions.length || r.jobs.length) run.err(`gateway: revoked sender: closed ${r.sessions.length} session(s), disabled ${r.jobs.length} job(s)\n`);
         })
         .catch(() => {});
       // A device revoked by another process (or expired) loses its open tabs too.
       webServer?.recheckDevices().catch(() => {});
-    }, 5000);
+    }, run.seams?.reapEveryMs ?? 5000);
     reaper.unref();
     stopReaper = () => clearInterval(reaper);
     selfUpdate?.start();

@@ -282,6 +282,12 @@ export class TelegramAdapter implements ChannelAdapter {
     this.opening.clear();
   }
 
+  /** Drops a chat and what it queued (the gateway's reaper, before it closes the chat's session). */
+  forget(chatKey: string): void {
+    const chat = this.chats.get(chatKey);
+    if (chat) this.dropChat(chat);
+  }
+
   /** Sends text to `telegram:<chat id>`, split to Telegram's message size. */
   async deliver(chatKey: string, text: string): Promise<void> {
     const id = /^telegram:(-?\d{1,20})$/.exec(chatKey)?.[1];
@@ -816,29 +822,29 @@ export class TelegramAdapter implements ChannelAdapter {
         this.sendAll(chat, unknown ? `Unknown command.\n${HELP_TEXT}` : e instanceof UserFacingError ? e.message : "Something went wrong running that. Try again, or send /new.");
       }
     }
-    chat.running = false;
     if (busy) {
+      chat.running = false;
       this.drain(chat);
       return;
     }
-    this.flushTools(chat);
-    // A turn that ended without a turn_end event (an error) still releases what it held.
-    this.flushSummary(chat);
-    this.flushNotices(chat);
-    if (reason) {
-      const note = turnEndNote(reason);
-      if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
-    }
-    if (await this.projectMoved(chat)) return;
-    if (reason === "end_turn") {
-      // Held as running, so a message that arrives meanwhile waits until the buttons are out (they belong to this turn).
-      chat.running = true;
-      try {
-        await this.offerWorktree(chat);
-      } finally {
-        chat.running = false;
+    // Held as running until the turn has wrapped up (a project move, the worktree buttons, which belong to this turn):
+    // a message that arrives meanwhile waits, or its turn would run beside this wrap-up and get buttons of its own.
+    try {
+      this.flushTools(chat);
+      // A turn that ended without a turn_end event (an error) still releases what it held.
+      this.flushSummary(chat);
+      this.flushNotices(chat);
+      if (reason) {
+        const note = turnEndNote(reason);
+        if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
       }
+      if (await this.projectMoved(chat)) return;
+      if (reason === "end_turn") await this.offerWorktree(chat);
+    } finally {
+      chat.running = false;
     }
+    // What was learned during the wrap-up was held as if a turn ran.
+    this.flushNotices(chat);
     this.drain(chat);
   }
 
@@ -879,7 +885,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private async projectMoved(chat: Chat): Promise<boolean> {
     if (!this.projects || chat.projectId === undefined) return false;
     const now = (await this.projects.current(`${CHANNEL}:${chat.chatId}`).catch(() => undefined))?.id;
-    if (now === undefined || now === chat.projectId || chat.running) return false;
+    if (now === undefined || now === chat.projectId) return false;
     const queued = chat.queue.splice(0);
     this.dropChat(chat);
     if (queued.length === 0 || this.stopped) return true;
@@ -894,7 +900,9 @@ export class TelegramAdapter implements ChannelAdapter {
     chat.queue.length = 0;
     for (const ask of chat.asks.values()) clearTimeout(ask.timer);
     chat.detach();
-    if (this.chats.get(key) === chat) this.chats.delete(key);
+    // A chat forgotten earlier comes by again when its last turn ends: the chat and opening there now are a newer one's.
+    if (this.chats.get(key) !== chat) return;
+    this.chats.delete(key);
     this.opening.delete(key);
   }
 

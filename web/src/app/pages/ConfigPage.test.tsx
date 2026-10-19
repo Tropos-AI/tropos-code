@@ -223,7 +223,9 @@ describe("ConfigPanel form", () => {
     const calls: Array<{ path: string; value: unknown }> = [];
     const schema = { type: "object", properties: { telegram: { type: "object", properties: { botToken: { type: "string", description: "Bot token." } } } } };
     const current = { file: "gateway" as const, path: "/g.json", schema, value: { telegram: { botToken: "••••" } } };
-    await mountAdmin(ConfigPanel, { ...setHandler(current, calls), "config.get": () => current });
+    // Only the gateway file has the field: were the settings tab showing it too, the lookup could find that tab's input
+    // while it fades out, and the keys would go to an input about to be removed.
+    await mountAdmin(ConfigPanel, { ...setHandler(current, calls), "config.get": (p) => ((p as { file: string }).file === "gateway" ? current : view()) });
     fireEvent.click(await screen.findByRole("tab", { name: "Gateway" }));
     await screen.findByLabelText("botToken");
     const input = screen.getByLabelText("botToken") as HTMLInputElement;

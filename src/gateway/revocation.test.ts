@@ -41,6 +41,20 @@ test("a session opened as owner is closed once its sender is no longer the owner
   expect(closed).toEqual(["telegram:1@a"]);
 });
 
+test("the chat of a revoked sender or a demoted owner is forgotten before its session closes; others are left alone", async () => {
+  const calls: string[] = [];
+  await reapRevoked({
+    sessionKeys: () => ["telegram:1@a", "telegram:2@a", "telegram:3@a"],
+    closeSession: async (k) => void calls.push(`close ${k}`),
+    isApproved: async (_c, s) => s !== "1",
+    isOwner: async (_c, s) => s === "3",
+    roleOf: () => "owner",
+    cron: { list: () => [] as never, setEnabled: () => undefined as never },
+    forgetChat: (k) => void calls.push(`forget ${k}`),
+  });
+  expect(calls).toEqual(["forget telegram:1", "close telegram:1@a", "forget telegram:2", "close telegram:2@a"]);
+});
+
 test("a demoted owner's session closes without a final review: it would still run with owner powers", async () => {
   const dir = await makeTmpDir("reaper");
   try {
