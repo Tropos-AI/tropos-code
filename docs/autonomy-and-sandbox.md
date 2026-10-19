@@ -155,7 +155,9 @@ default project is initialised for you). Treat the project as the thing a chat c
   `~/Documents` isn't denied as a whole: projects often live there, and a project inside a denied folder couldn't
   read its own files. The per-sandbox caches are writable and shared by every chat.
 - Another project's `.env` files are found when the chat's session starts, so one created later is covered from the
-  next session; one deeper than two folders below a project's root isn't covered.
+  next session; one deeper than two folders below a project's root isn't covered. A project with too many folders
+  to search is made unreadable as a whole instead (around the chat's own project, when that lies inside it), and
+  `tcode doctor` names it.
 - Git config that already runs programs keeps doing so: a `diff.external` or a textconv driver in your own or the
   repo's config runs on `git diff` in a chat. A chat can't write `.git/config` to add one.
 - A repo whose `.git/hooks` is a link, or whose hooks link into the project, is refused on its first command (a chat

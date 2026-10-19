@@ -2,7 +2,7 @@
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
 import { type Dirent, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentsDir, isInside, worktreesDir } from "../paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
@@ -125,8 +125,9 @@ export interface ConfinementPaths {
    */
   instructionFiles: string[];
   /**
-   * The `.env` files of the owner's other projects (see otherProjectSecrets): unreadable. Denied after the read
-   * carve-outs, since the default project, inside one, is usually one of those projects.
+   * The `.env` files of the owner's other projects, or a whole project too big to search (see otherProjectSecrets):
+   * unreadable, files and folders alike. Denied after the read carve-outs, since the default project, inside one, is
+   * usually one of those projects.
    */
   otherProjectSecrets: string[];
   platform: NodeJS.Platform;
@@ -136,39 +137,75 @@ export interface ConfinementPaths {
 const ENV_FILE = /^\.env(\..+)?$|^\.envrc$/;
 /** How far below a project's root its `.env` files are looked for: `apps/web/.env` is found. */
 const ENV_SCAN_DEPTH = 2;
-/** Entries looked at across all other projects before the search stops; what it found so far is still denied. */
-const ENV_SCAN_ENTRIES = 20_000;
+/** Folders the search reads in one project; a project with more is denied whole instead (otherProjectSecrets). */
+export const ENV_SCAN_DIRS = 2_000;
 const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", ".venv", "venv", "vendor", "target"]);
 
 /**
  * The `.env` files in the owner's other projects (a project inside the session's own is part of it, and the session's
  * project is never searched, even when it lies inside another one). Real paths: a linked `.env` is denied where it
- * points. Found when the confinement is built, so a file created later in another project isn't covered until the
- * next session.
+ * points. Each project has its own search; one with more folders than that reads is denied whole (wholeProject), so a
+ * file is never missed for lack of time. Found when the confinement is built, so a file created later in another
+ * project isn't covered until the next session.
  */
 function otherProjectSecrets(project: string, others: readonly string[]): string[] {
   const found: string[] = [];
-  let budget = ENV_SCAN_ENTRIES;
-  const visit = (dir: string, depth: number): void => {
-    if (dir === project || isInside(dir, project)) return;
+  for (const other of others) {
+    const root = real(other);
+    if (root === project || isInside(root, project)) continue;
+    found.push(...(envFiles(root, project) ?? wholeProject(root, project)));
+  }
+  return unique(found).filter((path) => !isInside(path, project));
+}
+
+/** The projects (real paths) a confined chat elsewhere can't read at all, because they have too many folders to search. */
+export function tooBigToSearch(projects: readonly string[]): string[] {
+  return unique(projects.map(real)).filter((root) => envFiles(root) === null);
+}
+
+/** One project's `.env` files, or null when it has more folders than the search reads. */
+function envFiles(root: string, project?: string): string[] | null {
+  const found: string[] = [];
+  let dirs = 0;
+  const visit = (dir: string, depth: number): boolean => {
+    if (project !== undefined && isInside(dir, project)) return true;
+    if (++dirs > ENV_SCAN_DIRS) return false;
     let entries: Dirent[];
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      return;
+      return true; // unreadable to the owner, so to the command as well
     }
     for (const entry of entries) {
-      if (--budget < 0) return;
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name)) visit(path, depth + 1);
+        if (depth < ENV_SCAN_DEPTH && !ENV_SCAN_SKIPPED.has(entry.name) && !visit(path, depth + 1)) return false;
       } else if (ENV_FILE.test(entry.name) && (entry.isFile() || (entry.isSymbolicLink() && isFile(path)))) {
         found.push(real(path));
       }
     }
+    return true;
   };
-  for (const other of others) visit(real(other), 0);
-  return unique(found).filter((path) => !isInside(path, project));
+  return visit(root, 0) ? found : null;
+}
+
+/**
+ * Denies a whole other project: its root, or, when the session's project lies inside it, everything in it except the
+ * folders that lead down to the session's project.
+ */
+function wholeProject(root: string, project: string): string[] {
+  if (!isInside(project, root)) return [root];
+  const out: string[] = [];
+  for (let dir = root; dir !== project; ) {
+    const next = join(dir, relative(dir, project).split(sep)[0]!);
+    try {
+      for (const name of readdirSync(dir)) if (join(dir, name) !== next) out.push(join(dir, name));
+    } catch {
+      // unreadable to the owner, so to the command as well
+    }
+    dir = next;
+  }
+  return out;
 }
 
 function isFile(path: string): boolean {

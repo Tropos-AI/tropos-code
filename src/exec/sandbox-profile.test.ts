@@ -22,21 +22,25 @@ const base: ConfinementPaths = {
   platform: "darwin",
 };
 
-test("the .env files of other projects are read-denied after the carve-outs, and before the chief's own files", () => {
-  const { profile, params } = sandboxProfile({ ...base, otherProjectSecrets: ["/u/.tropos/workspace/.env", "/w/other/.env"] });
+test("other projects' .env files (or whole folders) are read-denied after the carve-outs, and before the chief's own files", () => {
+  const { profile, params } = sandboxProfile({ ...base, otherProjectSecrets: ["/u/.tropos/workspace/.env", "/w/other"] });
   const carve = profile.indexOf('(allow file-read* (subpath (param "C0"))');
-  const deny = profile.indexOf('(deny file-read* (literal (param "E0")) (literal (param "E1"))');
+  const deny = profile.indexOf('(deny file-read* (subpath (param "E0")) (subpath (param "E1"))');
   expect(carve).toBeGreaterThan(0);
   expect(deny).toBeGreaterThan(carve);
   expect(deny).toBeLessThan(profile.indexOf("(deny file-read* file-write* (regex"));
   expect(params).toContainEqual(["E0", "/u/.tropos/workspace/.env"]);
-  expect(params).toContainEqual(["E1", "/w/other/.env"]);
-  expect(ruleWith(profile, '(deny file-read* (literal (param "E0"))')).toContain('(regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/\\.[Ee][Nn][Vv]$")');
+  expect(params).toContainEqual(["E1", "/w/other"]);
+  expect(ruleWith(profile, '(deny file-read* (subpath (param "E0"))')).toContain('(regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr](/.*)?$")');
 });
 
-test("another project's .env whose path the profile can't express is left out instead of refusing every session", () => {
-  const { params } = sandboxProfile({ ...base, otherProjectSecrets: ['/w/odd"name/.env', "/w/Straße/.env", "/w/ok/.env"] });
+test("another project's .env whose path the profile can't spell is still denied, by a pattern that stands in for the odd letter", () => {
+  const { profile, params } = sandboxProfile({ ...base, otherProjectSecrets: ['/w/odd"name/.env', "/w/Straße/.env", "/w/ok/.env"] });
+  // Only a path the profile can spell travels as a param; the others are matched by a regex alone.
   expect(params.filter(([k]) => k.startsWith("E")).map(([, v]) => v)).toEqual(["/w/ok/.env"]);
+  const rule = ruleWith(profile, '(deny file-read* (subpath (param "E0"))');
+  expect(rule).toContain('(regex #"^/[Ww]/[Oo][Dd][Dd][^/][^/]?[^/]?[Nn][Aa][Mm][Ee]/\\.[Ee][Nn][Vv](/.*)?$")');
+  expect(rule).toContain('(regex #"^/[Ww]/[Ss][Tt][Rr][Aa][^/][^/]?[^/]?[Ee]/\\.[Ee][Nn][Vv](/.*)?$")');
 });
 
 const ruleWith = (profile: string, head: string) => {

@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { lstat, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { RunResult } from "../types";
 import { byId, fakeRunner, makeFixture, runOne, type Fixture } from "../testing";
+import { ENV_SCAN_DIRS } from "../../exec/confinement-paths";
 import { chatExecCheck } from "./chat-exec";
 import { dockerCheck } from "./docker";
 
@@ -29,9 +31,21 @@ test("confined at autonomous: a note that commands have the network and can read
     level: "info",
     message: "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied",
     detail:
-      "Keys, tokens, shell histories and your other projects' .env files stay unreadable, but other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+      "Keys, tokens, shell histories, and the .env files in the top two folder levels of your other projects stay unreadable; other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
   });
   expect(byId(r, "chat.exec.autonomous")!.fixable).toBeFalsy();
+});
+
+test("a project with too many folders to search for .env files is named: other chats can't read it at all", async () => {
+  fx = await makeFixture();
+  const big = join(fx.root, "big");
+  for (let i = 0; i <= ENV_SCAN_DIRS; i++) await mkdir(join(big, "libs", `d${i}`), { recursive: true });
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "host", autonomy: "balanced" }, projects: [{ id: "big", name: "Big", path: big }] }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  expect(byId(r, "chat.exec.env-scan")).toMatchObject({
+    level: "info",
+    message: `Chats in other projects can't read ${realpathSync(big)} at all: it has too many folders to search for .env files`,
+  });
 });
 
 test("a single project at autonomous gets the note too; balanced everywhere doesn't", async () => {

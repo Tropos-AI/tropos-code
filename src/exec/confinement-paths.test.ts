@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CACHE_PATHS, ConfinementError, confinementPaths, requireSingleLinks, SECRET_PATHS } from "./confinement-paths";
+import { CACHE_PATHS, ConfinementError, confinementPaths, ENV_SCAN_DIRS, requireSingleLinks, SECRET_PATHS } from "./confinement-paths";
 import { SANDBOX_CACHE_ENV } from "./env";
 
 let fx: string;
@@ -54,6 +54,38 @@ test("the .env files of the owner's other projects are denied; the session's own
     otherProjects: [proj, inner, join(fx, "otherlink"), join(fx, "venvy"), join(fx, "missing")],
   });
   expect([...paths.otherProjectSecrets].sort()).toEqual([join(other, ".env"), join(other, ".env.local"), join(other, ".envrc"), join(other, "apps", "web", ".env.production")].sort());
+});
+
+const withOthers = (project: string, otherProjects: string[]) =>
+  confinementPaths({ project, home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux", otherProjects });
+/** More folders than the search looks at in one project. */
+const crowd = (...parts: string[]) => {
+  for (let i = 0; i <= ENV_SCAN_DIRS; i++) mk(...parts, `d${i}`);
+};
+
+test("a project with more folders than the search looks at is denied whole, so none of its .env files is missed", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  writeFileSync(join(big, ".env"), "x");
+  expect(withOthers(mk("proj"), [big]).otherProjectSecrets).toEqual([big]);
+});
+
+test("each project gets its own search: one too big to search doesn't leave the next one unsearched", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  const small = mk("small");
+  writeFileSync(join(small, ".env"), "x");
+  expect(withOthers(mk("proj"), [big, small]).otherProjectSecrets).toEqual([big, join(small, ".env")]);
+});
+
+test("a project too big to search that holds the session's project is denied around it, never the session's project itself", () => {
+  const big = mk("big");
+  crowd("big", "libs");
+  writeFileSync(join(big, "README.md"), "x");
+  const proj = mk("big", "apps", "app");
+  mk("big", "apps", "other-app");
+  const denied = withOthers(proj, [big]).otherProjectSecrets;
+  expect([...denied].sort()).toEqual([join(big, "README.md"), join(big, "apps", "other-app"), join(big, "libs")].sort());
 });
 
 test("without other projects nothing extra is denied", () => {

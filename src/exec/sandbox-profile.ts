@@ -41,10 +41,12 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   params.push(["CD0", paths.cacheDir]);
   const ownFiles = named("O", paths.ownFiles);
   const instructionFiles = named("I", paths.instructionFiles);
-  // Found by a search of the owner's other projects: one the profile can't express is left out rather than refusing
-  // every session over another project's file name.
-  const otherSecrets = paths.otherProjectSecrets.filter((p) => !p.includes('"') && !lengthChangingLetter(p));
-  const envFiles = named("E", otherSecrets);
+  // Found by a search of the owner's other projects. One the profile can't spell (a `"`, a letter like ß) is still
+  // denied, by a regex alone with a short wildcard for that letter, rather than refusing every session over another
+  // project's file name; the wildcard may deny a few more of that project's files, never fewer.
+  const spellable = (p: string) => !p.includes('"') && !lengthChangingLetter(p);
+  const envFiles = named("E", paths.otherProjectSecrets.filter(spellable));
+  const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"^${spellable(p) ? anyCase(p) : looseAnyCase(p)}(/.*)?$")`);
 
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
@@ -93,8 +95,8 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
-    // Other projects' .env files, after the carve-out: the default project is usually one of them.
-    ...(envFiles.length > 0 ? [`(deny file-read* ${envFiles.map((p) => `(literal ${p})`).join(" ")} ${otherSecrets.map((p) => `(regex #"^${anyCase(p)}$")`).join(" ")})`] : []),
+    // Other projects' .env files (or whole projects), after the carve-out: the default project is usually one of them.
+    ...(envPatterns.length > 0 ? [`(deny file-read* ${[...envFiles.map((p) => `(subpath ${p})`), ...envPatterns].join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
       ? [
@@ -142,6 +144,14 @@ function anyCaseForm(path: string): string {
     else out += /^[A-Za-z]$/.test(ch) ? `[${ch.toUpperCase()}${ch.toLowerCase()}]` : `(${forms.join("|")})`;
   }
   return out;
+}
+
+/** anyCase for a path it can't spell: each `"` and each letter whose case changes its length becomes a short wildcard. */
+function looseAnyCase(path: string): string {
+  const form = (p: string) => [...p].map((ch) => (ch === '"' || lengthChangingLetter(ch) ? "[^/][^/]?[^/]?" : anyCaseForm(ch))).join("");
+  const nfc = form(path.normalize("NFC"));
+  const nfd = form(path.normalize("NFD"));
+  return nfc === nfd ? nfc : `(${nfc}|${nfd})`;
 }
 
 /**
