@@ -5,6 +5,7 @@ import { mkdir, rm, stat, truncate, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { projectDir } from "../session/store";
+import { formatJournalEntry } from "./daily";
 import { ftsQuery, MAX_SESSION_BYTES, noteEntries, parseSession, SearchIndex } from "./search-index";
 
 let home: string;
@@ -30,6 +31,14 @@ async function note(cwd: string, date: string, text: string): Promise<string> {
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${date}.md`);
   await writeFile(path, text);
+  return path;
+}
+
+async function journal(date: string, entries: Array<{ cwd: string; time?: string; body: string }>): Promise<string> {
+  const dir = join(home, "workspace", "memory");
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${date}.md`);
+  await writeFile(path, `# ${date}\n\n${entries.map((e) => formatJournalEntry({ time: e.time, name: e.cwd.split("/").pop()!, path: e.cwd, body: e.body })).join("")}`);
   return path;
 }
 
@@ -266,5 +275,66 @@ describe("refresh", () => {
     index.close();
     await expect(index.refresh({ home, cwd: CWD })).rejects.toThrow();
     index = SearchIndex.open(home)!;
+  });
+});
+
+describe("journal", () => {
+  const find = (word: string, dirs: string[] = here()) => index.search(word, { source: "notes", projectDirs: dirs, limit: 10 });
+
+  test("journal entries are found for their own project only", async () => {
+    await journal("2026-10-16", [
+      { cwd: "/work/app", time: "09:12", body: "deploy uses fly" },
+      { cwd: "/work/other", time: "09:30", body: "deploy uses netlify" },
+    ]);
+    await index.refresh({ home, cwd: CWD });
+    const hits = find("deploy");
+    expect(hits.map((h) => [h.id, h.snippets.length])).toEqual([["2026-10-16", 1]]);
+    expect(hits[0]!.snippets[0]!.text).toContain("fly");
+    expect(hits[0]!.title).toBe("Notes 2026-10-16");
+    expect(hits[0]!.project).toBe(projectDir(home, CWD));
+  });
+
+  test("all projects find both, each under its project", async () => {
+    await journal("2026-10-16", [
+      { cwd: "/work/app", body: "deploy uses fly" },
+      { cwd: "/work/other", body: "deploy uses netlify" },
+    ]);
+    await index.refresh({ home, cwd: CWD });
+    const hits = find("deploy", [projectDir(home, CWD), projectDir(home, OTHER)]);
+    expect(hits.map((h) => h.project).sort()).toEqual([projectDir(home, CWD), projectDir(home, OTHER)].sort());
+  });
+
+  test("the journal is indexed even for a project with no folder, and survives an all-projects refresh", async () => {
+    await journal("2026-10-16", [{ cwd: "/work/new", body: "first thought" }]);
+    await mkdir(projectDir(home, CWD), { recursive: true });
+    await index.refresh({ home, allProjects: true });
+    expect(find("thought", [projectDir(home, "/work/new")])).toHaveLength(1);
+    await index.refresh({ home, allProjects: true });
+    expect(find("thought", [projectDir(home, "/work/new")])).toHaveLength(1);
+  });
+
+  test("an edited journal is re-indexed; a deleted day is forgotten", async () => {
+    const path = await journal("2026-10-16", [{ cwd: "/work/app", body: "alpha plan" }]);
+    await index.refresh({ home, cwd: CWD });
+    expect(find("alpha")).toHaveLength(1);
+    await journal("2026-10-16", [{ cwd: "/work/app", body: "beta plan, a longer entry" }]);
+    await index.refresh({ home, cwd: CWD });
+    expect(find("alpha")).toHaveLength(0);
+    expect(find("beta")).toHaveLength(1);
+    await rm(path);
+    await index.refresh({ home, cwd: CWD });
+    expect(find("beta")).toHaveLength(0);
+  });
+
+  test("a schema-1 index is rebuilt", async () => {
+    index.close();
+    const db = new Database(join(home, "index.db"));
+    expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(2);
+    db.exec("PRAGMA user_version = 1");
+    db.close();
+    index = SearchIndex.open(home)!;
+    const check = new Database(join(home, "index.db"));
+    expect((check.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(2);
+    check.close();
   });
 });

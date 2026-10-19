@@ -3,8 +3,9 @@ import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { journalDir } from "../paths";
 import { projectDir, type MessageParam } from "../session/store";
-import { DAY_FILE } from "./daily";
+import { DAY_FILE, readJournalDay } from "./daily";
 
 /** A session transcript's file name: "<uuid>.jsonl". */
 export const SESSION_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
@@ -144,7 +145,7 @@ export interface RefreshOptions {
   excludeSessionId?: string;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 /** Chunk rowids are docId * STRIDE + index, so a document's chunks are one rowid range (cheap to delete). */
 const STRIDE = 1 << 20;
 const SNIPPETS_PER_RESULT = 3;
@@ -236,7 +237,7 @@ async function diskFiles(dir: string): Promise<DiskFile[]> {
 
 /**
  * Full-text index (SQLite FTS5, BM25 ranking) over session transcripts and daily notes at
- * <home>/index.db. It is a cache: every file it holds can be rebuilt from the transcripts, so a
+ * <home>/index.db (the journal at workspace/memory is indexed per project too). It is a cache: every file it holds can be rebuilt from the transcripts, so a
  * schema change simply drops and rebuilds it.
  */
 export class SearchIndex {
@@ -341,24 +342,69 @@ export class SearchIndex {
       // Projects whose folder is gone entirely.
       const known = this.db.query("SELECT DISTINCT project FROM docs").all() as Array<{ project: string }>;
       for (const { project } of known) {
-        if (project.startsWith(root) && !dirs.includes(project)) this.forgetProject(project);
+        if (project.startsWith(root) && !dirs.includes(project)) this.forgetProject(project, `${journalDir(opts.home)}${sep}`);
       }
     } else {
       dirs = opts.cwd ? [projectDir(opts.home, opts.cwd)] : [];
     }
-    for (const dir of dirs) await this.refreshProject(dir, opts.excludeSessionId);
+    const journal = `${journalDir(opts.home)}${sep}`;
+    for (const dir of dirs) await this.refreshProject(dir, journal, opts.excludeSessionId);
+    await this.refreshJournal(opts.home, journal);
   }
 
-  private forgetProject(project: string): void {
-    const rows = this.db.query("SELECT id, path, mtime, size FROM docs WHERE project = ?").all(project) as DocRow[];
+  /**
+   * workspace/memory/<date>.md holds every project's entries. Each day file becomes one `note` doc per project in it
+   * (path "<file>#<project dir>"), all replaced together when the file's mtime or size changes.
+   */
+  private async refreshJournal(home: string, prefix: string): Promise<void> {
+    const dir = journalDir(home);
+    const days = new Map<string, { date: string; mtime: number; size: number }>();
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
+      const date = DAY_FILE.exec(name)?.[1];
+      if (!date) continue;
+      try {
+        const info = await stat(join(dir, name));
+        if (info.isFile() && info.size <= MAX_SESSION_BYTES) days.set(join(dir, name), { date, mtime: info.mtimeMs, size: info.size });
+      } catch {
+        // vanished between readdir and stat
+      }
+    }
+    const known = this.db.query("SELECT id, path, mtime, size FROM docs WHERE substr(path, 1, ?) = ?").all(prefix.length, prefix) as DocRow[];
+    const byFile = new Map<string, DocRow[]>();
+    for (const row of known) {
+      const file = row.path.slice(0, row.path.indexOf("#", prefix.length));
+      byFile.set(file, [...(byFile.get(file) ?? []), row]);
+    }
+    for (const [file, rows] of byFile) {
+      const day = days.get(file);
+      if (day && rows.every((r) => r.mtime === day.mtime && r.size === day.size)) continue;
+      this.db.transaction(() => rows.forEach((r) => this.deleteDoc(r.id)))();
+      byFile.delete(file);
+    }
+    for (const [file, day] of days) {
+      if (byFile.has(file)) continue;
+      const perProject = new Map<string, string[]>();
+      for (const entry of await readJournalDay(file)) {
+        const project = projectDir(home, entry.path);
+        perProject.set(project, [...(perProject.get(project) ?? []), entry.body]);
+      }
+      for (const [project, bodies] of perProject) {
+        this.indexDoc({ project, path: `${file}#${project}`, kind: "note", docId: day.date, title: `Notes ${day.date}`, cwd: null, date: day.date, mtime: day.mtime, size: day.size }, bodies.map((body, index) => ({ index, role: "", body })));
+      }
+    }
+  }
+
+  /** Drops a project's sessions and legacy notes; its journal entries live in the shared day files and stay. */
+  private forgetProject(project: string, journal: string): void {
+    const rows = this.db.query("SELECT id, path, mtime, size FROM docs WHERE project = ? AND substr(path, 1, ?) <> ?").all(project, journal.length, journal) as DocRow[];
     this.db.transaction(() => rows.forEach((r) => this.deleteDoc(r.id)))();
   }
 
-  private async refreshProject(dir: string, excludeSessionId?: string): Promise<void> {
+  private async refreshProject(dir: string, journal: string, excludeSessionId?: string): Promise<void> {
     const files = await diskFiles(dir);
     const onDisk = new Set(files.map((f) => f.path));
     const known = new Map<string, DocRow>();
-    for (const row of this.db.query("SELECT id, path, mtime, size FROM docs WHERE project = ?").all(dir) as DocRow[]) {
+    for (const row of this.db.query("SELECT id, path, mtime, size FROM docs WHERE project = ? AND substr(path, 1, ?) <> ?").all(dir, journal.length, journal) as DocRow[]) {
       known.set(row.path, row);
     }
     const gone = [...known.values()].filter((r) => !onDisk.has(r.path));
@@ -400,6 +446,13 @@ export class SearchIndex {
         if (index < STRIDE) chunks.push({ index, role: "", body });
       });
     }
+    this.indexDoc({ project, path: file.path, kind: file.kind, docId: file.docId, title, cwd, date, mtime: file.mtime, size: file.size }, chunks);
+  }
+
+  private indexDoc(
+    doc: { project: string; path: string; kind: DiskFile["kind"]; docId: string; title: string; cwd: string | null; date: string; mtime: number; size: number },
+    chunks: Array<{ index: number; role: string; body: string }>,
+  ): void {
     this.db.transaction(() => {
       const { id } = this.db
         .query(
@@ -408,10 +461,10 @@ export class SearchIndex {
              title = excluded.title, cwd = excluded.cwd, date = excluded.date, mtime = excluded.mtime, size = excluded.size
            RETURNING id`,
         )
-        .get(file.path, file.kind, project, file.docId, title, cwd, date, file.mtime, file.size) as { id: number };
+        .get(doc.path, doc.kind, doc.project, doc.docId, doc.title, doc.cwd, doc.date, doc.mtime, doc.size) as { id: number };
       this.db.query("DELETE FROM chunks WHERE rowid >= ? AND rowid < ?").run(id * STRIDE, (id + 1) * STRIDE);
       const insert = this.db.query("INSERT INTO chunks (rowid, body, role) VALUES (?, ?, ?)");
-      for (const c of chunks) insert.run(id * STRIDE + c.index, c.body, c.role);
+      for (const c of chunks) if (c.index < STRIDE) insert.run(id * STRIDE + c.index, c.body, c.role);
     })();
   }
 

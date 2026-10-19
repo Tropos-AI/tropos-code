@@ -4,9 +4,10 @@ import { join, sep } from "node:path";
 import { z } from "zod";
 import { neutraliseHarnessTags } from "../context/tags";
 import { errorText } from "../error-text";
+import { journalDir } from "../paths";
 import { projectDir, type MessageParam } from "../session/store";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../tools/types";
-import { DAY_FILE } from "./daily";
+import { DAY_FILE, readJournalDay, type JournalEntry } from "./daily";
 import {
   MAX_SESSION_BYTES,
   MESSAGE_LINE_PREFIX,
@@ -67,10 +68,12 @@ interface Candidate {
   path: string;
   project: string;
   mtime: Date;
+  /** A journal day: it holds every project's entries, so `project` is not meaningful and the scan groups them. */
+  journal?: boolean;
 }
 
 /** Session and day files of the given project directories, newest first. */
-async function candidateFiles(dirs: string[], source: SearchSource): Promise<Candidate[]> {
+async function candidateFiles(home: string, dirs: string[], source: SearchSource): Promise<Candidate[]> {
   const out: Candidate[] = [];
   const add = async (c: Omit<Candidate, "mtime">) => {
     try {
@@ -90,6 +93,13 @@ async function candidateFiles(dirs: string[], source: SearchSource): Promise<Can
         const date = DAY_FILE.exec(name)?.[1];
         if (date) await add({ kind: "note", id: date, path: join(notes, name), project: dir });
       }
+    }
+  }
+  if (source !== "sessions") {
+    const journal = journalDir(home);
+    for (const name of await readdir(journal).catch(() => [] as string[])) {
+      const date = DAY_FILE.exec(name)?.[1];
+      if (date) await add({ kind: "note", id: date, path: join(journal, name), project: "", journal: true });
     }
   }
   return out.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
@@ -162,12 +172,34 @@ function scanNotes(text: string, words: string[]): SearchResult["snippets"] {
   return out;
 }
 
+/** A journal day's entries grouped by the searched project (a key of `dirs`) they belong to. */
+function journalByProject(entries: JournalEntry[], dirs: string[], home: string): Map<string, JournalEntry[]> {
+  const out = new Map<string, JournalEntry[]>();
+  for (const e of entries) {
+    const project = projectDir(home, e.path);
+    if (dirs.includes(project)) out.set(project, [...(out.get(project) ?? []), e]);
+  }
+  return out;
+}
+
 /** The fallback: plain substring matching over the files, newest first. */
-async function scanSearch(dirs: string[], words: string[], source: SearchSource, limit: number, current: string | undefined, signal: AbortSignal): Promise<SearchResult[]> {
-  const candidates = (await candidateFiles(dirs, source)).filter((c) => !(c.kind === "session" && (c.id === current || (current && c.path.includes(`${sep}subagents${sep}${current}${sep}`)))));
+async function scanSearch(home: string, dirs: string[], words: string[], source: SearchSource, limit: number, current: string | undefined, signal: AbortSignal): Promise<SearchResult[]> {
+  const candidates = (await candidateFiles(home, dirs, source)).filter((c) => !(c.kind === "session" && (c.id === current || (current && c.path.includes(`${sep}subagents${sep}${current}${sep}`)))));
   const out: SearchResult[] = [];
   for (const c of candidates) {
     if (signal.aborted || out.length >= limit) break;
+    if (c.journal) {
+      // One result per searched project that has matching entries that day.
+      for (const [project, entries] of journalByProject(await readJournalDay(c.path), dirs, home)) {
+        const snippets: SearchResult["snippets"] = [];
+        entries.forEach((e, index) => {
+          const lower = e.body.toLowerCase();
+          if (snippets.length < SNIPPETS_PER_SESSION && words.every((w) => lower.includes(w))) snippets.push({ index, text: snippet(e.body, words) });
+        });
+        if (snippets.length > 0 && out.length < limit) out.push({ kind: "note", id: c.id, project, score: 0, title: `Notes ${c.id}`, date: c.id, snippets });
+      }
+      continue;
+    }
     let text: string;
     try {
       text = await readFile(c.path, "utf8");
@@ -252,12 +284,15 @@ async function readSession(dirs: string[], id: string, around: number | undefine
   return { content: `${head}\n\n${lines.join("\n\n")}${tail}`, summary: `${lines.length} message${lines.length === 1 ? "" : "s"}` };
 }
 
-/** Read mode for a date: that day's notes, from each project searched. */
-async function readNotes(dirs: string[], date: string): Promise<ToolOutput> {
+/** Read mode for a date: that day's notes, from each project searched (legacy notes first, then the journal). */
+async function readNotes(home: string, dirs: string[], date: string): Promise<ToolOutput> {
   const parts: string[] = [];
+  const journal = journalByProject(await readJournalDay(join(journalDir(home), `${date}.md`)), dirs, home);
   for (const dir of dirs) {
-    const text = await readFile(join(dir, "notes", `${date}.md`), "utf8").catch(() => null);
-    if (text?.trim()) parts.push(`## Notes ${date}${dirs.length > 1 ? ` (${dir})` : ""}\n${neutraliseHarnessTags(clip(text.trim(), MAX_OUTPUT_CHARS))}`);
+    const legacy = await readFile(join(dir, "notes", `${date}.md`), "utf8").catch(() => null); // LEGACY_LAYOUT
+    const entries = (journal.get(dir) ?? []).map((e) => `- ${e.time ? `${e.time} ` : ""}${e.body.replace(/\n/g, "\n  ")}`);
+    const text = [legacy?.trim() ?? "", ...entries].filter(Boolean).join("\n");
+    if (text) parts.push(`## Notes ${date}${dirs.length > 1 ? ` (${dir})` : ""}\n${neutraliseHarnessTags(clip(text, MAX_OUTPUT_CHARS))}`);
   }
   if (parts.length === 0) return { content: `No notes for ${date}.`, summary: "no notes" };
   return { content: clip(parts.join("\n\n"), MAX_OUTPUT_CHARS), summary: `notes ${date}` };
@@ -303,7 +338,7 @@ export function createSessionSearchTool(opts: SessionSearchOptions): AnyTool {
         results = null; // a broken or locked index: the scan still answers
       }
     }
-    results ??= await scanSearch(dirs, words, source, limit, current, ctx.signal);
+    results ??= await scanSearch(opts.home, dirs, words, source, limit, current, ctx.signal);
 
     const sections: string[] = [];
     let used = 0;
@@ -351,7 +386,7 @@ export function createSessionSearchTool(opts: SessionSearchOptions): AnyTool {
         if (input.session_id !== undefined) {
           const id = input.session_id.trim();
           const dirs = await projectDirs(opts.home, opts.cwd, input.all_projects);
-          if (DATE.test(id)) return await readNotes(dirs, id);
+          if (DATE.test(id)) return await readNotes(opts.home, dirs, id);
           if (!SESSION_ID.test(id)) return { content: "session_id must be a session id from a result or a date YYYY-MM-DD.", isError: true };
           return await readSession(dirs, id, input.around, input);
         }

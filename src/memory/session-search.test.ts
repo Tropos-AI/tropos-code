@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { projectDir } from "../session/store";
+import { formatJournalEntry } from "./daily";
 import { SearchIndex } from "./search-index";
 import { createSessionSearchTool, MAX_OUTPUT_CHARS, type SessionSearchOptions } from "./session-search";
 
@@ -35,6 +36,13 @@ async function note(cwd: string, date: string, text: string): Promise<void> {
   const dir = join(projectDir(home, cwd), "notes");
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${date}.md`), text);
+}
+
+async function journal(date: string, entries: Array<{ cwd: string; time?: string; body: string }>): Promise<void> {
+  const dir = join(home, "workspace", "memory");
+  await mkdir(dir, { recursive: true });
+  const body = entries.map((e) => formatJournalEntry({ time: e.time, name: e.cwd.split("/").pop()!, path: e.cwd, body: e.body })).join("");
+  await writeFile(join(dir, `${date}.md`), `# ${date}\n\n${body}`);
 }
 
 type Mode = "fts" | "scan";
@@ -198,6 +206,40 @@ describe.each(["fts", "scan"] as const)("search (%s)", (mode) => {
     expect(notes.text).not.toContain("Talk");
     expect((await run(tool, { query: "fallback", source: "sessions" })).text).not.toContain("Notes 2026-10-08");
     expect((await run(tool, { query: "fallback" })).summary).toBe("2 results");
+  });
+});
+
+describe.each(["fts", "scan"] as const)("journal (%s)", (mode) => {
+  // all_projects walks the project folders, so the other project has one (it has had sessions).
+  beforeEach(() => mkdir(projectDir(home, OTHER), { recursive: true }));
+
+  test("finds this project's journal entries only", async () => {
+    await journal("2026-10-16", [
+      { cwd: CWD, time: "09:12", body: "deploy uses fly" },
+      { cwd: OTHER, time: "09:30", body: "deploy uses netlify" },
+    ]);
+    const tool = makeTool(mode);
+    const out = await run(tool, { query: "deploy", source: "notes" });
+    expect(out.summary).toBe("1 result");
+    expect(out.text).toContain("## Notes 2026-10-16 (notes 2026-10-16)");
+    expect(out.text).toContain("fly");
+    expect(out.text).not.toContain("netlify");
+    const all = await run(tool, { query: "deploy", source: "notes", all_projects: true });
+    expect(all.text).toContain("netlify");
+  });
+
+  test("read mode with a date shows this project's journal entries and the legacy notes", async () => {
+    await journal("2026-10-16", [
+      { cwd: CWD, time: "09:12", body: "deploy uses fly" },
+      { cwd: OTHER, time: "09:30", body: "deploy uses netlify" },
+    ]);
+    await note(CWD, "2026-10-16", "- 08:00 legacy thought\n");
+    const tool = makeTool(mode);
+    const out = await run(tool, { session_id: "2026-10-16" });
+    expect(out.text).toBe("## Notes 2026-10-16\n- 08:00 legacy thought\n- 09:12 deploy uses fly");
+    const all = await run(tool, { session_id: "2026-10-16", all_projects: true });
+    expect(all.text).toContain(`(${projectDir(home, OTHER)})`);
+    expect(all.text).toContain("netlify");
   });
 });
 

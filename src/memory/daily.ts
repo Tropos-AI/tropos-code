@@ -115,6 +115,16 @@ async function readNoFollow(path: string): Promise<string | null> {
   }
 }
 
+/** A journal day file's entries; none when it is absent, unreadable or a symlink. */
+export async function readJournalDay(file: string): Promise<JournalEntry[]> {
+  try {
+    const text = await readNoFollow(file);
+    return text === null ? [] : parseJournal(text);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Appends text in one write (O_APPEND), so concurrent appends from separate processes never overwrite each other.
  * The directory is created 0700 and the file 0600; a symlink at `file` is refused.
