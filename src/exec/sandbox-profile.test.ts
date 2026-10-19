@@ -134,11 +134,17 @@ test("secret reads and writes are denied in any letter case, and the carve-outs 
   expect(carve).toBeGreaterThan(readDeny);
 });
 
-test("a protected or denied path with a non-ASCII character can't be confined: its case can't be matched safely", () => {
-  for (const over of [{ deniedReads: ["/u/.ssh", "/u/Παν/.aws"] }, { ownFiles: ["/u/.tropos/workspace/ΜΝΗΜΗ.md"] }, { project: "/w/έργο", gitDirs: ["/w/έργο/.git"], husky: ["/w/έργο/.husky"] }]) {
+test("a Greek path confines, matched in any case and in both NFC and NFD; a character whose case changes length is refused", () => {
+  const ws = "/u/Έργα/.tropos/workspace";
+  const { profile } = sandboxProfile({ ...base, deniedReads: ["/u/.ssh", "/u/Έργα/.tropos"], instructionFiles: [`${ws}/TROPOS.md`], project: "/w/Πάνος", gitDirs: ["/w/Πάνος/.git"], husky: ["/w/Πάνος/.husky"] });
+  // Each letter is its upper and lower form (σ with ς and Σ); the NFD spelling (Ε + combining acute) is an alternative.
+  expect(profile).toContain("(Π|π)(Ά|ά)(Ν|ν)(Ο|ο)(Σ|σ|ς)");
+  expect(profile).toContain("(/[Uu]/(Έ|έ)(Ρ|ρ)");
+  expect(profile).toContain("|/[Uu]/(Ε|ε)\u0301(Ρ|ρ)");
+  for (const over of [{ deniedReads: ["/u/.ssh", "/u/Straße/.aws"] }, { project: "/w/ŉame", gitDirs: ["/w/ŉame/.git"], husky: ["/w/ŉame/.husky"] }]) {
     expect(() => sandboxProfile({ ...base, ...over })).toThrow(ConfinementError);
   }
-  expect(() => sandboxProfile({ ...base, deniedReads: ["/u/Παν/.aws"] })).toThrow("non-ASCII");
+  expect(() => sandboxProfile({ ...base, deniedReads: ["/u/Straße/.aws"] })).toThrow("changes length");
 });
 
 const sandboxExec = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
@@ -186,6 +192,33 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(existsSync(join(ws, "TROPOS.md"))).toBe(false);
       const owner = confinementPaths({ project: ws, home, userHome, env: { TMPDIR: join(fx, "tmp") } });
       expect(run(owner, "echo x > TROPOS.md")).toBe(0);
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
+
+  test("a project and a home at Greek paths confine, and the protections hold for case variants of the Greek names", () => {
+    const fx = realpathSync(mkdtempSync(join(tmpdir(), "tropos-sbx-")));
+    try {
+      const userHome = join(fx, "Πάνος");
+      const ws = join(userHome, ".tropos", "workspace");
+      const project = join(fx, "Έργα", "app");
+      for (const d of [join(userHome, ".ssh"), ws, join(project, ".git", "hooks"), join(fx, "tmp")]) mkdirSync(d, { recursive: true });
+      writeFileSync(join(userHome, ".ssh", "id"), "key");
+      writeFileSync(join(project, ".git", "config"), "");
+      const paths = confinementPaths({ project, home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(paths, "echo a > ok.txt")).toBe(0);
+      expect(run(paths, "echo a > .git/hooks/pre-commit")).not.toBe(0);
+      expect(run(paths, `echo a > "${join(fx, "ΈΡΓΑ", "APP", ".GIT", "hooks", "pre-commit")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(fx, "ΠΆΝΟΣ", ".ssh", "id")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(fx, "πάνος", ".SSH", "id")}"`)).not.toBe(0);
+      // A non-owner in the chief's workspace under the Greek home: the instruction files in any case.
+      mkdirSync(join(ws, ".git"), { recursive: true });
+      const guarded = confinementPaths({ project: ws, home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") }, protectInstructions: true });
+      expect(run(guarded, "echo x > notes.txt")).toBe(0);
+      expect(run(guarded, "echo x > tropos.MD")).not.toBe(0);
+      expect(run(guarded, `echo x > "${join(fx, "ΠΆΝΟΣ", ".tropos", "workspace", "Tropos.md")}"`)).not.toBe(0);
+      expect(existsSync(join(ws, "TROPOS.md"))).toBe(false);
     } finally {
       rmSync(fx, { recursive: true, force: true });
     }

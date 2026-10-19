@@ -23,8 +23,9 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
   for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.instructionFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
-    // The protections also match every letter case (anyCase), which only ASCII can do faithfully.
-    if (/[^\x00-\x7f]/.test(p)) throw new ConfinementError(`${p} can't be confined: its path has a non-ASCII character, which the sandbox can't match in every letter case.`);
+    // The protections also match every letter case (anyCase); a letter whose other case is longer (ß → SS) can't be.
+    const odd = lengthChangingLetter(p);
+    if (odd) throw new ConfinementError(`${p} can't be confined: its letter "${odd}" changes length between upper and lower case, so the sandbox can't match it in every case.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
   const named = (prefix: string, list: string[]) =>
@@ -109,7 +110,40 @@ function anyCaseSubpath(path: string): string {
   return `(regex #"^${anyCase(path)}(/.*)?$")`;
 }
 
-/** The path as a regex that matches it in any letter case (`[Tt][Rr]…`): the disk would treat those as one file. */
+const SIGMAS = ["Σ", "σ", "ς"];
+
+/** A letter's upper and lower forms (σ, ς and Σ together); one entry for anything without case. */
+function caseForms(ch: string): string[] {
+  if (SIGMAS.includes(ch)) return SIGMAS;
+  return [...new Set([ch.toUpperCase(), ch.toLowerCase(), ch])];
+}
+
+/** The first character, in either normal form, whose case mapping is not one code point (ß → SS, ŉ → ʼN, İ → i̇). */
+function lengthChangingLetter(path: string): string | undefined {
+  for (const form of [path.normalize("NFC"), path.normalize("NFD")]) {
+    for (const ch of form) if ([ch.toUpperCase(), ch.toLowerCase()].some((c) => [...c].length !== 1)) return ch;
+  }
+  return undefined;
+}
+
+/** One spelling of the path in any case: ASCII letters as `[Tt]`, other letters as `(Ε|ε)`, the rest escaped. */
+function anyCaseForm(path: string): string {
+  let out = "";
+  for (const ch of path) {
+    const forms = caseForms(ch);
+    if (forms.length === 1) out += escapeRegex(ch);
+    // Alternation, not a bracket class, beyond ASCII: a class of multi-byte characters may match single bytes.
+    else out += /^[A-Za-z]$/.test(ch) ? `[${ch.toUpperCase()}${ch.toLowerCase()}]` : `(${forms.join("|")})`;
+  }
+  return out;
+}
+
+/**
+ * The path as a regex that matches it in any letter case (`[Tt][Rr]…`, `(Ε|ε)(Ρ|ρ)…`), the way a case-insensitive disk
+ * treats them as one file; a non-ASCII path in both its NFC and NFD spellings, which the disk treats as one name too.
+ */
 function anyCase(path: string): string {
-  return escapeRegex(path).replace(/[a-z]/gi, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`);
+  const nfc = anyCaseForm(path.normalize("NFC"));
+  const nfd = anyCaseForm(path.normalize("NFD"));
+  return nfc === nfd ? nfc : `(${nfc}|${nfd})`;
 }
