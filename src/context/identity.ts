@@ -167,13 +167,13 @@ This is your first session with this user, and you don't have a name yet.
 
 const bootstrapPath = (home: string): string => workspaceFile(home, "BOOTSTRAP.md");
 
-/** workspace/BOOTSTRAP.md (≤ 4,000 chars), threat-scanned; null when absent or unreadable. */
+/**
+ * The first-run ritual, when workspace/BOOTSTRAP.md is there and not empty. The file is only a flag: the text always
+ * comes from code, so a planted BOOTSTRAP.md can't inject instructions. Empty (a sandbox placeholder) counts as absent.
+ */
 export async function loadBootstrap(home: string): Promise<string | null> {
   const text = await readSmall(bootstrapPath(home)).catch(() => null);
-  if (text === null) return null;
-  const scan = scanText(text);
-  if (!scan.ok) return blockedPlaceholder(scan.reason);
-  return text.slice(0, MAX_BOOTSTRAP_CHARS);
+  return text === null || text.length === 0 ? null : BOOTSTRAP_TEXT;
 }
 
 /** True only while BOOTSTRAP.md exists and the agent has no name. identity.json is not read any more. */
