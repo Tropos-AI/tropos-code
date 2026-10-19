@@ -19,6 +19,7 @@ const base: ConfinementPaths = {
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
   instructionFiles: [],
   otherProjects: [],
+  otherProjectsShallow: [],
   otherProjectSecrets: [],
   platform: "darwin",
 };
@@ -60,11 +61,22 @@ test("thousands of other projects keep the profile small, and no regex reaches t
   for (const [, regex] of profile.matchAll(/#"([^"]*)"/g)) expect(regex!.length).toBeLessThan(1_024);
 });
 
-test("a project path too long to spell in every case is still denied, in its own case", () => {
+test("a project path too long to spell in every case is denied by as much of its start as fits, still in any case; no allow is made for it", () => {
   const long = `/w/${"deeply-nested-folder/".repeat(20)}other`;
   const { profile } = sandboxProfile({ ...base, otherProjects: [long], otherProjectSecrets: [`${long}-secrets/app.env`] });
-  expect(profile).toContain(`(regex #"^/w/deeply-nested-folder/`);
+  const denies = ruleWith(profile, "(deny file-read* (regex #\"^/[Ww]/[Dd][Ee][Ee][Pp]");
+  expect(denies).toContain(".*(.*/)?\\.[Ee][Nn][Vv]");
+  expect(profile).toContain('.*(/.*)?$")');
+  expect(profile).not.toContain("#\"^/w/deeply");
+  expect(profile.split("\n").filter((line) => line.startsWith("(allow file-read*") && line.includes("[Dd][Ee][Ee][Pp]"))).toEqual([]);
   for (const [, regex] of profile.matchAll(/#"([^"]*)"/g)) expect(regex!.length).toBeLessThan(1_024);
+});
+
+test("a project holding the home folder gets a pattern two folders deep, and the session's own .env files are reopened", () => {
+  const { profile } = sandboxProfile({ ...base, project: "/u/app", otherProjectsShallow: ["/u"] });
+  expect(profile).toContain('(deny file-read* (regex #"^/[Uu]/([^/]+/)?([^/]+/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$"))');
+  const reopen = ruleWith(profile, "(allow file-read* (regex #\"^/[Uu]/(.*/)?\\.[Ee][Nn][Vv]\\.(");
+  expect(reopen).toContain('(regex #"^/[Uu]/[Aa][Pp][Pp]/(.*/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$")');
 });
 
 test("another project's .env whose path the profile can't spell is still denied, by a pattern that stands in for the odd letter", () => {

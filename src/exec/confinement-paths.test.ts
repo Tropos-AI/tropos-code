@@ -80,13 +80,26 @@ test("each project gets its own search: one too big to search doesn't leave the 
   expect(withOthers(mk("proj"), [big, small]).otherProjectSecrets).toEqual([big, join(small, ".env")]);
 });
 
-test("a registered project that holds the session's project (a monorepo root), or the home folder, is not another project", () => {
+test("a registered project that holds the session's project (a monorepo root, the repo of a worktree) is not another project", () => {
   const mono = mk("h", "mono");
   writeFileSync(join(mono, ".env"), "x");
   const proj = mk("h", "mono", "packages", "app");
-  const paths = withOthers(proj, [mono, join(fx, "h")]);
+  const paths = withOthers(proj, [mono]);
   expect(paths.otherProjects).toEqual([]);
+  expect(paths.otherProjectsShallow).toEqual([]);
   expect(paths.otherProjectSecrets).toEqual([]);
+});
+
+test("a registered project that holds the home folder still has the .env files near its top denied, never the session's own", () => {
+  writeFileSync(join(fx, ".env"), "x");
+  writeFileSync(join(mk("h"), ".env"), "x");
+  const proj = mk("h", "proj");
+  writeFileSync(join(proj, ".env"), "own");
+  writeFileSync(join(mk("h", "a", "b", "c"), ".env"), "deeper than the search");
+  const paths = withOthers(proj, [fx]);
+  expect(paths.otherProjects).toEqual([]);
+  expect(paths.otherProjectsShallow).toEqual([fx]);
+  expect([...paths.otherProjectSecrets].sort()).toEqual([join(fx, ".env"), join(fx, "h", ".env")].sort());
 });
 
 test("a project denied whole still has its linked .env files denied where they point, but not other links", () => {

@@ -127,9 +127,16 @@ export interface ConfinementPaths {
   /**
    * The owner's other projects (real roots): their `.env` files are unreadable. The macOS profile matches them by
    * pattern, at any depth and including ones created later; bwrap can only hide files that exist (otherProjectSecrets).
-   * Never a project that holds the session's own, lies inside it, or holds the user's home.
+   * Never a project that lies inside the session's or holds it (a monorepo root, the repo a worktree belongs to):
+   * those are the session's own files. One that holds the user's home is in otherProjectsShallow instead.
    */
   otherProjects: string[];
+  /**
+   * Other projects that hold the user's home (a registered `/`, say): only their `.env` files up to two folders below
+   * the root are denied, and never in the session's own project, since a pattern at any depth there would cover every
+   * project of the user's.
+   */
+  otherProjectsShallow: string[];
   /**
    * Concrete paths to deny besides that: the real targets of linked `.env` files (both platforms) and, on Linux, the
    * `.env` files found, or a whole project too big to search. Denied after the read carve-outs, since the default
@@ -151,8 +158,12 @@ const ENV_LINK_SCAN_DIRS = 500;
 const ENV_SCAN_SKIPPED: ReadonlySet<string> = new Set(["node_modules", ".git", ".venv", "venv", "vendor", "target"]);
 
 /** The other projects whose `.env` files are denied: real roots, without the session's own, its parents or children. */
-function otherProjectRoots(project: string, others: readonly string[], userHome: string): string[] {
-  return unique(others.map(real)).filter((root) => !isInside(root, project) && !isInside(project, root) && !isInside(userHome, root));
+function otherProjectRoots(project: string, others: readonly string[], userHome: string): { deep: string[]; shallow: string[] } {
+  const roots = unique(others.map(real)).filter((root) => !isInside(root, project));
+  return {
+    deep: roots.filter((root) => !isInside(project, root) && !isInside(userHome, root)),
+    shallow: roots.filter((root) => isInside(userHome, root)),
+  };
 }
 
 /**
@@ -162,8 +173,14 @@ function otherProjectRoots(project: string, others: readonly string[], userHome:
  * missed for lack of time. Found when the confinement is built: on Linux a file created later in another project isn't
  * covered until the next session.
  */
-function otherProjectSecrets(roots: readonly string[], platform: NodeJS.Platform): string[] {
+function otherProjectSecrets(roots: readonly string[], shallow: readonly string[], project: string, platform: NodeJS.Platform): string[] {
   const found: string[] = [];
+  // A project holding the home can't be denied whole: on Linux, a search that can't finish refuses the sandbox.
+  for (const root of platform === "darwin" ? [] : shallow) {
+    const scan = envScan(root, ENV_SCAN_DIRS, false, project);
+    if (!scan.complete) throw new ConfinementError(`${root} is registered as a project but holds your home folder, and has too many folders to search for .env files; remove it from your projects.`);
+    found.push(...scan.found);
+  }
   for (const root of roots) {
     if (platform === "darwin") {
       found.push(...envScan(root, ENV_LINK_SCAN_DIRS, true).found);
@@ -184,12 +201,13 @@ export function tooBigToSearch(projects: readonly string[]): string[] {
  * One project's `.env` files (real paths), reading at most `maxDirs` folders; `complete` is false when it had more.
  * With `linksOnly`, only `.env` files that are links (to somewhere else) are collected.
  */
-function envScan(root: string, maxDirs: number, linksOnly: boolean): { found: string[]; complete: boolean } {
+function envScan(root: string, maxDirs: number, linksOnly: boolean, skip?: string): { found: string[]; complete: boolean } {
   const found: string[] = [];
   // Level by level, names in order: a cut-short search has still covered the levels nearest the root.
   const queue: [string, number][] = [[root, 0]];
   for (let dirs = 0; queue.length > 0; ) {
     const [dir, depth] = queue.shift()!;
+    if (skip !== undefined && isInside(dir, skip)) continue;
     if (++dirs > maxDirs) return { found, complete: false };
     let entries: Dirent[];
     try {
@@ -245,7 +263,7 @@ export function confinementPaths(opts: {
   // inside the denied `~/.tropos`, so the builders carve it back out for read and write (like the workspace).
   // Residual: a project at `~` makes the host caches under it writable through the project itself.
   const home = real(opts.home);
-  const roots = otherProjectRoots(project, opts.otherProjects ?? [], userHome);
+  const { deep, shallow } = otherProjectRoots(project, opts.otherProjects ?? [], userHome);
   const paths: ConfinementPaths = {
     project,
     writable: unique(writable),
@@ -258,8 +276,9 @@ export function confinementPaths(opts: {
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
-    otherProjects: roots,
-    otherProjectSecrets: otherProjectSecrets(roots, platform),
+    otherProjects: deep,
+    otherProjectsShallow: shallow,
+    otherProjectSecrets: otherProjectSecrets(deep, shallow, project, platform),
     platform,
   };
   // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.

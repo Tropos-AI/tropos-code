@@ -79,7 +79,8 @@ By default a chat's commands run on this computer, in the project's directory, c
   and `~/.tropos` (its managed workspace excepted). The `.env`, `.env.*` and `.envrc` files of your other projects
   (the registered ones and the managed workspaces) are unreadable too, and so is where a linked one points;
   committed templates (`.env.example`, `.env.sample`, `.env.template`) stay readable. The chat's own project keeps
-  its own, and so does a project that holds it (a monorepo root) or that its worktree belongs to. The full list is
+  its own, and so does a project that holds it (a monorepo root) or that its worktree belongs to. A registered project
+  that holds your home folder only has the `.env` files in its top two folder levels made unreadable. The full list is
   `SECRET_PATHS` in `src/exec/confinement-paths.ts`.
 - **Network** is on, so installs and `git fetch` work.
 - **The environment** is an allowlist: `PATH` (without relative or in-project entries), `HOME`, `USER`, `SHELL`,

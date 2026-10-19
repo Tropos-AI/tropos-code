@@ -117,6 +117,23 @@ describe.skipIf(available === null)("other projects' .env files under real confi
     }
   }, 30_000);
 
+  test("a project registered around the home folder: the .env files near its top are denied, the session's own are not", async () => {
+    const f = fixture();
+    writeFileSync(join(f.fx, ".env"), "TOP-SECRET");
+    writeFileSync(join(f.project, ".env"), "OWN");
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [f.fx] });
+    try {
+      const run = (script: string) => collect(backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} }));
+      const top = await run(`cat ${quoted(join(f.fx, ".env"))}`);
+      expect(top.out).not.toContain("TOP-SECRET");
+      expect(top.code).not.toBe(0);
+      expect((await run("cat .env")).out).toBe("OWN");
+    } finally {
+      await backend.close();
+      rmSync(f.fx, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test.skipIf(process.platform !== "darwin")("on macOS a .env created in another project after the session started is denied too", async () => {
     const f = fixture();
     const other = join(f.fx, "other");
