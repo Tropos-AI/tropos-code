@@ -7,7 +7,7 @@ import { z } from "zod";
 import { neutraliseHarnessTags } from "../context/tags";
 import { errorText } from "../error-text";
 import { blockedPlaceholder, scanText } from "../learning/threats";
-import { journalDir } from "../paths";
+import { journalDir, projectKey } from "../paths";
 import { projectDir } from "../session/store";
 import { defineTool, type Actor, type AnyTool } from "../tools/types";
 
@@ -50,6 +50,16 @@ export interface JournalEntry {
   name: string;
   path: string;
   body: string;
+  /** The project's key (projectKey of its folder): the only thing that attributes an entry to a project. */
+  key?: string;
+}
+
+/** name and path are display text: one line, no control characters, so they can't fake structure. */
+const oneLine = (text: string): string => text.replace(/[\p{Cc}\u2028\u2029]+/gu, " ").trim();
+
+/** The project folder an entry belongs to, by its key; undefined when it carries none. */
+export function entryProjectDir(home: string, e: JournalEntry): string | undefined {
+  return e.key ? join(home, "projects", e.key) : undefined;
 }
 
 /** The user's home shows as "~" so a journal stays readable and doesn't spell out the account name. */
@@ -68,11 +78,14 @@ function longPath(path: string): string {
 export function formatJournalEntry(e: JournalEntry): string {
   const [first, ...rest] = e.body.split(/\r?\n/);
   const tail = rest.map((line) => (line.trim() ? `  ${line.trimEnd()}` : ""));
-  const heading = `## ${e.time ? `${e.time} · ` : ""}${e.name} (${shortPath(e.path)})`;
+  const key = e.key ?? projectKey(e.path);
+  const heading = `## ${e.time ? `${e.time} · ` : ""}${oneLine(e.name)} (${oneLine(shortPath(e.path))}) <!-- project:${key} -->`;
   return `${[heading, `- ${first!.trimEnd()}`, ...tail].join("\n")}\n\n`;
 }
 
 const HEADING = /^## (?:(\d{2}:\d{2}) · )?(.*)$/;
+/** Fixed-format, last on the heading line: a name or path can't move it. */
+const KEY_MARKER = / <!-- project:([A-Za-z0-9_-][\w.-]*) -->$/;
 
 /** The entries of a journal day; its `# <date>` title and anything before the first heading are ignored. */
 export function parseJournal(text: string): JournalEntry[] {
@@ -80,16 +93,20 @@ export function parseJournal(text: string): JournalEntry[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   for (let i = 0; i < lines.length; i++) {
     const m = HEADING.exec(lines[i]!);
-    if (!m || !m[2]!.endsWith(")") || m[2]!.lastIndexOf(" (") < 0) continue;
-    const cut = m[2]!.lastIndexOf(" (");
+    const marker = m ? KEY_MARKER.exec(m[2]!) : null;
+    if (!m || !marker) continue;
+    const shown = m[2]!.slice(0, marker.index);
+    const cut = shown.lastIndexOf(" (");
+    if (!shown.endsWith(")") || cut < 0) continue;
     const body: string[] = [];
     let end = i + 1;
     while (end < lines.length && !lines[end]!.startsWith("## ")) body.push(lines[end++]!);
     while (body.length > 0 && body[body.length - 1] === "") body.pop();
     const [first = "", ...rest] = body;
     const entry: JournalEntry = {
-      name: m[2]!.slice(0, cut),
-      path: longPath(m[2]!.slice(cut + 2, -1)),
+      name: shown.slice(0, cut),
+      path: longPath(shown.slice(cut + 2, -1)),
+      key: marker[1],
       body: [first.replace(/^- ?/, ""), ...rest.map((l) => l.replace(/^ {1,2}/, ""))].join("\n"),
     };
     if (m[1]) entry.time = m[1];
@@ -195,7 +212,7 @@ export class DailyNotes {
 
   /** Whether a journal entry belongs to this project. */
   private mine(e: JournalEntry): boolean {
-    return projectDir(this.home, e.path) === projectDir(this.home, this.cwd);
+    return e.key === projectKey(this.cwd);
   }
 
   append(text: string, actor: Actor = "agent"): Promise<DailyAppendResult> {

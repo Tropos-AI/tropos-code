@@ -7,7 +7,7 @@ import { errorText } from "../error-text";
 import { journalDir } from "../paths";
 import { projectDir, type MessageParam } from "../session/store";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../tools/types";
-import { DAY_FILE, readJournalDay, type JournalEntry } from "./daily";
+import { DAY_FILE, entryProjectDir, readJournalDay, type JournalEntry } from "./daily";
 import {
   MAX_SESSION_BYTES,
   MESSAGE_LINE_PREFIX,
@@ -176,8 +176,8 @@ function scanNotes(text: string, words: string[]): SearchResult["snippets"] {
 function journalByProject(entries: JournalEntry[], dirs: string[], home: string): Map<string, JournalEntry[]> {
   const out = new Map<string, JournalEntry[]>();
   for (const e of entries) {
-    const project = projectDir(home, e.path);
-    if (dirs.includes(project)) out.set(project, [...(out.get(project) ?? []), e]);
+    const project = entryProjectDir(home, e);
+    if (project && dirs.includes(project)) out.set(project, [...(out.get(project) ?? []), e]);
   }
   return out;
 }

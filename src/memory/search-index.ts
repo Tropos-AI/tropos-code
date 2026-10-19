@@ -5,7 +5,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { journalDir } from "../paths";
 import { projectDir, type MessageParam } from "../session/store";
-import { DAY_FILE, readJournalDay } from "./daily";
+import { DAY_FILE, entryProjectDir, readJournalDay } from "./daily";
 
 /** A session transcript's file name: "<uuid>.jsonl". */
 export const SESSION_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
@@ -385,7 +385,8 @@ export class SearchIndex {
       if (byFile.has(file)) continue;
       const perProject = new Map<string, string[]>();
       for (const entry of await readJournalDay(file)) {
-        const project = projectDir(home, entry.path);
+        const project = entryProjectDir(home, entry);
+        if (!project) continue;
         perProject.set(project, [...(perProject.get(project) ?? []), entry.body]);
       }
       for (const [project, bodies] of perProject) {
