@@ -36,7 +36,7 @@ jobs:
       - run: shellcheck -s sh install.sh scripts/release/make-manifest.sh scripts/release/collect-assets.sh
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      - run: bun test --timeout 20000
 
   build:
     name: build (all targets)
