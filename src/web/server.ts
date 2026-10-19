@@ -31,6 +31,8 @@ export interface WebServerOptions {
   dev?: boolean;
   /** `host[:port]` of this Mac's tailnet name while phone access is on, else null; asked on every request. */
   remoteHost?: () => string | null;
+  /** How long a socket may take to log in; default 20 s. */
+  loginDeadlineMs?: number;
 }
 
 export interface RunningWebServer {
@@ -49,8 +51,12 @@ export const MAX_MESSAGE_BYTES = 1024 * 1024;
 export const MAX_AUTHED_MESSAGE_BYTES = Math.ceil(((MAX_IMAGES * MAX_IMAGE_BYTES + MAX_TEXT_ATTACHMENTS * MAX_TEXT_ATTACHMENT_BYTES) * 4) / 3) + MAX_MESSAGE_BYTES;
 /** Sockets that may wait to log in at once; more upgrades are refused. Each could send a large frame before Bun drops it. */
 export const MAX_PENDING_SOCKETS = 16;
-/** WebSocket close code for a message the socket wasn't allowed to send. */
+/** WebSocket close code for a socket that broke the rules (a big frame, too many wrong keys, too slow to log in). */
 export const POLICY_VIOLATION = 1008;
+/** How long a socket may take to log in before it is closed. */
+const LOGIN_DEADLINE_MS = 20_000;
+/** Wrong keys or codes one socket may send; the last closes it (codes stay rate-limited by LoginCodes as well). */
+export const MAX_FAILED_LOGINS = 3;
 
 const CSP = [
   "default-src 'self'",
@@ -119,6 +125,10 @@ interface SocketData {
   closed: boolean;
   /** Holds one of the MAX_PENDING_SOCKETS places until it logs in or closes. */
   waitingSlot: boolean;
+  /** Wrong keys and codes sent on this socket (see MAX_FAILED_LOGINS). */
+  failedLogins: number;
+  /** Closes the socket if it hasn't logged in by then. */
+  deadline?: ReturnType<typeof setTimeout>;
   detach?: () => void;
   /** This tab's sender, the same function the host knows it by (so it can leave it out of broadcasts). */
   send?: (message: ServerMessage) => void;
@@ -146,11 +156,15 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
   const authed = new Set<Socket>();
   /** Sockets holding a place while they log in (counted from the upgrade, so concurrent upgrades can't overshoot). */
   let waiting = 0;
+  /** Idempotent: every way a socket stops waiting (logged in, closed, refused) frees its place exactly once. */
   const releaseSlot = (data: SocketData) => {
+    clearTimeout(data.deadline);
+    data.deadline = undefined;
     if (!data.waitingSlot) return;
     data.waitingSlot = false;
     waiting--;
   };
+  const loginDeadlineMs = opts.loginDeadlineMs ?? LOGIN_DEADLINE_MS;
 
   const attach = (ws: Socket, deviceId: string) => {
     releaseSlot(ws.data);
@@ -166,14 +180,17 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
     if (message.t === "auth") {
       const device = await opts.devices.verify(message.key, ws.data.via);
       if (ws.data.closed) return;
-      if (!device) return send({ t: "auth_failed" });
+      if (!device) {
+        send({ t: "auth_failed" });
+        return failedLogin(ws);
+      }
       send({ t: "auth_ok", device: { id: device.id, name: device.name } });
       return attach(ws, device.id);
     }
     if (!(await opts.logins.redeem(message.value))) {
       const reason = (await opts.logins.locked()) ? "locked" : "invalid";
       if (!ws.data.closed) send({ t: "login_failed", reason });
-      return;
+      return failedLogin(ws);
     }
     // The code is spent: whatever fails from here must still answer, or the browser waits for nothing.
     let created: Awaited<ReturnType<DeviceStore["create"]>>;
@@ -201,6 +218,20 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
     ws.data.detach = undefined;
   };
 
+  /** Closes a socket that broke the rules for one that hasn't logged in; its place is free at once. */
+  const refuse = (ws: Socket, reason: string) => {
+    if (ws.data.closed) return;
+    logOut(ws);
+    ws.close(POLICY_VIOLATION, reason);
+  };
+
+  /** A wrong key or code: after a few on one socket it is closed, so it can't keep a place guessing. */
+  function failedLogin(ws: Socket): void {
+    if (ws.data.closed) return;
+    ws.data.failedLogins++;
+    if (ws.data.failedLogins >= MAX_FAILED_LOGINS) refuse(ws, "Too many failed logins");
+  }
+
   const serve = (p: number) =>
     Bun.serve<SocketData>({
       hostname: "127.0.0.1",
@@ -221,7 +252,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
           const via: Device["via"] = name && origin === `https://${name}` ? "tailscale" : "local";
           if (waiting >= MAX_PENDING_SOCKETS) return respond("Too many connections waiting to log in", { status: 503 });
           waiting++;
-          if (server.upgrade(req, { data: { via, pending: Promise.resolve(), closed: false, waitingSlot: true } })) return undefined;
+          if (server.upgrade(req, { data: { via, pending: Promise.resolve(), closed: false, waitingSlot: true, failedLogins: 0 } })) return undefined;
           waiting--;
           return respond("Expected a WebSocket", { status: 400 });
         }
@@ -251,13 +282,16 @@ export async function startWebServer(opts: WebServerOptions): Promise<RunningWeb
         open(ws) {
           // Not attached yet: the tab gets nothing until it logs in.
           ws.data.send = (message: ServerMessage) => ws.send(JSON.stringify(message));
+          // A socket that never logs in would hold its place for good, and enough of them would lock the owner out.
+          ws.data.deadline = setTimeout(() => {
+            if (ws.data.deviceId === undefined) refuse(ws, "Log in timed out");
+          }, loginDeadlineMs);
         },
         message(ws, raw) {
           const authed = ws.data.deviceId !== undefined;
           // Bun accepts frames up to the logged-in limit from anyone; a socket that hasn't logged in gets no further.
           if (!authed && (typeof raw === "string" ? Buffer.byteLength(raw) : (raw as Buffer).length) > MAX_MESSAGE_BYTES) {
-            logOut(ws);
-            ws.close(POLICY_VIOLATION, "Message too big");
+            refuse(ws, "Message too big");
             return;
           }
           const message = parseClientMessage(raw as string | Buffer, { authed });

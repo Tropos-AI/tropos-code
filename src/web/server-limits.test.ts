@@ -12,7 +12,7 @@ import type { DeviceStore } from "./devices";
 import { WebHost } from "./host";
 import type { LoginCodes } from "./login-codes";
 import type { ServerMessage } from "./protocol";
-import { MAX_AUTHED_MESSAGE_BYTES, MAX_MESSAGE_BYTES, MAX_PENDING_SOCKETS, POLICY_VIOLATION, parseClientMessage, startWebServer, type RunningWebServer } from "./server";
+import { MAX_AUTHED_MESSAGE_BYTES, MAX_FAILED_LOGINS, MAX_MESSAGE_BYTES, MAX_PENDING_SOCKETS, POLICY_VIOLATION, parseClientMessage, startWebServer, type RunningWebServer } from "./server";
 
 let dir: string;
 let server: RunningWebServer | null = null;
@@ -34,9 +34,9 @@ afterEach(async () => {
   await removeDir(dir);
 });
 
-async function start() {
+async function start(opts: { loginDeadlineMs?: number } = {}) {
   const runtime = fakeRuntime([() => reply([textBlock("a picture")])]);
-  server = await startWebServer({ host: new WebHost(runtime), assets: assetsFromDir(dir), devices, logins, port: 0 });
+  server = await startWebServer({ host: new WebHost(runtime), assets: assetsFromDir(dir), devices, logins, port: 0, ...opts });
   return { runtime, base: `http://127.0.0.1:${server.port}` };
 }
 
@@ -68,6 +68,67 @@ describe("message size", () => {
     expect(MAX_AUTHED_MESSAGE_BYTES).toBeLessThanOrEqual(Math.ceil((attachments * 4) / 3) + MAX_MESSAGE_BYTES);
     const over = Buffer.alloc(MAX_AUTHED_MESSAGE_BYTES + 1, 0x20);
     expect(parseClientMessage(over, { authed: true })).toBeNull();
+  });
+});
+
+/** Opens sockets until one is refused; the number that opened. */
+async function openUntilRefused(base: string, max = MAX_PENDING_SOCKETS + 4): Promise<number> {
+  for (let n = 0; n < max; n++) {
+    const s = track(rawSocket(base));
+    const ok = await s.opened.then(
+      () => true,
+      () => false,
+    );
+    if (!ok) return n;
+  }
+  return max;
+}
+
+describe("sockets that never log in", () => {
+  test("are closed at the login deadline, and their places are free again", async () => {
+    const { base } = await start({ loginDeadlineMs: 100 });
+    const idle = Array.from({ length: MAX_PENDING_SOCKETS }, () => track(rawSocket(base)));
+    await Promise.all(idle.map((s) => s.opened));
+    expect(await Promise.all(idle.map((s) => s.closed))).toEqual(idle.map(() => POLICY_VIOLATION));
+    await new Promise((r) => setTimeout(r, 20));
+    const s = track(rawSocket(base));
+    await s.opened;
+  });
+
+  test("a socket that logs in in time is not closed by the deadline", async () => {
+    const { base } = await start({ loginDeadlineMs: 150 });
+    const s = track(await openAuthed(base, key));
+    await new Promise((r) => setTimeout(r, 250));
+    expect(s.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  test(`are closed after ${MAX_FAILED_LOGINS} failed attempts`, async () => {
+    const { base } = await start();
+    const s = track(rawSocket(base));
+    for (let i = 1; i < MAX_FAILED_LOGINS; i++) {
+      s.send({ t: "auth", key: `wrong-${i}` });
+      await s.next((m) => m.t === "auth_failed" && s.messages.filter((x) => x.t === "auth_failed").length === i);
+    }
+    expect(s.ws.readyState).toBe(WebSocket.OPEN);
+    s.send({ t: "login", value: "000000", name: "x" });
+    expect(await s.closed).toBe(POLICY_VIOLATION);
+  });
+
+  test("every way out frees exactly one place: deadline, failed logins, a big frame, the browser closing, logging in", async () => {
+    const { base } = await start({ loginDeadlineMs: 300 });
+    const sockets = Array.from({ length: 5 }, () => track(rawSocket(base)));
+    await Promise.all(sockets.map((s) => s.opened));
+    const [fails, big, gone, loggedIn] = sockets as [TestSocket, TestSocket, TestSocket, TestSocket, TestSocket];
+    for (let i = 0; i < MAX_FAILED_LOGINS; i++) fails.send({ t: "auth", key: `nope-${i}` });
+    big.ws.send(JSON.stringify({ t: "auth", key: "x".repeat(MAX_MESSAGE_BYTES) }));
+    gone.ws.close();
+    loggedIn.send({ t: "auth", key });
+    await loggedIn.next((m) => m.t === "auth_ok");
+    // The fifth waits out the deadline.
+    await Promise.all([fails.closed, big.closed, gone.closed, sockets[4]!.closed]);
+    await new Promise((r) => setTimeout(r, 30));
+    // All five places are free, and no more than that: exactly the cap opens again.
+    expect(await openUntilRefused(base)).toBe(MAX_PENDING_SOCKETS);
   });
 });
 
