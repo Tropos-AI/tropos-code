@@ -70,6 +70,7 @@ test("the project is bound after the secrets are hidden and the cache is rebound
   // The cache lives in the hidden ~/.tropos, so it is rebound writable after the secret is hidden.
   const cache = at(args, "--bind", c.cacheDir, c.cacheDir);
   const carve = at(args, ...ro(join(userHome, ".tropos", "workspace")));
+  expect(at(args, ...ro(join(userHome, ".tropos", "worktrees")))).toBe(-1); // absent: nothing to carve out
   const projectBind = at(args, "--bind", project, project);
   expect(at(args, ...emptyDir(join(userHome, ".tropos")))).toBeLessThan(cache);
   expect(ssh).toBeLessThan(projectBind);
@@ -134,9 +135,19 @@ test("a symlinked or file .git is refused rather than confined weaker", () => {
   rmSync(join(project, ".git"), { recursive: true });
   symlinkSync(join(fx, "elsewhere"), join(project, ".git"));
   expect(() => bwrapArgs(paths(), project)).toThrow(ConfinementError);
-  rmSync(join(project, ".git"));
-  writeFileSync(join(project, ".git"), "gitdir: /elsewhere"); // a worktree gitfile
-  expect(() => bwrapArgs(paths(), project)).toThrow(ConfinementError);
+});
+
+test("a linked worktree's .git file is kept read-only in place, and the worktrees folder is carved out for reading", () => {
+  const wt = join(userHome, ".tropos", "worktrees", "app", "t1");
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, ".git"), "gitdir: /elsewhere/.git/worktrees/t1\n");
+  const args = bwrapArgs(paths(wt), wt);
+  const carve = at(args, ...ro(join(userHome, ".tropos", "worktrees")));
+  const bind = at(args, "--bind", wt, wt);
+  expect(carve).toBeGreaterThan(0);
+  expect(carve).toBeLessThan(bind);
+  expect(at(args, ...ro(join(wt, ".git")))).toBeGreaterThan(bind);
+  expect(at(args, ...emptyDir(join(wt, ".git")))).toBe(-1);
 });
 
 test("a symlinked or file .tropos is refused", () => {

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { SandboxUnavailableError, UnknownCommandError, SenderNotApprovedError, UserFacingError } from "../errors";
 import type { Autonomy } from "../config";
 import { AutonomyError, RAISE_REFUSED } from "../autonomy";
-import type { ChatAutonomy, ChatProjects } from "../types";
+import type { ChatAutonomy, ChatProjects, ChatWorktrees, WorktreeAction, WorktreeSummary } from "../types";
+import { OWNER_ONLY_FINISH } from "../worktrees";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
 import { CLAIM_REPLY, SECRET_REMOVED_NOTE, TelegramAdapter } from "./adapter";
@@ -37,6 +38,23 @@ function fakeAutonomy(level: Autonomy = "balanced") {
 }
 const NOT_OWNER = "Only the owner can see or change the autonomy level.";
 
+/** A ChatWorktrees whose task has `summary` (or none) and that records finish() calls; `answer` is what finish says. */
+function fakeWorktrees(summary: WorktreeSummary | undefined, answer = "Kept the work.") {
+  const finished: { chatKey: string; senderId: string; action: WorktreeAction; title: string }[] = [];
+  const wt: ChatWorktrees & { finished: typeof finished; summary: WorktreeSummary | undefined } = {
+    finished,
+    summary,
+    status: async () => wt.summary,
+    finish: async (chatKey, senderId, action, title) => {
+      finished.push({ chatKey, senderId, action, title });
+      return answer;
+    },
+  };
+  return wt;
+}
+const buttonTexts = (m: { replyMarkup?: { inline_keyboard: { text: string }[][] } } | undefined): string[] => (m?.replyMarkup?.inline_keyboard ?? []).flat().map((b) => b.text);
+const lastEdit = (m: { edits: { text: string; replyMarkup?: { inline_keyboard: { text: string }[][] } }[] }) => m.edits[m.edits.length - 1];
+
 /** Two projects, each chat in `default` until it picks. */
 function fakeProjects() {
   const all: Project[] = [
@@ -65,7 +83,7 @@ function fakeClaim(open: boolean) {
 
 const NONCE = "n0nce-secret";
 
-async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView, proof?: string): Promise<boolean> } } = {}) {
+async function setup(opts: { worktrees?: ChatWorktrees; approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView, proof?: string): Promise<boolean> } } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -79,6 +97,7 @@ async function setup(opts: { approved?: boolean; askTimeoutMs?: number; allowGro
     allowGroups: opts.allowGroups,
     projects: opts.projects,
     autonomy: opts.autonomy,
+    worktrees: opts.worktrees,
     loginMessage: opts.loginMessage,
     ownerClaim: opts.ownerClaim,
     askTimeoutMs: opts.askTimeoutMs,
@@ -1029,5 +1048,107 @@ describe("TelegramAdapter", () => {
     const text = server.textsTo(CHAT).find((t) => t.startsWith("Changed:"))!;
     expect(text).toContain("Changed: ..foo, /h/outside.ts");
     expect(text).toContain("cmd7 and 97 more");
+  });
+});
+
+describe("TelegramAdapter worktree buttons", () => {
+  const summary: WorktreeSummary = { branch: "tropos/t1", changedFiles: 2, commitsAhead: 0, canPr: true };
+  const BUTTONS = "Changes on tropos/t1: 2 files changed.";
+  const findButtons = (server: FakeTelegramServer) => server.waitFor(() => server.sent.find((m) => m.text === BUTTONS));
+
+  test("after a turn with changes the chat gets the four buttons; Discard asks twice", async () => {
+    const wt = fakeWorktrees(summary);
+    const { server } = await setup({ worktrees: wt });
+    server.pushMessage(CHAT, CHAT, "fix the bug");
+    const msg = await findButtons(server);
+    expect(buttonTexts(msg)).toEqual(["Merge", "Open PR", "Keep branch", "Discard"]);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:discard");
+    await server.waitFor(() => buttonTexts(lastEdit(msg)).includes("Yes, discard"));
+    expect(wt.finished).toEqual([]);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:cancel");
+    await server.waitFor(() => buttonTexts(lastEdit(msg)).includes("Merge"));
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:discard");
+    await server.waitFor(() => buttonTexts(lastEdit(msg)).includes("Yes, discard"));
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:discard!");
+    await server.waitFor(() => wt.finished.length === 1);
+    expect(wt.finished[0]).toEqual({ chatKey: `telegram:${CHAT}`, senderId: String(CHAT), action: "discard", title: "fix the bug" });
+    await server.waitFor(() => lastEdit(msg)?.text === `${BUTTONS}\nKept the work.`);
+    expect(buttonTexts(lastEdit(msg))).toEqual([]);
+  });
+
+  test("the title is the task's first message, cut to 72 characters; a finish starts a new task on the next message", async () => {
+    const wt = fakeWorktrees(summary);
+    const { server, sessions } = await setup({ worktrees: wt });
+    server.pushMessage(CHAT, CHAT, `first ${"word ".repeat(30)}`);
+    const msg = await findButtons(server);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:merge");
+    await server.waitFor(() => wt.finished.length === 1);
+    expect(wt.finished[0]!.action).toBe("merge");
+    expect(wt.finished[0]!.title).toHaveLength(72);
+    expect(wt.finished[0]!.title.startsWith("first word word")).toBe(true);
+    wt.summary = undefined;
+    server.pushMessage(CHAT, CHAT, "second");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: second"));
+    expect(sessions.opens).toBe(2); // the chat was dropped and reopened: a new task
+    server.pushMessage(CHAT, CHAT, "third");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: third"));
+  });
+
+  test("a new turn with changes takes the keyboard off the old message and sends a fresh one", async () => {
+    const { server } = await setup({ worktrees: fakeWorktrees(summary) });
+    server.pushMessage(CHAT, CHAT, "one");
+    const first = await findButtons(server);
+    server.pushMessage(CHAT, CHAT, "two");
+    await server.waitFor(() => server.sent.filter((m) => m.text === BUTTONS).length === 2);
+    await server.waitFor(() => first.edits.length > 0);
+    expect(buttonTexts(lastEdit(first))).toEqual([]);
+  });
+
+  test("no changes, no buttons; a press from someone else is ignored", async () => {
+    const wt = fakeWorktrees({ ...summary, changedFiles: 0 });
+    const { server } = await setup({ worktrees: wt });
+    server.pushMessage(CHAT, CHAT, "just talking");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: just talking"));
+    await Bun.sleep(50);
+    expect(server.sent.filter((m) => m.replyMarkup)).toEqual([]);
+
+    wt.summary = summary;
+    server.pushMessage(CHAT, CHAT, "now edit");
+    const msg = await findButtons(server);
+    server.pushCallback(999, CHAT, msg.messageId, "wt:keep");
+    await Bun.sleep(100);
+    expect(wt.finished).toEqual([]);
+  });
+
+  test("a press while a turn runs is told to wait; the owner-only refusal keeps the buttons", async () => {
+    const wt = fakeWorktrees(summary);
+    const { server, session } = await setup({ worktrees: wt });
+    server.pushMessage(CHAT, CHAT, "go");
+    const msg = await findButtons(server);
+    let release!: () => void;
+    session().onPrompt = (_t, s) => new Promise((r) => { release = () => { s.emit({ type: "turn_end", reason: "end_turn" }); r("end_turn"); }; });
+    server.pushMessage(CHAT, CHAT, "again");
+    await server.waitFor(() => session().prompts.length === 2);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:keep");
+    await server.waitFor(() => server.answered.some((a) => a.text === "Wait for the current turn to finish."));
+    expect(wt.finished).toEqual([]);
+    release();
+  });
+
+  test("when finish refuses because only the owner may merge, the buttons stay and the answer is shown", async () => {
+    const wt = fakeWorktrees(summary, OWNER_ONLY_FINISH);
+    const { server } = await setup({ worktrees: wt });
+    server.pushMessage(CHAT, CHAT, "go");
+    const msg = await findButtons(server);
+    server.pushCallback(CHAT, CHAT, msg.messageId, "wt:merge");
+    await server.waitFor(() => server.answered.some((a) => a.text === OWNER_ONLY_FINISH));
+    expect(msg.edits).toEqual([]);
+  });
+
+  test("without worktree support nothing changes", async () => {
+    const { server } = await setup();
+    server.pushMessage(CHAT, CHAT, "hi");
+    await server.waitFor(() => server.textsTo(CHAT).includes("echo: hi"));
+    expect(server.sent.filter((m) => m.replyMarkup)).toEqual([]);
   });
 });

@@ -30,6 +30,8 @@ import { untilSignal } from "../web/serve";
 import { GatewayConfigError, loadGatewayConfig, telegramToken, gatewayDir, type GatewayConfig } from "./config";
 import { effectiveAutonomy, ensureChatSettings, lowerAutonomy, pinnedTestCommands, sessionAutonomy } from "./autonomy";
 import { chatBackend } from "./chat-exec";
+import { createChatWorktrees, workdirForSession, worktreeContext } from "./chat-worktrees";
+import { createWorktree, WorktreeStore, type Worktree } from "./worktrees";
 import { ProjectContexts } from "./contexts";
 import { SenderNotApprovedError, UserFacingError } from "./errors";
 import {
@@ -238,6 +240,8 @@ export async function runGateway(run: GatewayRun): Promise<number> {
 
   // The role each open session was created with, so the reaper can close an owner session when ownership moves.
   const roles = new Map<string, SessionRole>();
+  // The git worktrees chats in registered repos work in (spec §2.6).
+  const worktreeStore = new WorktreeStore(home);
   const pool = new SessionPool({
     statePath: join(dir, "sessions.json"),
     idleMs: live.idleMinutes * 60_000,
@@ -260,11 +264,14 @@ export async function runGateway(run: GatewayRun): Promise<number> {
       let exec: { backend: ExecBackend; confined: boolean } | undefined;
       try {
         const role = await chatRole(parseSessionKey(key)?.chatKey ?? "", run.pairing);
+        // A guest never works in a project the owner hasn't shared, in a worktree of it or otherwise.
+        if (role === "guest" && !guestVisible(project)) throw new UserFacingError("That project doesn't exist any more. Send /project to pick another.");
+        const worktree = await openWorktree(key, project);
         // Fail closed: no Docker for a session that needs it, or no confinement it may go without, means no session.
         exec = await chatBackend({
           config,
           role,
-          workspace: pc.ctx.cwd,
+          workspace: worktree?.path ?? pc.ctx.cwd,
           home,
           userHome,
           env: run.env,
@@ -272,7 +279,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
           dockerCheck: check,
           override: run.seams?.backend,
         });
-        const handle = await startSession(key, saved, pc, role, exec);
+        const handle = await startSession(key, saved, pc, role, exec, worktree);
         return {
           ...handle,
           close: async () => {
@@ -291,6 +298,20 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     },
   });
 
+  /** The worktree a chat in a registered repo works in (made on first use); undefined where it works in the project folder. */
+  const openWorktree = async (key: string, project: Project): Promise<Worktree | undefined> => {
+    let made: Worktree | undefined;
+    try {
+      made = await workdirForSession({ key, project, store: worktreeStore, create: createWorktree, home });
+    } catch (e) {
+      run.err(`gateway: worktree for ${key}: ${e instanceof Error ? e.message : String(e)}\n`);
+      throw new UserFacingError(`I couldn't set up a separate worktree for ${project.name}, so I didn't start. Check the repo on your computer.`);
+    }
+    const problem = made && workspaceProblem(made.path, home);
+    if (problem) throw new UserFacingError(`Project "${project.name}" can't be used: ${problem}`);
+    return made;
+  };
+
   /**
    * A chat's session on its project's context: its backend, its role's tools, its autonomy, and its transcript
    * (resumed when saved).
@@ -301,8 +322,9 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     pc: ProjectContext,
     role: SessionRole,
     exec: { backend: ExecBackend; confined: boolean },
+    worktree?: Worktree,
   ): Promise<HostHandle> => {
-    const cwd = pc.ctx.cwd;
+    const cwd = worktree?.path ?? pc.ctx.cwd;
     const { backend, confined } = exec;
     const projectId = parseSessionKey(key)?.projectId ?? DEFAULT_PROJECT_ID;
     const { ctx: base, setSessionId } = await pc.newSessionContext();
@@ -354,7 +376,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
     }
     setSessionId(session.id);
     // On a failure here the caller closes the backend.
-    const runtime = await createRuntime(sessionCtx, {
+    const runtime = await createRuntime(worktree ? worktreeContext(sessionCtx, worktree) : sessionCtx, {
       session,
       history,
       mode: "default",
@@ -377,6 +399,12 @@ export async function runGateway(run: GatewayRun): Promise<number> {
 
   const sessions = new RoutedSessions(router, pool);
   const chatProjects: ChatProjects = { current: (k) => router.current(k), list: (k) => router.list(k), select: (k, id) => router.select(k, id) };
+  const chatWorktrees = createChatWorktrees({
+    store: worktreeStore,
+    current: (k) => router.current(k),
+    isOwner: (s) => run.pairing.isOwner("telegram", s),
+    closeSession: (k) => pool.close(k),
+  });
   const chatAutonomy: ChatAutonomy = {
     current: async (k) => {
       const project = await router.current(k);
@@ -401,7 +429,7 @@ export async function runGateway(run: GatewayRun): Promise<number> {
   const buildAdapters = (token: string | undefined): ChannelAdapter[] => {
     if (!token) return [];
     const api = run.seams?.telegramApi ?? new TelegramApi({ token });
-    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, loginMessage, pairing: run.pairing, ownerClaim: new OwnerClaimStore(run.home), log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
+    return [new TelegramAdapter({ api, sessions, projects: chatProjects, autonomy: chatAutonomy, worktrees: chatWorktrees, loginMessage, pairing: run.pairing, ownerClaim: new OwnerClaimStore(run.home), log: (m) => run.err(`gateway: telegram: ${m}\n`), ...run.seams?.telegramOptions })];
   };
   let adapterToken = telegramToken(live, run.env);
   let adapters = buildAdapters(adapterToken);

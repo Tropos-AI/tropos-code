@@ -82,6 +82,8 @@ export interface AppContext {
   autonomy?: () => AutonomyPolicy;
   /** Keys and tokens pasted into this session, held out of the transcript and the model's sight. */
   secrets?: SecretVault;
+  /** Extra context blocks for the main agent's first message (each producer appends its own), before the nonce block. */
+  contextBlocks?: () => Promise<string[]>;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -213,6 +215,7 @@ export function makeAgent(
         // Guests can't use specialists, so they don't hear of them.
         ...(scope === "main" ? { reminder: await setupReminder(), specialists: ctx.role !== "guest" } : {}),
       })),
+      ...(scope === "main" ? ((await ctx.contextBlocks?.()) ?? []) : []),
       nonceBlock(nonce()),
     ]);
   const contextText = contextFor("main");

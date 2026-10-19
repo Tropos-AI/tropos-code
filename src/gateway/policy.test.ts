@@ -158,6 +158,12 @@ describe("workspaceProblem", () => {
     expect(workspaceProblem(tropos, "/Users/me/.tropos", userHome)).toBeDefined();
     expect(workspaceProblem("/Users/me/.tropos/projects/x", tropos, userHome)).toMatch(/data directory/);
   });
+  test("a worktree folder is a fit workspace though it is under ~/.tropos", () => {
+    expect(workspaceProblem("/Users/me/.tropos/worktrees/app/t1", tropos, userHome)).toBeUndefined();
+    // Only the folders below it: the worktrees folder itself and look-alikes stay refused.
+    expect(workspaceProblem("/Users/me/.tropos/worktrees", tropos, userHome)).toBeDefined();
+    expect(workspaceProblem("/Users/me/.tropos/worktrees-x/app", tropos, userHome)).toBeDefined();
+  });
 });
 
 describe("chatRole", () => {

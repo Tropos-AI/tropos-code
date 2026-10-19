@@ -13,7 +13,7 @@ const base: ConfinementPaths = {
   gitDirs: ["/w/app/.git", "/w/app/realgit"],
   husky: ["/w/app/.husky"],
   deniedReads: ["/u/.ssh", "/u/.tropos", "/Library/Keychains"],
-  readCarveOut: "/u/.tropos/workspace",
+  readCarveOuts: ["/u/.tropos/workspace", "/u/.tropos/worktrees"],
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
   platform: "darwin",
 };
@@ -38,7 +38,7 @@ test("the rules come in the order the sandbox needs: service denies, base write 
     '(allow file-write* (regex #"^/u/\\.tropos/sandbox-cache/.+"))',
     '(deny file-write* (literal (param "PROJECT"))',
     '(deny file-read* (subpath (param "R0"))',
-    '(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))',
+    '(allow file-read* (subpath (param "C0")) (subpath (param "C1")) (subpath (param "CD0")))',
     "(deny file-read* file-write* (subpath (param \"O0\")) (subpath (param \"O1\")))",
   ];
   const at = order.map((rule) => profile.indexOf(rule));
@@ -74,7 +74,8 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     ["R0", base.deniedReads[0]!],
     ["R1", base.deniedReads[1]!],
     ["R2", base.deniedReads[2]!],
-    ["C0", base.readCarveOut],
+    ["C0", base.readCarveOuts[0]!],
+    ["C1", base.readCarveOuts[1]!],
     ["CD0", base.cacheDir],
     ["O0", base.ownFiles[0]!],
     ["O1", base.ownFiles[1]!],
@@ -85,7 +86,7 @@ test("paths travel as params; only the git and settings regexes embed an escaped
     `  (regex #"^${escaped}/\\.git/(.*/)?(hooks(/.*)?|config(\\.worktree)?|commondir)$")`,
     `  (regex #"^${escaped}/(.*/)?\\.tropos(/settings(\\.local)?\\.json)?$")`,
   ]);
-  for (const p of [...base.writable, ...base.deniedReads, base.readCarveOut, base.cacheDir, ...base.ownFiles]) expect(profile).not.toContain(p);
+  for (const p of [...base.writable, ...base.deniedReads, ...base.readCarveOuts, base.cacheDir, ...base.ownFiles]) expect(profile).not.toContain(p);
 
   expect(() => sandboxProfile({ ...base, project: '/w/a"b' })).toThrow(new ConfinementError(`/w/a"b can't be confined: its path contains a double quote.`));
   expect(() => sandboxProfile({ ...base, gitDirs: ["/w/app/.git", '/w/app/g"it'] })).toThrow(ConfinementError);

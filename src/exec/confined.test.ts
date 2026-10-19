@@ -136,6 +136,32 @@ describe.skipIf(available === null)("with real confinement", () => {
     expect(workspace).toMatchObject({ code: 0, out: "w" });
   });
 
+  test("a command in a worktree under ~/.tropos can write there but still can't read ~/.tropos/credentials.json", async () => {
+    // A linked worktree: its .git is a file pointing into the owner's repo.
+    const wt = join(f.home, "worktrees", "app", "t1");
+    mkdirSync(wt, { recursive: true });
+    mkdirSync(join(f.fx, "repo", ".git", "worktrees", "t1"), { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(f.fx, "repo", ".git", "worktrees", "t1")}\n`);
+    writeFileSync(join(wt, "seed.txt"), "seed");
+    writeFileSync(join(f.home, "credentials.json"), "token");
+    const inWorktree = confinedBackend({ project: wt, home: f.home, userHome: f.userHome, env: f.env });
+    try {
+      const go = (script: string) => collect(inWorktree.spawn({ shell: "/bin/sh", script, cwd: wt, env: {} }));
+      expect(await go("echo a > new.txt && cat seed.txt")).toMatchObject({ code: 0, out: "seed" });
+      expect(readFileSync(join(wt, "new.txt"), "utf8")).toBe("a\n");
+      const creds = await go(`cat '${join(f.home, "credentials.json")}'`);
+      expect(creds.code).not.toBe(0);
+      expect(creds.out).not.toContain("token");
+      // Other worktrees are readable (the carve-out is the worktrees folder), the rest of ~/.tropos is not.
+      expect((await go(`cat '${join(f.home, "secret")}'`)).code).not.toBe(0);
+      expect((await go(`echo x > '${join(f.home, "worktrees", "app", "other")}'`)).code).not.toBe(0);
+      // The gitfile pointer can't be rewritten.
+      expect((await go("echo 'gitdir: /elsewhere' > .git")).code).not.toBe(0);
+    } finally {
+      await inWorktree.close();
+    }
+  });
+
   test("network is allowed (a local Bun.serve on 127.0.0.1 answers curl)", async () => {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("pong") });
     try {

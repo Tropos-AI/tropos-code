@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, redactSecrets, splitMessage, statusText, taskSummaryText } from "./render";
+import { BOT_COMMANDS, callbackData, HELP_TEXT, learnedText, parseCallbackData, permissionKeyboard, permissionText, permissionView, renderToolBatch, redactSecrets, splitMessage, statusText, taskSummaryText, discardConfirmKeyboard, parseWorktreeCallback, worktreeKeyboard, worktreeText } from "./render";
 
 describe("splitMessage", () => {
   test("short text is one part", () => {
@@ -129,5 +129,29 @@ describe("redactSecrets", () => {
   });
   test("extra counts add to 'and N more'", () => {
     expect(taskSummaryText({ files: ["a"], commands: [], moreFiles: 5 })).toBe("Changed: a and 5 more");
+  });
+});
+
+describe("worktree buttons", () => {
+  const summary = { branch: "tropos/t1", changedFiles: 3, commitsAhead: 0, canPr: true };
+  test("the text says what changed", () => {
+    expect(worktreeText(summary)).toBe("Changes on tropos/t1: 3 files changed.");
+    expect(worktreeText({ ...summary, changedFiles: 1, commitsAhead: 2 })).toBe("Changes on tropos/t1: 1 file changed, 2 commits.");
+  });
+  test("Open PR is offered only when gh is ready", () => {
+    const texts = (k: ReturnType<typeof worktreeKeyboard>) => k.inline_keyboard.flat().map((b) => b.text);
+    expect(texts(worktreeKeyboard(summary))).toEqual(["Merge", "Open PR", "Keep branch", "Discard"]);
+    expect(texts(worktreeKeyboard({ ...summary, canPr: false }))).toEqual(["Merge", "Keep branch", "Discard"]);
+    expect(worktreeKeyboard(summary).inline_keyboard.flat().map((b) => b.callback_data)).toEqual(["wt:merge", "wt:pr", "wt:keep", "wt:discard"]);
+  });
+  test("discard asks again, with its own data", () => {
+    expect(discardConfirmKeyboard().inline_keyboard.flat()).toEqual([
+      { text: "Yes, discard", callback_data: "wt:discard!" },
+      { text: "Cancel", callback_data: "wt:cancel" },
+    ]);
+  });
+  test("callback data parses to the action, and nothing else does", () => {
+    for (const a of ["merge", "pr", "keep", "discard", "discard!", "cancel"]) expect(parseWorktreeCallback(`wt:${a}`)).toBe(a as never);
+    for (const bad of [undefined, "", "wt:", "wt:rm", "wt:merge ", "p:app", "a:1:y", "wt:discard!!"]) expect(parseWorktreeCallback(bad)).toBeUndefined();
   });
 });

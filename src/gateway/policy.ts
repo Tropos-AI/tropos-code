@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import type { Mode } from "../config/constants";
-import { isInside } from "../paths";
+import { isInside, worktreesDir } from "../paths";
 import { STORE_TOOLS } from "../learning/stores";
 import { compileRules, type AutonomyPolicy } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
@@ -105,6 +105,9 @@ export function workspaceProblem(workspace: string, troposHome: string, userHome
   ] as const) {
     if (isInside(protectedDir, dir)) return `${workspace} is, or contains, ${label}; pick a project directory`;
   }
+  // The chats' git worktrees live under ~/.tropos/worktrees (the confinement carves that folder out); anything below it is fine.
+  const worktrees = real(worktreesDir(troposHome));
+  if (dir !== worktrees && isInside(dir, worktrees)) return undefined;
   if (isInside(dir, real(troposHome))) return `${workspace} is inside Tropos's data directory; pick a project directory`;
   return undefined;
 }

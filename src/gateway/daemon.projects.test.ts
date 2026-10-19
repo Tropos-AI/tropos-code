@@ -1,6 +1,6 @@
 // src/gateway/daemon.projects.test.ts — projects and services in the running gateway: Telegram and the model are fakes.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { realpathSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
@@ -17,6 +17,7 @@ import { FilePairing } from "./pairing";
 import { loginCodesFor } from "../web/login-codes";
 import { gatewayConfigSchema, saveGatewayConfig } from "./config";
 import { readGatewayState, type GatewayRun } from "./daemon";
+import { git, makeRepo } from "../snapshots/test-repo";
 import { addProject } from "./projects";
 import { TelegramApi } from "./telegram/api";
 import type { ChatSession, ChatSink, GatewayService, GatewayServiceDeps } from "./types";
@@ -323,6 +324,50 @@ describe("scheduling from chats", () => {
 
     gw.stop();
     expect(await gw.done).toBe(0);
+  });
+});
+
+describe.skipIf(Bun.which("git") === null)("worktrees in chats", () => {
+  test("a chat in a registered repo works in a worktree, gets the end-of-task buttons, and Keep branch commits it", async () => {
+    const repo = await makeRepo();
+    try {
+      await mkdir(home, { recursive: true });
+      await addProject(home, { path: repo, name: "App" }, { userHome: join(dir, "nobody") });
+      // The second turn "changes" a file in the worktree the chat works in (the first backend's workspace).
+      const gw: ReturnType<typeof startGateway> = startGateway([
+        () => reply([textBlock("one")]),
+        () => {
+          writeFileSync(join(gw.workspaces[0]!, "new.txt"), "x\n");
+          return reply([textBlock("two")]);
+        },
+      ]);
+      await server.waitFor(() => server.commands.length > 0);
+      await pairChat();
+      server.pushMessage(CHAT, CHAT, "/project app");
+      await server.waitFor(() => server.textsTo(CHAT).some((t) => t.startsWith("Switched to App (app)")));
+      server.pushMessage(CHAT, CHAT, "start");
+      await server.waitFor(() => server.textsTo(CHAT).includes("one"));
+      const worktree = gw.workspaces[0]!;
+      expect(worktree.startsWith(join(home, "worktrees", "app") + "/")).toBe(true);
+      // No changes yet, so no buttons; the owner's checkout is untouched.
+      expect(server.sent.some((m) => m.replyMarkup)).toBe(false);
+
+      server.pushMessage(CHAT, CHAT, "change something");
+      const buttons = await server.waitFor(() => server.sent.find((m) => m.text.startsWith("Changes on tropos/")));
+      expect(buttons.text).toEndWith("1 file changed.");
+      expect(git(repo, "status", "--porcelain")).toBe("");
+
+      server.pushCallback(CHAT, CHAT, buttons.messageId, "wt:keep");
+      await server.waitFor(() => buttons.edits.some((e) => e.text.includes("Kept the work")));
+      const branch = buttons.text.match(/tropos\/[\w-]+/)![0];
+      expect(git(repo, "show", `${branch}:new.txt`)).toBe("x\n");
+      expect(gw.backendsClosed).toContain(worktree);
+
+      gw.stop();
+      expect(await gw.done).toBe(0);
+    } finally {
+      await removeDir(repo);
+    }
   });
 });
 

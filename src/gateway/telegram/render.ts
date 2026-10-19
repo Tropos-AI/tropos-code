@@ -4,6 +4,7 @@ import type { Message } from "../../api/model";
 import type { PanelData } from "../../ui/runtime";
 import type { SessionState } from "../../web/protocol";
 import type { TurnEndReason } from "../../agent/events";
+import type { WorktreeSummary } from "../types";
 import type { InlineKeyboard } from "./api";
 
 export const MAX_MESSAGE = 4096;
@@ -215,3 +216,33 @@ export const BOT_COMMANDS = [
   { command: "learned", description: "What I learned, with undo" },
   { command: "start", description: "Show help" },
 ];
+
+// ---- end-of-task buttons for a chat working in a git worktree ----
+
+export type WorktreeButton = "merge" | "pr" | "keep" | "discard" | "discard!" | "cancel";
+
+/** callback_data: `wt:<x>`. */
+export function parseWorktreeCallback(data: string | undefined): WorktreeButton | undefined {
+  const m = /^wt:(merge|pr|keep|discard!?|cancel)$/.exec(data ?? "");
+  return m ? (m[1] as WorktreeButton) : undefined;
+}
+
+/** What the task changed, for the message that carries the buttons. */
+export function worktreeText(s: WorktreeSummary): string {
+  const files = `${s.changedFiles} file${s.changedFiles === 1 ? "" : "s"} changed`;
+  const commits = s.commitsAhead > 0 ? `, ${s.commitsAhead} commit${s.commitsAhead === 1 ? "" : "s"}` : "";
+  return `Changes on ${s.branch}: ${files}${commits}.`;
+}
+
+/** Merge, Open PR (only with `gh` ready), Keep branch, Discard. */
+export function worktreeKeyboard(s: WorktreeSummary): InlineKeyboard {
+  const button = (text: string, action: string) => ({ text, callback_data: `wt:${action}` });
+  return {
+    inline_keyboard: [[button("Merge", "merge"), ...(s.canPr ? [button("Open PR", "pr")] : [])], [button("Keep branch", "keep"), button("Discard", "discard")]],
+  };
+}
+
+/** Discard throws the work away, so it takes a second tap. */
+export function discardConfirmKeyboard(): InlineKeyboard {
+  return { inline_keyboard: [[{ text: "Yes, discard", callback_data: "wt:discard!" }, { text: "Cancel", callback_data: "wt:cancel" }]] };
+}

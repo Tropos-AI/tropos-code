@@ -4,27 +4,33 @@ import type { AgentEvent, PermissionPrompt, TurnEndReason } from "../../agent/ev
 import { AUTONOMY_LEVELS, type Autonomy } from "../config";
 import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "../errors";
 import type { SessionState } from "../../web/protocol";
-import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, Pairing, SessionProvider } from "../types";
+import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, ChatWorktrees, Pairing, SessionProvider, WorktreeSummary } from "../types";
+import { OWNER_ONLY_FINISH } from "../worktrees";
 import { candidateFrom, type OwnerClaimStore } from "../owner-claim";
 import { findSecrets } from "../../tools/setup/secrets";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
   assistantText,
   BOT_COMMANDS,
+  discardConfirmKeyboard,
   HELP_TEXT,
   learnedText,
   oneLine,
   parseCallbackData,
   parseProjectCallback,
+  parseWorktreeCallback,
   permissionKeyboard,
   permissionView,
   projectKeyboard,
   projectListText,
+  redactSecrets,
   renderToolBatch,
   splitMessage,
   statusText,
   turnEndNote,
   taskSummaryText,
+  worktreeKeyboard,
+  worktreeText,
   type ToolLine,
 } from "./render";
 
@@ -53,6 +59,8 @@ export interface TelegramAdapterOptions {
   projects?: ChatProjects;
   /** Lets the owner see and lower the autonomy level (/autonomy). Without it the command says it isn't available. */
   autonomy?: ChatAutonomy;
+  /** Lets the owner finish a chat's git-worktree task with buttons. Without it a turn ends without any. */
+  worktrees?: ChatWorktrees;
   /** The text for /login: a fresh code and where to type it. Without it the command says it isn't available. */
   loginMessage?: () => Promise<string>;
   allowGroups?: boolean;
@@ -128,6 +136,12 @@ interface Chat {
   root: string | undefined;
   /** The project this chat's session works in; when the agent switches it (SwitchProject), the session is left. */
   projectId: string | undefined;
+  /** The first message of the task, for the commit and PR title. */
+  taskTitle?: string;
+  /** The message carrying the end-of-task buttons; `busy` while a button's action runs. */
+  worktreeMsg?: { messageId: number; text: string; busy: boolean };
+  /** What the buttons were drawn from, to draw them again after Cancel. */
+  worktreeSummary?: WorktreeSummary;
 }
 
 /** `/Project@MyBot arg` -> `project`. */
@@ -155,6 +169,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly pairing: Pairing;
   private readonly projects: ChatProjects | undefined;
   private readonly autonomy: ChatAutonomy | undefined;
+  private readonly worktrees: ChatWorktrees | undefined;
   private readonly loginMessage: (() => Promise<string>) | undefined;
   private readonly allowGroups: boolean;
   private readonly ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add">;
@@ -183,6 +198,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.pairing = opts.pairing;
     this.projects = opts.projects;
     this.autonomy = opts.autonomy;
+    this.worktrees = opts.worktrees;
     this.loginMessage = opts.loginMessage;
     this.allowGroups = opts.allowGroups ?? false;
     this.ownerClaim = opts.ownerClaim;
@@ -588,6 +604,11 @@ export class TelegramAdapter implements ChannelAdapter {
       await this.handleProjectButton(cb, chatId, projectId);
       return;
     }
+    const wtButton = parseWorktreeCallback(cb.data);
+    if (wtButton !== undefined) {
+      await this.handleWorktreeButton(cb, chatId, wtButton);
+      return;
+    }
     const chat = this.chats.get(`${CHANNEL}:${chatId}`);
     // Only the approved sender of that chat may answer; anyone else is ignored without a reply.
     if (!chat || chat.senderId !== String(cb.from.id) || !(await this.pairing.isApproved(CHANNEL, chat.senderId))) return;
@@ -599,6 +620,51 @@ export class TelegramAdapter implements ChannelAdapter {
     }
     this.settleAsk(chat, parsed.id, parsed.approve ? "Approved." : "Denied.", false, parsed.approve ? "allow" : "deny");
     await this.api.answerCallbackQuery(cb.id, parsed.approve ? "Approved" : "Denied").catch((e) => this.log("callback answer failed", e));
+  }
+
+  private async handleWorktreeButton(cb: TgCallbackQuery, chatId: number, action: NonNullable<ReturnType<typeof parseWorktreeCallback>>): Promise<void> {
+    const key = `${CHANNEL}:${chatId}`;
+    const chat = this.chats.get(key);
+    const worktrees = this.worktrees;
+    // Only the approved sender of that chat may press; anyone else is ignored without a reply.
+    if (!worktrees || !chat || chat.senderId !== String(cb.from.id) || !(await this.pairing.isApproved(CHANNEL, chat.senderId))) return;
+    const answer = (text: string) => this.api.answerCallbackQuery(cb.id, oneLine(text, 190)).catch((e) => this.log("callback answer failed", e));
+    await chat.outbox.idle();
+    const shown = chat.worktreeMsg;
+    if (!shown || shown.messageId !== cb.message?.message_id) return void (await answer("These buttons are out of date."));
+    if (shown.busy) return void (await answer("Working on it."));
+    if (chat.running || chat.blocked || chat.queue.length > 0 || chat.session.state().busy) return void (await answer("Wait for the current turn to finish."));
+    const edit = (text: string, replyMarkup: Parameters<TelegramApi["editMessageText"]>[3]) =>
+      chat.outbox.run(() => this.api.editMessageText(chatId, shown.messageId, text, replyMarkup)).catch((e) => this.log("worktree edit failed", e));
+    if (action === "discard") {
+      await answer("Discard? Tap Yes to confirm.");
+      await edit(`${shown.text}\nDiscard this branch and everything on it? This can't be undone.`, { replyMarkup: discardConfirmKeyboard() });
+      return;
+    }
+    if (action === "cancel") {
+      await answer("Cancelled.");
+      if (chat.worktreeSummary) await edit(shown.text, { replyMarkup: worktreeKeyboard(chat.worktreeSummary) });
+      return;
+    }
+    shown.busy = true;
+    let result: string;
+    try {
+      result = await worktrees.finish(key, chat.senderId, action === "discard!" ? "discard" : action, chat.taskTitle ?? "");
+    } catch (e) {
+      shown.busy = false;
+      this.log("worktree finish failed", e);
+      await answer("That didn't work. Try again.");
+      return;
+    }
+    await answer(result);
+    if (result === OWNER_ONLY_FINISH) {
+      shown.busy = false; // the buttons stay: keep and discard are still open to this sender
+      return;
+    }
+    // The session is closed and the task is over: this message becomes the record, and the next message starts afresh.
+    chat.worktreeMsg = undefined;
+    await edit(`${shown.text}\n${result}`, { replyMarkup: { inline_keyboard: [] } });
+    this.dropChat(chat);
   }
 
   // ---- prompts and commands ----
@@ -618,6 +684,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
   private async runTurn(chat: Chat, item: QueueItem): Promise<void> {
     chat.errorSent = false;
+    if ("text" in item) chat.taskTitle ??= oneLine(redactSecrets(item.text), 72);
     // Another client's turn may be in flight (busy): keep what it has recorded so far.
     if (!chat.session.state().busy) {
       this.resetDone(chat);
@@ -658,7 +725,46 @@ export class TelegramAdapter implements ChannelAdapter {
       if (note && !(reason === "error" && chat.errorSent)) this.sendAll(chat, note);
     }
     if (await this.projectMoved(chat)) return;
+    if (reason === "end_turn") {
+      // Held as running, so a message that arrives meanwhile waits until the buttons are out (they belong to this turn).
+      chat.running = true;
+      try {
+        await this.offerWorktree(chat);
+      } finally {
+        chat.running = false;
+      }
+    }
     this.drain(chat);
+  }
+
+  /** After a turn that changed the task's worktree: the buttons to merge, open a PR, keep or discard. */
+  private async offerWorktree(chat: Chat): Promise<void> {
+    if (!this.worktrees || this.stopped) return;
+    let summary: Awaited<ReturnType<ChatWorktrees["status"]>>;
+    try {
+      summary = await this.worktrees.status(`${CHANNEL}:${chat.chatId}`);
+    } catch (e) {
+      this.log("worktree status failed", e);
+      return;
+    }
+    if (!summary || (summary.changedFiles === 0 && summary.commitsAhead === 0)) return;
+    const previous = chat.worktreeMsg;
+    if (previous) this.clearKeyboard(chat, previous.messageId, previous.text);
+    const text = worktreeText(summary);
+    chat.worktreeMsg = undefined;
+    chat.worktreeSummary = summary;
+    // Recorded inside the send, so a press that comes right after the message appears already finds it.
+    await chat.outbox
+      .run(async () => {
+        const messageId = (await this.api.sendMessage(chat.chatId, text, { replyMarkup: worktreeKeyboard(summary) })).message_id;
+        chat.worktreeMsg = { messageId, text, busy: false };
+      })
+      .catch((e) => this.log("worktree buttons failed", e));
+  }
+
+  /** Takes the buttons off a message (its text stays, or becomes `text`). */
+  private clearKeyboard(chat: Chat, messageId: number, text: string): void {
+    void chat.outbox.run(() => this.api.editMessageText(chat.chatId, messageId, text, { replyMarkup: { inline_keyboard: [] } })).catch((e) => this.log("worktree edit failed", e));
   }
 
   /**

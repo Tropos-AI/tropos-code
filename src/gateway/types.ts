@@ -4,6 +4,9 @@ import type { PanelData } from "../ui/runtime";
 import type { SessionState } from "../web/protocol";
 import type { Autonomy, GatewayConfig } from "./config";
 import type { Project, ProjectSource } from "./projects";
+import type { WorktreeAction } from "./worktrees";
+
+export type { WorktreeAction } from "./worktrees";
 
 /** Who a session answers to: the owner at their own chat, a paired guest, or a scheduled run. */
 export type SessionRole = "owner" | "guest" | "scheduled";
@@ -89,6 +92,23 @@ export interface ChatProjects {
   list(chatKey: string): Promise<Project[]>;
   /** Rejects with a user-facing error when the project doesn't exist. */
   select(chatKey: string, projectId: string): Promise<Project>;
+}
+
+/** What a chat's open task changed in its worktree. */
+export interface WorktreeSummary {
+  branch: string;
+  changedFiles: number;
+  commitsAhead: number;
+  /** `gh` is logged in and the repo has an origin: Open PR can work. */
+  canPr: boolean;
+}
+
+/** What a channel needs to show and finish the task a chat works on in a git worktree. */
+export interface ChatWorktrees {
+  /** The chat's open task, or undefined when it has none (no worktree). */
+  status(chatKey: string): Promise<WorktreeSummary | undefined>;
+  /** Finishes the task and answers with what happened. Merge and PR are the owner's; the session is closed either way. */
+  finish(chatKey: string, senderId: string, action: WorktreeAction, title: string): Promise<string>;
 }
 
 /** What a channel needs to show and lower the autonomy level of the project a chat is in. */

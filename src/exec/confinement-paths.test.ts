@@ -49,7 +49,7 @@ test("paths are real paths; Tropos's home is denied and its workspace carved out
   expect(paths.deniedReads).toContain(join(fx, "home", ".config", "gh"));
   expect(paths.deniedReads).toContain(realpathOr("/Library/Keychains"));
   expect(paths.deniedReads).toHaveLength(SECRET_PATHS.length + 1);
-  expect(paths.readCarveOut).toBe(join(fx, "home", ".tropos", "workspace"));
+  expect(paths.readCarveOuts).toEqual([join(fx, "home", ".tropos", "workspace"), join(fx, "home", ".tropos", "worktrees")]);
   expect(paths.cacheDir).toBe(join(fx, "home", ".tropos", "sandbox-cache"));
   expect(paths.writable).toContain(join(fx, "tmp"));
   expect(paths.writable).toContain(realpathOr("/tmp")); // root's, so resolved even when it is a link (macOS)

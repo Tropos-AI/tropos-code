@@ -52,6 +52,9 @@ export interface Worktree {
 
 export type WorktreeAction = "merge" | "pr" | "keep" | "discard";
 
+/** What a guest gets for Merge or Open PR; the Telegram adapter recognises it to leave the buttons in place. */
+export const OWNER_ONLY_FINISH = "Only the owner can merge or open a PR. You can keep the branch or discard it.";
+
 const worktreeSchema = z.object({
   key: z.string(),
   projectId: z.string(),

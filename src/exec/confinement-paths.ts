@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { workspaceOwnPaths } from "../home/layout";
-import { isInside } from "../paths";
+import { isInside, worktreesDir } from "../paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
 
 export class ConfinementError extends Error {
@@ -91,8 +91,8 @@ export interface ConfinementPaths {
   /** `<project>/.husky` and, when it is a link, its target inside the project. */
   husky: string[];
   deniedReads: string[];
-  /** Readable although inside a denied path: Tropos's default project. */
-  readCarveOut: string;
+  /** Readable although inside a denied path: Tropos's default project and the chats' git worktrees. */
+  readCarveOuts: string[];
   /** The chief's own files inside that project (USER.md, the journal …): neither readable nor writable, though the workspace is. */
   ownFiles: string[];
   platform: NodeJS.Platform;
@@ -124,7 +124,7 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     gitDirs: withLinkTarget(join(project, ".git"), project),
     husky: withLinkTarget(join(project, ".husky"), project),
     deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
-    readCarveOut: real(join(opts.home, "workspace")),
+    readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     platform,
   };

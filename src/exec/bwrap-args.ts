@@ -39,7 +39,9 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   const { project } = paths;
   // Parity with the macOS profile needs real dirs: a linked or file `.git`/`.husky`/`.tropos` (a worktree gitfile, a
   // link a chat could swap) can't be made a read-only mount point, so refuse rather than confine something weaker.
-  for (const name of [".git", ".husky", ".tropos"]) requireRealDirOrAbsent(join(project, name));
+  // A linked worktree's `.git` is a plain file (a pointer into the owner's repo): it is kept read-only in place below.
+  requireRealDirOrAbsent(join(project, ".git"), { allowFile: true });
+  for (const name of [".husky", ".tropos"]) requireRealDirOrAbsent(join(project, name));
 
   const args = ["--unshare-all", "--share-net", "--new-session", "--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"];
   args.push(...hostServiceMasks(hostServicePaths(process.getuid?.() ?? 1000)));
@@ -50,9 +52,8 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   for (const secret of secrets) args.push(...hide(secret));
   // The cache lives inside the now-hidden ~/.tropos; rebind it writable, and the default project readable.
   if (exists(paths.cacheDir)) args.push("--bind", paths.cacheDir, paths.cacheDir);
-  const carveOut = paths.readCarveOut;
-  const carve = exists(carveOut) && carveOut !== project;
-  if (carve) args.push("--ro-bind", carveOut, carveOut);
+  const carveOuts = paths.readCarveOuts.filter((dir) => exists(dir) && dir !== project);
+  for (const dir of carveOuts) args.push("--ro-bind", dir, dir);
 
   args.push("--bind", project, project);
   // The project bind brings back what lies beneath it: secrets inside the project (a project at ~) are hidden again,
@@ -60,7 +61,7 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
   const reopened = secrets.filter((secret) => secret !== project && isInside(secret, project));
   for (const secret of reopened) args.push(...hide(secret));
   if (reopened.length > 0 && isInside(paths.cacheDir, project) && exists(paths.cacheDir)) args.push("--bind", paths.cacheDir, paths.cacheDir);
-  if (carve && reopened.some((secret) => isInside(carveOut, secret))) args.push("--ro-bind", carveOut, carveOut);
+  for (const dir of carveOuts) if (reopened.some((secret) => isInside(dir, secret))) args.push("--ro-bind", dir, dir);
 
   // The chief's own files, last among the binds that could bring them back (the project or the workspace carve-out).
   // One that doesn't exist yet is covered by an empty read-only placeholder (like .git below), or a command could create
@@ -78,6 +79,8 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
     if (!isRealDir(git)) {
       // No `.git` at all: an empty read-only one, so `git init` (and planting hooks with it) fails as on macOS.
       if (i === 0 && !exists(git)) args.push(...protect(git, "dir"));
+      // A worktree's gitfile stays readable but can't be pointed somewhere else.
+      else if (i === 0) args.push("--ro-bind", git, git);
       continue;
     }
     args.push("--bind", git, git);
@@ -107,15 +110,15 @@ function protect(path: string, kind: Kind): string[] {
   return kind === "dir" ? ["--tmpfs", path, "--remount-ro", path] : ["--ro-bind", "/dev/null", path];
 }
 
-function requireRealDirOrAbsent(path: string): void {
+function requireRealDirOrAbsent(path: string, opts: { allowFile?: boolean } = {}): void {
   let info: ReturnType<typeof lstatSync>;
   try {
     info = lstatSync(path);
   } catch {
     return; // absent is fine: a read-only placeholder covers it
   }
-  if (info.isSymbolicLink() || !info.isDirectory()) {
-    throw new ConfinementError(`${path} can't be confined: it must be a real directory, not a symlink or file.`);
+  if (info.isSymbolicLink() || !(info.isDirectory() || (opts.allowFile && info.isFile()))) {
+    throw new ConfinementError(`${path} can't be confined: it must be a real directory${opts.allowFile ? " or a gitfile" : ""}, not a symlink or other file.`);
   }
 }
 

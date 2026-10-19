@@ -19,7 +19,7 @@ export interface SandboxProfile {
 
 export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
-  for (const p of [paths.project, paths.cacheDir, paths.readCarveOut, ...paths.ownFiles, ...paths.gitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
+  for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.gitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
@@ -32,7 +32,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   const gitDirs = named("G", paths.gitDirs);
   const husky = named("K", paths.husky);
   const secrets = named("R", paths.deniedReads);
-  params.push(["C0", paths.readCarveOut]);
+  const carveOuts = named("C", paths.readCarveOuts);
   params.push(["CD0", paths.cacheDir]);
   const ownFiles = named("O", paths.ownFiles);
 
@@ -73,8 +73,8 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     ")",
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
-    // Carve back out, after the secret read-deny: the default project and the per-sandbox cache (inside ~/.tropos).
-    `(allow file-read* (subpath (param "C0")) (subpath (param "CD0")))`,
+    // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
+    `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")))`,
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0 ? [`(deny file-read* file-write* ${ownFiles.map((p) => `(subpath ${p})`).join(" ")})`] : []),
     "",

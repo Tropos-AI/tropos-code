@@ -548,6 +548,16 @@ describe("learning and identity", () => {
     expect(firstMessage(2)).not.toContain("<bootstrap>");
   });
 
+  test("context blocks ride in the first message's context, before the nonce block, and not in a subagent's", async () => {
+    const model = await setup([text("a")]);
+    const { agent } = await agentFor({ ctx: { ...ctx, contextBlocks: async () => ["<worktree>x</worktree>"] } });
+    await agent.run("hi", signal());
+    const first = JSON.stringify(model.requests[0]!.messages[0]);
+    expect(first).toContain("<worktree>x</worktree>");
+    expect(first.indexOf("<worktree>")).toBeLessThan(first.indexOf("nonce"));
+    expect(await ctx.subagents.deps!.contextText()).not.toContain("<worktree>");
+  });
+
   test("subagents get the agent's own notes but not the user profile or the identity", async () => {
     const model = await setup([text("a")]);
     await ctx.ext.notes!.add("user", "Prefers bun");
