@@ -97,11 +97,16 @@ describe("AutonomyPanel", () => {
     await waitFor(() => expect(calls).toEqual([{ method: "set", params: { level: null, projectId: "app" } }]));
 
     expect(screen.getByRole("list", { name: "Detected tests for app" }).textContent).toBe("bun test");
-    fireEvent.click(screen.getByRole("button", { name: "Pin these tests for app" }));
+    // The call is recorded when it is sent; the buttons stay disabled until its answer has rendered.
+    const pin = screen.getByRole("button", { name: "Pin these tests for app" }) as HTMLButtonElement;
+    await waitFor(() => expect(pin.disabled).toBe(false));
+    fireEvent.click(pin);
     await waitFor(() => expect(calls[1]).toEqual({ method: "tests", params: { projectId: "app", commands: ["bun test"] } }));
     expect((await screen.findByRole("list", { name: "Pinned tests for app" })).textContent).toBe("bun test");
     expect(screen.queryByRole("list", { name: "Detected tests for app" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Unpin the tests for app" }));
+    const unpin = screen.getByRole("button", { name: "Unpin the tests for app" }) as HTMLButtonElement;
+    await waitFor(() => expect(unpin.disabled).toBe(false));
+    fireEvent.click(unpin);
     await waitFor(() => expect(calls[2]).toEqual({ method: "tests", params: { projectId: "app", commands: [] } }));
   });
 
