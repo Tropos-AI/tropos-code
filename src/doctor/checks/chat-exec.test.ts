@@ -21,6 +21,36 @@ test("confined on this machine: ok, naming the tool and the level", async () => 
   expect(r.findings.some((f) => f.fixable)).toBe(false);
 });
 
+test("confined at autonomous: a note that commands have the network and can read the home folder outside the deny list", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", chat({ backend: "host", autonomy: "autonomous" }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  expect(byId(r, "chat.exec.autonomous")).toMatchObject({
+    level: "info",
+    message: "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied",
+    detail:
+      "Keys, tokens, shell histories and your other projects' .env files stay unreadable, but other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+  });
+  expect(byId(r, "chat.exec.autonomous")!.fixable).toBeFalsy();
+});
+
+test("a single project at autonomous gets the note too; balanced everywhere doesn't", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", JSON.stringify({ chat: { backend: "host", autonomy: "balanced" }, projects: [{ id: "p", name: "P", path: fx.root, autonomy: "autonomous" }] }));
+  const one = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
+  expect(byId(one, "chat.exec.autonomous")).toBeDefined();
+  await fx.write("gateway.json", chat({ backend: "host", autonomy: "balanced" }));
+  const none = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
+  expect(byId(none, "chat.exec.autonomous")).toBeUndefined();
+});
+
+test("Docker at autonomous gets no such note: the container sees only the project", async () => {
+  fx = await makeFixture();
+  await fx.write("gateway.json", chat({ backend: "docker", autonomy: "autonomous" }));
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }) });
+  expect(byId(r, "chat.exec.autonomous")).toBeUndefined();
+});
+
 test("macOS names sandbox-exec", async () => {
   fx = await makeFixture();
   await fx.write("gateway.json", chat({ backend: "host", autonomy: "ask" }));

@@ -59,6 +59,15 @@ export const chatExecCheck: Check = {
     const confinement = await detectConfinement(env.runner.exec, env.platform);
     if (confinement) {
       out.push(finding("chat.exec", "ok", `Chat commands run on this machine, confined by ${confinement}, at ${level}`));
+      // The confinement denies a list of secrets, not the home folder, and leaves the network on: unasked, that is a lot.
+      if (level === "autonomous" || config.projects.some((p) => p.autonomy === "autonomous")) {
+        out.push(
+          finding("chat.exec.autonomous", "info", "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied", {
+            detail:
+              "Keys, tokens, shell histories and your other projects' .env files stay unreadable, but other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+          }),
+        );
+      }
     } else if (needsUnconfinedConsent(config, null)) {
       out.push(finding("chat.exec.held", "info", "Chats are held at ask: commands can't be confined here and running unconfined wasn't confirmed"));
     } else {
