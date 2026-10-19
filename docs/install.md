@@ -1,4 +1,9 @@
-# Installing and updating Tropos Code
+# Install and verify
+
+This page covers installing Tropos Code with the one-line installer, the installer's flags, what it changes on your
+machine, how to verify a release yourself before running it, and how to uninstall. Tropos Code runs on macOS
+(arm64, x64) and Linux (arm64, x64, glibc or musl). After installing, continue with [Onboarding](onboarding.md);
+keeping it up to date is in [Updates and rollback](updates.md).
 
 ## Install
 
@@ -37,7 +42,7 @@ A variable counts as set when it is non-empty and not `0`, `false`, `no` or `off
 
 1. Resolves the version, downloads the signed manifest and verifies the signature, then the binary's size and SHA-256 (see below).
 2. Runs the binary's `install --self`, which puts the version under `~/.local/share/tropos/versions` and links `~/.local/bin/tcode`.
-3. **Upgrade detection.** If `tcode` is on `PATH`, `~/.local/bin/tcode` exists, or the versions directory has entries, this is an upgrade (or a re-run): it runs `tcode doctor --fix --yes` (a failure only warns), restarts the gateway with `tcode gateway restart` when a gateway service is installed (a launchd or systemd unit with `tropos` in its name; a failure only warns), and prints `Upgraded X -> Y`. Re-running the same version repairs but does not restart the gateway. Upgrades and re-runs never start onboarding.
+3. **Upgrade detection.** If `tcode` is on `PATH`, `~/.local/bin/tcode` exists, or the versions directory has entries, this is an upgrade (or a re-run): it prints `Upgraded X -> Y` and runs `tcode doctor --fix --yes` (a failure only warns). When a gateway service is installed (a launchd or systemd unit with `tropos` in its name), it stops it with `tcode gateway stop` before that check and starts it again afterwards with `tcode gateway install`, which points the service at the new version (a failure only warns). Re-running the same version repairs but does not restart the gateway. Upgrades and re-runs never start onboarding.
 4. **PATH.** Unless `--no-modify-path`, or `~/.local/bin` is already on `PATH` and a block already exists, it appends the block below to the startup files of the shell named by `$SHELL`. It never adds the block twice, never writes to a file that is not writable (it warns instead), and prints which files changed and a `source …` line.
 5. **Onboarding.** On a fresh install (no `~/.tropos/settings.json`, `credentials.json` or `gateway.json`, and no earlier install) with a terminal, it connects `/dev/tty` and runs `tcode onboard`. Without a terminal, or with `--no-onboard`, `CI` or `--non-interactive`, it prints `Run: tcode onboard`.
 6. Prints a summary: version, location, next steps and a link to this page.
@@ -95,6 +100,7 @@ Release key fingerprint: `SHA256:QY3xHG6gCBN84NfeYw1Vy1r5G0NpGTf0jDR02/QVLr8` (a
 |---|---|
 | `tcode install [stable\|latest\|<version>] [--force]` | One-time install of a release (no target means `latest`); does not change your update channel. `--force` re-verifies and re-activates a version that is already installed, and replaces a `~/.local/bin/tcode` that Tropos did not create |
 | `tcode update` / `tcode upgrade` | Newest release of your channel; never older |
+| `tcode update --version <version>` | Installs that release (the same as `tcode install <version>`) |
 | `tcode rollback` | Back to the previous version; updates then skip the one you left |
 | `tcode -- update` | Everything after `--` is a prompt |
 
@@ -108,7 +114,8 @@ Settings in `~/.tropos/settings.json` (repository settings cannot change these):
 
 Interactive sessions check at most every 6 hours (longer after failures) and install newer releases
 in the background; the next session prints "Updated to <version>". Set `"autoUpdates": false` or
-`TROPOS_DISABLE_AUTOUPDATER=1` to turn this off. Print mode (`-p`) and CI never update.
+`TROPOS_DISABLE_AUTOUPDATER=1` to turn this off. Print mode (`-p`) and CI never update. Channels, the dashboard's
+update controls and rolling back: [Updates and rollback](updates.md).
 
 ## Files
 
@@ -125,6 +132,19 @@ Uninstall: `tcode uninstall` (see `tcode uninstall --help` for scopes, `--dry-ru
 Before the first release is promoted, `install.sh` and `install.sh stable` exit 69 with "no release
 has been published yet, or the release server could not be reached"; the first release's promotion
 sets both `latest` and `stable`. Installing an explicit version works.
+
+## Troubleshooting
+
+- **`tcode: command not found` after installing.** Open a new terminal, or run the `source …` line the installer
+  printed. With `--no-modify-path`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file.
+- **A step failed.** The installer prints the last 20 lines of its log; the whole log is `tcode logs install`
+  (or `~/.local/state/tropos/install.log`). Re-running the installer is safe: the same version is repaired in
+  place.
+- **Exit 65 (verification failed).** Nothing was installed. Try again later; if it persists, report it as described
+  in [SECURITY.md](../SECURITY.md).
+- **Exit 75.** Another install or update is running; wait for it and run the installer again.
+- **"do not run this installer with sudo".** Tropos Code installs into your home directory: run the installer as
+  your own user. Set `TROPOS_INSTALL_ALLOW_SUDO=1` only if you really want to install for root.
 
 ## For maintainers
 
