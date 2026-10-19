@@ -20,7 +20,7 @@ export interface SandboxProfile {
 export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   requireLinkedGitDirsOutsideWritable(paths);
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
-  for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
+  for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.instructionFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
@@ -36,6 +36,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   const carveOuts = named("C", paths.readCarveOuts);
   params.push(["CD0", paths.cacheDir]);
   const ownFiles = named("O", paths.ownFiles);
+  const instructionFiles = named("I", paths.instructionFiles);
 
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
@@ -72,6 +73,8 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny file-write* ${protections}`,
     ...regexes.map((r) => `  ${r}`),
     ")",
+    // A non-owner's session: the instruction files the owner's sessions load from the workspace, missing ones included.
+    ...(instructionFiles.length > 0 ? [`(deny file-write* ${instructionFiles.map((p) => `(literal ${p})`).join(" ")})`] : []),
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).

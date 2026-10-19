@@ -87,7 +87,13 @@ test.skipIf(!canConfine)("host with confinement: the confined backend, confined"
   const got = await chatBackend(input({ config: config({ backend: "host" }), role: "owner" }));
   expect(got.backend.kind).toBe("confined");
   expect(got.confined).toBe(true);
+  // The owner's own sessions may change the workspace's instruction files; a scheduled run's commands may not.
+  const pathsOf = (b: unknown) => (b as { paths: { instructionFiles: string[] } }).paths.instructionFiles;
+  expect(pathsOf(got.backend)).toEqual([]);
   await got.backend.close();
+  const scheduled = await chatBackend(input({ config: config({ backend: "host" }), role: "scheduled" }));
+  expect(pathsOf(scheduled.backend).map((p) => p.split("/").at(-1))).toEqual(["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"]);
+  await scheduled.backend.close();
 });
 
 test.skipIf(!canConfine)("host: a project that can't be confined fails closed with the reason", async () => {

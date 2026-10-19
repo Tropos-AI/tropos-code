@@ -237,6 +237,26 @@ test("missing own files inside a writable workspace get read-only placeholders, 
   for (const name of ["memory", "skills", "skills-learned"]) expect(at(args, ...emptyDir(join(ws, name)))).toBeGreaterThan(projectBind);
 });
 
+test("for a non-owner, the workspace's instruction files are read-only, with placeholders where missing; an owner's are not", () => {
+  const ws = join(userHome, ".tropos", "workspace");
+  writeFileSync(join(ws, "CLAUDE.md"), "owner's");
+  const guarded = confinementPaths({ project: ws, home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") }, platform: "linux", protectInstructions: true });
+  const args = bwrapArgs(guarded, ws);
+  const projectBind = at(args, "--bind", ws, ws);
+  expect(at(args, ...ro(join(ws, "CLAUDE.md")))).toBeGreaterThan(projectBind);
+  for (const name of ["TROPOS.md", "TROPOS.local.md", "AGENTS.override.md"]) expect(at(args, ...nullFile(join(ws, name)))).toBeGreaterThan(projectBind);
+  const owner = bwrapArgs(paths(ws), ws);
+  expect(at(owner, ...nullFile(join(ws, "TROPOS.md")))).toBe(-1);
+  expect(at(owner, ...ro(join(ws, "CLAUDE.md")))).toBe(-1);
+});
+
+test("an instruction file that is a link refuses a non-owner's sandbox", () => {
+  const ws = join(userHome, ".tropos", "workspace");
+  symlinkSync(join(fx, "elsewhere.md"), join(ws, "TROPOS.md"));
+  const guarded = confinementPaths({ project: ws, home: join(userHome, ".tropos"), userHome, env: { TMPDIR: join(fx, "tmp") }, platform: "linux", protectInstructions: true });
+  expect(() => bwrapArgs(guarded, ws)).toThrow(join(ws, "TROPOS.md"));
+});
+
 test("an own file that is a link, even a dangling one, refuses the sandbox", () => {
   const ws = join(userHome, ".tropos", "workspace");
   symlinkSync(join(fx, "nowhere"), join(ws, "USER.md"));

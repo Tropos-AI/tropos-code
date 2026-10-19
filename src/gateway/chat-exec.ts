@@ -57,7 +57,7 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     throw new SandboxUnavailableError(NO_CONFINEMENT);
   }
   try {
-    return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env }), confined: true };
+    return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner" }), confined: true };
   } catch (err) {
     // A project that can't be confined (a linked sandbox cache, an untrusted bwrap …) gets no session, not a bare shell.
     if (err instanceof ConfinementError) throw new SandboxUnavailableError(err.message);

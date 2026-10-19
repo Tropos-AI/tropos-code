@@ -17,6 +17,7 @@ const base: ConfinementPaths = {
   deniedReads: ["/u/.ssh", "/u/.tropos", "/Library/Keychains"],
   readCarveOuts: ["/u/.tropos/workspace", "/u/.tropos/worktrees"],
   ownFiles: ["/u/.tropos/workspace/USER.md", "/u/.tropos/workspace/memory"],
+  instructionFiles: [],
   platform: "darwin",
 };
 
@@ -102,6 +103,19 @@ test("secrets are write-protected too, except one that holds the project (Tropos
   expect(secretsDeny).toContain('(subpath (param "R2"))');
 });
 
+test("a non-owner's profile write-denies the workspace's instruction files among the last write rules; an owner's has no such rule", () => {
+  const files = ["/u/.tropos/workspace/TROPOS.md", "/u/.tropos/workspace/CLAUDE.md"];
+  const { profile, params } = sandboxProfile({ ...base, instructionFiles: files });
+  expect(params).toContainEqual(["I0", files[0]!]);
+  expect(params).toContainEqual(["I1", files[1]!]);
+  const rule = ruleWith(profile, '(deny file-write* (literal (param "I0"))');
+  expect(rule).toContain('(literal (param "I1"))');
+  // After every write allow, so nothing reopens them.
+  const lines = profile.split("\n");
+  expect(lines.indexOf(rule)).toBeGreaterThan(lines.findLastIndex((l) => l.startsWith("(allow file-write*")));
+  expect(sandboxProfile(base).profile).not.toContain('(param "I0")');
+});
+
 const sandboxExec = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
 describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
   const run = (paths: ConfinementPaths, script: string) => {
@@ -126,6 +140,27 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
     writeFileSync(join(project, ".tropos", "settings.json"), "{}");
     return { fx, userHome, project };
   };
+
+  test("a non-owner's command in the chief's workspace can't create or overwrite its instruction files; other files are fine", () => {
+    const { fx, userHome } = fixture();
+    try {
+      const ws = join(userHome, ".tropos", "workspace");
+      mkdirSync(join(ws, ".git"), { recursive: true });
+      writeFileSync(join(ws, "CLAUDE.md"), "owner's");
+      const home = join(userHome, ".tropos");
+      const guarded = confinementPaths({ project: ws, home, userHome, env: { TMPDIR: join(fx, "tmp") }, protectInstructions: true });
+      expect(run(guarded, "echo x > TROPOS.md")).not.toBe(0);
+      expect(run(guarded, "echo x > CLAUDE.md")).not.toBe(0);
+      expect(run(guarded, "echo x > TROPOS.local.md")).not.toBe(0);
+      expect(run(guarded, "echo x > AGENTS.override.md")).not.toBe(0);
+      expect(run(guarded, "echo x > notes.txt")).toBe(0);
+      expect(existsSync(join(ws, "TROPOS.md"))).toBe(false);
+      const owner = confinementPaths({ project: ws, home, userHome, env: { TMPDIR: join(fx, "tmp") } });
+      expect(run(owner, "echo x > TROPOS.md")).toBe(0);
+    } finally {
+      rmSync(fx, { recursive: true, force: true });
+    }
+  });
 
   test("an escaped project path still confines: hooks, commondir and settings are refused, ordinary files are not", () => {
     const { fx, userHome, project } = fixture();

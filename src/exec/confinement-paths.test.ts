@@ -152,6 +152,13 @@ function realpathOr(p: string): string {
   }
 }
 
+test("instructionFiles are the workspace's root instruction files for a non-owner, under the real home; none otherwise", () => {
+  const home = mk("h", ".tropos");
+  const opts = { project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" as const };
+  expect(confinementPaths({ ...opts, protectInstructions: true }).instructionFiles).toEqual(["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"].map((n) => join(realpathOr(home), "workspace", n)));
+  expect(confinementPaths(opts).instructionFiles).toEqual([]);
+});
+
 test("ownFiles lists the chief's files under the real home, existing or not", () => {
   const home = mk("h", ".tropos");
   const paths = confinementPaths({ project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" });

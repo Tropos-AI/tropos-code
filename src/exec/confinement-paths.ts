@@ -3,7 +3,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { workspaceOwnPaths } from "../home/layout";
+import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { isInside, worktreesDir } from "../paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
 
@@ -99,11 +99,16 @@ export interface ConfinementPaths {
   readCarveOuts: string[];
   /** The chief's own files inside that project (USER.md, the journal …): neither readable nor writable, though the workspace is. */
   ownFiles: string[];
+  /**
+   * For a session that isn't the owner's: the workspace's root instruction files (TROPOS.md, CLAUDE.md …), which the
+   * owner's sessions there load. Read-only, and a missing one can't be created. Empty for the owner.
+   */
+  instructionFiles: string[];
   platform: NodeJS.Platform;
 }
 
 /** All paths are real paths: the macOS sandbox matches the resolved path, so `/tmp/x` in a profile never matches. */
-export function confinementPaths(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv; platform?: NodeJS.Platform }): ConfinementPaths {
+export function confinementPaths(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv; platform?: NodeJS.Platform; protectInstructions?: boolean }): ConfinementPaths {
   const platform = opts.platform ?? process.platform;
   const userHome = real(opts.userHome);
   const project = real(opts.project);
@@ -132,6 +137,7 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
     readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
+    instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
     platform,
   };
 }

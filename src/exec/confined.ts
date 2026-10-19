@@ -60,6 +60,8 @@ export interface ConfinedBackendOptions {
   /** For tests: the platform to confine for, and the bwrap binary (a path, or a name looked up on TRUSTED_PATH). */
   platform?: NodeJS.Platform;
   bwrapBin?: string;
+  /** The session isn't the owner's: the workspace's instruction files are read-only (ConfinementPaths.instructionFiles). */
+  protectInstructions?: boolean;
 }
 
 /** The checks one command gets after it ran. */
@@ -104,7 +106,7 @@ export class ConfinedBackend implements ExecBackend {
     if (platform !== "darwin" && platform !== "linux") {
       throw new ConfinementError(`Commands can't be confined on ${platform}: only macOS (sandbox-exec) and Linux (bwrap) are supported.`);
     }
-    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform });
+    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform, protectInstructions: opts.protectInstructions });
     this.env = chatEnv(opts.env, { project: opts.project, troposHome: opts.home });
     // The marker must be writable inside: the confined temp dir when it is one of the writable paths, else the
     // system temp dir (always writable). Real paths, so the file is the same inside and on the host.
@@ -299,7 +301,7 @@ export class ConfinedBackend implements ExecBackend {
   }
 }
 
-export function confinedBackend(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv }): ExecBackend {
+export function confinedBackend(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv; protectInstructions?: boolean }): ExecBackend {
   return new ConfinedBackend(opts);
 }
 

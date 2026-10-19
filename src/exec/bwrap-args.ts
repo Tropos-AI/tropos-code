@@ -75,6 +75,14 @@ export function bwrapArgs(paths: ConfinementPaths, cwd: string): string[] {
     else if (!exists(own) && isInside(own, project)) args.push(...protect(own, own.endsWith(".md") ? "file" : "dir"));
   }
 
+  // A non-owner's session: the workspace's instruction files read-only, and a placeholder where one is missing in a
+  // writable workspace, so a command can't plant one for the owner's sessions to load.
+  for (const file of paths.instructionFiles) {
+    if (isLink(file)) throw new ConfinementError(`${file} is a link; the sandbox won't run until it is replaced by a real file.`);
+    if (exists(file)) args.push("--ro-bind", file, file);
+    else if (isInside(file, project)) args.push(...protect(file, "file"));
+  }
+
   // `.git` as a mount point can't be renamed (EBUSY): `mv .git g2; write g2/hooks/x; mv g2 .git` fails.
   for (const [i, git] of paths.gitDirs.entries()) {
     if (!isRealDir(git)) {

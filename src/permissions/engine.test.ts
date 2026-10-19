@@ -665,6 +665,24 @@ describe("decide — instruction files at the chief's workspace root", () => {
     expect(decide(edit(`${ws}/TROPOS.md`), ctx({ ...base, role: "guest", mode: "bypass" })).behavior).toBe("deny");
     expect(decide(edit(`${ws}/CLAUDE.md`), ctx({ ...base })).behavior).toBe("deny");
   });
+  test("a path that reaches them through a link (a linked folder, or a file link) is the same file", async () => {
+    const root = await makeTmpDir();
+    try {
+      const real = join(root, "workspace");
+      await mkdir(real);
+      await writeFile(join(real, "TROPOS.md"), "");
+      await symlink(real, join(root, "alias"));
+      await symlink(join(real, "TROPOS.md"), join(real, "notes.md"));
+      const files = ["TROPOS.md", "TROPOS.local.md", "CLAUDE.md", "AGENTS.override.md"].map((n) => join(real, n));
+      const c = ctx({ cwd: real, allowedDirs: [real, join(root, "alias")], instructionFiles: files, allow: ["Edit(**)"], role: "guest" });
+      expect(decide(edit(join(root, "alias", "TROPOS.md")), c).behavior).toBe("deny");
+      expect(decide(edit(join(root, "alias", "CLAUDE.md")), c).behavior).toBe("deny"); // missing: its real parent decides
+      expect(decide(edit(join(real, "notes.md")), c).behavior).toBe("deny");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
   test("reading them is not affected, and the owner writes them as any other file", () => {
     expect(decide(read(`${ws}/TROPOS.md`), ctx({ ...base, role: "guest" })).behavior).toBe("allow");
     expect(decide(edit(`${ws}/TROPOS.md`), ctx({ ...base, role: "owner" })).behavior).toBe("allow");

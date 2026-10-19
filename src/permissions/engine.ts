@@ -1,5 +1,6 @@
 // src/permissions/engine.ts
-import { dirname, relative } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import type { Mode, ToolKind } from "../config/constants";
 import type { Autonomy } from "../gateway/config";
 import { isTestManifest, matchesTestCommand } from "../gateway/tests-detect";
@@ -232,11 +233,24 @@ export function ownFilePath(req: PermissionRequest, ctx: PermissionContext): str
   return req.paths.find((p) => own.some((dir) => isInside(foldPath(p), dir)));
 }
 
-/** The first of an edit's paths that is one of the workspace's instruction files. */
+/** A path with its links resolved: the whole path where it exists, else its real parent and its own name. */
+function realForm(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    try {
+      return join(realpathSync(dirname(path)), basename(path));
+    } catch {
+      return path;
+    }
+  }
+}
+
+/** The first of an edit's paths that is one of the workspace's instruction files, as written or through a link. */
 function instructionFilePath(req: PermissionRequest, ctx: PermissionContext): string | undefined {
   if (req.kind !== "edit" || !ctx.instructionFiles?.length) return undefined;
-  const files = ctx.instructionFiles.map(foldPath);
-  return req.paths.find((p) => files.includes(foldPath(p)));
+  const files = new Set(ctx.instructionFiles.flatMap((f) => [foldPath(f), foldPath(realForm(f))]));
+  return req.paths.find((p) => files.has(foldPath(p)) || files.has(foldPath(realForm(p))));
 }
 
 export function decide(req: PermissionRequest, ctx: PermissionContext): Decision {
