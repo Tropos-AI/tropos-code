@@ -23,6 +23,8 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   // A `"` in any inlined or param path would break the SBPL quoting; refuse rather than emit a broken profile.
   for (const p of [paths.project, paths.cacheDir, ...paths.readCarveOuts, ...paths.ownFiles, ...paths.instructionFiles, ...paths.gitDirs, ...paths.linkedGitDirs, ...paths.husky, ...paths.writable, ...paths.deniedReads]) {
     if (p.includes('"')) throw new ConfinementError(`${p} can't be confined: its path contains a double quote.`);
+    // The protections also match every letter case (anyCase), which only ASCII can do faithfully.
+    if (/[^\x00-\x7f]/.test(p)) throw new ConfinementError(`${p} can't be confined: its path has a non-ASCII character, which the sandbox can't match in every letter case.`);
   }
   const params: [string, string][] = [["PROJECT", paths.project]];
   const named = (prefix: string, list: string[]) =>
@@ -42,6 +44,7 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
   // A secret that holds the project (Tropos's home around its workspace) can't be write-denied without denying the
   // project; the rest of it lies outside every writable path anyway.
   const writeDeniedSecrets = secrets.filter((_, i) => !isInside(paths.project, paths.deniedReads[i]!));
+  const writeDeniedSecretPaths = paths.deniedReads.filter((p) => !isInside(paths.project, p));
   const protections = [
     // The literal dirs: renaming .git (or the project) away, writing hooks, and renaming it back is refused.
     `(literal (param "PROJECT"))`,
@@ -72,19 +75,19 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     `(deny mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.SecurityServer") (global-name-regex #"^com\\.apple\\.security\\."))`,
     "(deny file-write*)",
     `(allow file-write* ${writeAllow.join(" ")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/(tty|fd/)"))`,
-    ...(writeDeniedSecrets.length > 0 ? [`(deny file-write* ${writeDeniedSecrets.map((p) => `(subpath ${p})`).join(" ")})`] : []),
+    ...(writeDeniedSecrets.length > 0 ? [`(deny file-write* ${writeDeniedSecrets.map((p) => `(subpath ${p})`).join(" ")} ${writeDeniedSecretPaths.map(anyCaseSubpath).join(" ")})`] : []),
     // The cache's contents, not the cache dir itself (it can't be renamed or replaced by a link). It sits inside the
     // write-denied ~/.tropos, so it comes after that deny, and before the protections so it can never reopen them.
-    `(allow file-write* (regex #"^${escapeRegex(paths.cacheDir)}/.+"))`,
+    `(allow file-write* (regex #"^${anyCase(paths.cacheDir)}/.+"))`,
     `(deny file-write* ${protections}`,
     ...regexes.map((r) => `  ${r}`),
     ")",
     // A non-owner's session: the instruction files the owner's sessions load from the workspace, missing ones included.
     ...(instructionFiles.length > 0 ? [`(deny file-write* ${instructionFiles.map((p) => `(literal ${p})`).join(" ")} ${paths.instructionFiles.map((p) => `(regex #"^${anyCase(p)}$")`).join(" ")})`] : []),
     // subpath matches the path itself too, so this covers files and folders alike.
-    `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")})`,
+    `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
-    `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")))`,
+    `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
       ? [
@@ -99,6 +102,11 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
 
 function escapeRegex(path: string): string {
   return path.replace(/[\\^$.|?*+()[\]{}]/g, "\\$&");
+}
+
+/** `(subpath p)` in any letter case: the path itself and everything below it. */
+function anyCaseSubpath(path: string): string {
+  return `(regex #"^${anyCase(path)}(/.*)?$")`;
 }
 
 /** The path as a regex that matches it in any letter case (`[Tt][Rr]…`): the disk would treat those as one file. */

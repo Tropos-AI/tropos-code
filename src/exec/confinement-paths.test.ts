@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CACHE_PATHS, ConfinementError, confinementPaths, SECRET_PATHS } from "./confinement-paths";
+import { CACHE_PATHS, ConfinementError, confinementPaths, requireSingleLinks, SECRET_PATHS } from "./confinement-paths";
 import { SANDBOX_CACHE_ENV } from "./env";
 
 let fx: string;
@@ -175,6 +175,28 @@ test("for a non-owner, an instruction file or own file with a second hard link r
   expect(() => confinementPaths({ ...opts, protectInstructions: true })).toThrow(join(realpathOr(ws), "USER.md"));
   rmSync(join(opts.project, "user-copy.md"));
   expect(() => confinementPaths({ ...opts, protectInstructions: true })).not.toThrow();
+});
+
+test("for a non-owner, a hard-linked file anywhere inside the chief's folders (journal, skills, specialists) refuses the sandbox", () => {
+  const home = mk("h", ".tropos");
+  const opts = { project: mk("proj"), home, userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "linux" as const, protectInstructions: true };
+  for (const rel of [["workspace", "memory", "2026-10-16.md"], ["workspace", "skills", "deploy", "SKILL.md"], ["agents", "reviewer", "MEMORY.md"]]) {
+    const file = join(home, ...rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "x");
+    linkSync(file, join(opts.project, "copy"));
+    expect(() => confinementPaths(opts)).toThrow("hard link");
+    rmSync(join(opts.project, "copy"));
+    expect(() => confinementPaths(opts)).not.toThrow();
+  }
+});
+
+test("the hard-link walk is bounded and fails closed past its bound", () => {
+  const dir = mk("many");
+  for (let i = 0; i < 6; i++) writeFileSync(join(dir, `f${i}`), "");
+  expect(() => requireSingleLinks([dir], 10)).not.toThrow();
+  expect(() => requireSingleLinks([dir], 5)).toThrow(ConfinementError);
+  expect(() => requireSingleLinks([dir], 5)).toThrow("too many files");
 });
 
 test("ownFiles lists the chief's files under the real home, existing or not", () => {

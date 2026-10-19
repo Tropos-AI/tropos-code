@@ -38,10 +38,10 @@ test("the rules come in the order the sandbox needs: service denies, base write 
     "(deny file-write*)",
     '(allow file-write* (subpath (param "PROJECT"))',
     '(deny file-write* (subpath (param "R0"))',
-    '(allow file-write* (regex #"^/u/\\.tropos/sandbox-cache/.+"))',
+    '(allow file-write* (regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ss][Aa][Nn][Dd][Bb][Oo][Xx]-[Cc][Aa][Cc][Hh][Ee]/.+"))',
     '(deny file-write* (literal (param "PROJECT"))',
     '(deny file-read* (subpath (param "R0"))',
-    '(allow file-read* (subpath (param "C0")) (subpath (param "C1")) (subpath (param "CD0")))',
+    '(allow file-read* (subpath (param "C0")) (subpath (param "C1")) (subpath (param "CD0")) (regex',
     "(deny file-read* file-write* (subpath (param \"O0\")) (subpath (param \"O1\")))",
   ];
   const at = order.map((rule) => profile.indexOf(rule));
@@ -123,6 +123,24 @@ test("a non-owner's profile write-denies the workspace's instruction files among
   expect(profile).toContain('(regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/[Uu][Ss][Ee][Rr]\\.[Mm][Dd](/.*)?$")');
 });
 
+test("secret reads and writes are denied in any letter case, and the carve-outs reopen in any case after them", () => {
+  const { profile } = sandboxProfile(base);
+  const lines = profile.split("\n");
+  const ssh = '(regex #"^/[Uu]/\\.[Ss][Ss][Hh](/.*)?$")';
+  const readDeny = lines.findIndex((l) => l.startsWith("(deny file-read*") && l.includes(ssh));
+  expect(readDeny).toBeGreaterThan(0);
+  expect(lines.some((l) => l.startsWith("(deny file-write*") && l.includes(ssh))).toBe(true);
+  const carve = lines.findIndex((l) => l.startsWith("(allow file-read*") && l.includes('(regex #"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee](/.*)?$")'));
+  expect(carve).toBeGreaterThan(readDeny);
+});
+
+test("a protected or denied path with a non-ASCII character can't be confined: its case can't be matched safely", () => {
+  for (const over of [{ deniedReads: ["/u/.ssh", "/u/Παν/.aws"] }, { ownFiles: ["/u/.tropos/workspace/ΜΝΗΜΗ.md"] }, { project: "/w/έργο", gitDirs: ["/w/έργο/.git"], husky: ["/w/έργο/.husky"] }]) {
+    expect(() => sandboxProfile({ ...base, ...over })).toThrow(ConfinementError);
+  }
+  expect(() => sandboxProfile({ ...base, deniedReads: ["/u/Παν/.aws"] })).toThrow("non-ASCII");
+});
+
 const sandboxExec = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
 describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
   const run = (paths: ConfinementPaths, script: string) => {
@@ -194,6 +212,9 @@ describe.skipIf(!sandboxExec)("under the real sandbox-exec", () => {
       expect(run(paths, "mkdir -p sub/.tropos")).not.toBe(0);
       expect(run(paths, "echo a > .tropos/notes.md")).toBe(0);
       expect(run(paths, `cat "${join(userHome, ".ssh", "id")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(userHome, ".SSH", "id")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(userHome, ".TROPOS", "gateway.json")}"`)).not.toBe(0);
+      expect(run(paths, `cat "${join(userHome, ".Tropos", "WORKSPACE", "f")}"`)).toBe(0);
       expect(run(paths, `cat "${join(userHome, ".tropos", "gateway.json")}"`)).not.toBe(0);
       expect(run(paths, `cat "${join(userHome, ".tropos", "workspace", "f")}"`)).toBe(0);
       expect(readdirSync(project).sort()).toEqual([".git", ".tropos", "src", "sub"]); // sub made by `mkdir -p`, its .tropos refused

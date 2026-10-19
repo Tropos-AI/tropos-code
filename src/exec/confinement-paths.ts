@@ -1,10 +1,10 @@
 // src/exec/confinement-paths.ts — the paths a confined chat command may write, must not touch, and must not read.
 // One source for both confinements (sandboxProfile on macOS, bwrapArgs on Linux).
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
-import { isInside, worktreesDir } from "../paths";
+import { agentsDir, isInside, worktreesDir } from "../paths";
 import { SANDBOX_CACHE_ENV, sandboxCacheDir } from "./env";
 
 export class ConfinementError extends Error {
@@ -141,24 +141,40 @@ export function confinementPaths(opts: { project: string; home: string; userHome
     platform,
   };
   // A second hard link elsewhere (in the project, say) would reach the same file under a name no rule protects.
-  if (opts.protectInstructions) requireSingleLinks([...paths.instructionFiles, ...paths.ownFiles]);
+  // The specialists' folders too: their notes and skills are the chief's as much as the journal is.
+  if (opts.protectInstructions) requireSingleLinks([...paths.instructionFiles, ...paths.ownFiles, real(agentsDir(opts.home))]);
   return paths;
 }
 
+/** How many entries the hard-link check looks at before it gives up (and refuses). */
+export const MAX_LINK_CHECK_ENTRIES = 10_000;
+
 /**
  * Refuses a protected file that has another hard link: masking or write-denying one name leaves the file open
- * through the other. Folders and missing paths are fine (a folder's link count is its subfolders).
+ * through the other. A folder is walked (links inside it are not followed); past `maxEntries` it fails closed.
+ * Missing paths are fine.
  */
-export function requireSingleLinks(files: readonly string[]): void {
-  for (const file of files) {
+export function requireSingleLinks(paths: readonly string[], maxEntries: number = MAX_LINK_CHECK_ENTRIES): void {
+  let seen = 0;
+  const visit = (path: string): void => {
+    if (++seen > maxEntries) throw new ConfinementError(`The chief's folders hold too many files to check for hard links (over ${maxEntries}); the sandbox won't run.`);
     let info: ReturnType<typeof lstatSync>;
     try {
-      info = lstatSync(file);
+      info = lstatSync(path);
     } catch {
-      continue;
+      return;
     }
-    if (info.isFile() && info.nlink > 1) throw new ConfinementError(`${file} has another hard link; the sandbox won't run until that other link is removed.`);
-  }
+    if (info.isFile() && info.nlink > 1) throw new ConfinementError(`${path} has another hard link; the sandbox won't run until that other link is removed.`);
+    if (!info.isDirectory()) return;
+    let names: string[];
+    try {
+      names = readdirSync(path);
+    } catch {
+      throw new ConfinementError(`${path} can't be read to check it for hard links; the sandbox won't run.`);
+    }
+    for (const name of names) visit(join(path, name));
+  };
+  for (const path of paths) visit(path);
 }
 
 /**

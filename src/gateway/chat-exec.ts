@@ -5,6 +5,7 @@ import { confinedBackend, unconfinedBackend } from "../exec/confined";
 import { ConfinementError, requireSingleLinks } from "../exec/confinement-paths";
 import { DockerBackend } from "../exec/docker";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
+import { agentsDir } from "../paths";
 import type { GatewayConfig } from "./config";
 import { SandboxUnavailableError } from "./errors";
 import type { SessionRole } from "./types";
@@ -50,7 +51,7 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     if (role !== "owner") {
       // A hard link to a masked file would show it in the container under another name.
       try {
-        requireSingleLinks([...workspaceOwnPaths(input.home), ...workspaceInstructionPaths(input.home)]);
+        requireSingleLinks([...workspaceOwnPaths(input.home), ...workspaceInstructionPaths(input.home), agentsDir(input.home)]);
       } catch (err) {
         if (err instanceof ConfinementError) throw new SandboxUnavailableError(err.message);
         throw err;
