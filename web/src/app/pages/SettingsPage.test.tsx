@@ -428,7 +428,8 @@ describe("Settings › Backups › backups", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore now" }));
     await screen.findByText(/Restored 2 files.*before-restore\.tar\.gz/);
     expect(calls[1]).toEqual({ name: BACKUP.name });
-    expect(socket.adminOf("backup.list").length).toBeGreaterThan(1);
+    // The list reloads from an effect, which can run after the message is already on screen.
+    await waitFor(() => expect(socket.adminOf("backup.list").length).toBeGreaterThan(1));
     expect(screen.queryByText("Would restore")).toBeNull();
   });
 

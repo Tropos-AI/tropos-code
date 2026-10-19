@@ -50,11 +50,13 @@ describe("LocalBackend", () => {
   });
 
   test("signal() reaches the whole process group; alive() tracks it", async () => {
-    const child = localBackend.spawn({ shell: "/bin/sh", script: "sleep 30 & sleep 30; wait", cwd: tmpdir(), env: process.env });
-    child.stdout!.resume();
+    // Signalled once both sleeps run: a signal sent while the shell forks one would miss it on macOS.
+    const child = localBackend.spawn({ shell: "/bin/sh", script: "sleep 30 & sleep 30 & echo up; wait", cwd: tmpdir(), env: process.env });
+    const up = new Promise((r) => child.stdout!.once("data", r));
     child.stderr!.resume();
-    expect(localBackend.alive(child)).toBe(true);
     const closed = new Promise((r) => child.once("close", r));
+    await up;
+    expect(localBackend.alive(child)).toBe(true);
     localBackend.signal(child, "SIGTERM");
     await closed;
     await until(() => !localBackend.alive(child));

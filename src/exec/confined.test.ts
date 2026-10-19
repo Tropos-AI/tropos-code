@@ -1,5 +1,5 @@
 // src/exec/confined.test.ts
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { confinedFixtureBase } from "../../test/helpers/tmp";
@@ -23,6 +23,16 @@ const collect = (child: ChildProcess) =>
     child.stderr!.setEncoding("utf8").on("data", (d: string) => (err += d));
     child.once("close", (code) => resolve({ out, err, code }));
   });
+/**
+ * SIGKILLs a command's process group until its output closes. On macOS one signal to a group misses a child that its
+ * shell is forking at that moment, and that child (a `sleep 30`) would hold the output open past the test's timeout.
+ */
+const stop = async (backend: { signal(child: ChildProcess, sig: NodeJS.Signals): void }, child: ChildProcess, closed: Promise<unknown>) => {
+  for (;;) {
+    backend.signal(child, "SIGKILL");
+    if (await Promise.race([closed.then(() => true), Bun.sleep(100).then(() => false)])) return;
+  }
+};
 
 /** A fake user home and project under a fresh temp dir; nothing here touches the real home. */
 const fixture = () => {
@@ -218,11 +228,13 @@ describe.skipIf(available === null)("with real confinement", () => {
   });
 
   test("signal() stops the whole group and alive() follows it", async () => {
-    const child = backend.spawn({ shell: "/bin/sh", script: "sleep 30 & sleep 30; wait", cwd: f.project, env: {} });
-    child.stdout!.resume();
+    // Signalled once both sleeps run: a signal sent while the shell forks one would miss it on macOS.
+    const child = backend.spawn({ shell: "/bin/sh", script: "sleep 30 & sleep 30 & echo up; wait", cwd: f.project, env: {} });
+    const up = new Promise((r) => child.stdout!.once("data", r));
     child.stderr!.resume();
-    expect(backend.alive(child)).toBe(true);
     const closed = new Promise((r) => child.once("close", r));
+    await up;
+    expect(backend.alive(child)).toBe(true);
     backend.signal(child, "SIGTERM");
     await closed;
     await until(() => !backend.alive(child));
@@ -283,7 +295,7 @@ describe.skipIf(available === null)("with real confinement", () => {
         return false;
       }
     });
-    backend.signal(child, "SIGKILL");
+    await stop(backend, child, result);
     const r = await result;
     expect(r.code).not.toBe(0);
     expect(r.err).toContain(GIT_METADATA_TAMPERED);
@@ -333,6 +345,19 @@ describe("the bwrap backend (fake bwrap)", () => {
   afterAll(() => rmSync(f.fx, { recursive: true, force: true }));
   const commondir = () => join(f.project, ".git", "commondir");
   const sh = (script: string, cwd = f.project) => collect(backend.spawn({ shell: "/bin/sh", script, cwd, env: { PASSED: "no" } }));
+  /** Commands left running in the background. afterEach stops any a failed test left, so the next test starts clean. */
+  const jobs: { job: ChildProcess; done: ReturnType<typeof collect> }[] = [];
+  const background = (script: string) => {
+    const job = backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} });
+    const started = { job, done: collect(job) };
+    jobs.push(started);
+    return started;
+  };
+  afterEach(async () => {
+    for (const { job, done } of jobs.splice(0)) await stop(backend, job, done);
+    for (const planted of [join(f.project, ".git", "modules", "late"), join(f.project, ".git", "worktrees")]) rmSync(planted, { recursive: true, force: true });
+    rmSync(commondir(), { force: true });
+  });
 
   test("the wrapper and bwrap get only the trusted PATH; the command gets the allowlisted environment", async () => {
     const r = await sh('echo "$PATH|$npm_config_cache|${SECRET-unset}|${PASSED-unset}"');
@@ -408,11 +433,10 @@ describe("the bwrap backend (fake bwrap)", () => {
 
   test("a killed command that planted git metadata is still caught on the host, even if it printed the message itself", async () => {
     const script = `echo ${JSON.stringify(COMMONDIR_TAMPERED)} >&2; echo x > .git/commondir; mkdir -p .git/worktrees/w/hooks && echo r > .git/worktrees/w/HEAD && echo x > .git/worktrees/w/hooks/x; sleep 30`;
-    const child = backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} });
-    const result = collect(child);
+    const { job, done } = background(script);
     await until(() => existsSync(join(f.project, ".git", "worktrees", "w", "hooks", "x")));
-    backend.signal(child, "SIGKILL"); // the wrapper dies before it can report to the host
-    const r = await result;
+    await stop(backend, job, done); // the wrapper dies before it can report to the host
+    const r = await done;
     expect(r.code).not.toBe(0);
     expect(r.err.split(COMMONDIR_TAMPERED).length - 1).toBe(2); // the command's fake line, then the host's real one
     expect(r.err).toContain(GIT_METADATA_TAMPERED);
@@ -425,8 +449,7 @@ describe("the bwrap backend (fake bwrap)", () => {
   const late = () => join(f.project, ".git", "modules", "late");
   const backgroundPlanter = () => {
     // Like a run_in_background job: it outlives the tool call that started it, and plants once that has returned.
-    const job = backend.spawn({ shell: "/bin/sh", script: `sleep 0.2; ${plantModule}; sleep 30`, cwd: f.project, env: {} });
-    return { job, done: collect(job) };
+    return background(`sleep 0.2; ${plantModule}; sleep 30`);
   };
 
   test("a background job that plants after its tool call returned is caught before the next command runs", async () => {
@@ -444,8 +467,7 @@ describe("the bwrap backend (fake bwrap)", () => {
       expect(at).toBeGreaterThan(0);
       expect(args[at - 1]).toBe("--tmpfs");
     } finally {
-      backend.signal(job, "SIGKILL");
-      await done;
+      await stop(backend, job, done);
       rmSync(late(), { recursive: true, force: true });
     }
   });
@@ -457,7 +479,7 @@ describe("the bwrap backend (fake bwrap)", () => {
       await backend.close();
       expect(existsSync(join(late(), "hooks"))).toBe(false);
     } finally {
-      backend.signal(job, "SIGKILL");
+      await stop(backend, job, done);
     }
     expect((await done).err).toContain(GIT_METADATA_TAMPERED);
     rmSync(late(), { recursive: true, force: true });
@@ -570,8 +592,7 @@ describe("the bwrap backend (fake bwrap)", () => {
         expect(r.err).toContain(GIT_METADATA_TAMPERED);
         expect(existsSync(join(own.project, ".git", "modules", "late", "hooks"))).toBe(false);
       } finally {
-        b.signal(job, "SIGKILL");
-        await jobDone;
+        await stop(b, job, jobDone);
       }
     } finally {
       rmSync(own.fx, { recursive: true, force: true });
@@ -623,8 +644,7 @@ describe("the bwrap backend (fake bwrap)", () => {
         expect(r.err).toContain("can't be confined");
         expect(existsSync(join(own.project, "ran.txt"))).toBe(false);
       } finally {
-        b.signal(job, "SIGKILL");
-        await jobDone;
+        await stop(b, job, jobDone);
       }
     } finally {
       rmSync(own.fx, { recursive: true, force: true });

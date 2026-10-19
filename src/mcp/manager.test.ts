@@ -228,6 +228,7 @@ describe("McpManager over HTTP", () => {
   test("connects to a streamable HTTP server with expanded url and headers", async () => {
     const seen: string[] = [];
     const server = Bun.serve({
+      hostname: "127.0.0.1", // where the url points: a wildcard listener can share its port with another's 127.0.0.1 one
       port: 0,
       async fetch(req) {
         seen.push(req.headers.get("authorization") ?? "");

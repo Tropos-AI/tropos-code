@@ -69,7 +69,8 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install zstd shellcheck; else sudo apt-get install -y zstd shellcheck dash busybox; fi
       - run: bun install --frozen-lockfile
-      - run: bun test test/install
+      # The same per-test limit as the test job: the 5 s default is too tight for a compiled binary on a slow runner.
+      - run: bun test --timeout 20000 test/install
 
   # Decision D2: no job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
   installer-musl:
@@ -101,5 +102,5 @@ jobs:
             apk add --no-cache bash git curl unzip zstd openssh-keygen shellcheck libstdc++ libgcc >/dev/null
             install -m 0755 /opt/bun/bun /usr/local/bin/bun
             adduser -D -u "$HOST_UID" tester
-            su tester -c "bun install --frozen-lockfile && bun test test/install"
+            su tester -c "bun install --frozen-lockfile && bun test --timeout 20000 test/install"
           '

@@ -182,10 +182,12 @@ describe("SkillsPage › managing skills", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("looks unsafe");
     refuse = false;
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.write", params: { source: "user", name: "bun-testing", content: "---\ndescription: d\n---\nnew body" } }));
+    // The refused write already matches the last call, so the wait is for the second write itself.
+    await waitFor(() => expect(socket.adminOf("skills.write")).toHaveLength(2));
+    expect(socket.adminCalls.at(-1)).toEqual({ method: "skills.write", params: { source: "user", name: "bun-testing", content: "---\ndescription: d\n---\nnew body" } });
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "SKILL.md" })).toBeNull());
     await settle();
-    // Two round trips and an editor that mounts lazily: a busy CI machine has taken over 5 s.
+    // Two round trips and a dialog: a busy CI machine has taken over 5 s.
   }, 20_000);
 
   test("Delete asks first, then deletes", async () => {

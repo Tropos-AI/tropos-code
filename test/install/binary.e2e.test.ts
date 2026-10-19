@@ -14,6 +14,8 @@ let srv: ReleaseServer;
 let prodBin: string;
 let testBin: string;
 const home = () => join(dir, "home");
+/** For a test that starts the compiled binary: on a slow runner its first start alone takes seconds (macOS checks a new file). */
+const BINARY_RUN_MS = 30_000;
 
 beforeAll(async () => {
   dir = await makeTmpDir();
@@ -55,16 +57,17 @@ describe("production binary", () => {
 
   test("subcommands outside a native install exit 73", async () => {
     expect((await exec(prodBin, ["update"])).code).toBe(73);
-  });
+  }, BINARY_RUN_MS);
 
   test("rejects a manifest not signed by the pinned key", async () => {
-    const r = await makeFixtureRelease({ version: pkg.version, key, dir, binary: new Uint8Array(await Bun.file(prodBin).arrayBuffer()) });
+    // A manifest true to this binary; `--self` never fetches the .zst, so a stand-in spares compressing the whole binary.
+    const r = await makeFixtureRelease({ version: pkg.version, key, dir, binary: new Uint8Array(await Bun.file(prodBin).arrayBuffer()), zst: new Uint8Array([0]) });
     await writeFile(join(dir, "pm.json"), r.verified.bytes);
     await writeFile(join(dir, "pm.sig"), r.verified.signature);
     const out = await exec(prodBin, ["install", "--self", "--manifest", join(dir, "pm.json"), "--signature", join(dir, "pm.sig")]);
     expect(out.code).toBe(65);
     expect(out.stderr).toContain("untrusted key");
-  });
+  }, BINARY_RUN_MS);
 });
 
 describe("test-build binary: install --self → update → rollback", () => {

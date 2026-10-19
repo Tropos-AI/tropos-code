@@ -292,9 +292,10 @@ describe("TelegramAdapter", () => {
     const { server, session, logs } = await setup();
     const token = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1";
     server.pushMessage(CHAT, CHAT, `use ${token}`);
-    await server.waitFor(() => server.deleted.length === 1);
+    // The note is sent only once the delete has answered, so it is waited for on its own.
+    await server.waitFor(() => server.textsTo(CHAT).includes(SECRET_REMOVED_NOTE));
+    expect(server.deleted).toHaveLength(1);
     expect(server.deleted[0]!.chatId).toBe(CHAT);
-    expect(server.textsTo(CHAT)).toContain(SECRET_REMOVED_NOTE);
     await server.waitFor(() => session()?.prompts.length === 1);
     expect(logs.join("\n")).not.toContain(token);
   });
@@ -576,8 +577,9 @@ describe("TelegramAdapter", () => {
     ctx.server.pushMessage(CHAT, CHAT, "after failures");
     await ctx.server.waitFor(() => ctx.server.textsTo(CHAT).includes("echo: after failures"));
     expect(ctx.session().prompts).toEqual(["after failures"]);
+    // The poll that acknowledges the message can still be on its way when the reply has arrived.
     const offs = ctx.server.getUpdatesOffsets;
-    expect(offs[offs.length - 1]!).toBeGreaterThan(offs[0]!);
+    await ctx.server.waitFor(() => offs[offs.length - 1]! > offs[0]!);
   });
 
   test("stop() aborts a long poll promptly and is idempotent", async () => {
