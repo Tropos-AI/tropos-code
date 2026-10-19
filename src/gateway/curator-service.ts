@@ -15,8 +15,9 @@ export function createCuratorService(opts: { everyMs?: number; now?: () => Date;
     if (running) return;
     running = true;
     try {
-      const { archived } = await runCurator(home, { ledger: new Ledger(home), now: opts.now?.() });
+      const { archived, specialists } = await runCurator(home, { ledger: new Ledger(home), now: opts.now?.() });
       if (archived.length > 0) log(`archived ${archived.length} learned skill(s): ${archived.join(", ")}`);
+      if (specialists.length > 0) log(`archived ${specialists.length} specialist(s): ${specialists.join(", ")}`);
     } catch (e) {
       log(`failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

@@ -1,9 +1,13 @@
 // src/learning/curator.ts
-import { lstat, mkdir, readFile, realpath, rename } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { resolveLayoutPath } from "../home/layout";
 import { fmBool, parseFrontmatter } from "../extensions/frontmatter";
 import { atomicWrite } from "../memory/notes";
+import { readRuns } from "../agents/runs";
+import { archiveSpecialist } from "../agents/store";
+import { AGENT_FILE, loadSpecialists, SPECIALIST_IDLE_MS } from "../agents/specialists";
+import { agentLabel } from "../extensions/agents";
 import { type Ledger, sha256 } from "./ledger";
 import { readSkillUsage } from "./skill-usage";
 
@@ -15,6 +19,9 @@ export const CURATOR_STALE_MS = 30 * DAY_MS;
 
 export interface CuratorResult {
   archived: string[];
+  /** Ids of the specialists archived for lack of use, and their labels ("🔍 reviewer"). */
+  specialists: string[];
+  specialistLabels: string[];
   ran: boolean;
 }
 
@@ -108,11 +115,12 @@ async function freeName(archive: string, base: string): Promise<string> {
 export async function runCurator(home: string, opts: { ledger: Ledger; now?: Date; skillsDir?: string }): Promise<CuratorResult> {
   const now = opts.now ?? new Date();
   const last = await lastRun(home);
-  if (last !== undefined && now.getTime() - last < CURATOR_INTERVAL_MS && now.getTime() >= last) return { archived: [], ran: false };
+  if (last !== undefined && now.getTime() - last < CURATOR_INTERVAL_MS && now.getTime() >= last) return { archived: [], specialists: [], specialistLabels: [], ran: false };
 
   const skillsDir = opts.skillsDir ?? resolveLayoutPath(home, "skills-learned");
   const roots = [...new Set([skillsDir, await realpath(skillsDir).catch(() => skillsDir)])];
   const archived: string[] = [];
+  let idle: { ids: string[]; labels: string[] } = { ids: [], labels: [] };
   try {
     const candidates = await agentSkills(opts.ledger, roots);
     const usage = await readSkillUsage(home);
@@ -134,9 +142,34 @@ export async function runCurator(home: string, opts: { ledger: Ledger; now?: Dat
         // leave this one in place; the next run tries again
       }
     }
+    idle = await archiveIdleSpecialists(home, now, opts.ledger);
   } finally {
     await mkdir(join(home, "learning"), { recursive: true, mode: 0o700 });
     await atomicWrite(statePath(home), `${JSON.stringify({ lastRun: now.toISOString() })}\n`);
   }
-  return { archived, ran: true };
+  return { archived, specialists: idle.ids, specialistLabels: idle.labels, ran: true };
+}
+
+/**
+ * Archives specialists unused for 60 days (the newest of: creation, last delegation, last edit of AGENT.md) into
+ * agents/.archive/, folder and memory intact, with a ledger entry so it can be undone. A paused one counts too.
+ * One that can't be moved stays where it is.
+ */
+export async function archiveIdleSpecialists(home: string, now: Date, ledger: Ledger): Promise<{ ids: string[]; labels: string[] }> {
+  const out = { ids: [] as string[], labels: [] as string[] };
+  for (const spec of (await loadSpecialists(home).catch(() => [])).filter((s) => !s.archived)) {
+    try {
+      const runs = await readRuns(home, { agent: spec.id });
+      const lastRun = Math.max(0, ...runs.map((r) => Date.parse(r.ts) || 0));
+      const edited = (await stat(join(spec.dir, AGENT_FILE))).mtimeMs;
+      const lastUse = Math.max(spec.createdAt, lastRun, edited);
+      if (now.getTime() - lastUse < SPECIALIST_IDLE_MS) continue;
+      await archiveSpecialist(home, spec.id, { ledger, actor: "review", now });
+      out.ids.push(spec.id);
+      out.labels.push(agentLabel(spec));
+    } catch {
+      // leave this one in place; the next run tries again
+    }
+  }
+  return out;
 }

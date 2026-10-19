@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, utimes, writeFile } from "node:fs/promises";
+import { renderSpecialistFile } from "../agents/specialists";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
@@ -64,4 +65,16 @@ test("a failing run is logged and the next tick tries again", async () => {
   await until(() => logs.length >= 2);
   await service.stop();
   expect(logs.every((l) => l.startsWith("failed: "))).toBe(true);
+});
+
+test("logs the specialists it archived next to the skills line", async () => {
+  const dir = join(home, "agents", "idle");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "AGENT.md"), renderSpecialistFile({ name: "idle", description: "d", prompt: "## Purpose\nx", createdBy: "user", createdAt: T0.getTime() - 90 * DAY, revision: 1 }));
+  await utimes(join(dir, "AGENT.md"), new Date(T0.getTime() - 90 * DAY), new Date(T0.getTime() - 90 * DAY));
+  const logs: string[] = [];
+  const service = createCuratorService({ everyMs: 100_000, now: () => T0, log: (m) => logs.push(m) });
+  await service.start(deps());
+  await until(() => logs.includes("archived 1 specialist(s): idle"));
+  await service.stop();
 });

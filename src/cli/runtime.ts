@@ -784,7 +784,10 @@ export async function createRuntime(
       // Archive learned skills nobody used for a month (at most once a week; never deletes).
       if (ctx.settings.learning.curator && (init.interactive ?? true)) {
         void runCurator(ctx.home, { ledger: ctx.ext.ledger })
-          .then(({ archived }) => {
+          .then(({ archived, specialistLabels }) => {
+            if (specialistLabels.length > 0) {
+              notice("info", `Archived specialist ${specialistLabels.join(", ")} (unused for 60 days); restore it on the Agents page.`);
+            }
             if (archived.length > 0) {
               notice("info", `Archived ${archived.length} learned skill${archived.length === 1 ? "" : "s"} unused for 30 days: ${archived.join(", ")} (in ${join(resolveLayoutPath(ctx.home, "skills-learned"), ".archive")})`);
             }

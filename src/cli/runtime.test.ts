@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { BOOTSTRAP_TEXT } from "../context/identity";
-import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProviderRouter } from "../providers/router";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../../test/helpers/fake-model";
@@ -768,9 +768,23 @@ describe("learning and identity", () => {
     const a2 = second.runtime.newAgent({ emit: () => {}, askPermission: allow });
     await a2.run("one", signal());
     await a2.run("two", signal());
-    await waitFor(() => memory.requests.length >= 3);
+    await waitFor(() => expect(memory.requests.length).toBeGreaterThanOrEqual(3));
     await second.runtime.shutdown({ finalReview: false });
     expect(JSON.stringify(memory.requests[2]!.messages.at(-1))).not.toContain("<delegations>");
+  });
+
+  test("the session-start curator archives an idle specialist and says so in one line", async () => {
+    await setup([], { curator: true });
+    const dirOf = join(ctx.home, "agents", "idle");
+    await mkdir(dirOf, { recursive: true });
+    await writeFile(join(dirOf, "AGENT.md"), renderSpecialistFile({ name: "idle", description: "d", prompt: "## Purpose\nx", emoji: "🔍", createdBy: "user", createdAt: 1, revision: 1 }));
+    const old = new Date("2026-01-01T00:00:00Z");
+    await utimes(join(dirOf, "AGENT.md"), old, old);
+    const { runtime: rt } = await runtime();
+    const told: string[] = [];
+    await rt.start((_level, text) => told.push(text));
+    await waitFor(() => expect(told).toHaveLength(1));
+    expect(told).toEqual(["Archived specialist 🔍 idle (unused for 60 days); restore it on the Agents page."]);
   });
 
   test("shutdown({ finalReview: false }) skips it; the counters carry to the next runtime", async () => {
