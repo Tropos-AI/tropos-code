@@ -13,6 +13,8 @@ export interface ExecSpawn {
   cwd: string;
   /** The environment the command gets. The local backend uses it as is; a sandbox starts from an empty one. */
   env: NodeJS.ProcessEnv;
+  /** A background job (run_in_background): while one runs, a sandbox that excludes file tools refuses them rather than wait. */
+  background?: boolean;
 }
 
 /**
@@ -46,10 +48,11 @@ export interface ExecBackend {
    */
   quiesce?(): Promise<string | undefined>;
   /**
-   * Held by a host-side file tool for as long as it works on the project: quiesces first, refuses while a command
-   * runs, and commands started while it is held wait until it is released. Unset: nothing to exclude.
+   * Held by a host-side file tool for as long as it works on the project: waits for commands running in the
+   * foreground (until `signal` aborts), refuses while a background job runs, quiesces, and commands started while it
+   * is held wait until it is released. Unset: nothing to exclude.
    */
-  holdForFiles?(): Promise<FilesHold>;
+  holdForFiles?(signal?: AbortSignal): Promise<FilesHold>;
 }
 
 /** A file tool's hold on the sandbox (release it once, when done), or why the tool can't act now. */

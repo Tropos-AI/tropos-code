@@ -77,8 +77,11 @@ By default a chat's commands run on this computer, in the project's directory, c
   CLI credentials, other coding agents' folders (`~/.claude`, `~/.codex`, `~/.gemini`), shell and REPL histories
   (`~/.zsh_history`, `~/.bash_history`, fish, Python, Node, psql, MySQL, SQLite, `less`), keychains, browser profiles
   and `~/.tropos` (its managed workspace excepted). The `.env`, `.env.*` and `.envrc` files of your other projects
-  (the registered ones and the managed workspaces, up to two folders below their root) are unreadable too; the
-  chat's own project keeps its own. The full list is `SECRET_PATHS` in `src/exec/confinement-paths.ts`.
+  (the registered ones and the managed workspaces) are unreadable too, and so is where a linked one points;
+  committed templates (`.env.example`, `.env.sample`, `.env.template`) stay readable. The chat's own project keeps
+  its own, and so does a project that holds it (a monorepo root) or that its worktree belongs to. A registered project
+  that holds your home folder only has the `.env` files in its top two folder levels made unreadable. The full list is
+  `SECRET_PATHS` in `src/exec/confinement-paths.ts`.
 - **Network** is on, so installs and `git fetch` work.
 - **The environment** is an allowlist: `PATH` (without relative or in-project entries), `HOME`, `USER`, `SHELL`,
   `LANG`, `LC_*`, `TERM` and `TMPDIR`. Tokens and keys your shell exports (the bot token too) don't come along. Git
@@ -111,7 +114,8 @@ the owner's machine".
 
 A guest's container also stops everything a command left running as soon as the command ends, so nothing of theirs
 keeps running beside the file tools (which work on the project from this computer, as you). The two take turns: a
-command started while a file tool works waits until it is done. A guest can still start a background job
+command started while a file tool works waits until it is done, and a file tool waits for a command that is still
+running. A guest can still start a background job
 (`run_in_background`): while one runs, Read, Write, Edit and Grep in that chat refuse with a message saying so, until
 the job ends or is stopped with KillShell.
 
@@ -154,10 +158,10 @@ default project is initialised for you). Treat the project as the thing a chat c
   injection could send what it reads elsewhere without asking. `tcode doctor` notes this when a level is Autonomous.
   `~/Documents` isn't denied as a whole: projects often live there, and a project inside a denied folder couldn't
   read its own files. The per-sandbox caches are writable and shared by every chat.
-- Another project's `.env` files are found when the chat's session starts, so one created later is covered from the
-  next session; one deeper than two folders below a project's root isn't covered. A project with too many folders
-  to search is made unreadable as a whole instead (around the chat's own project, when that lies inside it), and
-  `tcode doctor` names it.
+- On macOS another project's `.env` files are matched by name, at any depth and including ones created later. On
+  Linux `bwrap` can only hide files that exist, so they are found when the chat's session starts: one created later
+  is covered from the next session, one deeper than two folders below a project's root isn't covered, and a project
+  with too many folders to search is made unreadable as a whole instead (`tcode doctor` names it).
 - Git config that already runs programs keeps doing so: a `diff.external` or a textconv driver in your own or the
   repo's config runs on `git diff` in a chat. A chat can't write `.git/config` to add one.
 - A repo whose `.git/hooks` is a link, or whose hooks link into the project, is refused on its first command (a chat

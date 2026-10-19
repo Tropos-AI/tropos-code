@@ -306,6 +306,7 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
           config,
           role,
           workspace: worktree?.path ?? pc.ctx.cwd,
+          project: project.path,
           home,
           userHome,
           env: run.env,

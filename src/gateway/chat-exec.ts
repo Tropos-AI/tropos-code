@@ -1,5 +1,6 @@
 // src/gateway/chat-exec.ts — where a chat's (or a scheduled run's) commands run: on the host, confined to the project
 // by the OS when it can be, or in a Docker container.
+import { realpathSync } from "node:fs";
 import type { Confinement, ExecBackend } from "../exec/backend";
 import { confinedBackend, unconfinedBackend } from "../exec/confined";
 import { ConfinementError, requireSingleLinks } from "../exec/confinement-paths";
@@ -21,6 +22,8 @@ export interface ChatBackendInput {
   role: SessionRole;
   /** The project directory the session works in. */
   workspace: string;
+  /** The project the session works on, when `workspace` is a worktree of it: its files are the session's, not another project's. */
+  project?: string;
   /** Tropos's home. */
   home: string;
   userHome: string;
@@ -32,6 +35,14 @@ export interface ChatBackendInput {
   dockerCheck(): Promise<string | undefined>;
   /** Tests: the backend to use instead of the real one. */
   override?: (workspace: string) => ExecBackend;
+}
+
+function realOr(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /** Every project of the owner's a chat may work in: the registered ones first, then the managed workspaces. */
@@ -76,7 +87,8 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
   }
   try {
     // A command may not read the .env files of the owner's other projects (the session's own project is skipped).
-    const otherProjects = ownerProjects(config, input.home);
+    const own = input.project === undefined ? undefined : realOr(input.project);
+    const otherProjects = ownerProjects(config, input.home).filter((p) => realOr(p) !== own);
     return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner", otherProjects }), confined: true };
   } catch (err) {
     // A project that can't be confined (a linked sandbox cache, an untrusted bwrap …) gets no session, not a bare shell.

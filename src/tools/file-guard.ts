@@ -29,8 +29,14 @@ export async function writeFileNoFollow(path: string, content: string): Promise<
  */
 export class PathSwapError extends Error {
   override name = "PathSwapError";
-  constructor() {
+  /**
+   * The path itself is still where it was, but holds another file than the one opened: an editor saving by replacing
+   * the file, usually (or a link swapped in and back out). False when the path now leads somewhere else.
+   */
+  readonly replaced: boolean;
+  constructor(replaced = false) {
     super("the path changed while it was being opened (a folder on its way now leads somewhere else), so it was left untouched");
+    this.replaced = replaced;
   }
 }
 
@@ -64,9 +70,9 @@ export async function verifyOpened(handle: FileHandle, path: string, within?: re
   try {
     now = await lstat(real);
   } catch {
-    throw new PathSwapError();
+    throw new PathSwapError(true);
   }
-  if (now.dev !== info.dev || now.ino !== info.ino) throw new PathSwapError();
+  if (now.dev !== info.dev || now.ino !== info.ino) throw new PathSwapError(true);
   return { info, real };
 }
 
@@ -191,7 +197,7 @@ export interface SandboxHold {
  * folder while the tool works. The error result while it can't be taken.
  */
 export async function holdSandbox(ctx: ToolContext): Promise<SandboxHold | ToolOutput> {
-  const hold = await ctx.exec?.holdForFiles?.();
+  const hold = await ctx.exec?.holdForFiles?.(ctx.signal);
   if (hold === undefined) return { release: () => {} };
   return hold.ok ? hold : { content: hold.reason, isError: true };
 }
@@ -222,7 +228,11 @@ export function staleText(path: string): string {
   return `${path} changed on disk since you last read it. Read it again first.`;
 }
 
-/** Error result for a write that failed on disk or in path resolution. */
+/**
+ * Error result for a write that failed on disk or in path resolution. A file replaced at its own path while it was
+ * being opened (an editor saving) is reported as changed since it was read, which is what it is.
+ */
 export function cannotWrite(path: string, error: unknown): ToolOutput {
+  if (error instanceof PathSwapError && error.replaced) return { content: staleText(path), isError: true };
   return { content: `Cannot write ${path}: ${errorText(error)}`, isError: true };
 }

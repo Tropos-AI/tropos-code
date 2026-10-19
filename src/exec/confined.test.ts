@@ -88,33 +88,85 @@ test("a platform without confinement is refused", () => {
 });
 
 describe.skipIf(available === null)("other projects' .env files under real confinement", () => {
-  test("a command can't read another project's .env, even one whose path the profile can't spell, nor a project too big to search; its own project's .env it can", async () => {
+  const quoted = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+
+  test("a command can't read another project's .env, even one whose path the profile can't spell; its own project's .env and other projects' templates it can", async () => {
     const f = fixture();
     const odd = join(f.fx, 'Straße "x"');
     const plain = join(f.fx, "other");
-    const big = join(f.fx, "big");
-    for (const dir of [odd, plain, big]) mkdirSync(dir);
-    for (let i = 0; i <= 2_000; i++) mkdirSync(join(big, `d${i}`));
+    for (const dir of [odd, join(plain, "apps", "web")]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(odd, ".env"), "ODD-SECRET");
-    writeFileSync(join(plain, ".env.local"), "PLAIN-SECRET");
-    writeFileSync(join(big, "notes.txt"), "BIG-SECRET");
+    writeFileSync(join(plain, "apps", "web", ".env.local"), "PLAIN-SECRET");
+    writeFileSync(join(plain, ".env.example"), "TEMPLATE");
     writeFileSync(join(f.project, ".env"), "OWN");
     writeFileSync(join(f.outside, "README"), "readable");
-    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [odd, plain, big, f.project] });
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [odd, plain, f.project] });
     try {
       const run = (script: string) => collect(backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} }));
-      for (const [file, secret] of [[join(odd, ".env"), "ODD-SECRET"], [join(plain, ".env.local"), "PLAIN-SECRET"], [join(big, "notes.txt"), "BIG-SECRET"]] as const) {
-        const r = await run(`cat '${file.replace(/'/g, `'\\''`)}'`);
+      for (const [file, secret] of [[join(odd, ".env"), "ODD-SECRET"], [join(plain, "apps", "web", ".env.local"), "PLAIN-SECRET"]] as const) {
+        const r = await run(`cat ${quoted(file)}`);
         expect(r.out).not.toContain(secret);
         expect(r.code).not.toBe(0);
       }
       expect((await run("cat .env")).out).toBe("OWN");
-      expect((await run(`cat '${join(f.outside, "README")}'`)).out).toBe("readable");
+      expect((await run(`cat ${quoted(join(plain, ".env.example"))}`)).out).toBe("TEMPLATE");
+      expect((await run(`cat ${quoted(join(f.outside, "README"))}`)).out).toBe("readable");
     } finally {
       await backend.close();
       rmSync(f.fx, { recursive: true, force: true });
     }
   }, 30_000);
+
+  test("a project registered around the home folder: the .env files near its top are denied, the session's own are not", async () => {
+    const f = fixture();
+    writeFileSync(join(f.fx, ".env"), "TOP-SECRET");
+    writeFileSync(join(f.project, ".env"), "OWN");
+    writeFileSync(join(f.userHome, ".ssh", ".env.example"), "IN-SSH");
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [f.fx] });
+    try {
+      const run = (script: string) => collect(backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} }));
+      const top = await run(`cat ${quoted(join(f.fx, ".env"))}`);
+      expect(top.out).not.toContain("TOP-SECRET");
+      expect(top.code).not.toBe(0);
+      // Templates are reopened, but never inside a secret folder.
+      expect((await run(`cat ${quoted(join(f.userHome, ".ssh", ".env.example"))}`)).out).not.toContain("IN-SSH");
+      expect((await run("cat .env")).out).toBe("OWN");
+    } finally {
+      await backend.close();
+      rmSync(f.fx, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test.skipIf(process.platform !== "darwin")("on macOS a .env created in another project after the session started is denied too", async () => {
+    const f = fixture();
+    const other = join(f.fx, "other");
+    mkdirSync(join(other, "deep", "er", "still"), { recursive: true });
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [other] });
+    try {
+      writeFileSync(join(other, "deep", "er", "still", ".env.production"), "LATE-SECRET");
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script: `cat ${quoted(join(other, "deep", "er", "still", ".env.production"))}`, cwd: f.project, env: {} }));
+      expect(r.out).not.toContain("LATE-SECRET");
+      expect(r.code).not.toBe(0);
+    } finally {
+      await backend.close();
+      rmSync(f.fx, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test.skipIf(process.platform !== "linux")("on Linux a project too big to search is hidden whole", async () => {
+    const f = fixture();
+    const big = join(f.fx, "big");
+    for (let i = 0; i <= 2_000; i++) mkdirSync(join(big, "libs", `d${i}`), { recursive: true });
+    writeFileSync(join(big, "notes.txt"), "BIG-SECRET");
+    const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [big] });
+    try {
+      const r = await collect(backend.spawn({ shell: "/bin/sh", script: `cat ${quoted(join(big, "notes.txt"))}`, cwd: f.project, env: {} }));
+      expect(r.out).not.toContain("BIG-SECRET");
+    } finally {
+      await backend.close();
+      rmSync(f.fx, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe.skipIf(available === null)("with real confinement", () => {

@@ -31,7 +31,7 @@ test("confined at autonomous: a note that commands have the network and can read
     level: "info",
     message: "At autonomous, chat commands run unasked with network access, and can read your home folder outside the secrets they're denied",
     detail:
-      "Keys, tokens, shell histories, and the .env files in the top two folder levels of your other projects stay unreadable; other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
+      "Keys, tokens, shell histories and your other projects' .env files stay unreadable (on Linux, the ones in their top two folder levels when the chat starts); other files in your home folder don't. Lower the level to balanced, or run chats in Docker, if that is too much.",
   });
   expect(byId(r, "chat.exec.autonomous")!.fixable).toBeFalsy();
 });
@@ -41,7 +41,10 @@ test("a project with too many folders to search for .env files is named: other c
   const big = join(fx.root, "big");
   for (let i = 0; i <= ENV_SCAN_DIRS; i++) await mkdir(join(big, "libs", `d${i}`), { recursive: true });
   await fx.write("gateway.json", JSON.stringify({ chat: { backend: "host", autonomy: "balanced" }, projects: [{ id: "big", name: "Big", path: big }] }));
-  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  // macOS matches .env files by pattern and needs no search: only Linux names such a project.
+  const mac = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "darwin" });
+  expect(byId(mac, "chat.exec.env-scan")).toBeUndefined();
+  const r = await runOne(fx, chatExecCheck, { runner: fakeRunner({ exec: works }), platform: "linux" });
   expect(byId(r, "chat.exec.env-scan")).toMatchObject({
     level: "info",
     message: `Chats in other projects can't read ${realpathSync(big)} at all: it has too many folders to search for .env files`,

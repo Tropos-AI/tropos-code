@@ -9,9 +9,10 @@
 // child's process group. No fake ChildProcess, no event plumbing; a failure is a non-zero exit with a message.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
+import { readSmallFileSync } from "../paths";
 import type { CwdMarker, ExecBackend, ExecSpawn, FilesHold } from "./backend";
 import { type CommondirSnapshot, commondirGuardShell, commondirSnapshot, enforceCommondir } from "./git-integrity";
 
@@ -48,8 +49,10 @@ const KEEPER_ID = 65534;
  */
 const SWEEP = "kill -9 -1 2>/dev/null; echo swept";
 
-const SANDBOX_BUSY =
-  "A background command is still running in this chat's sandbox, so files can't be read or changed until it ends. Wait for it, or stop it with KillShell.";
+const BACKGROUND_BUSY =
+  "A background job (run_in_background) is still running in this chat's sandbox, so files can't be read or changed until it ends. Wait for it, or stop it with KillShell.";
+const COMMAND_RUNNING = "A command is still running in this chat's sandbox.";
+const INTERRUPTED = "Interrupted while waiting for a command in this chat's sandbox to finish; nothing was read or changed.";
 
 /**
  * `docker run` arguments that mask the `hide` paths inside the workspace: a file with /dev/null, a folder with an empty
@@ -219,11 +222,13 @@ export class DockerBackend implements ExecBackend {
   private readonly pendingChecks = new Set<PendingCheck>();
   private readonly stopLeftovers: boolean;
   /** Commands whose wrapper hasn't exited yet: background jobs, or a foreground command still running. */
-  private readonly live = new Set<ChildProcess>();
+  private readonly live = new Map<ChildProcess, { background: boolean }>();
+  /** File tools waiting for a foreground command to end (holdForFiles); called whenever a command ends. */
+  private readonly ended = new Set<() => void>();
   /** A command ran since the last sweep, so something may still be running in the container. */
   private dirty = false;
   private sweeping: Promise<string | undefined> | undefined;
-  /** File tools holding the sandbox (holdForFiles); while there is one, the `gate` file exists. */
+  /** File tools holding the sandbox (holdForFiles), and a sweep in progress; while there is one, the `gate` file exists. */
   private holders = 0;
   /** A host-only file (the container can't reach it) a command's wrapper waits on before it runs anything inside. */
   private readonly gate: string | undefined;
@@ -289,8 +294,11 @@ export class DockerBackend implements ExecBackend {
     });
     this.runs.set(child, { pidFile: join(this.runDir, `pid-${id}`) });
     this.dirty = true;
-    this.live.add(child);
-    const ended = () => this.live.delete(child);
+    this.live.set(child, { background: opts.background ?? false });
+    const ended = () => {
+      this.live.delete(child);
+      for (const wake of [...this.ended]) wake();
+    };
     child.once("exit", ended);
     child.once("error", ended);
     // Host-side fallback for when the wrapper never gets to its check (its process group was SIGKILLed): checked on
@@ -379,38 +387,71 @@ export class DockerBackend implements ExecBackend {
   /**
    * A guest's sandbox: before a host-side file tool acts (and after each command), everything that finished commands
    * left running in the container is killed, so no loop of theirs can swap a project folder for a link while the
-   * tool opens a file there as the owner. Background jobs stay a feature: while one runs nothing is killed, and the
-   * file tools are refused with SANDBOX_BUSY until it ends or is stopped. Otherwise the job would be killed by the
-   * next file tool, or keep running beside it, which is exactly the race.
+   * tool opens a file there as the owner. Nothing is killed while a command runs. The gate is raised for the sweep, so
+   * a command spawned meanwhile waits for it instead of being killed by it.
    */
   async quiesce(): Promise<string | undefined> {
     if (!this.stopLeftovers) return undefined;
-    if (this.live.size > 0) return SANDBOX_BUSY;
-    this.sweeping ??= this.sweep().finally(() => (this.sweeping = undefined));
+    if (this.live.size > 0) return COMMAND_RUNNING;
+    this.sweeping ??= (async () => {
+      const lower = this.raiseGate();
+      try {
+        return await this.sweep();
+      } finally {
+        lower();
+      }
+    })().finally(() => (this.sweeping = undefined));
     return this.sweeping;
   }
 
   /**
    * A file tool's hold on a guest's sandbox, for as long as it works on the project: taken only with no command
    * running (after the sweep), and commands spawned while it is held wait in their host-side wrapper, before anything
-   * runs in the container, until the last holder releases. An owner's sandbox holds nothing back.
+   * runs in the container, until the last holder releases. A command in the foreground (another subagent's) is waited
+   * for, until `signal` aborts; a background job is a feature, so the tool refuses while one runs rather than wait for
+   * it or kill it, which keeps the two from ever running side by side. An owner's sandbox holds nothing back.
    */
-  async holdForFiles(): Promise<FilesHold> {
+  async holdForFiles(signal?: AbortSignal): Promise<FilesHold> {
     if (!this.gate) return { ok: true, release: () => {} };
-    const problem = await this.quiesce();
-    if (problem !== undefined) return { ok: false, reason: problem };
-    // A command spawned during the sweep is running (or about to): the tool waits for it like for any other.
-    if (this.live.size > 0) return { ok: false, reason: SANDBOX_BUSY };
+    for (;;) {
+      if ([...this.live.values()].some((run) => run.background)) return { ok: false, reason: BACKGROUND_BUSY };
+      if (this.live.size > 0) {
+        if (await this.commandEnded(signal)) return { ok: false, reason: INTERRUPTED };
+        continue;
+      }
+      const problem = await this.quiesce();
+      if (problem !== undefined && this.live.size === 0) return { ok: false, reason: problem };
+      // A command spawned during the sweep waited for it and runs now: wait for it like for any other.
+      if (this.live.size === 0) return { ok: true, release: this.raiseGate() };
+    }
+  }
+
+  /** Resolves once some command ends (false) or `signal` aborts (true). */
+  private commandEnded(signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (aborted: boolean) => {
+        this.ended.delete(wake);
+        signal?.removeEventListener("abort", abort);
+        resolve(aborted);
+      };
+      const wake = () => done(false);
+      const abort = () => done(true);
+      this.ended.add(wake);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  /** Holds commands back (the gate file exists while anyone holds it); the returned release is safe to call twice. */
+  private raiseGate(): () => void {
     const gate = this.gate;
+    if (!gate) return () => {};
     if (this.holders++ === 0) writeFileSync(gate, "");
     let released = false;
-    return {
-      ok: true,
-      release: () => {
-        if (released) return;
-        released = true;
-        if (--this.holders === 0) rmSync(gate, { force: true });
-      },
+    return () => {
+      if (released) return;
+      released = true;
+      if (--this.holders === 0) rmSync(gate, { force: true });
     };
   }
 
@@ -420,10 +461,19 @@ export class DockerBackend implements ExecBackend {
     this.dirty = false;
     const r = await run(this.bin, ["exec", "-u", this.user, this.name, "sh", "-c", SWEEP, "tropos-sweep"], 30_000);
     if (r.error || r.code !== 0 || !r.stdout.includes("swept")) {
+      // A container that is gone (Docker restarted) runs nothing: that is as good as swept.
+      if (await this.containerGone()) return undefined;
       this.dirty = true;
       return `Couldn't stop what earlier commands left running in this chat's sandbox (${(r.error?.message ?? r.stderr.trim()) || `exit ${r.code}`}), so files are left alone for now. Try again.`;
     }
     return undefined;
+  }
+
+  /** True only when Docker answers that the container doesn't exist or isn't running; any other answer is no answer. */
+  private async containerGone(): Promise<boolean> {
+    const r = await run(this.bin, ["inspect", "-f", "{{.State.Running}}", this.name], 30_000);
+    if (r.error) return false;
+    return (r.code === 0 && r.stdout.trim() === "false") || /no such (object|container)/i.test(r.stderr);
   }
 
   close(): Promise<void> {
@@ -443,7 +493,8 @@ export class DockerBackend implements ExecBackend {
     const r = this.runs.get(child);
     if (!r) return undefined;
     try {
-      const n = Number.parseInt(readFileSync(r.pidFile, "utf8").trim(), 10);
+      // The container can write the run dir: a link or a FIFO planted as the pid file must not hang or flood the host.
+      const n = Number.parseInt((readSmallFileSync(r.pidFile, 64) ?? "").trim(), 10);
       return Number.isInteger(n) && n > 0 ? n : undefined;
     } catch {
       return undefined;

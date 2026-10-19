@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { makeParentDirs, openVerified, PathSwapError, removeStray, replaceContents, verifyOpened } from "./file-guard";
+import { cannotWrite, makeParentDirs, openVerified, PathSwapError, removeStray, replaceContents, staleText, verifyOpened } from "./file-guard";
 
 let dir: string;
 let project: string;
@@ -122,6 +122,30 @@ describe("verifyOpened", () => {
     } finally {
       await handle.close();
     }
+  });
+
+  test("a file replaced at its own path since the open (an editor saving) is told apart from a folder that now leads elsewhere", async () => {
+    await writeFile(join(project, "f.txt"), "old");
+    const handle = await open(join(project, "f.txt"), constants.O_RDONLY);
+    try {
+      await writeFile(join(project, "f.txt.new"), "new");
+      await rename(join(project, "f.txt.new"), join(project, "f.txt"));
+      const replaced = await verifyOpened(handle, join(project, "f.txt")).catch((e: unknown) => e);
+      expect(replaced).toBeInstanceOf(PathSwapError);
+      expect((replaced as PathSwapError).replaced).toBe(true);
+    } finally {
+      await handle.close();
+    }
+    await symlink(outside, join(project, "sub"));
+    const moved = await openVerified(join(project, "sub", "secret"), "read").catch((e: unknown) => e);
+    expect((moved as PathSwapError).replaced).toBe(false);
+  });
+});
+
+describe("cannotWrite", () => {
+  test("a file an editor replaced while Write or Edit opened it reads as changed since it was read; a moved folder doesn't", () => {
+    expect(cannotWrite("/p/f.ts", new PathSwapError(true))).toEqual({ content: staleText("/p/f.ts"), isError: true });
+    expect(String(cannotWrite("/p/f.ts", new PathSwapError()).content)).toStartWith("Cannot write /p/f.ts: the path changed while it was being opened");
   });
 });
 
