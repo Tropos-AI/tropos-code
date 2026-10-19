@@ -13,6 +13,7 @@ import { extensionsHandlers } from "./extensions";
 import { logsHandlers } from "./logs";
 import { onboardHandlers } from "./onboard";
 import { pairingHandlers } from "./pairing";
+import { proactiveHandlers } from "./proactive";
 import { projectsHandlers } from "./projects";
 import { remoteHandlers } from "./remote";
 import { serviceHandlers } from "./service";
@@ -48,6 +49,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...devicesHandlers(ctx),
     ...remoteHandlers(ctx),
     ...agentsHandlers(ctx),
+    ...proactiveHandlers(ctx),
     ...extra,
   };
   return {

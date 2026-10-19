@@ -172,3 +172,16 @@ test("mcp.add, mcp.remove and plugins.setEnabled ask the gateway to reload once 
     await own.cleanup();
   }
 });
+
+test("setEnabled writes disabled: true and removes it again; an unknown name is refused", async () => {
+  const h = extensionsHandlers(kit.ctx);
+  await h["mcp.add"]!({ name: "files", server: stdio() });
+  const off = await h["mcp.setEnabled"]!({ name: "files", enabled: false });
+  expect(off).toMatchObject([{ name: "files", state: "disabled" }]);
+  expect((await settings()).mcpServers.files.disabled).toBe(true);
+  const on = await h["mcp.setEnabled"]!({ name: "files", enabled: true });
+  expect(on[0]!.state).not.toBe("disabled");
+  expect("disabled" in (await settings()).mcpServers.files).toBe(false);
+  await expect(h["mcp.setEnabled"]!({ name: "ghost", enabled: false })).rejects.toThrow(/no server named ghost/);
+  await expect(h["mcp.setEnabled"]!({ name: "files", enabled: "no" as never })).rejects.toThrow(/true or false/);
+});

@@ -200,6 +200,14 @@ export function extensionsHandlers(ctx: AdminContext, deps: Partial<ExtensionsDe
       return list();
     },
 
+    async "mcp.setEnabled"({ name, enabled }) {
+      const id = checkName(name);
+      if (typeof enabled !== "boolean") throw new AdminError("Say true or false.");
+      if (!(id in (await configured()))) throw new AdminError(`There is no server named ${id}.`);
+      await write((draft) => (enabled ? unsetAt(draft, ["mcpServers", id, "disabled"]) : setAt(draft, ["mcpServers", id, "disabled"], true)));
+      return list();
+    },
+
     async "mcp.test"({ server }) {
       const setting = settingFrom(server);
       try {

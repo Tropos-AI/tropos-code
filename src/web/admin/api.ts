@@ -148,8 +148,38 @@ export interface ProjectsAdmin {
   "projects.add": { params: { path: string; name?: string }; result: ProjectView };
   "projects.remove": { params: { id: string }; result: { removed: boolean } };
   "projects.setDefault": { params: { id: string }; result: ProjectView[] };
+  "projects.rename": { params: { id: string; name: string }; result: ProjectView };
   /** Lists sub-directories for the folder picker. Starts in the home directory; never lists files. */
   "projects.browse": { params: { path?: string } | undefined; result: { path: string; parent: string | null; entries: BrowseEntry[] } };
+}
+
+// ---------- proactive messages ----------
+
+export interface ProactiveView {
+  /** What applies now: the explicit setting, or whether Telegram is connected. */
+  enabled: boolean;
+  /** True when `enabled` is set in gateway.json rather than following Telegram. */
+  explicit: boolean;
+  telegram: boolean;
+  activeHours: { start: string; end: string };
+  everyHours: number;
+  maxPerDay: number;
+  /** Where new projects are created, resolved. */
+  newProjectsDir: string;
+}
+
+/** A `null` value goes back to the default. */
+export type ProactivePatch = {
+  enabled?: boolean | null;
+  activeHours?: { start: string; end: string };
+  everyHours?: number;
+  maxPerDay?: number;
+  newProjectsDir?: string | null;
+};
+
+export interface ProactiveAdmin {
+  "proactive.get": { params: undefined; result: ProactiveView };
+  "proactive.set": { params: ProactivePatch; result: ProactiveView };
 }
 
 // ---------- service (run at login) and sandbox ----------
@@ -319,6 +349,8 @@ export interface ExtensionsAdmin {
   "mcp.list": { params: undefined; result: McpServerView[] };
   "mcp.add": { params: { name: string; server: McpServerInput }; result: McpServerView[] };
   "mcp.remove": { params: { name: string }; result: McpServerView[] };
+  /** Sets or removes `mcpServers.<name>.disabled`. */
+  "mcp.setEnabled": { params: { name: string; enabled: boolean }; result: McpServerView[] };
   /** Starts the server briefly and lists its tools, to show a bad command before it is saved. */
   "mcp.test": { params: { server: McpServerInput }; result: { ok: boolean; tools: string[]; error?: string } };
   "plugins.setEnabled": { params: { name: string; enabled: boolean }; result: { name: string; enabled: boolean } };
@@ -533,7 +565,8 @@ export type AdminMap = StatusAdmin &
   AutonomyAdmin &
   DevicesAdmin &
   RemoteAdmin &
-  AgentsAdmin;
+  AgentsAdmin &
+  ProactiveAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -561,6 +594,7 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "projects.add",
   "projects.remove",
   "projects.setDefault",
+  "projects.rename",
   "projects.browse",
   "service.status",
   "service.install",
@@ -592,6 +626,9 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "mcp.list",
   "mcp.add",
   "mcp.remove",
+  "mcp.setEnabled",
+  "proactive.get",
+  "proactive.set",
   "mcp.test",
   "plugins.setEnabled",
   "onboard.state",

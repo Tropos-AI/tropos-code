@@ -1,7 +1,7 @@
 // src/web/admin/projects.ts — `projects.*`: the project registry and the folder picker.
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { addProject, defaultProjectId, listProjects, removeProject, setDefaultProject, type Project } from "../../gateway/projects";
+import { addProject, defaultProjectId, listProjects, removeProject, renameProject, setDefaultProject, type Project } from "../../gateway/projects";
 import type { BrowseEntry, ProjectView } from "./api";
 import { AdminError, type AdminContext, type AdminHandlers } from "./context";
 import { messageOf } from "./util";
@@ -55,6 +55,14 @@ export function projectsHandlers(ctx: AdminContext): AdminHandlers {
         await setDefaultProject(ctx.home, p.id);
         await reload();
         return views();
+      }),
+    "projects.rename": (p) =>
+      shown(async () => {
+        if (typeof p?.id !== "string") throw new AdminError("Say which project to rename.");
+        if (typeof p.name !== "string") throw new AdminError("Give the project a name.");
+        const renamed = await renameProject(ctx.home, p.id, p.name);
+        await reload();
+        return (await views()).find((v) => v.id === renamed.id)!;
       }),
     "projects.browse": (p) =>
       shown(async () => {

@@ -72,3 +72,18 @@ test("browse canonicalises, refuses files and missing paths, caps at 500 and has
   expect(((await a.handle("projects.browse", { path: many })) as any).entries).toHaveLength(500);
   expect(((await a.handle("projects.browse", { path: "/" })) as any).parent).toBeNull();
 });
+
+test("rename changes the display name only, and refuses the built-in default and unknown ids", async () => {
+  const a = admin();
+  const dir = join(kit.root, "r");
+  await mkdir(dir, { recursive: true });
+  const { id } = (await a.handle("projects.add", { path: dir, name: "Old" })) as any;
+  const reloads = kit.reloads;
+  expect(await a.handle("projects.rename", { id, name: "  New name " })).toMatchObject({ id, name: "New name", path: dir, isDefault: false });
+  expect(((await a.handle("projects.list", undefined)) as any[]).find((p) => p.id === id).name).toBe("New name");
+  expect(kit.reloads).toBe(reloads + 1);
+  expect(await failure(a, "projects.rename", { id: "default", name: "x" })).toContain("can't be renamed");
+  expect(await failure(a, "projects.rename", { id: "ghost", name: "x" })).toContain("no project");
+  expect(await failure(a, "projects.rename", { id, name: " " })).toContain("1 to 80");
+  expect(await failure(a, "projects.rename", { id: 3 as never, name: "x" })).toContain("which project");
+});
