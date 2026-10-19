@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { GATEWAY_HELP, USAGE } from "./usage";
+import { GATEWAY_HELP, UPDATE_HELP, USAGE } from "./usage";
+
+test("update help says a running background service is restarted onto the new version", () => {
+  expect(UPDATE_HELP).toContain("A running background service is restarted so it runs the new version.");
+});
 
 test("help is grouped Start · Everyday · Setup and care · Advanced, and hides the aliases", () => {
   const order = ["Start:", "Everyday:", "Setup and care:", "Advanced:"].map((h) => USAGE.indexOf(h));

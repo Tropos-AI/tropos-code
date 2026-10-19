@@ -82,6 +82,7 @@ export const UPDATE_HELP = `Usage: tcode update   (or: tcode upgrade)
 
 Updates to the newest release of your update channel ("latest" or "stable"; change it in the
 dashboard: tcode dashboard). Never installs an older version.
+A running background service is restarted so it runs the new version.
 
 Options:
   -h, --help     show this help
