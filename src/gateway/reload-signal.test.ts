@@ -49,9 +49,11 @@ test("a process counts as the gateway by its command line, and this process alwa
 
 test("onReloadSignal runs the handler on SIGUSR2 and stops after the returned off()", async () => {
   let hits = 0;
+  const others = process.listenerCount(RELOAD_SIGNAL);
   const off = onReloadSignal(() => hits++);
+  expect(process.listenerCount(RELOAD_SIGNAL)).toBe(others + 1);
   process.emit(RELOAD_SIGNAL as NodeJS.Signals);
   expect(hits).toBe(1);
   off();
-  expect(process.listenerCount(RELOAD_SIGNAL)).toBe(0);
+  expect(process.listenerCount(RELOAD_SIGNAL)).toBe(others);
 });
