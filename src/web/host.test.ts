@@ -275,3 +275,18 @@ describe("projects", () => {
     expect(await second).toEqual({ ok: true, prompt: "deny" });
   });
 });
+
+describe("@specialist messages", () => {
+  const directCall = (t: string) =>
+    t.startsWith("@shell ") ? { call: { name: "Shell", input: { command: "ls" } } as never, reply: (r: { text: string }) => `🐚 shell:\n${r.text}` } : null;
+
+  test("go to the specialist without a model call; other text still reaches the model", async () => {
+    const { host, runtime, seen } = setup({ mode: "bypass", directCall }, [() => reply([textBlock("you're welcome")])]);
+    await host.call("prompt", { text: "@shell ls" });
+    expect(runtime.model.requests).toHaveLength(0);
+    expect(seen).toContainEqual({ t: "user", text: "@shell ls" });
+    expect(runtime.history().at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "🐚 shell:\nran ls" }] });
+    await host.call("prompt", { text: "thanks" });
+    expect(runtime.model.requests).toHaveLength(1);
+  });
+});

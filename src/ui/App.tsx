@@ -1,4 +1,5 @@
 // src/ui/App.tsx
+import type { DirectCall } from "../agents/mention";
 import { Box, Static, useApp, useInput, useStdout } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Agent } from "../agent/agent";
@@ -144,7 +145,7 @@ export function App({ runtime }: { runtime: Runtime }) {
   );
 
   const runTurn = useCallback(
-    async (prompt: string, display = prompt, model?: string) => {
+    async (prompt: string, display = prompt, model?: string, direct?: DirectCall) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setTranscript((t) => addUser(t, display));
@@ -155,7 +156,8 @@ export function App({ runtime }: { runtime: Runtime }) {
       abortRef.current = controller;
       runtime.setTurnModel(model);
       try {
-        await agentRef.current!.run(prompt, controller.signal);
+        if (direct) await agentRef.current!.runDirect(prompt, direct.call, direct.reply, controller.signal);
+        else await agentRef.current!.run(prompt, controller.signal);
       } catch (err) {
         notice("error", (err as Error).message);
       } finally {
@@ -224,7 +226,7 @@ export function App({ runtime }: { runtime: Runtime }) {
     async (command: CommandResult, trimmed: string) => {
       switch (command.kind) {
         case "none":
-          return runTurn(trimmed);
+          return runTurn(trimmed, trimmed, undefined, runtime.directCall?.(trimmed) ?? undefined);
         case "prompt":
           return runTurn(command.text, trimmed);
         case "help":

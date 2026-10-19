@@ -113,6 +113,19 @@ function harness(steps: Step[], over: {
 
 const run = (h: Harness, prompt = "go", signal = new AbortController().signal) => h.agent.run(prompt, signal);
 
+describe("Agent.runDirect", () => {
+  test("runs the call without the model and records a well-formed turn", async () => {
+    const h = harness([]); // any model call fails the test
+    const signal = new AbortController().signal;
+    expect(await h.agent.runDirect("@echo hi", { name: "Echo", input: { text: "hi" } }, (r) => `E: ${r.text}`, signal)).toBe("end_turn");
+    assertToolPairs(h.agent.messages);
+    expect(h.model.requests).toHaveLength(0);
+    expect(h.agent.messages.at(-1)).toEqual({ role: "assistant", content: [{ type: "text", text: "E: echo:hi" }] });
+    expect(h.events.map((e) => e.type)).toEqual(["tool_start", "tool_end", "text", "assistant", "turn_end"]);
+    expect((h.agent.messages[0]!.content as Array<{ text: string }>).at(-1)!.text).toBe("@echo hi");
+  });
+});
+
 describe("Agent", () => {
   test("a plain text turn", async () => {
     const h = harness([() => reply([textBlock("hello")])]);

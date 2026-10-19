@@ -147,37 +147,103 @@ export class Agent {
 
   private async runTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason> {
     try {
-      // A previous run may have ended with tool_use blocks that never got results; close them first.
-      const repair = danglingToolResults(this.messages);
-      if (repair) await this.push(repair);
-      this.changeRecorded = false;
-      this.stopRequested = undefined;
-      let hookTexts: string[] = [];
-      if (this.opts.hooks?.has("UserPromptSubmit")) {
-        const out = await this.hook("UserPromptSubmit", { prompt }, undefined, signal);
-        const refusal = out.blocked ?? out.stop;
-        if (refusal !== undefined) {
-          this.emit({ type: "notice", level: "error", text: `A UserPromptSubmit hook blocked this prompt: ${refusal}` });
-          this.emit({ type: "turn_end", reason: "blocked" });
-          return "blocked";
-        }
-        hookTexts = out.additionalContext;
-      }
-      const content: Anthropic.Beta.BetaTextBlockParam[] = [];
-      if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
-      const mode = this.opts.permissions().mode;
-      const reminder = modeReminder(this.lastMode, mode);
-      this.lastMode = mode;
-      if (reminder) content.push({ type: "text", text: reminder });
-      for (const text of this.opts.startTurn?.() ?? []) content.push({ type: "text", text });
-      if (hookTexts.length > 0) content.push({ type: "text", text: hookContext("UserPromptSubmit", hookTexts, this.opts.nonce?.()) });
-      content.push({ type: "text", text: prompt });
-      await this.push({ role: "user", content });
-      return await this.loop(signal);
+      const blocked = await this.startUserTurn(prompt, signal);
+      return blocked ?? (await this.loop(signal));
     } catch (err) {
-      this.emit({ type: "notice", level: "error", text: `Tropos could not complete this turn: ${errorText(err)}` });
-      this.emit({ type: "turn_end", reason: "error" });
-      return "error";
+      return this.failTurn(err);
+    }
+  }
+
+  private failTurn(err: unknown): TurnEndReason {
+    this.emit({ type: "notice", level: "error", text: `Tropos could not complete this turn: ${errorText(err)}` });
+    this.emit({ type: "turn_end", reason: "error" });
+    return "error";
+  }
+
+  /**
+   * Records the user message (context block, reminders, UserPromptSubmit hook output).
+   * Returns "blocked" when a hook refused the prompt; otherwise undefined.
+   */
+  private async startUserTurn(prompt: string, signal: AbortSignal): Promise<TurnEndReason | undefined> {
+    // A previous run may have ended with tool_use blocks that never got results; close them first.
+    const repair = danglingToolResults(this.messages);
+    if (repair) await this.push(repair);
+    this.changeRecorded = false;
+    this.stopRequested = undefined;
+    let hookTexts: string[] = [];
+    if (this.opts.hooks?.has("UserPromptSubmit")) {
+      const out = await this.hook("UserPromptSubmit", { prompt }, undefined, signal);
+      const refusal = out.blocked ?? out.stop;
+      if (refusal !== undefined) {
+        this.emit({ type: "notice", level: "error", text: `A UserPromptSubmit hook blocked this prompt: ${refusal}` });
+        this.emit({ type: "turn_end", reason: "blocked" });
+        return "blocked";
+      }
+      hookTexts = out.additionalContext;
+    }
+    const content: Anthropic.Beta.BetaTextBlockParam[] = [];
+    if (this.messages.length === 0) content.push({ type: "text", text: await this.opts.contextText() });
+    const mode = this.opts.permissions().mode;
+    const reminder = modeReminder(this.lastMode, mode);
+    this.lastMode = mode;
+    if (reminder) content.push({ type: "text", text: reminder });
+    for (const text of this.opts.startTurn?.() ?? []) content.push({ type: "text", text });
+    if (hookTexts.length > 0) content.push({ type: "text", text: hookContext("UserPromptSubmit", hookTexts, this.opts.nonce?.()) });
+    content.push({ type: "text", text: prompt });
+    await this.push({ role: "user", content });
+    return undefined;
+  }
+
+  /**
+   * One user turn without the model: the message is recorded as `run` would, `call` goes through the
+   * normal tool path (permissions, hooks, events), and `reply` turns its result into the assistant's answer.
+   * Never rejects.
+   */
+  async runDirect(
+    prompt: string,
+    call: { name: string; input: unknown },
+    reply: (result: { text: string; isError: boolean }) => string,
+    signal: AbortSignal,
+  ): Promise<TurnEndReason> {
+    const reason = await this.runDirectTurn(prompt, call, reply, signal);
+    try {
+      this.opts.endTurn?.(reason, this.messages);
+    } catch {
+      // an observer; the turn itself is over
+    }
+    return reason;
+  }
+
+  private async runDirectTurn(
+    prompt: string,
+    call: { name: string; input: unknown },
+    reply: (result: { text: string; isError: boolean }) => string,
+    signal: AbortSignal,
+  ): Promise<TurnEndReason> {
+    try {
+      const blocked = await this.startUserTurn(prompt, signal);
+      if (blocked) return blocked;
+      const block = { type: "tool_use", id: `toolu_direct_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`, name: call.name, input: call.input } as ToolUse;
+      const model = this.opts.config().model;
+      const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const assistant = (content: unknown[], stop: string) =>
+        ({ id: `msg_${crypto.randomUUID()}`, type: "message", role: "assistant", model, content, stop_reason: stop, stop_sequence: null, usage }) as unknown as Message;
+      await this.push({ role: "assistant", content: [block] });
+      const result = await this.runTool(block, signal);
+      await this.push({ role: "user", content: [result] });
+      if (signal.aborted) {
+        this.emit({ type: "turn_end", reason: "aborted" });
+        return "aborted";
+      }
+      const text = reply({ text: contentText(result.content as ToolResultContent), isError: result.is_error === true });
+      const message = assistant([{ type: "text", text, citations: null }], "end_turn");
+      this.emit({ type: "text", delta: text });
+      await this.push({ role: "assistant", content: [{ type: "text", text }] });
+      this.emit({ type: "assistant", message });
+      this.emit({ type: "turn_end", reason: "end_turn" });
+      return "end_turn";
+    } catch (err) {
+      return this.failTurn(err);
     }
   }
 

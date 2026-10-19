@@ -30,6 +30,21 @@ describe("App", () => {
     expect(runtime.inputs).toEqual(["hi"]);
   });
 
+  test("an @specialist message runs without a model request and shows the labelled answer", async () => {
+    const runtime = fakeRuntime([], {
+      mode: "bypass",
+      directCall: (t) => (t.startsWith("@shell ") ? { call: { name: "Shell", input: { command: "ls" } } as never, reply: (r) => `🐚 shell:\n${r.text}` } : null),
+    });
+    const r = render(<App runtime={runtime} />);
+    await tick();
+    r.stdin.write("@shell ls");
+    await tick();
+    r.stdin.write("\r");
+    await tick(200);
+    expect(all(r)).toContain("🐚 shell:");
+    expect(runtime.model.requests).toHaveLength(0);
+  });
+
   test("shift+tab cycles the permission mode", async () => {
     const runtime = fakeRuntime([]);
     const r = render(<App runtime={runtime} />);

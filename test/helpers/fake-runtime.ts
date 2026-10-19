@@ -38,6 +38,7 @@ export function fakeRuntime(
     identity?: Runtime["identity"];
     start?: Runtime["start"];
     modelPrefs?: Runtime["modelPrefs"];
+    directCall?: Runtime["directCall"];
   } = {},
 ): Runtime & {
   model: FakeModel;
@@ -81,6 +82,7 @@ export function fakeRuntime(
     redo: async () => ({ ok: true, files: [] }),
     undoLearned: over.undoLearned ?? (async () => ({ ok: false, reason: "Nothing learned to undo." })),
     identity: over.identity ?? (() => ({})),
+    ...(over.directCall ? { directCall: over.directCall } : {}),
     start: over.start ?? (async () => {}),
     shutdowns,
     shutdown: async (opts) => {

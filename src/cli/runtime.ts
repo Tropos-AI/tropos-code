@@ -1,3 +1,5 @@
+import { mentionCall } from "../agents/mention";
+import { isSpecialist } from "../agents/specialists";
 import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -780,6 +782,8 @@ export async function createRuntime(
       return out.ok ? { ok: true, summary: `${out.entry.kind}: ${out.entry.summary}` } : out;
     },
     identity: () => identity,
+    // Guests never reach specialists; ctx.ext.agents holds only the active, unpaused ones.
+    directCall: (text) => (ctx.role === "guest" ? null : mentionCall(text, ctx.ext.agents.flatMap((a) => (isSpecialist(a) ? [a] : [])))),
     start: async (notice) => {
       pendingContext = await sessionStart(hooks, init.source ?? "startup", notice, harnessNonce(session.id)).catch(() => null);
       // Archive learned skills nobody used for a month (at most once a week; never deletes).

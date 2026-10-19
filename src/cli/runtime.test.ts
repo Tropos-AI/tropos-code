@@ -580,6 +580,25 @@ describe("learning and identity", () => {
     expect(ctx.subagents.deps).toMatchObject({ home: ctx.home, role: "guest" });
   });
 
+  test("directCall resolves @specialist for owners and is null for guests, unknown names and plain text", async () => {
+    await setup();
+    await mkdir(join(ctx.home, "agents", "reviewer"), { recursive: true });
+    await writeFile(
+      join(ctx.home, "agents", "reviewer", "AGENT.md"),
+      renderSpecialistFile({ name: "reviewer", description: "reviews pull requests", prompt: "## Purpose\nx", emoji: "🔍", createdBy: "user", createdAt: 1, revision: 1 }),
+    );
+    await ctx.ext.reloadAgents();
+    const owner = (await runtime()).runtime;
+    expect(owner.directCall?.("@reviewer look at PR 12")?.call.input.subagent_type).toBe("reviewer");
+    expect(owner.directCall?.("@nobody hi")).toBeNull();
+    expect(owner.directCall?.("plain")).toBeNull();
+    const exec = {} as Parameters<typeof channelContext>[1];
+    const guestRt = await createRuntime(channelContext(ctx, exec, { role: "guest" }), {
+      session: (await runtime()).session, history: [], mode: "default", modes: ["default"], theme: DARK,
+    });
+    expect(guestRt.directCall?.("@reviewer look at PR 12")).toBeNull();
+  });
+
   test("the agents panel lists specialists in their own section", async () => {
     await mkdir(join(ctx.home, "agents", "reviewer"), { recursive: true });
     await writeFile(

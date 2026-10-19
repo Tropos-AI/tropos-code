@@ -1,6 +1,7 @@
 // src/ui/runtime.ts
 import type { Agent } from "../agent/agent";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "../agent/events";
+import type { DirectCall } from "../agents/mention";
 import type { Effort, Mode } from "../config/constants";
 import type { ProviderStatus } from "../providers/router";
 import type { MessageParam, SessionSummary } from "../session/store";
@@ -99,6 +100,8 @@ export interface Runtime {
   /** The agent's name and emoji from ~/.tropos/workspace/IDENTITY.md, for headers (re-read when the Identity tool saves). */
   identity(): { name?: string; emoji?: string };
   redo(): Promise<{ ok: true; files: string[] } | { ok: false; reason: string }>;
+  /** The call behind an `@<specialist> message`; null for a guest session or any other text. */
+  directCall?(text: string): DirectCall | null;
   /** Fires SessionStart (startup/resume) once the UI is up; notices go through `notice`. */
   start(notice: (level: "info" | "warn", text: string) => void): Promise<void>;
   /** True when shutdown will wait for the learning review: a final one is due, or one is running. */

@@ -253,7 +253,8 @@ export class WebHost {
             r.recordInput(display);
             r.setTurnModel(model);
             try {
-              return await this.agent.run(text, signal);
+              const direct = command ? null : (r.directCall?.(text) ?? null);
+              return direct ? await this.agent.runDirect(text, direct.call, direct.reply, signal) : await this.agent.run(text, signal);
             } finally {
               r.setTurnModel(undefined);
               this.turns++;
