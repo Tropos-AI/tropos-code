@@ -207,6 +207,26 @@ describe("Grep (fallback): a folder swapped for a link mid-search", () => {
     }
   });
 
+  test("a file named as the search path that turns into a link after the check is not read through it", async () => {
+    const root = await realpath(await makeTmpDir());
+    try {
+      await mkdir(join(root, "project"));
+      await mkdir(join(root, "outside"));
+      await writeFile(join(root, "project", "notes.txt"), "decoy\n");
+      await writeFile(join(root, "outside", "secret.txt"), "TOKEN=hunter2\n");
+      // The deny check runs after the path was resolved: the moment a racing command would swap the file for a link.
+      const isDenied = (p: string) => {
+        renameSync(join(root, "project", "notes.txt"), join(root, "project", "notes.old"));
+        symlinkSync(join(root, "outside", "secret.txt"), join(root, "project", "notes.txt"));
+        return p.endsWith("never");
+      };
+      const out = await createGrepTool({ rgPath: null }).run({ pattern: "TOKEN", path: "notes.txt", output_mode: "content" }, makeToolContext({ root: join(root, "project"), isDenied }));
+      expect(String(out.content)).not.toContain("hunter2");
+    } finally {
+      await removeDir(root);
+    }
+  });
+
   test("the sandbox is held while the search runs and released afterwards", async () => {
     const events: string[] = [];
     await createGrepTool({ rgPath: null }).run({ pattern: "foo" }, makeToolContext({ root: dir, exec: recordingBackend(events) }));

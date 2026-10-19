@@ -65,6 +65,9 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     // The session's own .env files, when a project holding the home lies around it.
     ...(shallow.some((root) => isInside(paths.project, root)) ? rootRegexes([paths.project], `(.*/)?${envLeaf}$`, "allow") : []),
   ].map((r) => `(regex #"${r}")`);
+  // Roots inside a carve-out (the default project): the carve-out reopens them, so they are denied again after it.
+  const carvedRoots = roots.filter((root) => paths.readCarveOuts.some((dir) => isInside(root, dir)));
+  const envDeniesCarved = rootRegexes(carvedRoots, `(.*/)?${envLeaf}$`, "deny").map((r) => `(regex #"${r}")`);
   // Concrete paths: where linked .env files point, and on a platform without patterns the files themselves.
   const envFiles = named("E", paths.otherProjectSecrets.filter(spellable));
   const envPatterns = paths.otherProjectSecrets.map((p) => `(regex #"${fitDeny(p, "(/.*)?$")}")`);
@@ -112,14 +115,17 @@ export function sandboxProfile(paths: ConfinementPaths): SandboxProfile {
     ")",
     // A non-owner's session: the instruction files the owner's sessions load from the workspace, missing ones included.
     ...(instructionFiles.length > 0 ? [`(deny file-write* ${instructionFiles.map((p) => `(literal ${p})`).join(" ")} ${paths.instructionFiles.map((p) => `(regex #"^${anyCase(p)}$")`).join(" ")})`] : []),
+    // Other projects' .env files, then their templates (and the session's own, around which a project holding the home
+    // lies) reopened. Before the secrets, so a reopened name inside a secret folder (~/.aws/.env.example) stays denied.
+    ...(envDenies.length > 0 ? [`(deny file-read* ${envDenies.join(" ")})`] : []),
+    ...(envReopens.length > 0 ? [`(allow file-read* ${envReopens.join(" ")})`] : []),
     // subpath matches the path itself too, so this covers files and folders alike.
     `(deny file-read* ${secrets.map((p) => `(subpath ${p})`).join(" ")} ${paths.deniedReads.map(anyCaseSubpath).join(" ")})`,
     // Carve back out, after the secret read-deny: the default project, the chats' worktrees and the per-sandbox cache (inside ~/.tropos).
     `(allow file-read* ${carveOuts.map((p) => `(subpath ${p})`).join(" ")} (subpath (param "CD0")) ${[...paths.readCarveOuts, paths.cacheDir].map(anyCaseSubpath).join(" ")})`,
-    // Other projects' .env files, after the carve-out: the default project is usually one of them. Then their templates
-    // reopened, then the targets of linked .env files denied again (a link may point at a template-named file).
-    ...(envDenies.length > 0 ? [`(deny file-read* ${envDenies.join(" ")})`] : []),
-    ...(envReopens.length > 0 ? [`(allow file-read* ${envReopens.join(" ")})`] : []),
+    // The default project is usually another project too: its .env files again, after the carve-out. Then where linked
+    // .env files point (a link may point at a template-named file).
+    ...(envDeniesCarved.length > 0 ? [`(deny file-read* ${envDeniesCarved.join(" ")})`] : []),
     ...(envPatterns.length > 0 ? [`(deny file-read* ${[...envFiles.map((p) => `(subpath ${p})`), ...envPatterns].join(" ")})`] : []),
     // The chief's own files sit inside that workspace (and may be the project itself): last, so nothing reopens them.
     ...(ownFiles.length > 0
@@ -206,7 +212,7 @@ function rootRegexes(roots: readonly string[], rest: string, kind: "deny" | "all
   let trie: Trie = new Map();
   const render = () => `^${renderTrie(trie)}${rest}`;
   for (const root of [...roots].sort()) {
-    const forms = caseTokens(`${root}/`);
+    const forms = caseTokens(withSlash(root));
     for (const tokens of forms) insertTokens(trie, tokens);
     if (render().length <= MAX_REGEX) {
       chunk.push(...forms);
@@ -222,13 +228,18 @@ function rootRegexes(roots: readonly string[], rest: string, kind: "deny" | "all
     for (const tokens of forms) insertTokens(trie, tokens);
     chunk = forms;
     if (render().length > MAX_REGEX) {
-      if (kind === "deny") out.push(fitDeny(`${root}/`, rest));
+      if (kind === "deny") out.push(fitDeny(withSlash(root), rest));
       chunk = [];
       trie = new Map();
     }
   }
   if (chunk.length > 0) out.push(render());
   return out;
+}
+
+/** The path with one trailing slash: `/` stays `/`, or a root of `/` would become `//`, which no path matches. */
+function withSlash(path: string): string {
+  return path.endsWith("/") ? path : `${path}/`;
 }
 
 /** A trie of regex tokens: one per character of a path, in any letter case. */

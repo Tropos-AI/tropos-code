@@ -121,12 +121,15 @@ describe.skipIf(available === null)("other projects' .env files under real confi
     const f = fixture();
     writeFileSync(join(f.fx, ".env"), "TOP-SECRET");
     writeFileSync(join(f.project, ".env"), "OWN");
+    writeFileSync(join(f.userHome, ".ssh", ".env.example"), "IN-SSH");
     const backend = confinedBackend({ project: f.project, home: f.home, userHome: f.userHome, env: f.env, otherProjects: [f.fx] });
     try {
       const run = (script: string) => collect(backend.spawn({ shell: "/bin/sh", script, cwd: f.project, env: {} }));
       const top = await run(`cat ${quoted(join(f.fx, ".env"))}`);
       expect(top.out).not.toContain("TOP-SECRET");
       expect(top.code).not.toBe(0);
+      // Templates are reopened, but never inside a secret folder.
+      expect((await run(`cat ${quoted(join(f.userHome, ".ssh", ".env.example"))}`)).out).not.toContain("IN-SSH");
       expect((await run("cat .env")).out).toBe("OWN");
     } finally {
       await backend.close();

@@ -159,8 +159,9 @@ async function runRipgrep(
 async function readSearched(file: string, within: readonly string[] | undefined, isDenied?: (path: string) => boolean): Promise<Buffer | null> {
   let opened: VerifiedFile;
   try {
-    // The file's real path, as the walk checked it: opening the name would refuse a linked file (the leaf isn't followed).
-    opened = await openVerified(await realpath(file), "read", { within });
+    // A file the walk found opens at its real path, which must still lie inside the searched folder (`within`). A file
+    // named as the search path was resolved already: it opens as named, with its leaf never followed.
+    opened = within === undefined ? await openVerified(file, "read") : await openVerified(await realpath(file), "read", { within });
   } catch {
     return null;
   }

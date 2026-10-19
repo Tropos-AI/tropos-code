@@ -116,6 +116,17 @@ test("a project denied whole still has its linked .env files denied where they p
   expect([...denied].sort()).toEqual([big, join(stash, "app.env"), join(fx, "h", "deep", "db.env")].sort());
 });
 
+test("on macOS a project holding the home still has where its linked .env files point listed, never the session's own", () => {
+  writeFileSync(join(mk("stash"), "app.env"), "x");
+  symlinkSync(join(fx, "stash", "app.env"), join(fx, ".env"));
+  const proj = mk("h", "proj");
+  writeFileSync(join(mk("stash2"), "own.env"), "x");
+  symlinkSync(join(fx, "stash2", "own.env"), join(proj, ".env"));
+  const paths = confinementPaths({ project: proj, home: join(fx, "h", ".tropos"), userHome: mk("h"), env: { TMPDIR: mk("tmp") }, platform: "darwin", otherProjects: [fx] });
+  expect(paths.otherProjectsShallow).toEqual([fx]);
+  expect(paths.otherProjectSecrets).toEqual([join(fx, "stash", "app.env")]);
+});
+
 test("committed templates (.env.example, .env.sample, .env.template) are not secrets", () => {
   const other = mk("other");
   for (const name of [".env", ".env.example", ".env.sample", ".env.Template"]) writeFileSync(join(other, name), "x");

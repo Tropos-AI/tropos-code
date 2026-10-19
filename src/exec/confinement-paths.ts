@@ -175,7 +175,9 @@ function otherProjectRoots(project: string, others: readonly string[], userHome:
  */
 function otherProjectSecrets(roots: readonly string[], shallow: readonly string[], project: string, platform: NodeJS.Platform): string[] {
   const found: string[] = [];
-  // A project holding the home can't be denied whole: on Linux, a search that can't finish refuses the sandbox.
+  // A project holding the home can't be denied whole: on Linux, a search that can't finish refuses the sandbox. On
+  // macOS a pattern covers the files there, and only where linked ones point is listed.
+  for (const root of platform === "darwin" ? shallow : []) found.push(...envScan(root, ENV_LINK_SCAN_DIRS, true, project).found);
   for (const root of platform === "darwin" ? [] : shallow) {
     const scan = envScan(root, ENV_SCAN_DIRS, false, project);
     if (!scan.complete) throw new ConfinementError(`${root} is registered as a project but holds your home folder, and has too many folders to search for .env files; remove it from your projects.`);

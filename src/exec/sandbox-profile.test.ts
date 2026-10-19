@@ -42,8 +42,21 @@ test("one pattern per other project denies its .env files at any depth and reope
   expect(deny).toBe('(deny file-read* (regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/(.*/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$"))');
   const allow = profile.indexOf('(allow file-read* (regex #"^/[Ww]/[Oo][Tt][Hh][Ee][Rr]/(.*/)?\\.[Ee][Nn][Vv]\\.([Ee][Xx][Aa][Mm][Pp][Ll][Ee]|[Ss][Aa][Mm][Pp][Ll][Ee]|[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee])$"))');
   expect(allow).toBeGreaterThan(profile.indexOf(deny));
-  expect(profile.indexOf(deny)).toBeGreaterThan(profile.indexOf('(allow file-read* (subpath (param "C0"))'));
+  // The secrets come after both, so a template-named file inside a secret folder (~/.aws/.env.example) stays denied.
+  expect(profile.indexOf('(deny file-read* (subpath (param "R0"))')).toBeGreaterThan(allow);
   expect(params.some(([k]) => k.startsWith("E"))).toBe(false);
+});
+
+test("the default project's .env files are denied again after the carve-out that reopens the workspace", () => {
+  const { profile } = sandboxProfile({ ...base, otherProjects: ["/u/.tropos/workspace"] });
+  const again = profile.lastIndexOf("(deny file-read* (regex #\"^/[Uu]/\\.[Tt][Rr][Oo][Pp][Oo][Ss]/[Ww][Oo][Rr][Kk][Ss][Pp][Aa][Cc][Ee]/(.*/)?\\.[Ee][Nn][Vv]");
+  expect(again).toBeGreaterThan(profile.indexOf('(allow file-read* (subpath (param "C0"))'));
+});
+
+test("a project at / gets a pattern that matches: its root isn't written as //", () => {
+  const { profile } = sandboxProfile({ ...base, otherProjectsShallow: ["/"] });
+  expect(profile).toContain('(deny file-read* (regex #"^/([^/]+/)?([^/]+/)?\\.[Ee][Nn][Vv]([Rr][Cc]|\\.[^/]+)?$"))');
+  expect(profile).not.toContain('#"^//');
 });
 
 test("a project inside a denied secret (the guest workspace in ~/.tropos) gets no template allow that would reopen it", () => {
