@@ -24,7 +24,8 @@ export interface FixtureRelease {
 export async function makeFixtureRelease(opts: { version: string; key: TestKey; dir: string; binary?: Uint8Array | string; zst?: Uint8Array }): Promise<FixtureRelease> {
   const binary = typeof opts.binary === "string" ? new TextEncoder().encode(opts.binary) : (opts.binary ?? new TextEncoder().encode(fakeBinary(opts.version)));
   const zst = opts.zst ?? Bun.zstdCompressSync(binary);
-  const entry = (p: string) => ({ asset: `tropos-${p}`, sha256: sha256Hex(binary), size: binary.length, zst: { asset: `tropos-${p}.zst`, sha256: sha256Hex(zst), size: zst.length } });
+  const [binarySha, zstSha] = [sha256Hex(binary), sha256Hex(zst)]; // once, not per platform: a real binary is ~70 MB
+  const entry = (p: string) => ({ asset: `tropos-${p}`, sha256: binarySha, size: binary.length, zst: { asset: `tropos-${p}.zst`, sha256: zstSha, size: zst.length } });
   const manifest = { schema: 1, version: opts.version, commit: "f".repeat(40), buildDate: "2026-10-13T00:00:00Z", platforms: Object.fromEntries(PLATFORMS.map((p) => [p, entry(p)])) } as Manifest;
   const bytes = new TextEncoder().encode(serializeManifest(manifest));
   const signature = await sshSign(opts.key, bytes, "tropos-manifest", opts.dir);
