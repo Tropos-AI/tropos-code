@@ -117,6 +117,9 @@ export class FakePairing implements Pairing {
   async approve(channel: string, code: string): Promise<{ ok: true; senderId: string } | { ok: false; reason: string }> {
     return code === this.code ? { ok: true, senderId: "?" } : { ok: false, reason: "bad code" };
   }
+  async approveSender(channel: string, senderId: string): Promise<void> {
+    this.approved.add(`${channel}:${senderId}`);
+  }
   async list(): Promise<PairedSender[]> {
     return [];
   }

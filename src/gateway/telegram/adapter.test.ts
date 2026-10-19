@@ -7,7 +7,8 @@ import { OWNER_ONLY_FINISH } from "../worktrees";
 import type { Project } from "../projects";
 import { TelegramApi } from "./api";
 import { CLAIM_REPLY, SECRET_REMOVED_NOTE, TelegramAdapter } from "./adapter";
-import type { OwnerCandidateView } from "../owner-claim";
+import { OWNER_GREETING, OwnerClaimStore, type OwnerCandidateView } from "../owner-claim";
+import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
 import { HELP_TEXT } from "./render";
 import { assistantEvent, FakePairing, FakeSession, FakeSessions } from "../../../test/helpers/telegram-fakes";
@@ -83,7 +84,7 @@ function fakeClaim(open: boolean) {
 
 const NONCE = "n0nce-secret";
 
-async function setup(opts: { worktrees?: ChatWorktrees; approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView, proof?: string): Promise<boolean> } } = {}) {
+async function setup(opts: { worktrees?: ChatWorktrees; approved?: boolean; askTimeoutMs?: number; allowGroups?: boolean; start?: boolean; projects?: ChatProjects; autonomy?: ChatAutonomy; loginMessage?: () => Promise<string>; ownerClaim?: { isOpen(): Promise<boolean>; add(c: OwnerCandidateView, proof?: string): Promise<boolean>; isAuto?(): Promise<boolean>; close?(): Promise<void> } } = {}) {
   const server = new FakeTelegramServer();
   const logs: string[] = [];
   const api = new TelegramApi({ token: server.token, baseUrl: server.baseUrl, sleep: async () => {} });
@@ -117,6 +118,38 @@ async function setup(opts: { worktrees?: ChatWorktrees; approved?: boolean; askT
 }
 
 describe("TelegramAdapter owner claim", () => {
+  const autoWindow = async () => {
+    const home = await makeTmpDir("claim-");
+    cleanup.push(() => removeDir(home));
+    const store = new OwnerClaimStore(home);
+    await store.open({ auto: true });
+    return { store, nonce: (await store.nonce())! };
+  };
+
+  test("a window `tcode onboard` opened: whoever sends the link's secret is the owner at once, and is greeted", async () => {
+    const { store, nonce } = await autoWindow();
+    const { server, pairing } = await setup({ approved: false, ownerClaim: store });
+    server.pushMessage(CHAT, CHAT, `/start ${nonce}`, { from: { first_name: "Pan" } });
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(server.sent[0]!.text).toBe(OWNER_GREETING);
+    expect(await pairing.owner()).toEqual({ channel: "telegram", senderId: String(CHAT) });
+    expect(await pairing.isApproved("telegram", String(CHAT))).toBe(true);
+    expect(await store.isOpen()).toBe(false);
+  });
+
+  test("an automatic window never replaces an owner who is already set, and a wrong secret proves nothing", async () => {
+    const { store, nonce } = await autoWindow();
+    const { server, pairing } = await setup({ approved: false, ownerClaim: store });
+    server.pushMessage(CHAT, CHAT, "/start wrong-secret");
+    await server.waitFor(() => server.sent.length >= 1);
+    expect(await pairing.owner()).toBeNull();
+    await pairing.setOwner("telegram", "999");
+    server.pushMessage(CHAT, CHAT, `/start ${nonce}`);
+    await server.waitFor(() => server.sent.length >= 2);
+    expect(server.sent[1]!.text).toBe(CLAIM_REPLY);
+    expect(await pairing.owner()).toEqual({ channel: "telegram", senderId: "999" });
+  });
+
   test("while setup listens, a stranger is recorded with their names and told to confirm, never given a code", async () => {
     const claim = fakeClaim(true);
     const { server, sessions, pairing } = await setup({ approved: false, ownerClaim: claim });

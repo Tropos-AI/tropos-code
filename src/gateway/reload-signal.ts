@@ -20,6 +20,8 @@ const TROPOS_NAME = /^(tcode|tropos)$/i;
 const baseName = (path: string): string => path.split("/").pop() ?? "";
 /** A script a runtime (bun, node) runs as Tropos: the `tcode` link, or the entry point of a Tropos checkout or package. */
 const TROPOS_SCRIPT = /(^|\/)(tcode|tropos|tropos-code)\/(src|dist)\/[^/]+$/i;
+/** An installed version runs as its own file, ~/.local/share/tropos/versions/<version>. */
+const TROPOS_VERSION = /(^|\/)tropos\/versions\/\d+\.\d+\.\d+[^/]*$/;
 
 /**
  * True for `tcode gateway` as a command line: the program is the tcode/tropos binary (or a runtime running Tropos's
@@ -27,7 +29,7 @@ const TROPOS_SCRIPT = /(^|\/)(tcode|tropos|tropos-code)\/(src|dist)\/[^/]+$/i;
  */
 export function isGatewayCommand(command: string): boolean {
   const words = command.trim().split(/\s+/);
-  const program = TROPOS_NAME.test(baseName(words[0] ?? "")) ? 0 : words[1] && (TROPOS_NAME.test(baseName(words[1])) || TROPOS_SCRIPT.test(words[1])) ? 1 : -1;
+  const program = TROPOS_NAME.test(baseName(words[0] ?? "")) || TROPOS_VERSION.test(words[0] ?? "") ? 0 : words[1] && (TROPOS_NAME.test(baseName(words[1])) || TROPOS_SCRIPT.test(words[1])) ? 1 : -1;
   return program >= 0 && words.slice(program + 1).includes("gateway");
 }
 

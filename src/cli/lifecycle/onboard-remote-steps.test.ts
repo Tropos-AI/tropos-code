@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeTelegramServer } from "../../../test/helpers/telegram-fake-server";
 import { OwnerClaimStore } from "../../gateway/owner-claim";
@@ -22,43 +22,30 @@ afterEach(async () => {
 
 const pairingAt = (home: string) => new FilePairing({ path: join(home, "gateway", "pairing.json") });
 const gatewayJson = async (io: TestWizardIO) => JSON.parse(await readFile(join(io.home, "gateway.json"), "utf8"));
-const tg = (answers: string[], wait = 3000, engine: Parameters<typeof wizardIO>[1] = {}) => wizardIO(answers, { telegramBaseUrl: server.baseUrl, ...engine }, {}, { telegramWaitMs: wait });
+const tg = (answers: string[], engine: Parameters<typeof wizardIO>[1] = {}) => wizardIO(answers, { telegramBaseUrl: server.baseUrl, ...engine });
 const flat = (text: string) => text.replace(/\n│  /g, " ");
 
-/** Taps the link from the phone: waits for the window's secret, then sends `/start <secret>` as this sender. */
-async function tapLink(io: TestWizardIO, chatId: number, senderId: number, from: { first_name?: string; username?: string }): Promise<void> {
-  const store = new OwnerClaimStore(io.home);
-  for (let i = 0; i < 300; i++) {
-    const nonce = await store.nonce();
-    if (nonce) {
-      await Bun.sleep(80); // the poller drops what was already waiting when it started
-      server.pushMessage(chatId, senderId, `/start ${nonce}`, { from });
-      return;
-    }
-    await Bun.sleep(10);
-  }
-  throw new Error("the window never opened");
-}
-
 describe("telegramStep", () => {
-  test("BotFather, token, the link from the phone, 'is this you?' -> owner; the token is never printed", async () => {
-    const io = await tg(["", "", server.token, ""]);
-    const tapped = tapLink(io, 42, 7, { first_name: "Panagiotis", username: "pk" });
+  test("BotFather, token, then the link: the step moves on at once and the gateway confirms the owner later; the token is never printed", async () => {
+    const io = await tg(["", "", server.token]);
     expect(await telegramStep(io)).toBe("next");
-    await tapped;
     expect(io.opened).toEqual(["https://t.me/BotFather"]);
     expect(io.out()).toContain("/newbot");
-    expect(io.out()).toMatch(/https:\/\/t\.me\/tropos_bot\?start=[A-Za-z0-9_-]+/);
+    const nonce = io.out().match(/https:\/\/t\.me\/tropos_bot\?start=([A-Za-z0-9_-]+)/)![1];
     expect(io.out()).toContain("Connected to @tropos_bot");
-    expect(io.questions.some((q) => q.includes("Panagiotis (@pk)") && q.includes("id 7") && q.includes("is this you?"))).toBe(true);
-    expect(await pairingAt(io.home).owner()).toEqual({ channel: "telegram", senderId: "7" });
+    expect(flat(io.out())).toContain("No need to wait here");
+    // Nothing was asked after the token: no "is this you?", no "keep waiting".
+    expect(io.questions.some((q) => q.includes("is this you") || q.includes("No message yet"))).toBe(false);
+    const store = new OwnerClaimStore(io.home);
+    expect(await store.isAuto()).toBe(true);
+    expect(await store.nonce()).toBe(nonce!);
+    expect(await pairingAt(io.home).owner()).toBeNull();
     expect((await gatewayJson(io)).telegram.botToken).toBe(server.token);
     expect(io.out() + io.err()).not.toContain(server.token);
-    expect(io.out()).toContain("You're the owner of @tropos_bot.");
   });
 
   test("the link comes with its QR code", async () => {
-    const io = await tg(["", "n", server.token, "s"], 100);
+    const io = await tg(["", "n", server.token]);
     await telegramStep(io);
     const link = io.out().match(/https:\/\/t\.me\/tropos_bot\?start=[A-Za-z0-9_-]+/)![0];
     const qrLine = renderQr(link).split("\n")[4]!;
@@ -73,67 +60,20 @@ describe("telegramStep", () => {
     expect(await readFile(join(io.home, "gateway.json"), "utf8").catch(() => "")).not.toContain("bad");
   });
 
-  test("'n' waits for someone else; silence offers to keep waiting or skip", async () => {
-    const io = await tg(["", "n", server.token, "n", ""], 3000);
-    const stranger = tapLink(io, 43, 9, { first_name: "Eve" });
-    const owner = (async () => {
-      for (let i = 0; i < 500 && !io.questions.some((q) => q.includes("Eve")); i++) await Bun.sleep(10);
-      await Bun.sleep(150); // the second round of listening has started
-      await tapLink(io, 42, 7, { first_name: "Panagiotis", username: "pk" });
-    })();
-    expect(await telegramStep(io)).toBe("next");
-    await Promise.all([stranger, owner]);
-    expect(await pairingAt(io.home).owner()).toEqual({ channel: "telegram", senderId: "7" });
-    expect(await pairingAt(io.home).owner()).not.toEqual({ channel: "telegram", senderId: "9" });
-
-    const quiet = await tg(["", "n", server.token, "s"], 120);
-    expect(await telegramStep(quiet)).toBe("skip");
-    expect(flat(quiet.out())).toContain("No message yet");
-    expect(await pairingAt(quiet.home).owner()).toBeNull();
-  });
-
-  test("silence, then Enter keeps waiting", async () => {
-    const io = await tg(["", "n", server.token, "", ""], 150);
-    const tapped = (async () => {
-      for (let i = 0; i < 500 && !io.questions.some((q) => q.includes("No message yet")); i++) await Bun.sleep(10);
-      await Bun.sleep(100);
-      await tapLink(io, 42, 7, { first_name: "P" });
-    })();
-    expect(await telegramStep(io)).toBe("next");
-    await tapped;
-    // It waits for the prompt before tapping; a busy CI machine can take longer than the default 5 s to show it.
-  }, 20_000);
-
-  test("with the gateway reading the bot it uses the claim, never getUpdates", async () => {
-    const io = await tg(["", ""], 3000, { alive: (pid) => pid === 4242 });
-    await mkdir(join(io.home, "gateway"), { recursive: true });
-    await writeFile(join(io.home, "gateway", "state.json"), JSON.stringify({ pid: 4242, telegram: true }));
+  test("with the token already saved it shows the link without BotFather; with an owner it says so and opens nothing", async () => {
+    const io = await tg([""]);
     await writeFile(join(io.home, "gateway.json"), JSON.stringify({ telegram: { botToken: server.token } }));
-    const store = new OwnerClaimStore(io.home);
-    await store.open();
-    await store.add({ senderId: "7", chatId: 42, name: "Panagiotis", username: "pk", at: Date.now() }, `/start ${await store.nonce()}`);
     expect(await telegramStep(io)).toBe("next");
-    expect(server.getUpdatesOffsets).toEqual([]);
-    expect(await pairingAt(io.home).owner()).toEqual({ channel: "telegram", senderId: "7" });
-    expect(io.opened).toEqual([]); // the token was already there: no BotFather
-  });
+    expect(io.opened).toEqual([]);
+    expect(io.out()).toMatch(/https:\/\/t\.me\/tropos_bot\?start=/);
 
-  test("another program reading the bot: it retries through the gateway's claim", async () => {
-    const fetchBusy = (async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/getUpdates")) return Response.json({ ok: false, error_code: 409, description: "Conflict: terminated by other getUpdates request" }, { status: 409 });
-      return Response.json({ ok: true, result: url.includes("/getMe") ? { username: "tropos_bot", first_name: "T" } : { message_id: 1 } });
-    }) as unknown as typeof fetch;
-    const io = await wizardIO(["", ""], { fetch: fetchBusy }, {}, { telegramWaitMs: 3000 });
-    await writeFile(join(io.home, "gateway.json"), JSON.stringify({ telegram: { botToken: "5:tok" } }));
-    const store = new OwnerClaimStore(io.home);
-    const claimed = (async () => {
-      for (let i = 0; i < 300 && !(await store.nonce()); i++) await Bun.sleep(10);
-      await store.add({ senderId: "7", chatId: 42, name: "P", at: Date.now() }, `/start ${await store.nonce()}`);
-    })();
-    expect(await telegramStep(io)).toBe("next");
-    await claimed;
-    expect(await pairingAt(io.home).owner()).toEqual({ channel: "telegram", senderId: "7" });
+    const owned = await tg([""]);
+    await writeFile(join(owned.home, "gateway.json"), JSON.stringify({ telegram: { botToken: server.token } }));
+    await pairingAt(owned.home).approveSender("telegram", "7");
+    await pairingAt(owned.home).setOwner("telegram", "7");
+    expect(await telegramStep(owned)).toBe("next");
+    expect(owned.out()).toContain("You're already the owner of @tropos_bot.");
+    expect(await new OwnerClaimStore(owned.home).isOpen()).toBe(false);
   });
 
   test("declining, going back, and --quick", async () => {

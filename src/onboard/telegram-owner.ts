@@ -2,7 +2,7 @@
 // Nobody is approved from a message alone: the person at the computer picks the sender ("is this you?"), and only a
 // sender who wrote while the listening window was open can be picked.
 import { join } from "node:path";
-import { OwnerClaimStore, candidateFrom, type OwnerCandidateView } from "../gateway/owner-claim";
+import { OWNER_GREETING, OwnerClaimStore, candidateFrom, type OwnerCandidateView } from "../gateway/owner-claim";
 import { FilePairing } from "../gateway/pairing";
 import { TelegramApi, TelegramError } from "../gateway/telegram/api";
 import { readStateFile } from "../doctor/util";
@@ -10,7 +10,7 @@ import { OnboardError, type OnboardDeps } from "./engine";
 
 export type ListenMode = "direct" | "gateway";
 
-export const OWNER_GREETING = "You're connected. This chat now talks to Tropos on your computer; send me anything.";
+export { OWNER_GREETING };
 const BUSY_MESSAGE = "Another program is reading this bot's messages right now. Stop it, or do this step from the dashboard, and try again.";
 const NOT_CAUGHT = "That message wasn't seen during setup. Send the bot a message again, then pick yourself.";
 const POLL_SECONDS = 10;

@@ -6,7 +6,7 @@ import { SenderNotApprovedError, UnknownCommandError, UserFacingError } from "..
 import type { SessionState } from "../../web/protocol";
 import type { ChannelAdapter, ChatAutonomy, ChatProjects, ChatSession, ChatWorktrees, Pairing, SessionProvider, WorktreeSummary } from "../types";
 import { OWNER_ONLY_FINISH } from "../worktrees";
-import { candidateFrom, type OwnerClaimStore } from "../owner-claim";
+import { OWNER_GREETING, candidateFrom, type OwnerClaimStore } from "../owner-claim";
 import { findSecrets } from "../../tools/setup/secrets";
 import type { TelegramApi, TgCallbackQuery, TgMessage, TgUpdate } from "./api";
 import {
@@ -68,7 +68,7 @@ export interface TelegramAdapterOptions {
    * Set while `tcode setup` waits for the owner's first message: a stranger is then recorded, not given a pairing code,
    * and the owner picks them on the computer. Nobody is approved from here.
    */
-  ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add">;
+  ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add"> & Partial<Pick<OwnerClaimStore, "isAuto" | "close">>;
   /** Unanswered permission requests are denied after this long. Default 5 minutes. */
   askTimeoutMs?: number;
   log?: (message: string) => void;
@@ -172,7 +172,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private readonly worktrees: ChatWorktrees | undefined;
   private readonly loginMessage: (() => Promise<string>) | undefined;
   private readonly allowGroups: boolean;
-  private readonly ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add">;
+  private readonly ownerClaim?: Pick<OwnerClaimStore, "isOpen" | "add"> & Partial<Pick<OwnerClaimStore, "isAuto" | "close">>;
   private readonly claimReplied = new Set<string>();
   private readonly askTimeoutMs: number;
   private readonly minIntervalMs: number;
@@ -377,6 +377,21 @@ export class TelegramAdapter implements ChannelAdapter {
     // The store refuses a message dated before the window began: that sender is just a stranger.
     const recorded = await this.ownerClaim.add(candidate, msg.text).catch((e) => (this.log("recording the owner candidate failed", e), false));
     if (!recorded) return false;
+    // A window `tcode onboard` opened: the secret from the link is the proof, so whoever sent it becomes the owner now,
+    // and nobody waits at the terminal. Only while there is no owner; a later claim never replaces one.
+    if (await this.ownerClaim.isAuto?.().catch(() => false)) {
+      try {
+        if ((await this.pairing.owner()) === null) {
+          await this.pairing.approveSender(CHANNEL, candidate.senderId);
+          await this.pairing.setOwner(CHANNEL, candidate.senderId);
+          await this.ownerClaim.close?.();
+          await this.api.sendMessage(candidate.chatId, OWNER_GREETING).catch((e) => this.log("owner greeting failed", e));
+          return true;
+        }
+      } catch (e) {
+        this.log("making the owner failed", e);
+      }
+    }
     if (!this.claimReplied.has(candidate.senderId)) {
       if (this.claimReplied.size >= MAX_UNPAIRED_MEMORY) this.claimReplied.clear();
       this.claimReplied.add(candidate.senderId);

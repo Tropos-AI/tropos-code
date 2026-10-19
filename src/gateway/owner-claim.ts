@@ -1,5 +1,7 @@
-// src/gateway/owner-claim.ts — the short window in which setup listens for the owner's first Telegram message. The
-// gateway records who wrote (it never approves anyone); the owner confirms one of them on the computer.
+// src/gateway/owner-claim.ts — the window in which setup listens for the owner's first Telegram message. The dashboard
+// opens a short one: the gateway records who wrote and the owner confirms one of them on the computer. `tcode onboard`
+// opens an automatic one, so nobody has to wait at the terminal: the link's secret is the proof, and the gateway makes
+// whoever sends it the owner (only while there is none).
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -10,6 +12,9 @@ import type { TgMessage } from "./telegram/api";
 export type { OwnerCandidateView };
 
 export const OWNER_CLAIM_MINUTES = 10;
+/** An automatic window waits for the tap as long as Telegram keeps a message for the bot. */
+export const OWNER_CLAIM_AUTO_HOURS = 24;
+export const OWNER_GREETING = "You're connected. This chat now talks to Tropos on your computer; send me anything.";
 const MAX_CANDIDATES = 5;
 
 export const ownerClaimPath = (home: string) => join(home, "gateway", "owner-claim.json");
@@ -42,6 +47,8 @@ interface ClaimFile {
   /** The secret in the link. Only a sender who sends it is recorded. */
   nonce: string;
   candidates: OwnerCandidateView[];
+  /** The gateway confirms the first sender with the secret itself (opened by `tcode onboard`). */
+  auto?: boolean;
 }
 
 function parseCandidate(v: unknown): OwnerCandidateView | null {
@@ -63,13 +70,15 @@ export class OwnerClaimStore {
    * Starts a fresh window, or extends the one that is open (keeping its start and candidates). A window that has
    * expired is never revived: whatever it recorded is dropped.
    */
-  open(): Promise<void> {
+  open(opts: { auto?: boolean } = {}): Promise<void> {
     return this.locked(async () => {
       const now = this.now();
       const file = await this.read();
       const live = file !== null && file.openUntil > now;
+      const auto = opts.auto === true || (live && file.auto === true);
       await this.write({
-        openUntil: now + OWNER_CLAIM_MINUTES * 60_000,
+        openUntil: Math.max(live ? file.openUntil : 0, now + (auto ? OWNER_CLAIM_AUTO_HOURS * 3_600_000 : OWNER_CLAIM_MINUTES * 60_000)),
+        ...(auto ? { auto } : {}),
         windowStart: live ? file.windowStart : Math.floor(now / 1000) * 1000,
         generation: live ? file.generation : randomBytes(8).toString("hex"),
         nonce: live ? file.nonce : randomBytes(9).toString("base64url"),
@@ -81,6 +90,12 @@ export class OwnerClaimStore {
   async isOpen(): Promise<boolean> {
     const file = await this.read();
     return file !== null && file.openUntil > this.now();
+  }
+
+  /** True while an automatic window is open (see the top of this file). */
+  async isAuto(): Promise<boolean> {
+    const file = await this.read();
+    return file !== null && file.openUntil > this.now() && file.auto === true;
   }
 
   /** Start of the open window, or null when closed. */
@@ -135,7 +150,14 @@ export class OwnerClaimStore {
       if (typeof raw !== "object" || raw === null) return null;
       const r = raw as Record<string, unknown>;
       if (typeof r.openUntil !== "number" || typeof r.windowStart !== "number" || typeof r.generation !== "string" || typeof r.nonce !== "string" || !Array.isArray(r.candidates)) return null;
-      return { openUntil: r.openUntil, windowStart: r.windowStart, generation: r.generation, nonce: r.nonce, candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null) };
+      return {
+        openUntil: r.openUntil,
+        windowStart: r.windowStart,
+        generation: r.generation,
+        nonce: r.nonce,
+        candidates: r.candidates.map(parseCandidate).filter((c): c is OwnerCandidateView => c !== null),
+        ...(r.auto === true ? { auto: true } : {}),
+      };
     } catch {
       return null;
     }

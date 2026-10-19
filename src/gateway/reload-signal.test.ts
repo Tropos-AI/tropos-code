@@ -79,6 +79,10 @@ test("the gateway's command line, as the service and the shell start it", () => 
   expect(isGatewayCommand("vim /tmp/gateway")).toBe(false);
   expect(isGatewayCommand("python serve.py gateway")).toBe(false);
   expect(isGatewayCommand("/usr/bin/tcode status")).toBe(false);
+  // An installed version's own file, as services written before 0.5.1 run it.
+  expect(isGatewayCommand("/Users/u/.local/share/tropos/versions/0.5.0 gateway")).toBe(true);
+  expect(isGatewayCommand("/Users/u/.local/share/tropos/versions/0.5.0 status")).toBe(false);
+  expect(isGatewayCommand("/tmp/versions/0.5.0 gateway")).toBe(false);
 });
 
 test("onReloadSignal runs the handler on SIGUSR2 and stops after the returned off()", async () => {

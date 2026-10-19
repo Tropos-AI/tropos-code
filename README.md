@@ -45,9 +45,11 @@ Enter confirms, `s` skips a step (it is remembered and mentioned once later, nev
 and running it again resumes: each step reads the real state from the machine and only asks about what is not done.
 
 **The owner-link step (Telegram, no pairing code).** After the token is saved, Setup shows a link
-`https://t.me/<your bot>?start=<one-time nonce>` and a QR code for it. Tap it (or scan it) and press Start; the
-terminal then shows who wrote and asks "is this you?". Only a message carrying that nonce, within the short window,
-can become the owner, and nothing is granted until you confirm on the Mac. No code to copy.
+`https://t.me/<your bot>?start=<one-time nonce>` and a QR code for it, and moves on: nobody waits at the terminal.
+Tap it (or scan it) and press Start, now or later; the gateway makes the sender of that nonce the owner and says so in
+Telegram (at once while it runs, otherwise as soon as it starts). The nonce is shown only on your screen and works for
+24 hours, and only while there is no owner yet. No code to copy. (The dashboard's Telegram page still shows who wrote
+and asks you to confirm.)
 
 **Phone access.** The Phone step turns on Tailscale phone access (see [Phone access (Tailscale)](#phone-access-tailscale)),
 then shows the address, a QR code and a 6-digit login code. The same steps, with the same wording, are in the web UI

@@ -66,6 +66,8 @@ export interface Pairing {
   challenge(channel: string, senderId: string): Promise<PairingChallenge>;
   /** The owner approves a code on the machine. */
   approve(channel: string, code: string): Promise<{ ok: true; senderId: string } | { ok: false; reason: string }>;
+  /** Approves without a code: the sender proved who they are another way (the setup link's secret). Idempotent. */
+  approveSender(channel: string, senderId: string): Promise<void>;
   list(): Promise<PairedSender[]>;
   revoke(channel: string, senderId: string): Promise<boolean>;
   /** The one approved sender with owner rights, or null when none is set. */

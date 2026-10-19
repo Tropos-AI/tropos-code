@@ -31,6 +31,7 @@ import { readChatSettings } from "./autonomy";
 import { AUTONOMY_CHOICES } from "./copy";
 import { OnboardError } from "./errors";
 import { readOnboardingFlags, updateOnboardingFlags, writeOnboardingFlags } from "./flags";
+import { requestGatewayReload } from "../gateway/reload-signal";
 
 export const DEFAULT_SANDBOX_IMAGE = "alpine:3.22";
 const VALIDATE_TIMEOUT_MS = 15_000;
@@ -509,6 +510,8 @@ export async function verifyTelegram(deps: OnboardDeps, token: string): Promise<
 
 export async function saveTelegram(deps: OnboardDeps, token: string): Promise<void> {
   await updateConfigFile(gatewayFile(deps.home), { telegram: { botToken: token.trim() } });
+  // A gateway already running starts reading the bot now, not at its next restart.
+  await requestGatewayReload(deps.home);
 }
 
 /** The same install `tcode gateway install` does. */

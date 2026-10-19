@@ -1,18 +1,15 @@
 // src/cli/lifecycle/onboard-remote-steps.ts — the wizard's steps that reach beyond this terminal: Telegram, phone
 // access, the background service, and the closing summary. Each is drawn with the flow API.
 import { loadGatewayConfig, telegramToken } from "../../gateway/config";
-import { ownerClaimLink } from "../../gateway/owner-claim";
+import { OwnerClaimStore, ownerClaimLink } from "../../gateway/owner-claim";
 import { BOTFATHER_STEPS, BOTFATHER_URL, TAILSCALE_DOWNLOAD_URL } from "../../onboard/copy";
 import { installService, saveTelegram, telegramState, verifyTelegram } from "../../onboard/engine";
 import { OnboardError } from "../../onboard/errors";
 import { enablePhoneAccess } from "../../onboard/phone";
 import { botUsername, setupSummary } from "../../onboard/summary";
-import { BotBusyError, confirmOwner, describeCandidate, nextOwnerCandidate, telegramListenMode, type ListenMode } from "../../onboard/telegram-owner";
-import type { Spinner } from "../../ui/flow";
 import { renderQr } from "../../ui/qr";
 import { MAX_KEY_TRIES, ask, askYesNo, choose, openUrl, wrapAll, type StepHandler, type WizardIO } from "./onboard-ask";
 
-const DEFAULT_TELEGRAM_WAIT_MS = 120_000;
 const STATUS_MARK = { done: "✓", skipped: "–", todo: "–", warn: "!", error: "!" } as const;
 
 /** The QR code as frame lines, or nothing when the terminal is too narrow for it to be scannable. */
@@ -24,80 +21,19 @@ function qrLines(text: string): string[] {
 
 // ---------- Telegram ----------
 
-/** Waits for the owner to tap the link, then asks "is this you?" with the numeric id shown. */
-async function claimOwner(io: WizardIO, token: string, bot: string): Promise<"next" | "skip" | "back"> {
-  const { flow, deps, cli } = io;
-  const exclude = new Set<string>();
-  let mode: ListenMode = await telegramListenMode(deps);
-  let busy = false;
-  let shown: string | null = null;
-  let spin: Spinner | null = null;
-
-  // The window is open: show the link once, then the spinner (a spinner rewrites its line, so nothing may print above it).
-  const onWindow = ({ nonce }: { nonce: string }) => {
-    if (nonce !== shown) {
-      shown = nonce;
-      const link = ownerClaimLink(bot, nonce);
-      flow.note([...wrapAll("On your phone, tap this link (or scan the code) and press Start. That is how I know it's you:"), link, ...qrLines(link)]);
-    }
-    spin = flow.spinner();
-    spin.start("Waiting for you to tap Start in Telegram…");
-  };
-
-  for (;;) {
-    spin = null;
-    let candidate;
-    try {
-      candidate = await nextOwnerCandidate(deps, token, { mode, signal: AbortSignal.timeout(cli.telegramWaitMs ?? DEFAULT_TELEGRAM_WAIT_MS), exclude, onWindow });
-    } catch (err) {
-      (spin as Spinner | null)?.fail("Couldn't listen");
-      if (err instanceof BotBusyError && mode === "direct") {
-        // Tropos in the background is already reading this bot; ask it instead.
-        busy = true;
-        mode = "gateway";
-        flow.info(wrapAll("Another program is reading this bot's messages, so I'll listen through it."));
-        continue;
-      }
-      if (err instanceof OnboardError) {
-        flow.error(wrapAll(err.message));
-        return "skip";
-      }
-      throw err;
-    }
-    if (!candidate) {
-      (spin as Spinner | null)?.fail("No message yet");
-      if (busy) flow.warn(wrapAll(new BotBusyError().message));
-      const next = await choose(io, {
-        message: "No message yet. Enter keeps waiting, s skips.",
-        options: [
-          { value: "wait", label: "Keep waiting" },
-          { value: "stop", label: "Skip for now" },
-        ],
-        initial: "wait",
-        skip: true,
-        always: true,
-      });
-      if (next === "wait") continue;
-      return "skip";
-    }
-    (spin as Spinner | null)?.stop("Heard from someone");
-    const yes = await askYesNo(io, `${describeCandidate(candidate)}: is this you?`, true);
-    if (yes === "skip" || yes === "back") return yes;
-    if (!yes) {
-      exclude.add(candidate.senderId);
-      flow.info("Okay, I'll wait for someone else.");
-      continue;
-    }
-    try {
-      await confirmOwner(deps, token, candidate);
-    } catch (err) {
-      if (!(err instanceof OnboardError)) throw err;
-      flow.error(wrapAll(err.message));
-      continue;
-    }
-    flow.success(`You're the owner of @${bot}.`);
-    return "next";
-  }
+/**
+ * Shows the link and moves on: nobody waits here. The window is automatic, so the gateway makes whoever sends the
+ * link's secret the owner, at once when it is running, else as soon as it starts (Telegram keeps the message for a
+ * day, and the window stays open as long). The owner hears it in Telegram.
+ */
+async function showOwnerLink(io: WizardIO, bot: string): Promise<"next"> {
+  const { flow, deps } = io;
+  const claim = new OwnerClaimStore(deps.home);
+  await claim.open({ auto: true });
+  const link = ownerClaimLink(bot, (await claim.nonce())!);
+  flow.note([...wrapAll("On your phone, tap this link (or scan the code) and press Start, now or later. That is how I know it's you:"), link, ...qrLines(link)]);
+  flow.info(wrapAll("No need to wait here: Telegram tells you when you're connected."));
+  return "next";
 }
 
 export const telegramStep: StepHandler = async (io) => {
@@ -143,7 +79,7 @@ export const telegramStep: StepHandler = async (io) => {
     flow.success(`You're already the owner of @${bot}.`);
     return "next";
   }
-  return claimOwner(io, token, bot!);
+  return showOwnerLink(io, bot!);
 };
 
 // ---------- phone access ----------
