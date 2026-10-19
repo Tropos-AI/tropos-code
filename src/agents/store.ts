@@ -286,7 +286,9 @@ export async function undoSpecialist(home: string, id: string, ledger: Ledger): 
     await safeDirInside(agentsDir(home), dir);
     const archive = await safeDirInside(agentsDir(home), join(agentsDir(home), ARCHIVE_DIR), true);
     const target = await freeName(archive, `${id}-${new Date().toISOString().slice(0, 10)}`);
-    await rename(dir, target);
+    // The ledger drops a folder it emptied (a specialist with only its AGENT.md).
+    if (await exists(dir)) await rename(dir, target);
+    else await mkdir(target, { recursive: true, mode: 0o700 });
     await writeFileNoFollow(join(target, AGENT_FILE), text);
     return res;
   }

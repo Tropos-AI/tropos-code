@@ -1,6 +1,7 @@
 // src/web/admin/index.ts — the admin dispatcher: one table of handlers, composed from the area modules.
 import { ADMIN_METHODS, type AdminMethod } from "./api";
 import { AdminError, type AdminCaller, type AdminContext, type AdminHandlers } from "./context";
+import { agentsHandlers } from "./agents";
 import { autonomyHandlers } from "./autonomy";
 import { backupHandlers } from "./backup";
 import { channelsHandlers } from "./channels";
@@ -46,6 +47,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...autonomyHandlers(ctx),
     ...devicesHandlers(ctx),
     ...remoteHandlers(ctx),
+    ...agentsHandlers(ctx),
     ...extra,
   };
   return {

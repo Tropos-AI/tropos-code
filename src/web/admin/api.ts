@@ -492,6 +492,28 @@ export interface RemoteAdmin {
   "remote.disable": { params: undefined; result: RemoteView };
 }
 
+export interface SpecialistRunView { ts: string; task: string; ok: boolean; result: string; durationMs: number; costUsd?: number }
+export interface SpecialistView {
+  id: string; name: string; emoji?: string; description: string; contract: string;
+  model?: string; tools: string[] | null; autonomy?: AutonomyLevel;
+  createdBy: "user" | "chief" | "review"; createdAt: number; revision: number;
+  paused: boolean; archived: boolean; archivedDir?: string;
+  skills: string[]; memoryChars: number; runs: SpecialistRunView[];
+  revisions: Array<{ revision: number; savedAt: number }>;
+  /** The change Undo reverts, when there is one. */
+  undoable?: { summary: string };
+}
+export interface AgentRoster { chief: { name: string; emoji?: string; model: string }; specialists: SpecialistView[]; archived: SpecialistView[]; limit: number }
+export interface SpecialistEdit { description?: string; contract?: string; model?: string | null; tools?: string[] | null; emoji?: string | null; autonomy?: AutonomyLevel | null }
+export interface AgentsAdmin {
+  "agents.roster": { params: undefined; result: AgentRoster };
+  "agents.update": { params: { id: string; revision: number; changes: SpecialistEdit }; result: AgentRoster };
+  "agents.setPaused": { params: { id: string; paused: boolean }; result: AgentRoster };
+  "agents.archive": { params: { id: string }; result: AgentRoster };
+  "agents.restore": { params: { dir: string }; result: AgentRoster };
+  "agents.undo": { params: { id: string }; result: AgentRoster };
+}
+
 // ---------- the whole API ----------
 
 export type AdminMap = StatusAdmin &
@@ -510,7 +532,8 @@ export type AdminMap = StatusAdmin &
   OnboardAdmin &
   AutonomyAdmin &
   DevicesAdmin &
-  RemoteAdmin;
+  RemoteAdmin &
+  AgentsAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -598,4 +621,10 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "remote.status",
   "remote.enable",
   "remote.disable",
+  "agents.roster",
+  "agents.update",
+  "agents.setPaused",
+  "agents.archive",
+  "agents.restore",
+  "agents.undo",
 ];
