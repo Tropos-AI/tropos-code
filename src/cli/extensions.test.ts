@@ -304,8 +304,8 @@ test("reloadAgents picks up an agent file written after startup, in the same lis
   // AgentManage, wired by sessionTools, reloads after it writes.
   const tools = sessionTools([], ext, { home, cwd, holder: {}, sessionId: () => "s" });
   const { makeToolContext } = await import("../../test/helpers/tool-context");
-  await tools.find((t) => t.name === "AgentManage")!.run({ action: "create", name: "ana", description: "Analyses", prompt: "You analyse." }, makeToolContext());
-  expect(list.some((a) => a.name === "ana")).toBe(true);
+  await tools.find((t) => t.name === "AgentManage")!.run({ action: "update", name: "george", emoji: "🧭" }, makeToolContext());
+  expect(list.find((a) => a.name === "george")?.emoji).toBe("🧭");
 });
 
 test("context extras: the setup reminder is appended last, only when there is one", async () => {
