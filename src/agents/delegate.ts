@@ -1,7 +1,7 @@
 // src/agents/delegate.ts
 import { join } from "node:path";
 import { INTERRUPTED } from "../agent/agent";
-import { filterTools, HUB_ONLY_TOOLS, resolveAgentModel, runSubagent, subagentSystem, type SubagentDeps } from "../agent/subagent";
+import { filterTools, HUB_ONLY_TOOLS, resolveAgentModel, runSubagent, subagentSystem, type SubagentDeps, type SubagentRun } from "../agent/subagent";
 import { isAnthropicModelId } from "../config/settings";
 import { agentLabel } from "../extensions/agents";
 import { loadSkills, skillListing, type Skill } from "../extensions/skills";
@@ -22,6 +22,10 @@ import { parseRule, type Rule } from "../permissions/rules";
 import { agentsDir } from "../paths";
 import { createSkillTool } from "../tools/skill/skill";
 import type { AnyTool, ToolContext, ToolOutput } from "../tools/types";
+import { runReviewAgent, specialistLearnedNotice } from "../learning/review";
+import { SPECIALIST_REVIEW_ALLOWED_TOOLS, SPECIALIST_SELF_REVIEW_PROMPT } from "../learning/review-prompts";
+import { ReadState } from "../tools/read-state";
+import { MemoryTodoStore } from "../tools/todo/todo";
 import { recordRun, type DelegationRun } from "./runs";
 import { ARCHIVE_DIR, loadSpecialists, MAX_PARALLEL_SPECIALISTS, type Specialist } from "./specialists";
 
@@ -198,7 +202,8 @@ export async function specialistKit(spec: Specialist, deps: SpecialistDeps, cwd:
     ...t,
     run: async (input, ctx) => {
       const out = await t.run(input, ctx);
-      const text = out.isError ? undefined : savedNotice(t.name, input);
+      // The learning review announces its saves in one line of its own.
+      const text = out.isError || ctx.actor === "review" ? undefined : savedNotice(t.name, input);
       if (text) deps.notice(`${text} (${label})`);
       return out;
     },
@@ -222,6 +227,49 @@ export async function specialistKit(spec: Specialist, deps: SpecialistDeps, cwd:
       deps.specialistContext([skillListing(skills), await notesContext(notes, { targets: ["memory"] }), await dailyNotesContext(journal)]),
   };
 }
+
+/** What a review needs from the run it follows: the run's tool context, permissions and model. */
+export interface SpecialistReviewEnv {
+  ctx: ToolContext;
+  permissions(): PermissionContext;
+  model: string;
+}
+
+/** After a run that used tools: the specialist reads its own transcript and may update only its own memory and skills. */
+export function startSpecialistReview(spec: Specialist, kit: SpecialistKit, run: SubagentRun, deps: SpecialistDeps, env: SpecialistReviewEnv): void {
+  if (!deps.learn || !run.ok || run.toolUses === 0 || run.messages.length === 0) return;
+  const { ctx } = env;
+  const work = (async () => {
+    // Bounded: a hung review must not hold the session's end.
+    const result = await runReviewAgent({
+      model: deps.model,
+      tools: kit.tools,
+      system: kit.system,
+      config: () => ({ ...deps.config(), model: env.model }),
+      permissions: env.permissions,
+      hooks: deps.hooks,
+      toolContext: {
+        cwd: ctx.cwd,
+        setCwd: ctx.setCwd,
+        allowedDirs: ctx.allowedDirs,
+        readState: new ReadState(),
+        todos: new MemoryTodoStore(),
+        jobs: ctx.jobs,
+        shell: ctx.shell,
+        exec: ctx.exec,
+      },
+      history: run.messages,
+      prompt: SPECIALIST_SELF_REVIEW_PROMPT,
+      signal: AbortSignal.timeout(SPECIALIST_REVIEW_TIMEOUT_MS),
+      allowed: SPECIALIST_REVIEW_ALLOWED_TOOLS,
+    });
+    deps.recordCost?.(result.costUsd);
+    if (result.changes.length > 0) deps.notice(specialistLearnedNotice(agentLabel(spec), result.changes));
+  })().catch(() => {});
+  deps.background(work);
+}
+
+const SPECIALIST_REVIEW_TIMEOUT_MS = 60_000;
 
 /** Runs one specialist on a task for the chief and logs the run; its report is the tool result. */
 export async function runSpecialist(
@@ -261,6 +309,7 @@ export async function runSpecialist(
           cwd: ctx.cwd(),
         };
         logged = recordRun(deps.home, entry).catch(() => {});
+        startSpecialistReview(spec, kit, run, deps, { ctx, permissions, model: specialistModel(spec, deps.config().model) });
       },
     );
     await logged;

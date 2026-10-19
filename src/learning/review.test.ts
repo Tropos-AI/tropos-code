@@ -10,7 +10,7 @@ import { compileRules } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
 import { toolToApi } from "../api/model";
 import { defineTool, type Actor, type AnyTool } from "../tools/types";
-import { FINAL_PROMPT, FLUSH_PROMPT, MEMORY_REVIEW_PROMPT, NOTHING, REVIEW_ALLOWED_TOOLS, REVIEW_WRITE_TOOLS } from "./review-prompts";
+import { FINAL_PROMPT, FLUSH_PROMPT, MEMORY_REVIEW_PROMPT, NOTHING, REVIEW_ALLOWED_TOOLS, REVIEW_WRITE_TOOLS, SPECIALIST_SELF_REVIEW_PROMPT } from "./review-prompts";
 import {
   LearningLoop,
   REVIEW_PROMPTS,
@@ -19,6 +19,7 @@ import {
   reviewAskPermission,
   reviewToolGate,
   runReviewAgent,
+  specialistLearnedNotice,
   type LearningLoopDeps,
   type ReviewKind,
   type ReviewResult,
@@ -786,5 +787,19 @@ describe("review prompts", () => {
 
   test("the write tools are a subset of the allowed tools", () => {
     for (const name of REVIEW_WRITE_TOOLS) expect(REVIEW_ALLOWED_TOOLS).toContain(name);
+  });
+});
+
+describe("specialist self-review", () => {
+  test("its prompt speaks of the specialist's role and never of the user's memory", () => {
+    expect(SPECIALIST_SELF_REVIEW_PROMPT).toContain("your role");
+    expect(SPECIALIST_SELF_REVIEW_PROMPT).not.toContain('target "user"');
+  });
+
+  test("specialistLearnedNotice names the specialist and clips", () => {
+    expect(specialistLearnedNotice("🔍 reviewer", [{ tool: "Memory", summary: "Memory add memory: x" }, { tool: "SkillManage", summary: "SkillManage create lint" }])).toBe(
+      "💡 🔍 reviewer learned: Memory add memory: x; SkillManage create lint",
+    );
+    expect(specialistLearnedNotice("r", [{ tool: "Memory", summary: "y".repeat(400) }]).length).toBe(160);
   });
 });

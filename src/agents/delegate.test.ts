@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -247,4 +247,48 @@ test("a specialist's save is announced with its label", async () => {
   expect(notices).toEqual(["💡 Remembered: PRs need a changelog line (🔍 reviewer)"]);
   await kit.tools.find((t) => t.name === "Memory")!.run({ action: "add", target: "user", content: "x" }, ctx());
   expect(notices).toHaveLength(1);
+});
+
+describe("a specialist learns from its own run", () => {
+  const readStep = () => reply([toolUseBlock("t1", "Read", { path: "/repo/a.ts" })], "tool_use");
+  const learnSteps = (): Array<() => ReturnType<typeof reply>> => [
+    readStep,
+    () => reply([textBlock("report")]),
+    () => reply([toolUseBlock("m1", "Memory", { action: "add", target: "memory", content: "Changelog line needed on every PR" })], "tool_use"),
+    () => reply([textBlock("NOTHING")]),
+  ];
+  async function run(over: Partial<SpecialistDeps>, steps = learnSteps()) {
+    const jobs: Promise<void>[] = [];
+    const notices: string[] = [];
+    const model = new FakeModel(steps);
+    await mkdir(join(home, "workspace"), { recursive: true });
+    await writeFile(workspaceFile(home, "MEMORY.md"), "chief note\n");
+    const out = await runSpecialist({ ...spec, emoji: "🔍" }, "go", "go", { ...makeDeps(model), learn: true, notice: (t) => notices.push(t), background: (w) => void jobs.push(w), ...over }, ctx(), new SpecialistSlots());
+    await Promise.all(jobs);
+    return { out, model, notices, jobs };
+  }
+
+  test("after a run that used tools, the review writes only its own memory and says so once", async () => {
+    const { model, notices } = await run({});
+    expect(await readFile(join(spec.dir, "MEMORY.md"), "utf8")).toContain("Changelog line");
+    expect(await readFile(workspaceFile(home, "MEMORY.md"), "utf8")).toBe("chief note\n");
+    expect(notices).toEqual(["💡 🔍 reviewer learned: Memory add memory: Changelog line needed on every PR"]);
+    // Its history is the child's messages and its system prompt is the specialist's.
+    const review = model.requests[2]!;
+    expect(JSON.stringify(review.messages)).toContain("a.ts");
+    expect(String(review.system)).toContain("Review pull requests.");
+    expect(JSON.stringify(review.messages.at(-1))).toContain("your role");
+  });
+
+  test("no review when learning is off, no tool was used, or the run failed", async () => {
+    expect((await run({ learn: false }, [readStep, () => reply([textBlock("r")])])).model.requests).toHaveLength(2);
+    expect((await run({}, [() => reply([textBlock("r")])])).model.requests).toHaveLength(1);
+    expect((await run({}, [readStep, () => reply([textBlock("x")], "refusal")])).model.requests).toHaveLength(2);
+  });
+
+  test("a review that can't use the model fails quietly", async () => {
+    const { out, notices } = await run({}, [readStep, () => reply([textBlock("report")]), () => { throw new Error("boom"); }]);
+    expect(out.isError).toBeUndefined();
+    expect(notices).toEqual([]);
+  });
 });

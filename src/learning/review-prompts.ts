@@ -32,6 +32,13 @@ const MEMORY_RULES =
   'Lessons about how to work (corrections, what failed and what worked) go to Memory target "lessons". ' +
   "When a store is full, consolidate in one Memory call with operations: remove or merge entries and add the merged one. Never only remove.";
 
+const SPECIALIST_MEMORY_RULES =
+  'Memory (the Memory tool, target "memory") holds short declarative facts about your work that stay true across runs: ' +
+  "conventions of the projects you work on, what the user's requests usually need, lessons about how to do your role well. " +
+  'Write facts, not commands ("PRs here need a changelog line", not "Always add a changelog line"), and never task logs or progress reports. ' +
+  "Prefer replacing an outdated entry (action replace) over adding a near-duplicate. " +
+  "When the store is full, consolidate in one Memory call with operations: remove or merge entries and add the merged one. Never only remove.";
+
 const SKILL_RULES =
   "Skills (the SkillManage tool) hold reusable procedures. In order of preference:\n" +
   "1. patch a skill that was loaded in this conversation (load it with the Skill tool first so you edit what is really there);\n" +
@@ -106,3 +113,17 @@ export const FINAL_PROMPT = join(
   NEVER,
   FOOTER,
 );
+
+/** After a specialist's run: it reviews its own transcript and may change only its own memory and skills. */
+export const SPECIALIST_SELF_REVIEW_PROMPT = join(
+  HEADER,
+  "You are reviewing your own run as the specialist named in your role contract. Keep only what will help you do your role next time.",
+  SIGNALS,
+  SPECIALIST_MEMORY_RULES,
+  SKILL_RULES,
+  NEVER,
+  FOOTER,
+);
+
+/** The tools a specialist's self-review may run (no journal, no setup changes). */
+export const SPECIALIST_REVIEW_ALLOWED_TOOLS = ["Memory", "SkillManage", "Skill", "Read", "Glob", "Grep"];

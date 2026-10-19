@@ -85,6 +85,12 @@ export function learnedNotice(changes: ReviewResult["changes"]): string {
   return text.length > NOTICE_MAX ? `${text.slice(0, NOTICE_MAX - 1)}…` : text;
 }
 
+/** The notice for a specialist's own review: `💡 <label> learned: …`, clipped like learnedNotice. */
+export function specialistLearnedNotice(label: string, changes: ReviewResult["changes"]): string {
+  const text = `💡 ${label} learned: ${changes.map((c) => c.summary).join("; ")}`;
+  return text.length > NOTICE_MAX ? `${text.slice(0, NOTICE_MAX - 1)}…` : text;
+}
+
 /** One per runtime. Feed it the main agent's events; it decides when a review runs and keeps at most one in flight. */
 export class LearningLoop {
   /** User turns since the main agent last saved to memory (or since the last memory review). */
@@ -400,6 +406,8 @@ export interface RunReviewAgentOptions {
   hooks?: AgentHooks;
   /** Tool implementations swapped in under the same name and schema (see reviewToolGate). */
   overrides?: Record<string, Pick<AnyTool, "subject" | "run">>;
+  /** The tools the review may run; default REVIEW_ALLOWED_TOOLS. */
+  allowed?: readonly string[];
 }
 
 const REVIEW_MAX_TURNS = 16;
@@ -414,7 +422,7 @@ export async function runReviewAgent(opts: RunReviewAgentOptions): Promise<Revie
   const agent = new Agent(
     {
       model: opts.model,
-      tools: reviewToolGate(opts.tools, REVIEW_ALLOWED_TOOLS, opts.overrides),
+      tools: reviewToolGate(opts.tools, opts.allowed ?? REVIEW_ALLOWED_TOOLS, opts.overrides),
       system: opts.system,
       config: opts.config,
       // Always "default": plan mode would refuse the review's own writes, and bypass/acceptEdits would skip
@@ -428,7 +436,7 @@ export async function runReviewAgent(opts: RunReviewAgentOptions): Promise<Revie
       persist: async () => {},
       toolContext: { ...opts.toolContext, actor: "review" },
       maxTurns: opts.maxTurns ?? REVIEW_MAX_TURNS,
-      hooks: opts.hooks && reviewHooks(opts.hooks),
+      hooks: opts.hooks && reviewHooks(opts.hooks, opts.allowed ?? REVIEW_ALLOWED_TOOLS),
       emit: (event) => {
         if (event.type === "tool_start") started.set(event.id, event.summary);
         else if (event.type === "tool_end" && event.status === "done" && REVIEW_WRITE_TOOLS.includes(event.name)) {
@@ -447,11 +455,11 @@ export async function runReviewAgent(opts: RunReviewAgentOptions): Promise<Revie
  * The user's hooks as the review sees them: only tool events, only for tools the review may run (a refused call
  * never reaches a hook), and a hook's "ask" becomes a deny, since nobody is there to answer.
  */
-function reviewHooks(hooks: AgentHooks): AgentHooks {
+function reviewHooks(hooks: AgentHooks, allowed: readonly string[]): AgentHooks {
   return {
     has: (event) => TOOL_HOOKS.has(event) && hooks.has(event),
     run: async (event, input, match, signal) => {
-      if (match === undefined || !REVIEW_ALLOWED_TOOLS.includes(match)) return { additionalContext: [], messages: [], errors: [] };
+      if (match === undefined || !allowed.includes(match)) return { additionalContext: [], messages: [], errors: [] };
       const out = await hooks.run(event, input, match, signal);
       return out.permission === "ask" ? { ...out, permission: "deny", permissionReason: out.permissionReason ?? "a hook asks for confirmation, and the learning review can't ask" } : out;
     },
