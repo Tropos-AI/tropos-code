@@ -13,7 +13,7 @@ import { Formatters } from "../format/formatters";
 import { HookRunner, type HookRunnerConfig } from "../hooks/runner";
 import { LspManager } from "../lsp/manager";
 import { McpManager } from "../mcp/manager";
-import { bootstrapContext, bootstrapPending, createIdentityTool, identityContext, loadIdentity } from "../context/identity";
+import { bootstrapContext, bootstrapPending, createIdentityTool, identityContext, loadBootstrap, loadIdentity } from "../context/identity";
 import { Ledger } from "../learning/ledger";
 import { SkillTracker } from "../learning/skill-tracker";
 import { createDailyNoteTool, DailyNotes, dailyNotesContext } from "../memory/daily";
@@ -242,7 +242,9 @@ export async function contextExtras(
     return [skills, ext.notes ? await notesContext(ext.notes, { targets: ["memory"] }).catch(() => "") : ""];
   }
   const identity = identityContext(await loadIdentity(opts.home).catch(() => ({})));
-  const bootstrap = opts.bootstrap && (await bootstrapPending(opts.home).catch(() => false)) ? bootstrapContext() : "";
+  const pending = opts.bootstrap && (await bootstrapPending(opts.home).catch(() => false));
+  const bootText = pending ? await loadBootstrap(opts.home) : null;
+  const bootstrap = bootText === null ? "" : bootstrapContext(bootText);
   return [
     identity,
     bootstrap,

@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FilePairing } from "../gateway/pairing";
-import { saveIdentity } from "../context/identity";
+import { BOOTSTRAP_TEXT, saveIdentity } from "../context/identity";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
 import { checkSandbox, computeOnboardState, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
 import { STEP_WHY } from "./copy";
@@ -22,6 +22,8 @@ const stepOf = (s: Awaited<ReturnType<typeof computeOnboardState>>, id: string) 
 
 describe("computeOnboardState", () => {
   test("a bare machine lists the ten steps in order; only provider and model are required", async () => {
+    await mkdir(join(home, "workspace"), { recursive: true });
+    await writeFile(join(home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
     const s = await computeOnboardState(testDeps(home), { health: false });
     expect(s.steps.map((x) => x.id)).toEqual(["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"]);
     expect(s.steps.filter((x) => !x.optional).map((x) => x.id)).toEqual(["provider", "model"]);
@@ -34,6 +36,8 @@ describe("computeOnboardState", () => {
   test("identity, projects, autonomy, telegram and phone are read from the machine", async () => {
     const appDir = join(root, "app");
     await mkdir(appDir);
+    await mkdir(join(home, "workspace"), { recursive: true });
+    await writeFile(join(home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
     await saveIdentity(home, { name: "Ada", emoji: "🦊" });
     await writeFile(join(home, "gateway.json"), JSON.stringify({ projects: [{ id: "app", name: "app", path: appDir }], chat: { autonomy: "balanced", backend: "host" }, telegram: { botToken: "1:x" }, remoteAccess: { tailscale: true } }));
     const pairing = new FilePairing({ path: join(home, "gateway", "pairing.json") });

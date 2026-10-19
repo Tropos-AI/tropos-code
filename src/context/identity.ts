@@ -1,13 +1,13 @@
 // src/context/identity.ts
 import { constants } from "node:fs";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorText } from "../error-text";
 import { blockedPlaceholder, scanText } from "../learning/threats";
 import { atomicWrite } from "../memory/notes";
 import { resolveLayoutPath } from "../home/layout";
-import { isInside } from "../paths";
+import { isInside, workspaceFile } from "../paths";
 import { makeDiff } from "../tools/diff";
 import { resolveToolPath } from "../tools/paths";
 import { defineTool, type Actor, type AnyTool, type ToolOutput } from "../tools/types";
@@ -15,7 +15,7 @@ import { neutraliseHarnessTags } from "./tags";
 
 /**
  * The agent's identity: IDENTITY.md (name, emoji, vibe) and SOUL.md (voice and values, free text) in the
- * workspace, and identity.json (first-run state) at the Tropos home. Both Markdown files are prompt text the
+ * workspace, and BOOTSTRAP.md (the first-run ritual, deleted when done). All Markdown files are prompt text the
  * agent may write, so they are neutralised on load and never authorize anything.
  */
 export interface Identity {
@@ -151,25 +151,35 @@ export async function loadIdentity(home: string): Promise<Identity> {
   return id;
 }
 
-interface IdentityState {
-  bootstrapped?: boolean;
+/** BOOTSTRAP.md rides in the first session's context: a hard cap keeps it a note, not a manual. */
+const MAX_BOOTSTRAP_CHARS = 4_000;
+
+/** The first-run ritual; a new install gets it as workspace/BOOTSTRAP.md and the agent deletes it when done. */
+export const BOOTSTRAP_TEXT = `# BOOTSTRAP.md
+
+This is your first session with this user, and you don't have a name yet.
+- Handle the user's request first. The ritual below comes after it or alongside it, never instead of it.
+- At a natural moment (a pause, or the end of your first reply), ask what they'd like to call you. Propose a one-line vibe and one emoji to go with it; if they veto one, offer another once.
+- Save the result with the Identity tool, action "set" (name, emoji, vibe). If they don't care to choose, call Identity with action "skip".
+- Don't invent a name without asking. Mention this once, not every turn.
+- Saving or skipping deletes this file, and the ritual doesn't come back.
+`;
+
+const bootstrapPath = (home: string): string => workspaceFile(home, "BOOTSTRAP.md");
+
+/** workspace/BOOTSTRAP.md (≤ 4,000 chars), threat-scanned; null when absent or unreadable. */
+export async function loadBootstrap(home: string): Promise<string | null> {
+  const text = await readSmall(bootstrapPath(home)).catch(() => null);
+  if (text === null) return null;
+  const scan = scanText(text);
+  if (!scan.ok) return blockedPlaceholder(scan.reason);
+  return text.slice(0, MAX_BOOTSTRAP_CHARS);
 }
 
-async function readState(home: string): Promise<IdentityState> {
-  try {
-    const text = await readSmall(join(home, IDENTITY_STATE_FILE));
-    const data: unknown = text === null ? {} : JSON.parse(text);
-    return data !== null && typeof data === "object" && !Array.isArray(data) ? (data as IdentityState) : {};
-  } catch {
-    // A corrupt state file means "not bootstrapped": at worst the user is asked once more.
-    return {};
-  }
-}
-
-/** True until the agent has a name or the first-run ritual was done or declined. */
+/** True only while BOOTSTRAP.md exists and the agent has no name. identity.json is not read any more. */
 export async function bootstrapPending(home: string): Promise<boolean> {
-  if ((await loadIdentity(home)).name) return false;
-  return (await readState(home)).bootstrapped !== true;
+  if ((await loadBootstrap(home)) === null) return false;
+  return !(await loadIdentity(home)).name;
 }
 
 /**
@@ -189,10 +199,9 @@ async function writeHomeFile(target: string, text: string): Promise<void> {
   await atomicWrite(target, text);
 }
 
+/** Ends the first-run ritual by deleting BOOTSTRAP.md; nothing to do when it is gone. */
 export async function markBootstrapped(home: string): Promise<void> {
-  const target = homeFile(home, join(home, IDENTITY_STATE_FILE));
-  const state = await readState(home);
-  await writeHomeFile(target, `${JSON.stringify({ ...state, bootstrapped: true }, null, 2)}\n`);
+  await rm(homeFile(home, bootstrapPath(home)), { force: true });
 }
 
 /** The <identity> context block, or "" when nothing is set. All user-editable text is neutralised. */
@@ -208,19 +217,9 @@ export function identityContext(id: Identity): string {
   return `<identity source="user">\n${lines.join("\n")}\n</identity>`;
 }
 
-const BOOTSTRAP_NOTE = [
-  "<bootstrap>",
-  "This is your first session with this user, and you don't have a name yet.",
-  "- Handle the user's request first. The ritual below comes after it or alongside it, never instead of it.",
-  "- At a natural moment (a pause, or the end of your first reply), ask what they'd like to call you. Propose a one-line vibe and one emoji to go with it; if they veto one, offer another once.",
-  '- Save the result with the Identity tool, action "set" (name, emoji, vibe). If they don\'t care to choose, call Identity with action "skip".',
-  "- Don't invent a name without asking. Mention this once, not every turn.",
-  "</bootstrap>",
-].join("\n");
-
-/** The first-run note; add it to the context only while bootstrapPending is true. */
-export function bootstrapContext(): string {
-  return BOOTSTRAP_NOTE;
+/** The first-run note around the file's text; add it to the context only while bootstrapPending is true. */
+export function bootstrapContext(text: string = BOOTSTRAP_TEXT): string {
+  return `<bootstrap>\n${neutraliseHarnessTags(text.trim())}\n</bootstrap>`;
 }
 
 /** One line for a subagent's system prompt, e.g. "You are the explore agent 🔎, working for the main agent." */
@@ -301,8 +300,8 @@ function fieldProblem(field: Field, value: string): string | undefined {
 }
 
 function targetsFor(home: string, action: Input["action"]): string[] {
-  const state = join(home, IDENTITY_STATE_FILE);
-  const files = action === "set" ? [identityPath(home), state] : action === "soul" ? [soulPath(home)] : [state];
+  const boot = bootstrapPath(home);
+  const files = action === "set" ? [identityPath(home), boot] : action === "soul" ? [soulPath(home)] : [boot];
   return files.map((file) => homeFile(home, file));
 }
 

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { saveIdentity } from "../context/identity";
+import { BOOTSTRAP_TEXT, saveIdentity } from "../context/identity";
 import { addProject } from "../gateway/projects";
 import { finish } from "./engine";
 import { readOnboardingFlags } from "./flags";
@@ -52,6 +52,8 @@ test("guests, scheduled runs and print mode get nothing; a step done since is no
 
 test("openSkippedSteps lists only skipped steps still undone, in step order", async () => {
   const deps = testDeps(home);
+  await mkdir(join(home, "workspace"), { recursive: true });
+  await writeFile(join(home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
   await finish(deps, { skipped: ["projects", "identity", "service"] });
   expect(await openSkippedSteps(deps)).toEqual(["identity", "projects", "service"]);
   await saveIdentity(home, { name: "Ada" });

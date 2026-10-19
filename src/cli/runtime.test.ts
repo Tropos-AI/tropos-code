@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { BOOTSTRAP_TEXT } from "../context/identity";
 import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProviderRouter } from "../providers/router";
@@ -525,6 +526,8 @@ describe("learning and identity", () => {
   test("the main context carries the identity, and the first-run note only when interactive and unnamed", async () => {
     const model = await setup([text("a"), text("b"), text("c")]);
     const firstMessage = (i: number) => JSON.stringify(model.requests[i]!.messages[0]);
+    await mkdir(join(ctx.home, "workspace"), { recursive: true });
+    await writeFile(join(ctx.home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
     await (await agentFor({ interactive: true })).agent.run("hi", signal());
     expect(firstMessage(0)).toContain("<bootstrap>");
     expect(firstMessage(0)).not.toContain("<identity");

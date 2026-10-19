@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { DEFAULT_SETTINGS, type Settings } from "../config/settings";
+import { BOOTSTRAP_TEXT } from "../context/identity";
 import { skillListing } from "../extensions/skills";
 import { ReadState } from "../tools/read-state";
 import { createTools } from "../tools/registry";
@@ -173,9 +174,13 @@ test("context extras: identity, bootstrap, skills listing, notes and daily notes
   await ext.notes!.add("user", "Prefers bun");
   await ext.notes!.add("memory", "Tests are colocated");
   await ext.daily!.append("Moved the parser to src/parse");
+  // Without BOOTSTRAP.md (a finished or migrated home) no ritual starts.
+  expect((await contextExtras(ext, () => "", { home, scope: "main", bootstrap: true }))[1]).toBe("");
+  await put(join(home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
   const [identity, bootstrap, skills, notes, daily] = await contextExtras(ext, (s) => skillListing(s), { home, scope: "main", bootstrap: true });
   expect(identity).toBe("");
   expect(bootstrap).toContain("<bootstrap>");
+  expect(bootstrap).toContain("ask what they'd like to call you");
   expect(skills).toContain("- deploy: Deploy");
   expect(notes).toContain("Prefers bun");
   expect(daily).toContain("Moved the parser");

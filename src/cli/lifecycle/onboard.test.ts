@@ -6,9 +6,18 @@ import { PROVIDERS } from "../../providers/registry";
 import type { Flow } from "../../ui/flow";
 import { engineFakes, scriptAnswers, scriptedFlow } from "./onboard-test-kit";
 import { fakeRunner } from "../../doctor/testing";
-import { makeFixture, type Fixture } from "./lifecycle-fixture";
+import { makeFixture as baseFixture, type Fixture } from "./lifecycle-fixture";
+import { BOOTSTRAP_TEXT } from "../../context/identity";
 import { runOnboard, type OnboardCliDeps } from "./onboard";
 import type { LifecycleContext } from "./types";
+
+/** A fresh install carries the first-run ritual file, so the identity step starts open. */
+const makeFixture: typeof baseFixture = async (over) => {
+  const fx = await baseFixture(over);
+  await mkdir(join(fx.ctx.home, "workspace"), { recursive: true });
+  await writeFile(join(fx.ctx.home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
+  return fx;
+};
 
 let fx: Fixture;
 afterEach(() => fx?.cleanup());

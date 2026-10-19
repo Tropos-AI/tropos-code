@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { bootstrapPending, loadIdentity } from "../../context/identity";
+import { BOOTSTRAP_TEXT, bootstrapPending, loadIdentity } from "../../context/identity";
 import { listProjects } from "../../gateway/projects";
 import { addScannedProjects } from "../../onboard/projects-scan";
 import { readOnboardingFlags } from "../../onboard/flags";
@@ -24,9 +24,16 @@ async function repo(io: TestWizardIO, rel: string, daysAgo: number): Promise<voi
 }
 const gatewayChat = async (io: TestWizardIO) => JSON.parse(await read(io, "gateway.json")).chat;
 
+/** A fresh install carries the first-run ritual file; without it nothing is pending. */
+async function withBootstrap(io: TestWizardIO): Promise<void> {
+  await mkdir(join(io.home, "workspace"), { recursive: true });
+  await writeFile(join(io.home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
+}
+
 describe("identityStep", () => {
   test("Enter takes the first suggestion", async () => {
     const io = await wizardIO([""]);
+    await withBootstrap(io);
     expect(await identityStep(io)).toBe("next");
     expect(await loadIdentity(io.home)).toMatchObject({ name: "Tropos", emoji: "🧭", vibe: "calm, direct, gets things done" });
     expect(await bootstrapPending(io.home)).toBe(false);
@@ -50,6 +57,7 @@ describe("identityStep", () => {
 
   test("s leaves the first-chat ritual pending", async () => {
     const io = await wizardIO(["s"]);
+    await withBootstrap(io);
     expect(await identityStep(io)).toBe("skip");
     expect(await bootstrapPending(io.home)).toBe(true);
     expect(io.out()).toContain("Skipped. I'll ask for a name in our first chat.");
@@ -61,6 +69,7 @@ describe("identityStep", () => {
 
   test("--quick skips: naming is personal", async () => {
     const io = await wizardIO([], {}, { quick: true });
+    await withBootstrap(io);
     expect(await identityStep(io)).toBe("skip");
     expect(io.questions).toEqual([]);
     expect(await bootstrapPending(io.home)).toBe(true);
