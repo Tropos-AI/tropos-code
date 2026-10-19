@@ -1,6 +1,6 @@
 // src/context/identity.ts
 import { constants } from "node:fs";
-import { mkdir, open, rm } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { errorText } from "../error-text";
@@ -201,7 +201,17 @@ async function writeHomeFile(target: string, text: string): Promise<void> {
 
 /** Ends the first-run ritual by deleting BOOTSTRAP.md; nothing to do when it is gone. */
 export async function markBootstrapped(home: string): Promise<void> {
-  await rm(homeFile(home, bootstrapPath(home)), { force: true });
+  // Deal with the path as written: a symlink there is removed itself, never followed to its target.
+  const path = bootstrapPath(home);
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw error;
+  });
+  if (info === null) return;
+  const [parent, root] = await Promise.all([realpath(dirname(path)), realpath(home)]);
+  if (!isInside(parent, root)) throw new Error(`${dirname(path)} resolves outside ${root}`);
+  if (!info.isFile() && !info.isSymbolicLink()) throw new Error(`${path} is not a regular file`);
+  await unlink(path);
 }
 
 /** The <identity> context block, or "" when nothing is set. All user-editable text is neutralised. */
