@@ -882,6 +882,12 @@ describe("the review and specialists", () => {
       }
     });
 
+    test("a plain agents/<name>.md of the same name refuses every action, even beside a review-made specialist", async () => {
+      await writeFile(join(home, "agents", "made.md"), "---\nname: made\ndescription: d\n---\nx");
+      await refused({ action: "update", name: "made", description: "x" });
+      await refused({ action: "create", name: "made", tools: ["Read"] });
+    });
+
     test("without a home nothing is changed", async () => {
       const [bare] = reviewToolGate([agentManage]);
       expect((await bare!.run({ action: "create", name: "x", tools: ["Read"] } as never, ctx)).isError).toBe(true);

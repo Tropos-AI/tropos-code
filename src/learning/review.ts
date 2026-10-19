@@ -3,7 +3,7 @@
 // the conversation and saves what is worth keeping to memory and skills; near the context limit, a flush
 // review writes the session's durable state to the daily note before compaction loses it; and when the session
 // ends with unreviewed work, a final review does both.
-import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { HUB_ONLY_TOOLS } from "../agent/subagent";
 import { loadSpecialists } from "../agents/specialists";
@@ -423,7 +423,10 @@ async function unattendedSpecialistProblem(input: unknown, home: string | undefi
   const i = (typeof input === "object" && input !== null ? input : {}) as ManageInput;
   if (!home || typeof i.name !== "string") return "the review can't check this specialist.";
   const known = (await loadSpecialists(home).catch(() => [])).find((s) => s.id === i.name);
-  const taken = known !== undefined || existsSync(join(agentsDir(home), `${i.name}.md`)) || BUILTIN_AGENTS.some((b) => b.name === i.name);
+  // The same file AgentManage would write: a plain agent of this name (even a dangling link) is the owner's, whatever else exists.
+  const plain = await lstat(join(agentsDir(home), `${i.name}.md`)).then(() => true, () => false);
+  if (plain) return `a plain agent named ${i.name} exists; only the owner changes it.`;
+  const taken = known !== undefined || BUILTIN_AGENTS.some((b) => b.name === i.name);
   if (i.action === "create") {
     if (taken) return `an agent named ${i.name} already exists; update it instead, or pick another name.`;
     const allowed = chiefTools.filter((t) => !HUB_ONLY_TOOLS.has(t));
