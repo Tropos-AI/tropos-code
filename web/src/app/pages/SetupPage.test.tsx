@@ -309,6 +309,7 @@ describe("SetupPage", () => {
         dashboardUrl: "http://localhost:4317/",
         botUrl: "https://t.me/tropos_bot",
         examples: ["What changed in my project this week?"],
+        updates: "Updates install by themselves (latest channel).",
         health: { ok: 3, warn: 0, error: 0, problems: [] },
       }),
     });
@@ -316,6 +317,7 @@ describe("SetupPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: /All set/ }));
     expect(await screen.findByRole("link", { name: /t\.me\/tropos_bot/ })).toBeTruthy();
     expect(screen.getByText("What changed in my project this week?")).toBeTruthy();
+    expect(screen.getByText("Updates install by themselves (latest channel).")).toBeTruthy();
     const list = screen.getByRole("list", { name: "What is ready" });
     expect(list.textContent).toContain("Connect a model");
     expect(await screen.findByRole("list", { name: "Findings" })).toBeTruthy();

@@ -192,6 +192,15 @@ export class WebHost {
     }
   }
 
+  /**
+   * A notice from the gateway itself (an update restarting it) to every tab. An idle host follows it with its state: a
+   * tab takes an event outside a turn for the start of one.
+   */
+  notify(level: "info" | "warn" | "error", text: string): void {
+    this.broadcast({ t: "event", event: { type: "notice", level, text } });
+    if (!this.busy) this.broadcastState();
+  }
+
   private broadcastState(): void {
     this.broadcast({ t: "state", state: this.state() });
   }

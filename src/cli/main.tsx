@@ -23,6 +23,7 @@ import { layoutAtStart } from "../home/migrate";
 import { VERSION } from "../version";
 import { startNativeSession } from "../install/session";
 import { runInstallCommand, type CommandContext } from "../install/commands";
+import { productionAfterUpdate } from "./after-update";
 import type { Channel } from "../install/channels";
 import { CliError, parseInvocation, type CliOptions } from "./args";
 import { PRINT_DENY, PrintRenderer, runPrint } from "./print";
@@ -65,6 +66,8 @@ export interface MainDeps {
   /** The running executable; tests point it inside a fixture's versions/ to act as a native install. */
   execPath?: string;
   engine?: CommandContext["engine"];
+  /** What an update does next (restart the service); tests that fake the engine get nothing real by default. */
+  afterUpdate?: CommandContext["afterUpdate"];
   /** Tests override terminal detection for the native-session announcement. */
   tty?: { stdin: boolean; stdout: boolean };
   /** Tests replace parts of the lifecycle commands' context (prompts, terminal detection, clock). */
@@ -130,6 +133,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
         version: VERSION,
         settings,
         engine: deps.engine,
+        afterUpdate: deps.afterUpdate ?? (deps.engine ? undefined : productionAfterUpdate(env)),
       });
     }
     if (invocation.kind === "lifecycle") {

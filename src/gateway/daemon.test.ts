@@ -226,6 +226,49 @@ describe("tcode gateway", () => {
     }
   });
 
+  test("a newer installed version under a service: the gateway tells the dashboard, stops cleanly and exits 0 by itself", async () => {
+    await mkdir(join(dir, "project"));
+    let fire: (() => void) | undefined;
+    const g = start([], {
+      seams: {
+        selfUpdate: {
+          linked: () => "99.0.0",
+          supervised: async () => true,
+          checkForUpdates: () => {},
+          schedule: (fn) => ((fire = fn), () => (fire = undefined)),
+        },
+      },
+    });
+    while (!g.url()) await Bun.sleep(20);
+    const { key } = await testAccess(join(dir, "home"));
+    const ws = await openAuthed(`http://127.0.0.1:${new URL(g.url()!).port}`, key);
+    await ws.next((m) => m.t === "hello");
+    const notices: string[] = [];
+    ws.onMessage((m) => {
+      if (m.t === "event" && m.event.type === "notice") notices.push(m.event.text);
+    });
+    // The 5-minute look comes due (stop() is never called: the gateway ends on its own).
+    expect(fire).toBeDefined();
+    fire!();
+    expect(await g.done).toBe(0);
+    expect(g.err.join("")).toContain("updating from");
+    expect(g.err.join("")).toContain("to 99.0.0");
+    expect(notices).toEqual(["Updating to 99.0.0… The dashboard reconnects by itself in a few seconds."]);
+    expect(existsSync(join(dir, "home", "gateway", "state.json"))).toBe(false);
+    ws.ws.close();
+  });
+
+  test("SIGUSR2 also looks for a newer version; run from a terminal the gateway only prints a notice and keeps running", async () => {
+    await mkdir(join(dir, "project"));
+    const g = start([], { seams: { selfUpdate: { linked: () => "99.0.0", supervised: async () => false, checkForUpdates: () => {}, schedule: () => () => {} } } });
+    while (!g.url()) await Bun.sleep(20);
+    process.kill(process.pid, "SIGUSR2");
+    for (let i = 0; i < 100 && !g.err.join("").includes("99.0.0"); i++) await Bun.sleep(20);
+    expect(g.err.join("")).toContain("Tropos Code 99.0.0 is installed; this gateway still runs");
+    g.stop();
+    expect(await g.done).toBe(0);
+  });
+
   test("needs no workspace: it creates ~/.tropos/workspace with a .git and a README, and doesn't warn about it", async () => {
     const run = start(["--no-web"]);
     await Bun.sleep(400);

@@ -199,6 +199,20 @@ test("start fires SessionStart with notices; shutdown closes the runtime", async
   await host.shutdown();
 });
 
+test("notify tells every tab, then the idle state, so no tab thinks a turn started", async () => {
+  const { host, seen } = setup();
+  const other: ServerMessage[] = [];
+  host.attach((m) => other.push(m));
+  seen.length = 0;
+  other.length = 0;
+  host.notify("info", "Updating to 0.6.0…");
+  for (const tab of [seen, other]) {
+    expect(tab.map((m) => m.t)).toEqual(["event", "state"]);
+    expect(tab[0]).toEqual({ t: "event", event: { type: "notice", level: "info", text: "Updating to 0.6.0…" } });
+    expect(tab[1]).toMatchObject({ t: "state", state: { busy: false } });
+  }
+});
+
 test("an unknown message gets an error reply; a permission answer for a closed prompt is ignored", async () => {
   const { host } = setup();
   const replies: ServerMessage[] = [];

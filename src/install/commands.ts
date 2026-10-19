@@ -26,6 +26,12 @@ export interface CommandContext {
   settings: { autoUpdates: boolean; autoUpdatesChannel: Channel };
   /** Tests inject engine dependencies; production uses productionEngineDeps. */
   engine?: (log: (line: string) => void) => EngineDeps;
+  /**
+   * After an update moved the command to `version`: restarts the background service so it runs it (a background
+   * update only nudges the gateway, which restarts itself once idle). Returns a line for the owner. Production:
+   * src/cli/after-update.ts.
+   */
+  afterUpdate?: (version: string, opts: { background: boolean }) => Promise<string | undefined>;
 }
 
 export function productionEngineDeps(env: NodeJS.ProcessEnv, version: string, log: (line: string) => void): EngineDeps {
@@ -107,9 +113,28 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
   }
 }
 
+/** The update is in place whatever happens here: a failed restart is reported, never turned into a failed update. */
+async function restartAfter(ctx: CommandContext, version: string): Promise<void> {
+  if (!ctx.afterUpdate) return;
+  try {
+    const line = await ctx.afterUpdate(version, { background: false });
+    if (line) ctx.out(`${line}\n`);
+  } catch (e) {
+    ctx.err(`tcode: ${version} is installed, but the background service could not be restarted: ${describeError(e)}. Restart it with: tcode gateway restart\n`);
+  }
+}
+
 async function runNative(cmd: Exclude<InstallCommand, { kind: "help" | "install-self" }>, ctx: CommandContext, deps: EngineDeps, hooks: Hooks): Promise<number> {
   if (cmd.kind === "update" && cmd.background) {
-    await runBackgroundUpdate(deps, ctx.settings.autoUpdatesChannel);
+    const to = await runBackgroundUpdate(deps, ctx.settings.autoUpdatesChannel);
+    if (to && ctx.afterUpdate) {
+      try {
+        const line = await ctx.afterUpdate(to, { background: true });
+        if (line) deps.log?.(line);
+      } catch (e) {
+        deps.log?.(`after the update: ${describeError(e)}`);
+      }
+    }
     return 0;
   }
   if (cmd.kind === "install") {
@@ -123,8 +148,10 @@ async function runNative(cmd: Exclude<InstallCommand, { kind: "help" | "install-
   if (cmd.kind === "update") {
     const run = (await updateChannel(deps, ctx.settings.autoUpdatesChannel, { wait: true, ...hooks }))!;
     const r = run.value;
-    if (r.kind === "updated") ctx.out(`Updated Tropos Code from ${r.outcome.previous ?? "an unmanaged build"} to ${r.outcome.version}.\n`);
-    else if (r.kind === "up-to-date") ctx.out(`Tropos Code ${r.current} is up to date (${ctx.settings.autoUpdatesChannel}: ${r.available}).\n`);
+    if (r.kind === "updated") {
+      ctx.out(`Updated Tropos Code from ${r.outcome.previous ?? "an unmanaged build"} to ${r.outcome.version}.\n`);
+      if (r.outcome.changed) await restartAfter(ctx, r.outcome.version);
+    } else if (r.kind === "up-to-date") ctx.out(`Tropos Code ${r.current} is up to date (${ctx.settings.autoUpdatesChannel}: ${r.available}).\n`);
     else ctx.out(`Tropos Code ${r.version} is available but skipped because ${SKIP_TEXT[r.reason]}; install it with tcode install ${r.version}.\n`);
     return 0;
   }

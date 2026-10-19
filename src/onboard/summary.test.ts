@@ -37,6 +37,14 @@ describe("setupSummary", () => {
     expect((await setupSummary(testDeps(home))).dashboardUrl).toBe("http://127.0.0.1:4400");
   });
 
+  test("says updates are automatic (the default for a new install), or how to update when the owner turned them off", async () => {
+    expect((await setupSummary(testDeps(home))).updates).toBe(
+      "Updates install by themselves (latest channel), and the background service restarts into each new version when nothing is running. You can turn this off in Settings, Service & updates.",
+    );
+    await writeFile(join(home, "settings.json"), JSON.stringify({ autoUpdates: false, autoUpdatesChannel: "stable" }));
+    expect((await setupSummary(testDeps(home))).updates).toBe("Automatic updates are off: update from Settings, Service & updates, or ask me to update Tropos.");
+  });
+
   test("without a bot there is no bot link; without a project the first example is general", async () => {
     const s = await setupSummary(testDeps(home));
     expect(s.botUrl).toBeUndefined();

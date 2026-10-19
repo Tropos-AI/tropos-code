@@ -342,16 +342,30 @@ describe("Settings › Advanced › sandbox", () => {
 });
 
 describe("Settings › Service & updates › updates", () => {
-  test("shows current vs latest; Update now confirms, runs and explains the restart", async () => {
+  test("shows current vs latest; Update now confirms, runs and restarts the service itself", async () => {
     stubMatchMedia();
-    const { socket } = await mountSettingsTab("service", handlers({ "update.run": () => ({ ok: true, from: "0.5.2", to: "0.6.0", message: "Updated 0.5.2 to 0.6.0." }) }));
+    const message = "Updated 0.5.2 to 0.6.0. Restarting the background service to run 0.6.0; this page reconnects by itself.";
+    const { socket } = await mountSettingsTab("service", handlers({ "update.run": () => ({ ok: true, from: "0.5.2", to: "0.6.0", message, restarting: true }) }));
     await screen.findByText("Update available");
     fireEvent.click(screen.getByRole("button", { name: "Update now" }));
     expect(socket.adminOf("update.run").length).toBe(0);
+    expect(screen.getByText(/it restarts to run the new version/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Install update" }));
+    await screen.findByText(/Restarting the background service to run 0\.6\.0/);
+    // Nothing left for the owner to do: no "restart the gateway yourself".
+    expect(screen.queryByText(/after you restart the gateway/)).toBeNull();
+    expect(socket.adminOf("update.run")).toHaveLength(1);
+    expect(socket.adminOf("update.run")[0]!.params).toEqual({ restart: true });
+  });
+
+  test("without a running service, Update now says when the new version runs", async () => {
+    stubMatchMedia();
+    await mountSettingsTab("service", handlers({ "update.run": () => ({ ok: true, from: "0.5.2", to: "0.6.0", message: "Updated 0.5.2 to 0.6.0." }) }));
+    await screen.findByText("Update available");
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
     fireEvent.click(screen.getByRole("button", { name: "Install update" }));
     await screen.findByText(/Updated 0\.5\.2 to 0\.6\.0\./);
     expect(screen.getByText(/runs after you restart the gateway/)).toBeTruthy();
-    expect(socket.adminOf("update.run").length).toBe(1);
   });
 
   test("changes the channel, the auto-update switch and checks now", async () => {

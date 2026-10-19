@@ -298,12 +298,16 @@ test("runNow runs regardless of schedule or enabled, and refuses a job that is r
   const h = harness();
   const job = h.store.add({ ...every(60 * MIN), enabled: false, deliver: "telegram:1" });
   await h.start();
+  expect(h.service.running()).toBe(0);
   const p = h.service.runNow(job.id.slice(0, 4));
   await h.flush();
   expect(h.calls).toHaveLength(1);
+  // The gateway doesn't restart into an update while a job runs.
+  expect(h.service.running()).toBe(1);
   await expect(h.service.runNow(job.id)).rejects.toThrow(/already running/);
   h.calls[0]!.resolve("manual");
   expect(await p).toMatchObject({ status: "ok", summary: "manual" });
+  expect(h.service.running()).toBe(0);
   expect(h.delivered[0]!.text).toBe("job: manual");
   await expect(h.service.runNow("nope")).rejects.toThrow(/no job/);
   await h.service.stop();

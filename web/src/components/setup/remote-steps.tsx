@@ -341,6 +341,7 @@ export function DoneStep({ onChanged }: { onChanged: () => void }) {
               ))}
             </ul>
           </div>
+          <p className="text-[13px] text-ink-2">{summary.data.updates}</p>
         </>
       ) : (
         <p className="text-[13px] text-ink-3">Loading the summary…</p>

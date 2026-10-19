@@ -112,12 +112,14 @@ export function UpdateSection() {
                   busy={actions.busy}
                   disabled={status.running === true}
                   description="Downloads and verifies the newest release of this channel."
-                  confirm={{ message: `Install ${status.latest ? `v${status.latest.replace(/^v/, "")}` : "the newest release"}? It replaces the program files; your data is untouched.`, confirmLabel: "Install update" }}
+                  confirm={{ message: `Install ${status.latest ? `v${status.latest.replace(/^v/, "")}` : "the newest release"}? It replaces the program files; your data is untouched. If the background service runs, it restarts to run the new version and open chats pause for a few seconds.`, confirmLabel: "Install update" }}
                   onRun={() =>
                     void actions.run("run", async () => {
-                      const out = await admin("update.run");
+                      const out = await admin("update.run", { restart: true });
                       resource.refresh();
                       if (!out.ok) return { tone: "error", message: out.message };
+                      // The service restarts by itself; only a gateway without one (or an unchanged version) needs no more.
+                      if (out.restarting || !out.to || out.to === out.from) return out.message;
                       return `${out.message}\nThe new version runs after you restart the gateway (System, Service, Restart) or reopen the app.`;
                     })
                   }

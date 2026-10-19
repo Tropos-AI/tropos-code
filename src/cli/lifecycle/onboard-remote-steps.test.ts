@@ -188,6 +188,8 @@ describe("doneStep", () => {
     const text = io.out();
     expect(text).toContain("Try asking:");
     expect(text).toContain("Every weekday at 9, summarise my open pull requests.");
+    // New installs update by themselves; the owner hears it once, here.
+    expect(text).toContain("Updates install by themselves");
     expect(text).toContain("the disk is almost full");
     expect(text).toContain("Run `tcode doctor --fix`.");
     expect(text).toContain("https://t.me/tropos_bot");

@@ -6,6 +6,8 @@ import type { RunRecord } from "./types";
 
 export interface CronGatewayService extends GatewayService {
   runNow(idOrPrefix: string): Promise<RunRecord>;
+  /** How many jobs are running now. */
+  running(): number;
 }
 
 export function createCronGatewayService(opts: CronServiceOptions & { log?: (message: string) => void } = {}): CronGatewayService {
@@ -28,5 +30,6 @@ export function createCronGatewayService(opts: CronServiceOptions & { log?: (mes
     },
     stop: async () => void (await engine.stop()),
     runNow: (id) => engine.runNow(id),
+    running: () => engine.running(),
   };
 }

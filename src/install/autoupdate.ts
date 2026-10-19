@@ -23,6 +23,8 @@ export interface AutoUpdateInputs {
   autoUpdates: boolean;
   state: InstallState | null;
   now: Date;
+  /** The gateway asking: it runs for days without a terminal, so the terminal rule doesn't apply to it. */
+  gateway?: boolean;
 }
 
 export type CheckDecision = { check: true } | { check: false; reason: string };
@@ -33,7 +35,7 @@ const truthy = (v: string | undefined) => v !== undefined && v !== "" && v !== "
 export function shouldCheck(i: AutoUpdateInputs): CheckDecision {
   if (!i.native) return { check: false, reason: "not-native" };
   if (i.print) return { check: false, reason: "print-mode" };
-  if (!i.stdinTTY || !i.stdoutTTY) return { check: false, reason: "not-a-terminal" };
+  if (!i.gateway && (!i.stdinTTY || !i.stdoutTTY)) return { check: false, reason: "not-a-terminal" };
   if (truthy(i.env.CI)) return { check: false, reason: "ci" };
   if (truthy(i.env.TROPOS_DISABLE_AUTOUPDATER)) return { check: false, reason: "disabled-by-env" };
   if (!i.autoUpdates) return { check: false, reason: "disabled-by-setting" };
@@ -74,6 +76,30 @@ export function spawnBackgroundUpdate(execPath: string, layout: Layout, env: Nod
   }
 }
 
+export interface GatewayUpdateDeps {
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  layout: Layout;
+  /** The owner's setting, read again at every check so the dashboard's switch applies at once. */
+  autoUpdates: boolean;
+  /** The version the gateway runs. */
+  version: string;
+  now?: () => Date;
+  spawn?: typeof Bun.spawn;
+}
+
+/**
+ * The gateway's own check: an owner who only uses Telegram never opens a terminal, which is where checks start
+ * otherwise. Same rules (setting, env, schedule); an unmanaged local build never updates. True when one was started.
+ */
+export async function startDueGatewayUpdate(d: GatewayUpdateDeps): Promise<boolean> {
+  const read = await readState(d.layout).catch(() => ({ kind: "missing" as const }));
+  const state = read.kind === "ok" ? read.state : null;
+  const decision = shouldCheck({ env: d.env, native: true, print: false, stdinTTY: false, stdoutTTY: false, gateway: true, autoUpdates: d.autoUpdates, state, now: d.now?.() ?? new Date() });
+  if (!decision.check || !(await isManaged(d.layout, d.version))) return false;
+  return spawnBackgroundUpdate(d.execPath, d.layout, d.env, d.spawn);
+}
+
 async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: string | null): Promise<void> {
   const lock = await acquireInstallLock(deps.layout, { wait: false, version: deps.selfVersion, flock: deps.flock });
   if (!lock) return;
@@ -97,16 +123,20 @@ async function recordCheck(deps: EngineDeps, now: Date, ok: boolean, updatedTo: 
   }
 }
 
-/** `tcode update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always resolves. */
-export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
+/**
+ * `tcode update --background`: never waits for the lock, only moves forward, records the check (spec §11). Always
+ * resolves, with the version it moved to (null when nothing changed).
+ */
+export async function runBackgroundUpdate(deps: EngineDeps, channel: Channel): Promise<string | null> {
   try {
-    await backgroundUpdate(deps, channel);
+    return await backgroundUpdate(deps, channel);
   } catch {
     // the detached updater must never crash (spec §11)
+    return null;
   }
 }
 
-async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<void> {
+async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<string | null> {
   const log = (line: string): void => {
     try {
       deps.log?.(line);
@@ -126,13 +156,13 @@ async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<voi
     // A local build the user installed is theirs to replace: no background update ever touches it (spec §9).
     if (deps.runningVersion !== undefined && !(await isManaged(deps.layout, deps.runningVersion))) {
       log(`running ${deps.runningVersion}, an unmanaged local build; background updates are off for it`);
-      return;
+      return null;
     }
     // Recovery logs its actions through deps.log; a fatal recovery stops the run before anything is installed (A11).
     const run = await updateChannel(deps, channel, { wait: false, background: true });
     if (!run) {
       log("another Tropos install is running; skipping this check");
-      return;
+      return null;
     }
     if (run.value.kind === "updated" && run.value.outcome.changed) updatedTo = run.value.outcome.version;
     log(`background check: ${run.value.kind}`);
@@ -145,6 +175,7 @@ async function backgroundUpdate(deps: EngineDeps, channel: Channel): Promise<voi
   } catch (e) {
     log(`could not record the update check: ${describeError(e)}`);
   }
+  return updatedTo;
 }
 
 export async function markAnnounced(deps: Pick<EngineDeps, "layout" | "selfVersion" | "flock">): Promise<void> {

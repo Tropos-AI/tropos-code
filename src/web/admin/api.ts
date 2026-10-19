@@ -274,8 +274,11 @@ export interface UpdateAdmin {
   "update.status": { params: undefined; result: UpdateStatus };
   /** Asks the release channel (network). */
   "update.check": { params: undefined; result: UpdateStatus };
-  /** Installs the newest release of the channel; the new version runs after a restart. */
-  "update.run": { params: undefined; result: { ok: boolean; from: string; to?: string; message: string } };
+  /**
+   * Installs the newest release of the channel. With `restart`, a running background service is restarted so it runs
+   * the new version (`restarting`); inside the gateway that happens just after the answer.
+   */
+  "update.run": { params: { restart?: boolean } | undefined; result: { ok: boolean; from: string; to?: string; message: string; restarting?: boolean } };
   "update.setChannel": { params: { channel: "latest" | "stable" }; result: UpdateStatus };
   "update.setAuto": { params: { enabled: boolean }; result: UpdateStatus };
 }
@@ -406,6 +409,8 @@ export interface SetupSummaryView {
   botUrl?: string;
   /** Three things to try asking. */
   examples: string[];
+  /** How Tropos updates: automatically by default. */
+  updates: string;
   health: { ok: number; warn: number; error: number; problems: string[] };
 }
 

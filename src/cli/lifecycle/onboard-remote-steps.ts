@@ -176,6 +176,7 @@ export const doneStep: StepHandler = async (io) => {
   else flow.success(`Health check: ${ok} ok, no problems.`);
   flow.note([`Dashboard: ${summary.dashboardUrl}`, ...(summary.botUrl ? [`Telegram bot: ${summary.botUrl}`] : [])]);
   flow.info(["Try asking:", ...summary.examples.flatMap((e) => wrapAll(`  “${e}”`))]);
+  flow.note(wrapAll(summary.updates));
 
   // A service that was just started needs a moment before the dashboard answers.
   const sleep = cli.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));

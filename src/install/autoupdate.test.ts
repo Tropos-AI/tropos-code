@@ -1,11 +1,11 @@
 // src/install/autoupdate.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
-import { CHECK_INTERVAL_MS, announcement, nextCheckAfter, shouldCheck, spawnBackgroundUpdate, type AutoUpdateInputs } from "./autoupdate";
+import { CHECK_INTERVAL_MS, announcement, nextCheckAfter, shouldCheck, spawnBackgroundUpdate, startDueGatewayUpdate, type AutoUpdateInputs } from "./autoupdate";
 import { ensureLayout, resolveLayout } from "./layout";
-import { emptyState } from "./state";
+import { emptyState, writeState } from "./state";
 
 const now = new Date("2026-10-13T12:00:00Z");
 const base: AutoUpdateInputs = { env: {}, native: true, print: false, stdinTTY: true, stdoutTTY: true, autoUpdates: true, state: null, now };
@@ -87,5 +87,39 @@ describe("spawnBackgroundUpdate", () => {
     expect(env).not.toContain("ANTHROPIC_API_KEY");
     expect(env).not.toContain("GITHUB_TOKEN");
     expect(env).not.toContain("OPENAI_API_KEY");
+  });
+});
+
+describe("the gateway's update check", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await makeTmpDir();
+  });
+  afterEach(() => removeDir(dir));
+
+  test("shouldCheck: the gateway has no terminal but checks like a session would; the other rules still hold", () => {
+    const gateway = { ...base, stdinTTY: false, stdoutTTY: false, gateway: true };
+    expect(shouldCheck(gateway)).toEqual({ check: true });
+    expect(shouldCheck({ ...gateway, autoUpdates: false })).toEqual({ check: false, reason: "disabled-by-setting" });
+    expect(shouldCheck({ ...gateway, env: { TROPOS_DISABLE_AUTOUPDATER: "1" } })).toEqual({ check: false, reason: "disabled-by-env" });
+    expect(shouldCheck({ ...gateway, state: withNext("2026-10-13T13:00:00.000Z") })).toEqual({ check: false, reason: "not-due" });
+  });
+
+  test("starts the background update when due on a managed install; never for a local build, when off, or when not due", async () => {
+    const layout = resolveLayout({ HOME: dir });
+    await ensureLayout(layout);
+    const spawned: string[][] = [];
+    const spawn = ((cmd: string[]) => (spawned.push(cmd), { unref() {} })) as unknown as typeof Bun.spawn;
+    const d = { env: { HOME: dir }, execPath: join(dir, "tcode-bin"), layout, autoUpdates: true, version: "1.2.0", now: () => now, spawn };
+    // No manifest: an unmanaged local build, which background updates would replace with a release.
+    expect(await startDueGatewayUpdate(d)).toBe(false);
+    await mkdir(join(layout.manifests, "1.2.0"), { recursive: true });
+    await writeFile(join(layout.manifests, "1.2.0", "manifest.json"), "{}");
+    expect(await startDueGatewayUpdate({ ...d, autoUpdates: false })).toBe(false);
+    expect(spawned).toEqual([]);
+    expect(await startDueGatewayUpdate(d)).toBe(true);
+    expect(spawned).toEqual([[join(dir, "tcode-bin"), "update", "--background"]]);
+    await writeState(layout, withNext("2026-10-13T13:00:00.000Z"));
+    expect(await startDueGatewayUpdate(d)).toBe(false);
   });
 });

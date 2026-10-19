@@ -9,9 +9,10 @@ import { describeError } from "../../install/errors";
 import { resolveLayout } from "../../install/layout";
 import { readState } from "../../install/state";
 import { compareVersions, isVersion } from "../../install/version";
+import type { ServiceManager } from "../../service";
 import type { UpdateStatus } from "./api";
 import { AdminError, type AdminContext, type AdminHandlers } from "./context";
-import { scrub } from "./util";
+import { scrub, serviceFor } from "./util";
 
 export interface UpdateDeps {
   /** The install engine's dependencies (layout, platform, trusted keys, release URLs, fetch). */
@@ -19,14 +20,22 @@ export interface UpdateDeps {
   /** `tcode update`, with its output handed to `cmdCtx.out/err`. */
   install(cmdCtx: CommandContext): Promise<number>;
   check: typeof checkForUpdate;
+  /** The background service, restarted after an update when asked. */
+  service: Pick<ServiceManager, "status" | "restart">;
+  /** Runs `fn` after `ms` (the gateway answers before its own restart ends it). */
+  later(fn: () => void, ms: number): void;
 }
 
 const OUTPUT_MAX = 2000;
+/** Long enough for the answer to reach the dashboard before the restart closes its socket. */
+const RESTART_DELAY_MS = 1500;
 
 export function updateHandlers(ctx: AdminContext, deps: Partial<UpdateDeps> = {}): AdminHandlers {
   const engine = deps.engine ?? ((c: AdminContext, log: (line: string) => void) => ({ ...productionEngineDeps(c.env, c.version, log), layout: resolveLayout(c.env, c.userHome), fetch: c.fetch }));
   const install = deps.install ?? ((cmdCtx: CommandContext) => runInstallCommand({ kind: "update", background: false, alias: "update" }, cmdCtx));
   const check = deps.check ?? checkForUpdate;
+  const service = deps.service ?? serviceFor(ctx, {});
+  const later = deps.later ?? ((fn: () => void, ms: number) => void setTimeout(fn, ms));
   const layout = resolveLayout(ctx.env, ctx.userHome);
 
   let running = false;
@@ -53,6 +62,23 @@ export function updateHandlers(ctx: AdminContext, deps: Partial<UpdateDeps> = {}
     };
   }
 
+  /** Restarts a running service so it runs `version`; the sentence to add to the answer, or undefined when nothing ran. */
+  async function restartInto(version: string): Promise<{ restarting: boolean; note: string } | undefined> {
+    const s = await service.status().catch(() => null);
+    if (!s?.installed || !s.running) return undefined;
+    if (ctx.gateway) {
+      // This process is the service: the restart ends it, so it answers first and the dashboard reconnects by itself.
+      later(() => void service.restart().catch(() => {}), RESTART_DELAY_MS);
+      return { restarting: true, note: `Restarting the background service to run ${version}; this page reconnects by itself.` };
+    }
+    try {
+      await service.restart();
+      return { restarting: true, note: `Restarted the background service; it runs ${version} now.` };
+    } catch (err) {
+      return { restarting: false, note: `${version} is installed, but the background service could not be restarted: ${describeError(err)}. Restart it with: tcode gateway restart` };
+    }
+  }
+
   return {
     "update.status": () => status(),
 
@@ -68,7 +94,7 @@ export function updateHandlers(ctx: AdminContext, deps: Partial<UpdateDeps> = {}
       return status();
     },
 
-    async "update.run"() {
+    async "update.run"(params) {
       const from = ctx.version;
       if (running) return { ok: false, from, message: "An update is already running." };
       running = true;
@@ -89,6 +115,8 @@ export function updateHandlers(ctx: AdminContext, deps: Partial<UpdateDeps> = {}
         if (code !== 0) return { ok: false, from, message };
         const to = /\bto (\d+\.\d+\.\d+)\b/.exec(out)?.[1] ?? /Tropos Code (\d+\.\d+\.\d+) is up to date/.exec(out)?.[1];
         if (to) latest = to;
+        const restart = params?.restart && to && to !== from ? await restartInto(to) : undefined;
+        if (restart) return { ok: true, from, to, message: scrub(`${message} ${restart.note}`), ...(restart.restarting ? { restarting: true } : {}) };
         return { ok: true, from, ...(to ? { to } : {}), message };
       } catch (err) {
         return { ok: false, from, message: scrub(describeError(err)).slice(0, OUTPUT_MAX) };

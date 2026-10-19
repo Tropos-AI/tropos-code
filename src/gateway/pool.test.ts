@@ -92,6 +92,24 @@ describe("a chat's session", () => {
     await running;
   });
 
+  test("busy() is true while any chat's turn runs, including one waiting for an approval, and while a session opens", async () => {
+    const { pool } = setup([() => reply([toolUseBlock("t1", "Shell", { command: "ls" })], "tool_use"), () => reply([textBlock("done")])]);
+    expect(pool.busy()).toBe(false);
+    const opening = pool.open("telegram:1");
+    expect(pool.busy()).toBe(true);
+    const chat = await opening;
+    expect(pool.busy()).toBe(false);
+    const { s, asks } = sink();
+    chat.attach(s);
+    const turn = chat.prompt("list files");
+    await Bun.sleep(20);
+    expect(asks).toHaveLength(1);
+    expect(pool.busy()).toBe(true);
+    chat.answer(asks[0]!.id, { kind: "deny" });
+    await turn;
+    expect(pool.busy()).toBe(false);
+  });
+
   test("command, learned and undoLearned reach the host; an unknown command rejects with a user-facing error", async () => {
     const undone: Array<string | undefined> = [];
     const { pool, runtimes } = setup([() => reply([textBlock("deployed")])], { t: 1_000 }, {

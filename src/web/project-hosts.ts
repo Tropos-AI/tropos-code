@@ -106,6 +106,11 @@ export class ProjectHosts implements ChatHost {
     return tab.host.handle(message, tab.send);
   }
 
+  /** A notice to every tab, through the hosts they are on. */
+  notify(level: "info" | "warn" | "error", text: string): void {
+    for (const host of new Set([this.start.host, ...[...this.tabs.values()].map((t) => t.host)])) host.notify(level, text);
+  }
+
   /** Shuts down every host opened so far, including one still opening. */
   async shutdown(opts?: { finalReview?: boolean }): Promise<void> {
     this.closed = true;

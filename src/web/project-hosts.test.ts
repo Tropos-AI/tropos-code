@@ -317,4 +317,15 @@ describe("ProjectHosts when projects change", () => {
     release();
     await moving;
   });
+
+  test("notify reaches every opened project's host once", async () => {
+    const { router, hosts } = await setup();
+    const a = tab();
+    router.attach(a.send);
+    await a.rpc(router, 1, "project.select", "app");
+    const told: string[] = [];
+    for (const [id, h] of hosts) (h.host as unknown as { notify: WebHost["notify"] }).notify = (_level, text) => void told.push(`${id}: ${text}`);
+    router.notify("info", "Updating to 0.6.0…");
+    expect(told.sort()).toEqual(["app: Updating to 0.6.0…", "default: Updating to 0.6.0…"]);
+  });
 });

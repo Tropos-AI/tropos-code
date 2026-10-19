@@ -209,6 +209,55 @@ describe("commands hold the in-use lock of the version they run from (I2, spec Â
   });
 });
 
+describe("after an update", () => {
+  const bg = { kind: "update", background: true, alias: "update" } as const;
+  const fg = { kind: "update", background: false, alias: "update" } as const;
+
+  test("tcode update hands the new version to afterUpdate (the service restart) and prints its line; up to date does nothing", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await f.release("1.1.0");
+    await f.direct("1.0.0");
+    f.srv.put("channels", "latest", "1.1.0\n");
+    const calls: string[] = [];
+    const { c, out } = ctx({ afterUpdate: async (v, o) => (calls.push(`${v}:${o.background}`), `Restarted the background service; it runs ${v} now.`) });
+    expect(await runInstallCommand(fg, c)).toBe(0);
+    expect(out.join("")).toContain(" to 1.1.0.\nRestarted the background service; it runs 1.1.0 now.\n");
+    expect(await runInstallCommand(fg, c)).toBe(0);
+    expect(calls).toEqual(["1.1.0:false"]);
+  });
+
+  test("a restart that fails is reported, and the update still counts", async () => {
+    f = await makeEngineFixture();
+    await f.release("1.0.0");
+    await f.release("1.1.0");
+    await f.direct("1.0.0");
+    f.srv.put("channels", "latest", "1.1.0\n");
+    const { c, out, err } = ctx({ afterUpdate: async () => { throw new Error("launchctl kickstart failed: exit 5"); } });
+    expect(await runInstallCommand(fg, c)).toBe(0);
+    expect(out.join("")).toContain(" to 1.1.0.");
+    expect(err.join("")).toContain("tcode: 1.1.0 is installed, but the background service could not be restarted: launchctl kickstart failed: exit 5. Restart it with: tcode gateway restart\n");
+  });
+
+  test("a background update that moved the version tells afterUpdate it was a background one; a failure there is only logged", async () => {
+    f = await makeEngineFixture();
+    await f.setup({ versions: ["1.0.0", "1.3.0"], current: "1.3.0", previous: "1.0.0", link: "1.3.0" });
+    await f.release("1.4.0");
+    f.srv.put("channels", "latest", "1.4.0\n");
+    const calls: string[] = [];
+    const { c, out, err } = ctx({
+      afterUpdate: async (v, o) => {
+        calls.push(`${v}:${o.background}`);
+        throw new Error("no gateway");
+      },
+    });
+    expect(await runInstallCommand(bg, c)).toBe(0);
+    expect(calls).toEqual(["1.4.0:true"]);
+    expect(out.join("")).toMatch(/after the update: no gateway/);
+    expect(err.join("")).toBe("");
+  });
+});
+
 describe("recovery reporting (D2, M5)", () => {
   test("recovery actions are printed even when the command then fails", async () => {
     f = await makeEngineFixture();

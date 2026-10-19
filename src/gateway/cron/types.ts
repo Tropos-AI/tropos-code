@@ -57,4 +57,6 @@ export interface CronService {
   stop(): void | Promise<void>;
   /** Runs a job now (id or unique prefix), whatever its schedule says. Rejects when it is already running. */
   runNow(idOrPrefix: string): Promise<RunRecord>;
+  /** How many jobs are running now. */
+  running(): number;
 }

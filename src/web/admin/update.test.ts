@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CheckResult } from "../../install/check";
@@ -6,6 +6,7 @@ import { InstallError } from "../../install/errors";
 import { ensureLayout, resolveLayout } from "../../install/layout";
 import { emptyState, writeState } from "../../install/state";
 import { adminOverWs, makeKit, writeText, type Kit } from "./ops-testkit";
+import type { AdminContext } from "./context";
 import { updateHandlers, type UpdateDeps } from "./update";
 
 let kit: Kit;
@@ -79,6 +80,65 @@ test("run refuses to run twice at once and status says running", async () => {
   release();
   expect((await first).ok).toBe(true);
   expect((await h["update.status"]!(undefined)).running).toBeUndefined();
+});
+
+describe("run with restart (the dashboard's Update now)", () => {
+  const updated = (to: string): UpdateDeps["install"] => async (c) => (c.out(`Updated Tropos Code from 1.2.3 to ${to}.\n`), 0);
+  function fakeService(status: { installed: boolean; running: boolean }) {
+    const calls: string[] = [];
+    const service = { status: async () => ({ manager: "launchd" as const, ...status }), restart: async () => void calls.push("restart") };
+    return { service, calls };
+  }
+  const inGateway = (): AdminContext => ({ ...kit.ctx, gateway: { runCronNow: async () => {}, reload: async () => {}, devicesChanged: async () => {} } });
+
+  test("inside the gateway a running service restarts after the answer has gone out, and the message says so", async () => {
+    const { service, calls } = fakeService({ installed: true, running: true });
+    const timers: { fn: () => void; ms: number }[] = [];
+    const h = updateHandlers(inGateway(), { engine, install: updated("1.4.0"), service, later: (fn, ms) => void timers.push({ fn, ms }) });
+    const out = await h["update.run"]!({ restart: true });
+    expect(out).toMatchObject({ ok: true, to: "1.4.0", restarting: true });
+    expect(out.message).toBe("Updated Tropos Code from 1.2.3 to 1.4.0. Restarting the background service to run 1.4.0; this page reconnects by itself.");
+    // Not yet: this process answers first, then the restart ends it.
+    expect(calls).toEqual([]);
+    expect(timers).toHaveLength(1);
+    expect(timers[0]!.ms).toBeGreaterThan(0);
+    timers[0]!.fn();
+    await Promise.resolve();
+    expect(calls).toEqual(["restart"]);
+  });
+
+  test("outside the gateway (the terminal's setup) the running service restarts at once", async () => {
+    const { service, calls } = fakeService({ installed: true, running: true });
+    const h = updateHandlers(kit.ctx, { engine, install: updated("1.4.0"), service, later: () => { throw new Error("no timer outside the gateway"); } });
+    const out = await h["update.run"]!({ restart: true });
+    expect(out).toMatchObject({ ok: true, to: "1.4.0", restarting: true });
+    expect(out.message).toBe("Updated Tropos Code from 1.2.3 to 1.4.0. Restarted the background service; it runs 1.4.0 now.");
+    expect(calls).toEqual(["restart"]);
+  });
+
+  test("nothing restarts when it was up to date, when the service is stopped or missing, or when not asked", async () => {
+    for (const [status, install, params] of [
+      [{ installed: true, running: true }, (async (c) => (c.out("Tropos Code 1.2.3 is up to date (latest: 1.2.3).\n"), 0)) as UpdateDeps["install"], { restart: true }],
+      [{ installed: true, running: false }, updated("1.4.0"), { restart: true }],
+      [{ installed: false, running: false }, updated("1.4.0"), { restart: true }],
+      [{ installed: true, running: true }, updated("1.4.0"), undefined],
+    ] as const) {
+      const { service, calls } = fakeService(status);
+      const h = updateHandlers(inGateway(), { engine, install, service, later: (fn) => fn() });
+      const out = await h["update.run"]!(params);
+      expect(out.ok).toBe(true);
+      expect(out.restarting).toBeUndefined();
+      expect(calls).toEqual([]);
+    }
+  });
+
+  test("a restart that fails outside the gateway is reported; the update stands", async () => {
+    const service = { status: async () => ({ manager: "systemd" as const, installed: true, running: true }), restart: async () => { throw new Error("systemctl restart failed: exit 1"); } };
+    const h = updateHandlers(kit.ctx, { engine, install: updated("1.4.0"), service });
+    const out = await h["update.run"]!({ restart: true });
+    expect(out).toMatchObject({ ok: true, to: "1.4.0" });
+    expect(out.message).toContain("1.4.0 is installed, but the background service could not be restarted: systemctl restart failed: exit 1");
+  });
 });
 
 test("setChannel and setAuto write user settings through the store", async () => {

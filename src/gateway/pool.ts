@@ -221,6 +221,16 @@ export class SessionPool implements SessionProvider {
     return [...this.entries.keys()];
   }
 
+  /**
+   * True while any chat works: a turn runs (a turn waiting for an approval included), a session opens, a prompt waits
+   * for one, or a session is closing (its final review). The gateway restarts into an update only when this is false.
+   */
+  busy(): boolean {
+    if (this.opening.size > 0 || this.closing.size > 0) return true;
+    if ([...this.chats.values()].some((c) => c.waiting > 0)) return true;
+    return [...this.entries.values()].some((e) => e.handle.host.state().busy);
+  }
+
   private wrap(key: string, chat: Chat): ChatSession {
     /** The open session, or the closed one it had last (its state, its asks); never reopens. */
     const current = () => this.entries.get(key) ?? chat.last;

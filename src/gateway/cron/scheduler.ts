@@ -199,5 +199,6 @@ export function createCronService(opts: CronServiceOptions = {}): CronService & 
       store.update(job.id, { lastRunAt: t });
       return execute(job, t);
     },
+    running: () => running.size,
   };
 }

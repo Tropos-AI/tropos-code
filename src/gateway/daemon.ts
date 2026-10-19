@@ -60,6 +60,11 @@ import { createCronTool } from "../tools/cron/cron-tool";
 import { createSetupTool } from "../tools/setup/setup-tool";
 import { dashboardLink } from "./dashboard-link";
 import { onReloadSignal } from "./reload-signal";
+import { createSelfUpdateWatcher, type SelfUpdateDeps, type SelfUpdateWatcher } from "./self-update";
+import { startDueGatewayUpdate } from "../install/autoupdate";
+import { nativeVersionOf, resolveLayout } from "../install/layout";
+import { readUserSettingsRaw } from "../config/store";
+import { serviceManager } from "../service";
 import { acquireGatewayLock } from "./instance-lock";
 import { chatSessionTools } from "./session-tools";
 import { suggestionTool, withSuggestions } from "../suggest/wire";
@@ -114,6 +119,8 @@ export interface GatewayRun {
     sweep?: boolean;
     /** Replaces `git init` for the managed default project. */
     git?: (dir: string) => Promise<void>;
+    /** Turns the self-update watcher on (even for a run from source) with these fakes. */
+    selfUpdate?: Partial<Pick<SelfUpdateDeps, "linked" | "supervised" | "checkForUpdates" | "schedule">>;
   };
 }
 
@@ -680,9 +687,28 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
     ownerChat: () => ownerChatKey(run.pairing),
   };
 
+  // An update moved the command to a newer version: this gateway stops cleanly once idle and the service starts the new one.
+  let updateExit = (): void => {};
+  const updateExited = new Promise<void>((resolve) => (updateExit = resolve));
+  const selfUpdate = selfUpdateWatcher(run, version, {
+    busy: () => {
+      if (pool.busy()) return "a chat's turn";
+      if ([...dashboardHosts.keys()].some((h) => !h.isShutDown() && h.state().busy)) return "a dashboard turn";
+      return cron.running() > 0 ? "a scheduled job" : null;
+    },
+    notify: (text) => chatHosts?.notify("info", text),
+    exit: () => updateExit(),
+  });
+
   // Before state.json names this pid: SIGUSR2 without a handler would end the process. Another Tropos process (the
   // terminal's TroposSetup, `tcode` commands) sends it after changing the config; it only triggers the reload.
-  const stopReloadSignal = onReloadSignal(() => void reload().catch((e: unknown) => run.err(`gateway: reload failed: ${e instanceof Error ? e.message : String(e)}\n`)));
+  // After an update `tcode` sends it too: the gateway then looks for the new version at once.
+  const stopReloadSignal = onReloadSignal(() =>
+    void reload()
+      .catch((e: unknown) => run.err(`gateway: reload failed: ${e instanceof Error ? e.message : String(e)}\n`))
+      .then(() => selfUpdate?.check())
+      .catch(() => {}),
+  );
   state = { pid: process.pid, startedAt: new Date().toISOString(), webPort, ...(webProblem ? { webProblem } : {}), telegram: adapters.length > 0 };
   await writeFile(stateFile(home), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
@@ -727,9 +753,11 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
     }, 5000);
     reaper.unref();
     stopReaper = () => clearInterval(reaper);
-    await (run.until ? run.until({ webUrl, reload }) : untilSignal());
+    selfUpdate?.start();
+    await Promise.race([run.until ? run.until({ webUrl, reload }) : untilSignal(), updateExited]);
   } finally {
     stopping = true;
+    selfUpdate?.stop();
     stopReloadSignal();
     stopReaper();
     await reloading.catch(() => {});
@@ -746,6 +774,39 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
     await rm(stateFile(home), { force: true });
   }
   return 0;
+}
+
+const UPDATE_CHECK_GAP_MS = 60 * 60_000;
+
+/**
+ * The watcher for an installed gateway; none for a run from source, which has no newer version to move to. It also
+ * starts the background update check when due: a gateway-only owner never opens a terminal, where checks start.
+ */
+function selfUpdateWatcher(run: GatewayRun, version: string, hooks: Pick<SelfUpdateDeps, "busy" | "notify" | "exit">): SelfUpdateWatcher | undefined {
+  const seam = run.seams?.selfUpdate;
+  const layout = resolveLayout(run.env);
+  if (!seam && nativeVersionOf(layout, process.execPath) === null) return undefined;
+  const userHome = run.seams?.userHome ?? homedir();
+  // An update takes a while and records its check only at the end: one start per hour at most.
+  let startedAt = -Infinity;
+  return createSelfUpdateWatcher({
+    version,
+    linked: () => nativeVersionOf(layout, layout.binLink),
+    // The service runs this very process (or the parent that re-ran it), so it starts the new version after the exit.
+    supervised: async () => {
+      const s = await serviceManager({ userHome }).status();
+      return s.running && (s.pid === process.pid || s.pid === process.ppid);
+    },
+    checkForUpdates: async () => {
+      if (Date.now() - startedAt < UPDATE_CHECK_GAP_MS) return;
+      const settings = await readUserSettingsRaw(run.home).catch(() => ({}) as Record<string, unknown>);
+      const started = await startDueGatewayUpdate({ env: run.env, execPath: process.execPath, layout, autoUpdates: settings.autoUpdates !== false, version });
+      if (started) startedAt = Date.now();
+    },
+    log: (line) => run.err(`gateway: ${line}\n`),
+    ...hooks,
+    ...seam,
+  });
 }
 
 /** A mount can't protect a path that doesn't exist: a command could `git init` there and plant a hook or config. */
