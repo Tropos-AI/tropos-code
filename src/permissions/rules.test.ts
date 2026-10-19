@@ -87,7 +87,7 @@ describe("pathPatternMatches", () => {
   });
 });
 
-describe("splitBashCommand: shell parser differentials (fix round 1)", () => {
+describe("splitBashCommand: shell parser differentials", () => {
   test("ANSI-C and locale quoting ($'...' / $\"...\") is unsafe", () => {
     expect(splitBashCommand(`git status $'\\'' ; rm -rf x #'`).unsafe).toBe(true);
     expect(splitBashCommand(`echo $"x"`).unsafe).toBe(true);
@@ -129,7 +129,7 @@ describe("splitBashCommand: shell parser differentials (fix round 1)", () => {
   });
 });
 
-describe("pathPatternMatches: hardening (fix round 1)", () => {
+describe("pathPatternMatches: hardening", () => {
   const cwd = "/work/app";
   const home = "/home/u";
   test("normalizes .. segments in the candidate path", () => {
@@ -146,7 +146,7 @@ describe("pathPatternMatches: hardening (fix round 1)", () => {
   });
 });
 
-describe("splitBashCommand: heredocs and herestrings (fix round 2)", () => {
+describe("splitBashCommand: heredocs and herestrings", () => {
   test("heredoc body with a quote cannot desync the scanner", () => {
     expect(splitBashCommand("git status <<X\n'\nX\nrm -rf y\n'").unsafe).toBe(true);
   });
@@ -164,7 +164,7 @@ describe("splitBashCommand: heredocs and herestrings (fix round 2)", () => {
   });
 });
 
-describe("splitBashCommand: escaped redirects (fix round 3)", () => {
+describe("splitBashCommand: escaped redirects", () => {
   test("escaped \\> followed by & is a plain argument, so the & still splits", () => {
     const { parts, unsafe } = splitBashCommand("git status \\>&zz1");
     expect(parts).toContain("zz1");
@@ -181,7 +181,7 @@ describe("splitBashCommand: escaped redirects (fix round 3)", () => {
   });
 });
 
-describe("pathPatternMatches: relative rules stay in cwd and folding is opt-in (fix round 3)", () => {
+describe("pathPatternMatches: relative rules stay in cwd and folding is opt-in", () => {
   const cwd = "/work/app";
   const home = "/home/u";
   test("relative patterns never match outside cwd", () => {
@@ -195,7 +195,7 @@ describe("pathPatternMatches: relative rules stay in cwd and folding is opt-in (
   });
 });
 
-describe("pathPatternMatches: restrict mode (fix round 4)", () => {
+describe("pathPatternMatches: restrict mode", () => {
   const cwd = "/work/app";
   const home = "/home/u";
   const folds = process.platform === "darwin" || process.platform === "win32";
@@ -226,7 +226,7 @@ describe("pathPatternMatches: restrict mode (fix round 4)", () => {
   });
 });
 
-describe("bashPatternMatches: restrict mode strips wrappers (fix round 4)", () => {
+describe("bashPatternMatches: restrict mode strips wrappers", () => {
   const r = { restrict: true };
   test.each([
     "command rm -rf x",
@@ -260,7 +260,7 @@ describe("bashPatternMatches: restrict mode strips wrappers (fix round 4)", () =
   });
 });
 
-describe("splitBashCommand: fd duplication, continuations, dynamic first words (fix round 4)", () => {
+describe("splitBashCommand: fd duplication, continuations, dynamic first words", () => {
   test("<& is an fd duplication, not a background operator", () => {
     expect(splitBashCommand("git status <&0")).toEqual({ parts: ["git status <&0"], unsafe: false });
     expect(splitBashCommand("git status <&-")).toEqual({ parts: ["git status <&-"], unsafe: false });
@@ -294,7 +294,7 @@ describe("splitBashCommand: fd duplication, continuations, dynamic first words (
   });
 });
 
-describe("wrappers, reserved words and unmodelled command words (fix round 5)", () => {
+describe("wrappers, reserved words and unmodelled command words", () => {
   const r = { restrict: true };
   const unsafe = (c: string) => splitBashCommand(c).unsafe;
 
@@ -452,7 +452,7 @@ describe("leading redirects, eval/shell -c and path-qualified wrappers (carry-ov
   });
 });
 
-describe("shell -c attached values and code runners (fix round 1)", () => {
+describe("shell -c attached values and code runners", () => {
   const unsafe = (c: string) => splitBashCommand(c).unsafe;
 
   test.each([`bash -c'rm x'`, `bash -c"rm x"`, `sh -ec'x'`, `bash -c rm`, `zsh -xc 'rm x'`])("attached -c value is unsafe: %s", (cmd) => {
@@ -508,7 +508,7 @@ describe("shell -c attached values and code runners (fix round 1)", () => {
   });
 });
 
-describe("code-runner detection: more interpreters, versions and case (fix round 3)", () => {
+describe("code-runner detection: more interpreters, versions and case", () => {
   test("CODE_RUNNERS includes the extra interpreters but not everyday build tools", () => {
     for (const w of ["awk", "gawk", "mawk", "nawk", "python2", "pypy", "pypy3", "ipython", "pwsh", "powershell", "osascript", "lua", "luajit", "tclsh", "wish", "Rscript", "irb", "jshell", "expect", "ssh", "script", "nodejs", "tsx", "ts-node"]) {
       expect(CODE_RUNNERS.has(w)).toBe(true);
@@ -552,7 +552,7 @@ describe("code-runner detection: more interpreters, versions and case (fix round
   });
 });
 
-describe("final review fixes", () => {
+describe("path-qualified command words, noglob/nocorrect and whitespace", () => {
   test("restrict mode reduces a path-qualified command word to its basename; allow mode does not", () => {
     for (const cmd of ["/bin/rm -rf x", "./rm -rf x", "sudo /bin/rm -rf x", "'/bin/rm' x"]) {
       expect(bashPatternMatches("rm:*", cmd, { restrict: true })).toBe(true);

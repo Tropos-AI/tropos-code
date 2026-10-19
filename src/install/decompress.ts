@@ -9,7 +9,7 @@ import { InstallError, fromFsError } from "./errors";
 /**
  * Decompresses an already hash-verified .zst into `dest` (created, never overwritten).
  * The decoder reports corrupt frames and trailing data; the byte guard stops extra frames and bombs
- * before they are written; the exact size and sha256 catch truncated or empty input (spec §10.3 step 4).
+ * before they are written; the exact size and sha256 catch truncated or empty input.
  */
 export async function decompressZstdFile(src: string, dest: string, expected: { size: number; sha256: string }): Promise<void> {
   const hash = createHash("sha256");

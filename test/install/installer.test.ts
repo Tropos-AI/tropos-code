@@ -110,7 +110,7 @@ describe("install from the network", () => {
     expect((await f.state()).previous).toBeNull();
   });
 
-  test("an unmanaged local build with a release's version number is moved aside, never deleted (A9)", async () => {
+  test("an unmanaged local build with a release's version number is moved aside, never deleted", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     await writeFile(versionPath(f.layout, "1.0.0"), "local build of 1.0.0");
@@ -137,7 +137,7 @@ describe("install from the network", () => {
   });
 });
 
-describe("--force and damaged versions (R5.1–R5.3)", () => {
+describe("--force and damaged versions", () => {
   test("--force on the current version keeps the verified file (same inode) and re-checks it", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
@@ -193,7 +193,7 @@ describe("--force and damaged versions (R5.1–R5.3)", () => {
   });
 });
 
-describe("install --self (R1.1–R1.3)", () => {
+describe("install --self", () => {
   async function selfSource(version: string, opts: { tamperBinary?: boolean; untrusted?: boolean; manifestVersion?: string } = {}) {
     const r = await f.release(opts.manifestVersion ?? version);
     const tmp = join(f.root, `tmp-${Math.random().toString(36).slice(2)}`);
@@ -226,7 +226,7 @@ describe("install --self (R1.1–R1.3)", () => {
     expect(await readLink(f.layout)).toEqual({ kind: "missing" });
   });
 
-  test("a rejected --self leaves nothing installed: no manifest, no binary, empty staging (R1.2)", async () => {
+  test("a rejected --self leaves nothing installed: no manifest, no binary, empty staging", async () => {
     f = await makeEngineFixture();
     const e = await err(installSelf(f.deps, await selfSource("1.0.0", { tamperBinary: true })));
     expect(e.message).toBe("this binary does not match its signed manifest");
@@ -235,7 +235,7 @@ describe("install --self (R1.1–R1.3)", () => {
     expect(await readdir(f.layout.staging)).toEqual([]);
   });
 
-  test("the installed bytes are the verified copy, unaffected by later changes to the source (R1.3)", async () => {
+  test("the installed bytes are the verified copy, unaffected by later changes to the source", async () => {
     f = await makeEngineFixture();
     const src = await selfSource("1.0.0");
     const original = await readFile(src.execPath);
@@ -244,7 +244,7 @@ describe("install --self (R1.1–R1.3)", () => {
     expect(await readFile(versionPath(f.layout, "1.0.0"))).toEqual(original);
   });
 
-  test("a foreign ~/.local/bin/tcode: the message points to install.sh, not to a --force it does not have (M4)", async () => {
+  test("a foreign ~/.local/bin/tcode: the message points to install.sh, not to a --force it does not have", async () => {
     f = await makeEngineFixture();
     await writeFile(f.layout.binLink, "#!/bin/sh\n");
     const e = await err(installSelf(f.deps, await selfSource("1.0.0")));
@@ -277,7 +277,7 @@ describe("updateChannel", () => {
   });
 });
 
-describe("transient health-check failures are not verdicts (I1)", () => {
+describe("transient health-check failures are not verdicts", () => {
   const unknownFor = (version: string, onlyLink = false) => (b: string, v: string): Promise<HealthResult> =>
     v === version && (!onlyLink || b === f.layout.binLink) ? Promise.resolve("unknown") : f.deps.health(b, v);
 
@@ -294,7 +294,7 @@ describe("transient health-check failures are not verdicts (I1)", () => {
     expect((await f.state()).skip).toEqual({});
   });
 
-  // Residual I1: every check after the switch is inconclusive, including any restore candidate's.
+  // Every check after the switch is inconclusive, including any restore candidate's.
   const unknownAfterSwitch = () => {
     let switched = false;
     return (b: string, v: string): Promise<HealthResult> => {
@@ -329,7 +329,7 @@ describe("transient health-check failures are not verdicts (I1)", () => {
   });
 });
 
-describe("update floor without a managed current version (I3)", () => {
+describe("update floor without a managed current version", () => {
   async function localBuild(version: string) {
     await writeFile(versionPath(f.layout, version), "#!/bin/sh\necho local\n");
     await chmod(versionPath(f.layout, version), 0o755);
@@ -354,7 +354,7 @@ describe("update floor without a managed current version (I3)", () => {
 });
 
 describe("fix wave: identity lookups, rename failures, install --self wording", () => {
-  test("looks up the user (the `id` spawn) once per operation (D3)", async () => {
+  test("looks up the user (the `id` spawn) once per operation", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     const spy = spyOn(Bun, "spawnSync");
@@ -367,7 +367,7 @@ describe("fix wave: identity lookups, rename failures, install --self wording", 
     }
   });
 
-  test("a failed rename into versions/ removes the staged file and is a local error (D5)", async () => {
+  test("a failed rename into versions/ removes the staged file and is a local error", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     const target = versionPath(f.layout, "1.0.0");

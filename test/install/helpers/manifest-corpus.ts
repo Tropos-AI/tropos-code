@@ -1,5 +1,5 @@
 // test/install/helpers/manifest-corpus.ts
-// The shared manifest corpus (spec §13 layers 1 and 7): manifest.ts, manifest.awk and install.sh must agree on every case.
+// The shared manifest corpus: manifest.ts, manifest.awk and install.sh must agree on every case.
 import { serializeManifest, type Manifest } from "../../../src/install/manifest";
 import { PLATFORMS } from "../../../src/install/platform";
 

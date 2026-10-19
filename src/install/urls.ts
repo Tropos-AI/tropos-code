@@ -7,12 +7,12 @@ export interface ReleaseUrls {
   channel(slot: string): string;
   /** An asset of release v<version>. */
   asset(version: string, name: string): string;
-  /** An asset of GitHub's latest release (fallback for the latest channel, spec §10.4). */
+  /** An asset of GitHub's latest release (fallback for the latest channel). */
   latestAsset(name: string): string;
 }
 
 export const RELEASE_REPO = "Tropos-AI/tropos-code";
-/** Where the `channels` release lives. A separate repository because tropos-code releases are immutable (decision D1-B). */
+/** Where the `channels` release lives. A separate repository because tropos-code releases are immutable. */
 export const CHANNELS_REPO = "Tropos-AI/tropos-code-channels";
 
 const ASSET_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

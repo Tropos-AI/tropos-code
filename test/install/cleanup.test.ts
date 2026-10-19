@@ -13,7 +13,7 @@ afterEach(() => f?.close());
 
 const runCleanup = async (now?: Date) => (await withInstallLock(now ? { ...f.deps, now: () => now } : f.deps, { wait: true }, (s) => cleanup(s)))!.value;
 
-describe("cleanup (spec §10.5)", () => {
+describe("cleanup", () => {
   test("keeps current, previous and the 3 newest verified; removes the rest with their manifests", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"], current: "1.2.0", previous: "1.0.0", link: "1.2.0" });
@@ -22,7 +22,7 @@ describe("cleanup (spec §10.5)", () => {
     expect((await readdir(f.layout.manifests)).sort()).toEqual(["1.0.0", "1.2.0", "1.3.0", "1.4.0"]);
   });
 
-  test("never deletes a version a session is running (R5.4)", async () => {
+  test("never deletes a version a session is running", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"], current: "1.4.0", previous: "1.3.0", link: "1.4.0" });
     const session = (await lockVersionShared(f.layout, "1.0.0"))!;
@@ -53,7 +53,7 @@ describe("cleanup (spec §10.5)", () => {
     expect(await readdir(f.layout.versions)).toContain(".unmanaged-0.0.9-1");
   });
 
-  test("removes a manifest whose binary is gone (crash between the two writes, amendment A10)", async () => {
+  test("removes a manifest whose binary is gone (crash between the two writes)", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0", "1.2.0", "1.3.0"], current: "1.3.0", link: "1.3.0" });
     await Bun.$`rm ${versionPath(f.layout, "1.2.0")}`;

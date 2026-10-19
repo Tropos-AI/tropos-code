@@ -25,7 +25,7 @@ afterAll(async () => {
   await removeDir(root);
 });
 
-describe("one pinned key, one grammar (spec §4.2, §13 layer 7)", () => {
+describe("one pinned key, one grammar", () => {
   test("install.sh embeds release/allowed_signers verbatim, which trust.ts compiles in", async () => {
     const script = await readFile(INSTALL_SH, "utf8");
     const file = await readFile(join(import.meta.dir, "../../release/allowed_signers"), "utf8");
@@ -77,7 +77,7 @@ describe("platform detection agrees with platform.ts", () => {
   }
 });
 
-describe("zstd corpus through install.sh (R8.1)", () => {
+describe("zstd corpus through install.sh", () => {
   // The manifest promises `c.promised` for the raw binary and the corpus file's own hash for the .zst,
   // so every .zst downloads cleanly and only decompression can reject it; the raw asset (= c.promised)
   // is always an honest fallback, so every case must install — the valid one without falling back.

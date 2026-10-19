@@ -13,7 +13,7 @@ import { makeEngineFixture, type EngineFixture } from "./helpers/engine";
 let f: EngineFixture;
 afterEach(() => f?.close());
 
-describe("recovery (spec §10.6)", () => {
+describe("recovery", () => {
   test("nothing installed: nothing to do", async () => {
     f = await makeEngineFixture();
     expect(await f.recoverNow()).toEqual({ actions: [], fatal: null });
@@ -82,7 +82,7 @@ describe("recovery (spec §10.6)", () => {
     expect(await f.state()).toMatchObject({ current: "1.1.0", previous: "1.0.0" });
   });
 
-  test("current deleted: first healthy fallback (R6.2)", async () => {
+  test("current deleted: first healthy fallback", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0", link: "1.1.0" });
     await rm(versionPath(f.layout, "1.1.0"));
@@ -91,7 +91,7 @@ describe("recovery (spec §10.6)", () => {
     expect(await f.state()).toMatchObject({ current: "1.0.0", previous: null });
   });
 
-  test("current corrupted while a session runs it: link moves, file stays (R5.2)", async () => {
+  test("current corrupted while a session runs it: link moves, file stays", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0", link: "1.1.0" });
     const session = (await lockVersionShared(f.layout, "1.1.0"))!;
@@ -103,7 +103,7 @@ describe("recovery (spec §10.6)", () => {
     session.release();
   });
 
-  test("previous corrupted: previous becomes null (R6.3)", async () => {
+  test("previous corrupted: previous becomes null", async () => {
     f = await makeEngineFixture();
     await f.setup({ versions: ["1.0.0", "1.1.0"], current: "1.1.0", previous: "1.0.0", link: "1.1.0" });
     await appendFile(versionPath(f.layout, "1.0.0"), "x");
@@ -247,7 +247,7 @@ describe("withInstallLock", () => {
   });
 });
 
-describe("recovery: a health check that cannot run is not a broken release (I1)", () => {
+describe("recovery: a health check that cannot run is not a broken release", () => {
   const recoverWith = async (deps: EngineDeps, background = false) => (await withInstallLock(deps, { wait: true, background }, async () => undefined))!.recovery;
   const eagain = (() => {
     throw Object.assign(new Error("EAGAIN: resource temporarily unavailable, posix_spawn"), { code: "EAGAIN" });

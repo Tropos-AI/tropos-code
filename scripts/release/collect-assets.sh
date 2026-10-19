@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/release/collect-assets.sh <dist-dir> <version> <out-dir>
 # Gathers the six release binaries under their asset names plus ./install.sh, and writes SHA256SUMS
-# (checked by the privileged workflow before anything is signed - amendment A4).
+# (checked by the privileged workflow before anything is signed).
 # POSIX sh; runs on macOS, Linux and busybox (alpine). Fails closed on any missing input.
 set -eu
 [ $# -eq 3 ] || { echo "usage: collect-assets.sh <dist-dir> <version> <out-dir>" >&2; exit 64; }

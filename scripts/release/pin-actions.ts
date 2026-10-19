@@ -1,5 +1,5 @@
 // scripts/release/pin-actions.ts
-// Rewrites `uses: owner/repo@vN` to `uses: owner/repo@<40-hex sha> # vN` (spec §6.2). Run after editing workflows:
+// Rewrites `uses: owner/repo@vN` to `uses: owner/repo@<40-hex sha> # vN`. Run after editing workflows:
 //   bun scripts/release/pin-actions.ts .github/workflows/*.yml
 import { readFile, writeFile } from "node:fs/promises";
 

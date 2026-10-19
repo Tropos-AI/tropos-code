@@ -48,7 +48,7 @@ export function uniqueSlug(name: string, taken: Iterable<string>): string {
   }
 }
 
-/** C8's proactive-message defaults: quiet outside 09:00-21:00, at most one note a day, checked every 4 hours. */
+/** Proactive-message defaults: quiet outside 09:00-21:00, at most one note a day, checked every 4 hours. */
 export const PROACTIVE_DEFAULTS = { activeHours: { start: "09:00", end: "21:00" }, everyHours: 4, maxPerDay: 1 } as const;
 
 const timeOfDay = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "a time like 09:00");

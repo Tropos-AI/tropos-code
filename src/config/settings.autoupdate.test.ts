@@ -11,7 +11,7 @@ beforeEach(async () => {
 });
 afterEach(() => removeDir(dir));
 
-describe("update settings (spec §11)", () => {
+describe("update settings", () => {
   test("defaults", () => {
     expect(DEFAULT_SETTINGS.autoUpdates).toBe(true);
     expect(DEFAULT_SETTINGS.autoUpdatesChannel).toBe("latest");

@@ -72,7 +72,7 @@ jobs:
       # The same per-test limit as the test job: the 5 s default is too tight for a compiled binary on a slow runner.
       - run: bun test --timeout 20000 test/install
 
-  # Decision D2: no job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
+  # No job container. Actions run on the host; Bun (official musl zip) and the tests run in alpine:3.22.
   installer-musl:
     name: installer (alpine ${{ matrix.runner }})
     strategy:
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - name: Bun for musl (decision D2)
+      - name: Bun for musl
         env:
           BUNZIP: ${{ matrix.bunzip }}
           BUNSHA: ${{ matrix.bunsha }}

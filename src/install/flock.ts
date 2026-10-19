@@ -7,10 +7,10 @@ export const LOCK_EX = 2;
 export const LOCK_NB = 4;
 export const LOCK_UN = 8;
 
-/** flock(2): returns 0 on success, -1 on failure. Only ever called with LOCK_NB or LOCK_UN (amendment A6). */
+/** flock(2): returns 0 on success, -1 on failure. Only ever called with LOCK_NB or LOCK_UN. */
 export type FlockFn = (fd: number, operation: number) => number;
 
-/** C libraries to try, in order (decision D5). */
+/** C libraries to try, in order. */
 export function libcCandidates(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string[] {
   if (platform === "darwin") return ["libSystem.B.dylib"];
   const musl = arch === "arm64" ? "aarch64" : "x86_64";

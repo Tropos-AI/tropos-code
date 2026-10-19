@@ -1,4 +1,4 @@
-// src/tools/setup/matrix.ts — what TroposSetup can do, and who may ask for it (spec doc 2, Part H).
+// src/tools/setup/matrix.ts — what TroposSetup can do, and who may ask for it.
 // Raising autonomy, remote access, pairing approvals, permission rules, hooks and the sandbox are not actions at all:
 // they stay in the dashboard and the CLI, so no surface can reach them through this tool.
 import { z } from "zod";

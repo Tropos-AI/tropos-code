@@ -11,7 +11,7 @@ export interface LockHandle {
   release(): void;
 }
 
-/** Informational only: who holds the install lock. Correctness never depends on it (spec §10.1). */
+/** Informational only: who holds the install lock. Correctness never depends on it. */
 export interface LockInfo {
   pid: number;
   token: string;
@@ -88,7 +88,7 @@ function defaultWriteInfo(fd: number, json: string): void {
   writeSync(fd, json, 0);
 }
 
-/** The install lock (spec §10.1): foreground callers wait up to 60 s, then `busy`; background callers don't wait. */
+/** The install lock: foreground callers wait up to 60 s, then `busy`; background callers don't wait. */
 export async function acquireInstallLock(l: Layout, opts: AcquireOptions): Promise<LockHandle | null> {
   const path = installLockPath(l);
   const sleep = opts.sleep ?? ((ms: number) => Bun.sleep(ms));
@@ -102,7 +102,7 @@ export async function acquireInstallLock(l: Layout, opts: AcquireOptions): Promi
       try {
         (opts.writeInfo ?? defaultWriteInfo)(handle.fd, JSON.stringify(info));
       } catch {
-        // The holder info is informational only (spec 10.1); a failed write must not strand the lock.
+        // The holder info is informational only; a failed write must not strand the lock.
       }
       return handle;
     }

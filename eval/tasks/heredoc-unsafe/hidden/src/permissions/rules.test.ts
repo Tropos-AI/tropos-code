@@ -87,7 +87,7 @@ describe("pathPatternMatches", () => {
   });
 });
 
-describe("splitBashCommand: shell parser differentials (fix round 1)", () => {
+describe("splitBashCommand: shell parser differentials", () => {
   test("ANSI-C and locale quoting ($'...' / $\"...\") is unsafe", () => {
     expect(splitBashCommand(`git status $'\\'' ; rm -rf x #'`).unsafe).toBe(true);
     expect(splitBashCommand(`echo $"x"`).unsafe).toBe(true);
@@ -129,7 +129,7 @@ describe("splitBashCommand: shell parser differentials (fix round 1)", () => {
   });
 });
 
-describe("pathPatternMatches: hardening (fix round 1)", () => {
+describe("pathPatternMatches: hardening", () => {
   const cwd = "/work/app";
   const home = "/home/u";
   test("normalizes .. segments in the candidate path", () => {
@@ -151,7 +151,7 @@ describe("pathPatternMatches: hardening (fix round 1)", () => {
   });
 });
 
-describe("splitBashCommand: heredocs and herestrings (fix round 2)", () => {
+describe("splitBashCommand: heredocs and herestrings", () => {
   test("heredoc body with a quote cannot desync the scanner", () => {
     expect(splitBashCommand("git status <<X\n'\nX\nrm -rf y\n'").unsafe).toBe(true);
   });

@@ -22,7 +22,7 @@ async function runChild(op: "install" | "rollback" | "cleanup", crashAt: string,
   return child;
 }
 
-/** The invariant of spec §10.6: our link is absent or points at a Healthy version; state agrees; nothing pending. */
+/** The crash-consistency invariant: our link is absent or points at a Healthy version; state agrees; nothing pending. */
 async function assertConsistent(allowAbsent: boolean) {
   const report = await f.recoverNow();
   const link = await readLink(f.layout);
@@ -45,7 +45,7 @@ async function assertConsistent(allowAbsent: boolean) {
 
 const POINTS = ["after-download", "after-rename", "after-pending", "after-swap", "after-state"] as const;
 
-describe("SIGKILL during an upgrade (R6.x)", () => {
+describe("SIGKILL during an upgrade", () => {
   const expected: Record<(typeof POINTS)[number], string> = {
     "after-download": "1.0.0",
     "after-rename": "1.0.0",
@@ -67,7 +67,7 @@ describe("SIGKILL during an upgrade (R6.x)", () => {
   }
 });
 
-describe("SIGKILL during a first install (R6.1)", () => {
+describe("SIGKILL during a first install", () => {
   for (const point of POINTS) {
     test(point, async () => {
       f = await makeEngineFixture();

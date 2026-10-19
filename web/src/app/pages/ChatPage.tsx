@@ -1,4 +1,4 @@
-// web/src/app/pages/ChatPage.tsx — the conversation (spec §5 "Transcript", "Composer"): the transcript in a 760px reading
+// web/src/app/pages/ChatPage.tsx — the conversation: the transcript in a 760px reading
 // column that keeps itself pinned to the newest output, the typing indicator while the agent works, Interior's New Items
 // Pill when output arrives while the reader has scrolled up, and the composer pinned at the bottom.
 import { useMemo, useState } from "react";

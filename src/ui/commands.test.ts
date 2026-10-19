@@ -33,7 +33,7 @@ test("help lists every command and the shortcuts", () => {
   }
 });
 
-describe("phase 2 commands", () => {
+describe("custom commands, skills and session commands", () => {
   const extra = [{ name: "review", description: "Review", argumentHint: "[focus]" }, { name: "kit:ship", description: "Ship" }];
   test("custom commands and skills dispatch by name; built-ins win", () => {
     expect(parseCommand("/review the diff", extra)).toEqual({ kind: "custom", name: "review", args: "the diff" });

@@ -1,4 +1,4 @@
-// src/tools/setup/autonomy.ts — the setup tool's only way to touch autonomy: lowering it, built on P2's lowerAutonomy.
+// src/tools/setup/autonomy.ts — the setup tool's only way to touch autonomy: lowering it, built on the gateway's lowerAutonomy.
 import { AutonomyError, effectiveAutonomy, lowerAutonomy, RAISE_REFUSED, UNCONFINED_CONSENT } from "../../gateway/autonomy";
 import { loadGatewayConfig, type Autonomy, type GatewayConfig } from "../../gateway/config";
 import { dashboardLink } from "../../gateway/dashboard-link";
@@ -32,7 +32,7 @@ export async function lowerSetupAutonomy(home: string, to: Autonomy, projectId?:
   try {
     if (projectId !== undefined) {
       const builtIn = projectId === DEFAULT_PROJECT_ID || projectId === TEMPORARY_PROJECT_ID;
-      // P2's lowerAutonomy treats an unknown id as the global level; here a typo must not lower everything.
+      // lowerAutonomy treats an unknown id as the global level; here a typo must not lower everything.
       if (!builtIn && !config.projects.some((p) => p.id === projectId)) throw new SetupRefused(`There is no project "${projectId}".`);
       const before = effectiveAutonomy(config, projectId);
       const out = await lowerAutonomy(home, projectId, to);

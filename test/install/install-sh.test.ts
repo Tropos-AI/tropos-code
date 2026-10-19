@@ -49,7 +49,7 @@ describe("install.sh targets and sources", () => {
     expect(srv.requests.some((p) => p.includes("/channels/"))).toBe(false);
   });
 
-  test("stable through the .bak slot when the primary is missing (R3.1)", async () => {
+  test("stable through the .bak slot when the primary is missing", async () => {
     srv.put("channels", "stable.bak", "1.0.0\n");
     const r = await (await sandbox()).run(["stable"]);
     expect(r.code).toBe(0);

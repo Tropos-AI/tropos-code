@@ -1,4 +1,4 @@
-// src/gateway/policy.ts — what a session started from a messaging channel may do (spec §2.3).
+// src/gateway/policy.ts — what a session started from a messaging channel may do.
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname } from "node:path";

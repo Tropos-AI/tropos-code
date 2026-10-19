@@ -129,7 +129,7 @@ test("deny rules: private files and other specialists, not its own folder", () =
   expect(decide({ toolName: "Bash", kind: "exec", command: `cat ${workspaceFile(home, "USER.md")}`, paths: [] }, pc).behavior).not.toBe("allow");
 });
 
-test("capAutonomy keeps the stricter level of P2's policy and its pinned tests", () => {
+test("capAutonomy keeps the stricter level of the autonomy policy and its pinned tests", () => {
   const base = withRules([]);
   const at = (level: "ask" | "balanced" | "autonomous"): PermissionContext => ({ ...base, autonomy: { level, testCommands: ["bun test"] } });
   expect(capAutonomy(at("autonomous"), "balanced").autonomy).toEqual({ level: "balanced", testCommands: ["bun test"] });

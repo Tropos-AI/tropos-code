@@ -1,6 +1,6 @@
-# .github/workflows/channels-health.yml — every 6 hours: check the channel pointers; repair on request (spec §7.4).
+# .github/workflows/channels-health.yml — every 6 hours: check the channel pointers; repair on request.
 # The check is read-only. Repair writes slots to Tropos-AI/tropos-code-channels (CHANNELS_WRITE_TOKEN, environment
-# channels-write; decision D1-B) and may set GitHub latest on Tropos-AI/tropos-code, so only it holds contents: write.
+# channels-write) and may set GitHub latest on Tropos-AI/tropos-code, so only it holds contents: write.
 name: channels-health
 on:
   schedule:

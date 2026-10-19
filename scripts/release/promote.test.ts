@@ -5,7 +5,7 @@ import { checkChannels, previousRelease, promoteLatest, promoteStable, recordsOn
 const enc = (s: string) => new TextEncoder().encode(s);
 const dec = (b: Uint8Array | null) => (b ? new TextDecoder().decode(b) : null);
 
-/** Decision D1-A, kept for these tests only: `verified.json` on the version release (tropos-code releases are immutable, so production uses D1-B). */
+/** For these tests only: `verified.json` on the version release (tropos-code releases are immutable, so production keeps the records on the channels release). */
 function recordsOnVersionRelease(main: GitHubClient): VerificationRecords {
   return {
     read: async (v) => {
@@ -28,7 +28,7 @@ class FakeGitHub implements GitHubClient {
   failUpload: (tag: string, name: string) => boolean = () => false;
   failMarkLatest = false;
   observe: () => void = () => {};
-  /** Awaited at the start of every call; R7.2 makes it random to vary the interleaving. */
+  /** Awaited at the start of every call; the interleaving tests make it random to vary the order. */
   delay: () => Promise<void> = async () => {};
   async getRelease(tag: string): Promise<ReleaseInfo | null> {
     await this.delay();
@@ -103,7 +103,7 @@ beforeEach(() => {
 
 const endState = () => ({ latest: gh.slot("latest"), latestBak: gh.slot("latest.bak"), stable: gh.slot("stable"), stableBak: gh.slot("stable.bak"), gh: gh.latest });
 
-describe("first release (R7.1)", () => {
+describe("first release", () => {
   test("creates the channels release and every slot, then marks GitHub latest", async () => {
     gh.publish("1.0.0");
     await promoteLatest(deps, "1.0.0");
@@ -126,13 +126,13 @@ describe("first release (R7.1)", () => {
     expect(await previousRelease(deps, "1.0.0")).toEqual({ installerTag: null, stable: null });
   });
 
-  test("the first release, published but not promoted, is not its own old installer (R3)", async () => {
+  test("the first release, published but not promoted, is not its own old installer", async () => {
     gh.publish("1.0.0");
     expect(await previousRelease(deps, "1.0.0")).toEqual({ installerTag: null, stable: null });
   });
 });
 
-describe("resuming an interrupted promotion (R2.1)", () => {
+describe("resuming an interrupted promotion", () => {
   const faults: Array<[string, () => void, () => void]> = [
     ["upload of latest.bak", () => (gh.failUpload = (_t, n) => n === "latest.bak"), () => (gh.failUpload = () => false)],
     ["upload of latest", () => (gh.failUpload = (_t, n) => n === "latest"), () => (gh.failUpload = () => false)],
@@ -168,7 +168,7 @@ describe("safety rules", () => {
     await expect(promoteLatest(deps, "1.0.0")).rejects.toThrow("would move latest backwards");
   });
 
-  test("a slot changed by someone else is never overwritten (R2.2)", async () => {
+  test("a slot changed by someone else is never overwritten", async () => {
     gh.publish("1.0.0");
     gh.publish("1.1.0");
     await promoteLatest(deps, "1.0.0");
@@ -201,7 +201,7 @@ describe("safety rules", () => {
   });
 });
 
-describe("stable (spec §7.4, R3.1–R3.2)", () => {
+describe("stable", () => {
   beforeEach(async () => {
     gh.publish("1.0.0");
     gh.publish("1.1.0");
@@ -225,7 +225,7 @@ describe("stable (spec §7.4, R3.1–R3.2)", () => {
     await expect(promoteStable(deps, "1.0.0")).rejects.toThrow("would move stable backwards");
   });
 
-  test("a failed upload of stable leaves stable.bak verified; repair restores stable (R3.1)", async () => {
+  test("a failed upload of stable leaves stable.bak verified; repair restores stable", async () => {
     gh.failUpload = (_t, n) => n === "stable";
     await expect(promoteStable(deps, "1.2.0")).rejects.toThrow();
     gh.failUpload = () => false;
@@ -235,7 +235,7 @@ describe("stable (spec §7.4, R3.1–R3.2)", () => {
     expect([gh.slot("stable"), gh.slot("stable.bak")]).toEqual(["1.2.0", "1.2.0"]);
   });
 
-  test("a failed upload of stable.bak leaves stable untouched and verified (R3.2)", async () => {
+  test("a failed upload of stable.bak leaves stable untouched and verified", async () => {
     gh.failUpload = (_t, n) => n === "stable.bak";
     await expect(promoteStable(deps, "1.2.0")).rejects.toThrow();
     gh.failUpload = () => false;
@@ -245,7 +245,7 @@ describe("stable (spec §7.4, R3.1–R3.2)", () => {
   });
 });
 
-describe("checkChannels (R3.3)", () => {
+describe("checkChannels", () => {
   test("healthy", async () => {
     gh.publish("1.0.0");
     await promoteLatest(deps, "1.0.0");
@@ -416,7 +416,7 @@ describe("CLI", () => {
     });
 
   for (const args of [["latest", "1.0.0"], ["stable", "1.0.0"], ["check", "--repair"]]) {
-    test(`${args.join(" ")} fails fast without CHANNELS_WRITE_TOKEN (spec §7.1)`, () => {
+    test(`${args.join(" ")} fails fast without CHANNELS_WRITE_TOKEN`, () => {
       const r = cli(...args);
       expect(r.exitCode).toBe(1);
       expect(r.stderr.toString()).toContain("CHANNELS_WRITE_TOKEN is not set");
@@ -430,7 +430,7 @@ describe("CLI", () => {
   });
 });
 
-describe("records on the channels repository (D1-B, production layout)", () => {
+describe("records on the channels repository (production layout)", () => {
   let main: FakeGitHub;
   let channels: FakeGitHub;
   beforeEach(() => {
@@ -485,7 +485,7 @@ describe("records on the channels repository (D1-B, production layout)", () => {
   });
 });
 
-describe("interleaved promotions (R7.2)", () => {
+describe("interleaved promotions", () => {
   for (let seed = 1; seed <= 25; seed++) {
     test(`seed ${seed}`, async () => {
       for (const v of ["1.0.0", "1.1.0", "2.0.0"]) gh.publish(v);

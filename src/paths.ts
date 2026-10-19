@@ -72,7 +72,7 @@ function realOr(path: string): string {
   }
 }
 
-// The Tropos home layout (contract C6): the chief's own files live in one workspace folder, OpenClaw-style.
+// The Tropos home layout: the chief's own files live in one workspace folder, OpenClaw-style.
 
 export type WorkspaceFileName = "AGENTS.md" | "SOUL.md" | "IDENTITY.md" | "USER.md" | "MEMORY.md" | "BOOTSTRAP.md";
 

@@ -25,7 +25,7 @@ function rng(seed: number) {
 
 const VERSIONS = ["1.0.0", "1.1.0", "1.2.0"];
 
-describe("recovery never activates an unverified binary (R6.4)", () => {
+describe("recovery never activates an unverified binary", () => {
   for (let seed = 1; seed <= 40; seed++) {
     test(`seed ${seed}`, async () => {
       const random = rng(seed);

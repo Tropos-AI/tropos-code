@@ -247,7 +247,7 @@ export type Invocation =
 
 const SUBCOMMAND_WORDS = new Set(["install", "update", "upgrade", "rollback"]);
 
-/** Spec §12.2: a subcommand only when the whole argv has one of these exact shapes. */
+/** A subcommand only when the whole argv has one of these exact shapes. */
 export function matchSubcommand(argv: string[]): InstallCommand | null {
   const [word, ...rest] = argv;
   if (!word || !SUBCOMMAND_WORDS.has(word)) return null;
@@ -284,7 +284,7 @@ function gatewayLogsArgs(rest: string[]): string[] {
   return ["-n", String(lines)];
 }
 
-/** Subcommands first (unless argv starts with "--", amendment A2), otherwise exactly the old parser. */
+/** Subcommands first (unless argv starts with "--"), otherwise exactly the old parser. */
 export function parseInvocation(argv: string[]): Invocation {
   if (argv[0] !== "--") {
     const command = matchSubcommand(argv);

@@ -31,7 +31,7 @@ test("the file is private", async () => {
   expect(statSync(`${home}/learning/suggestions.json`).mode & 0o777).toBe(0o600);
 });
 
-test("marking a setup signal records it in P4's reminded list", async () => {
+test("marking a setup signal records it in the onboarding reminded list", async () => {
   await store.mark("setup:telegram", "mentioned");
   expect((await readOnboardingFlags(home)).reminded).toContain("telegram");
   await store.mark("setup:phone", "declined");

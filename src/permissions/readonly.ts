@@ -7,7 +7,7 @@
 //   (per-driver textconv, core.fsmonitor, core.pager, diff.external, log.showSignature).
 // - Shell start-up files (`.zshenv`): options, cdpath, functions this file does not model.
 // The execution layer covers these: the confinement profile (no secret reads, no writes to
-// .git/config or hooks) and the chat environment's git overrides (P2 Task 5).
+// .git/config or hooks) and the chat environment's git overrides.
 import { resolve } from "node:path";
 import { expandHome, isInside } from "../paths";
 import { hasLeadingPrefix, isCodeRunner, splitBashCommand } from "./rules";

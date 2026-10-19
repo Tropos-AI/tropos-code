@@ -16,7 +16,7 @@ export interface Resolution {
 }
 
 /**
- * Primary slot, then `.bak`, then (latest only) GitHub's latest release — spec §10.4.
+ * Primary slot, then `.bak`, then (latest only) GitHub's latest release.
  * Each source gets 3 attempts; the 4 s backoff step separates sources.
  */
 export async function resolveChannel(channel: Channel, deps: RemoteDeps): Promise<Resolution> {

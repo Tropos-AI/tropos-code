@@ -13,7 +13,7 @@ let f: EngineFixture;
 afterEach(() => f?.close());
 const now = new Date("2026-10-13T12:00:00Z");
 
-describe("runBackgroundUpdate (spec §11, layer 10)", () => {
+describe("runBackgroundUpdate", () => {
   test("installs a newer version and records it for the announcement", async () => {
     f = await makeEngineFixture({ now: () => now });
     await f.release("1.0.0");
@@ -47,7 +47,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
     expect((await f.state()).current).toBe("1.0.0");
   });
 
-  test("channel above current: stays (R9.3)", async () => {
+  test("channel above current: stays", async () => {
     f = await makeEngineFixture({ now: () => now });
     for (const v of ["1.0.0", "1.1.0"]) await f.release(v);
     await installTarget(f.deps, "1.1.0", false);
@@ -112,7 +112,7 @@ describe("runBackgroundUpdate (spec §11, layer 10)", () => {
   });
 });
 
-describe("background updates never act on what they must not touch (I1, I3, A11)", () => {
+describe("background updates never act on what they must not touch", () => {
   test("a dev 0.4.0 local build with latest 0.3.1: nothing changes, nothing is installed", async () => {
     const lines: string[] = [];
     f = await makeEngineFixture({ now: () => now, log: (line) => void lines.push(line) });

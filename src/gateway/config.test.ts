@@ -139,7 +139,7 @@ describe("remoteAccess", () => {
 });
 
 describe("proactive and new-project settings", () => {
-  test("proactive defaults are C8's; enabled unset follows Telegram", async () => {
+  test("proactive defaults; enabled unset follows Telegram", async () => {
     const c = await loadGatewayConfig(home);
     expect(c.proactive).toEqual({ activeHours: { start: "09:00", end: "21:00" }, everyHours: 4, maxPerDay: 1 });
     expect(proactiveEnabled(c, false)).toBe(false);

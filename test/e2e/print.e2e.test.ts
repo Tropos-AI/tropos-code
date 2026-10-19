@@ -47,7 +47,7 @@ describe("compiled binary", () => {
     expect(r.stdout).toBe("Hi from the mock\n");
   });
 
-  test("the request follows the spec defaults", async () => {
+  test("the request follows the defaults", async () => {
     const r = await runBinary(["-p", "hi"], [{ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }]);
     const { headers, body } = r.requests[0]!;
     expect(headers["anthropic-beta"]).toContain("compact-2026-01-12");

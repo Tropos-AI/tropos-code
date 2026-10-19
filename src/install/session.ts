@@ -50,7 +50,7 @@ export async function migrateCommandLink(layout: Layout): Promise<string | null>
 }
 
 /**
- * Spec §10.1 and §11: hold a shared lock on our own version for the whole session; if our binary vanished
+ * Hold a shared lock on our own version for the whole session; if our binary vanished
  * before we locked it, run again through ~/.local/bin/tcode; announce a finished update; maybe start one.
  */
 export async function startNativeSession(d: NativeSessionDeps): Promise<NativeSessionStart> {

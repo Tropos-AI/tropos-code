@@ -1,4 +1,4 @@
-// src/doctor/types.ts — the shared shapes of the doctor (control-plane spec §2.6).
+// src/doctor/types.ts — the shared shapes of the doctor.
 import type { ProviderSetting } from "../config/settings";
 import type { Project } from "../gateway/projects";
 import type { ServiceStatus } from "../service/types";

@@ -20,7 +20,7 @@ export const PAGES = [
   { id: "setup", label: "Setup", title: "Setup", icon: "rocket", group: "Control", nav: false },
 ] as const satisfies ReadonlyArray<{ id: string; label: string; title: string; icon: IconName; group: NavGroup; nav?: boolean }>;
 
-/** Tab ids per tabbed page, in display order. Sibling plans add to these (P7: "suggestions"). */
+/** Tab ids per tabbed page, in display order. */
 export const SETTINGS_TABS = ["models", "autonomy", "channels", "phone", "suggestions", "service", "backups", "advanced"] as const;
 export const STATUS_TABS = ["health", "logs", "usage"] as const;
 export const EXTENSIONS_TABS = ["mcp", "hooks", "plugins"] as const;

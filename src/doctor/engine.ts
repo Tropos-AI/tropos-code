@@ -1,4 +1,4 @@
-// src/doctor/engine.ts — runs the checks, applies fixes, and sums up (control-plane spec §2.6).
+// src/doctor/engine.ts — runs the checks, applies fixes, and sums up.
 import { ALL_CHECKS } from "./checks";
 import { defaultRunner } from "./runner";
 import type { Check, DoctorEnv, DoctorOptions, Finding, Report, ReportSummary } from "./types";

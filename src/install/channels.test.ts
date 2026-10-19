@@ -32,7 +32,7 @@ describe("resolveChannel", () => {
     expect(await resolveChannel("latest", deps())).toEqual({ channel: "latest", version: "1.0.0", source: "primary" });
   });
 
-  test("falls back to the .bak slot when the primary is missing (the --clobber window, R3.1)", async () => {
+  test("falls back to the .bak slot when the primary is missing (the --clobber window)", async () => {
     srv.put("channels", "stable.bak", "1.1.0\n");
     expect(await resolveChannel("stable", deps())).toEqual({ channel: "stable", version: "1.1.0", source: "backup" });
     expect(sleeps).toEqual([1000, 2000, 4000]);

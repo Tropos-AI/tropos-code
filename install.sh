@@ -16,7 +16,7 @@ main() {
   set -eu
 
   # >>> pinned-key (identical to release/allowed_signers; checked by test/install/parity.test.ts)
-  TROPOS_ALLOWED_SIGNERS='# release/allowed_signers — trusted Tropos Code release signing keys (spec §4.2, §6).
+  TROPOS_ALLOWED_SIGNERS='# release/allowed_signers — trusted Tropos Code release signing keys.
 # One line per key: tropos-release ssh-ed25519 <base64-key> <comment>
 tropos-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOO+zck/jxeGAAG152as6cUCgS3MrK4ky3Egz7rj68Jw tropos-release
 '
@@ -28,7 +28,7 @@ tropos-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOO+zck/jxeGAAG152as6cUCgS3Mr
   # <<< release-urls
   # shellcheck disable=SC2016 # awk program text, expanded by awk, not the shell
   # >>> manifest-awk (identical to scripts/release/manifest.awk; checked by test/install/parity.test.ts)
-  MANIFEST_AWK='# scripts/release/manifest.awk — validates a canonical Tropos manifest (spec §5.3) and prints the fields of one platform.
+  MANIFEST_AWK='# scripts/release/manifest.awk — validates a canonical Tropos manifest and prints the fields of one platform.
 # Usage: awk -v want=<platform> -f manifest.awk manifest.json
 # Prints version= (and sha256=, size=, zst_sha256=, zst_size= when want is set); exits 1 on any deviation.
 # Callers must first check that the file contains only newline and printable ASCII (0x20-0x7E) and ends with a
@@ -306,7 +306,7 @@ NOTE_EOF
   }
   if [ "$opt_dry" = no ]; then setup_log "$@"; fi
 
-  # fetch URL FILE MAX_BYTES MAX_SECONDS — under a file-size limit, no pipelines (spec §8.2 step 7).
+  # fetch URL FILE MAX_BYTES MAX_SECONDS — under a file-size limit, no pipelines.
   fetch() {
     fetch_blocks=$(($3 / 512 + 2))
     rm -f "$2"
@@ -397,7 +397,7 @@ NOTE_EOF
   printf '%s' "$TROPOS_ALLOWED_SIGNERS" >"$tmp/allowed_signers"
   if ! ssh-keygen -Y verify -f "$tmp/allowed_signers" -I tropos-release -n tropos-manifest -s "$tmp/manifest.json.sig" <"$tmp/manifest.json" >"$tmp/sshverify.out" 2>&1; then
     log_file_of "$tmp/sshverify.out"
-    # The probe only picks the message; installation stops either way (spec §8.2 step 6, decision D3).
+    # The probe only picks the message; installation stops either way.
     case $(ssh-keygen -Y verify 2>&1 || true) in
       *"option -- Y"* | *"option -- 'Y'"* | *"option: Y"* | *"unknown option"*) fail 65 "your ssh-keygen cannot verify signatures; install OpenSSH 8.1 or newer and run the installer again" ;;
     esac

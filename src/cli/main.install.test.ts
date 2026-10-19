@@ -25,7 +25,7 @@ async function run(argv: string[], execPath: string) {
   return { code, out: out.join(""), err: err.join("") };
 }
 
-describe("main dispatches install subcommands (spec §12)", () => {
+describe("main dispatches install subcommands", () => {
   test("a dev run refuses with 73", async () => {
     f = await makeEngineFixture();
     const r = await run(["update"], "/usr/local/bin/bun");
@@ -38,7 +38,7 @@ describe("main dispatches install subcommands (spec §12)", () => {
     expect(r.err).toContain("interactive mode needs a terminal");
   });
 
-  test("install stable never changes settings and prints the notice (R9.1)", async () => {
+  test("install stable never changes settings and prints the notice", async () => {
     f = await makeEngineFixture();
     await f.release("1.0.0");
     await f.direct("1.0.0");
@@ -97,7 +97,7 @@ describe("corrupt settings.json", () => {
   });
 });
 
-describe("main starts native sessions (spec 10.1, 11)", () => {
+describe("main starts native sessions", () => {
   async function session(execPath: string) {
     const out: string[] = [];
     const err: string[] = [];

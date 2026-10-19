@@ -19,7 +19,7 @@ export const SMALL_TIMEOUT_MS = 10_000;
 const MAX_SIGNATURE_BYTES = 4096;
 const MAX_POINTER_BYTES = 64;
 
-/** 1 s, 2 s, 4 s with ±20 % jitter (spec §10.4); `random` returns a number in [0, 1). */
+/** 1 s, 2 s, 4 s with ±20 % jitter; `random` returns a number in [0, 1). */
 export function backoffDelays(random: () => number = Math.random): number[] {
   return [1000, 2000, 4000].map((ms) => Math.round(ms * (0.8 + 0.4 * random())));
 }

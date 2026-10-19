@@ -1,7 +1,7 @@
 // src/install/errors.ts
 export type InstallErrorKind = "usage" | "integrity" | "network" | "local" | "busy";
 
-/** sysexits.h codes (spec §10.8); `usage` matches EXIT_USAGE in src/cli/main.tsx. */
+/** sysexits.h codes; `usage` matches EXIT_USAGE in src/cli/main.tsx. */
 export const EXIT_CODES = { ok: 0, other: 1, usage: 64, integrity: 65, network: 69, local: 73, busy: 75 } as const;
 
 export class InstallError extends Error {

@@ -23,10 +23,10 @@ export interface Settings {
   env: Record<string, string>;
   /** Base URL overrides for built-in providers, and extra OpenAI-compatible endpoints. */
   providers: Record<string, ProviderSetting>;
-  /** Background updates (spec §11). Only the user's own layers may set these. */
+  /** Background updates. Only the user's own layers may set these. */
   autoUpdates: boolean;
   autoUpdatesChannel: "latest" | "stable";
-  /** Commands run on agent events (§ hooks). Only the user's own layers may set these, as for every key below. */
+  /** Commands run on agent events. Only the user's own layers may set these, as for every key below. */
   hooks: HooksSetting;
   /** MCP servers whose tools join the session. */
   mcpServers: Record<string, McpServerSetting>;

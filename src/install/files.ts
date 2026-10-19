@@ -36,7 +36,7 @@ export async function fsyncFile(path: string): Promise<void> {
   }
 }
 
-/** Temp file in the same directory, fsync, rename over `path`, fsync the directory (spec §9). */
+/** Temp file in the same directory, fsync, rename over `path`, fsync the directory. */
 export async function writeFileAtomic(path: string, data: string | Uint8Array, mode = 0o600): Promise<void> {
   const tmp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
   try {

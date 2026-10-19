@@ -1,4 +1,4 @@
-// src/learning/stores.ts — Tropos's own stores: where the learning tools save under the Tropos home (contract C2).
+// src/learning/stores.ts — Tropos's own stores: where the learning tools save under the Tropos home.
 import { join, relative } from "node:path";
 import { IDENTITY_FILE, IDENTITY_STATE_FILE, SOUL_FILE } from "../context/identity";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
@@ -28,7 +28,7 @@ export function canonicalStorePath(home: string, path: string): string | undefin
   }
 }
 
-/** The stores Memory, DailyNote, SkillManage, AgentManage and Identity write to, as canonical paths. P5 and P6 add to it. */
+/** The stores Memory, DailyNote, SkillManage, AgentManage and Identity write to, as canonical paths. */
 export function troposStorePaths(home: string): string[] {
   const legacy = STORE_ENTRIES.map((name) => join(home, name));
   // The workspace itself is a project, so only the chief's own files and folders in it count.

@@ -1,5 +1,5 @@
 // test/install/helpers/zstd-corpus.ts
-// The shared zstd corpus (spec R8.1): decompress.ts and install.sh must reject every invalid case.
+// The shared zstd corpus: decompress.ts and install.sh must reject every invalid case.
 // Each case carries the bytes the manifest promises (`promised`), so a test can serve them as an
 // honest raw fallback and check that only the .zst is rejected.
 export interface ZstdCase {

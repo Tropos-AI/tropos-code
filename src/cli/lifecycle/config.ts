@@ -1,4 +1,4 @@
-// src/cli/lifecycle/config.ts — `tcode config`: read and change settings.json / gateway.json safely (spec §2.3).
+// src/cli/lifecycle/config.ts — `tcode config`: read and change settings.json / gateway.json safely.
 import { parseArgs } from "node:util";
 import { CONFIG_FILE_NAMES, ConfigStoreError, configFile, getAt, jsonSchemaOf, readConfigRaw, redact, redactAt, setAt, unsetAt, updateConfigFile, validateConfigFile, type ConfigFile, type ConfigFileName } from "../../config/store";
 import type { LifecycleRun } from "./types";

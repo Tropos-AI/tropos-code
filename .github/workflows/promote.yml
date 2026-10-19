@@ -1,5 +1,5 @@
-# .github/workflows/promote.yml — manual: move the stable channel to a verified version (spec §7.4).
-# Writes only to Tropos-AI/tropos-code-channels (CHANNELS_WRITE_TOKEN, environment channels-write; decision D1-B);
+# .github/workflows/promote.yml — manual: move the stable channel to a verified version.
+# Writes only to Tropos-AI/tropos-code-channels (CHANNELS_WRITE_TOKEN, environment channels-write);
 # on Tropos-AI/tropos-code it only reads, so the workflow token is contents: read.
 name: promote
 on:

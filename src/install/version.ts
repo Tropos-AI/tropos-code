@@ -1,5 +1,5 @@
 // src/install/version.ts
-/** Release versions are plain MAJOR.MINOR.PATCH (spec §5.3); no prerelease or build suffixes. */
+/** Release versions are plain MAJOR.MINOR.PATCH; no prerelease or build suffixes. */
 export const VERSION_RE = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
 export function isVersion(value: unknown): value is string {

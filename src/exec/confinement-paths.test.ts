@@ -18,7 +18,7 @@ const mk = (...parts: string[]) => {
   return p;
 };
 
-test("the secrets list holds every path the spec names", () => {
+test("the secrets list holds every known secret path", () => {
   for (const p of [".ssh", ".aws", ".gnupg", ".config/gh", ".docker/config.json", ".netrc", "Library/Keychains"]) expect(SECRET_PATHS).toContain(p);
   for (const p of [".claude", ".kube", ".password-store", "Library/Application Support/Google/Chrome", "Library/Safari", ".mozilla", "/Library/Keychains"]) expect(SECRET_PATHS).toContain(p);
   for (const p of [".npm", ".bun/install/cache", ".cache/pip", "Library/Caches/Homebrew", "go/pkg/mod"]) expect(CACHE_PATHS).toContain(p);

@@ -276,7 +276,7 @@ test("the preview is the before → after of the change", () => {
   expect(tool.preview!({ action: "model.set", model: "openai/gpt-5" })!.text).toContain("→ openai/gpt-5");
 });
 
-// ---- Task 7: Telegram, provider keys, doctor, restart and update
+// ---- Telegram, provider keys, doctor, restart and update
 
 test("telegram.connect takes the sealed token, never shows it, and is not undoable", async () => {
   const v = new SecretVault();

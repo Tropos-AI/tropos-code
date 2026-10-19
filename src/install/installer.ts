@@ -81,7 +81,7 @@ export function staysActive(version: string): InstallError {
   return new InstallError("busy", `the health check of ${version} could not be run after switching; ${version} stays active — try \`tcode --version\``);
 }
 
-/** zst first (verified before decompression), raw as fallback; a raw mismatch is retried twice (spec §10.3 step 4). */
+/** zst first (verified before decompression), raw as fallback; a raw mismatch is retried twice. */
 async function downloadVerified(s: EngineSession, version: string, entry: PlatformEntry, staged: string): Promise<void> {
   const d = s.deps;
   const opts = { timeoutMs: SMALL_TIMEOUT_MS, fetch: d.fetch, allowLoopbackHttp: d.allowLoopbackHttp };
@@ -131,7 +131,7 @@ async function stage(s: EngineSession, version: string, entry: PlatformEntry, so
   }
 }
 
-/** Spec §10.3 steps 2–10. Caller holds the install lock and has run recovery. */
+/** Download, verify, stage and switch. Caller holds the install lock and has run recovery. */
 export async function installVersion(s: EngineSession, version: string, opts: InstallOptions): Promise<InstallOutcome> {
   const d = s.deps;
   const l = d.layout;
@@ -151,7 +151,7 @@ export async function installVersion(s: EngineSession, version: string, opts: In
   try {
     const existing = await checkFileAgainst(target, entry, d.user);
     if (!existing.ok && existing.reason !== "missing") {
-      // Immutability rule (spec §10.2): replace a damaged file only while no process runs it.
+      // Immutability rule: replace a damaged file only while no process runs it.
       exclusive = tryLockVersionExclusive(l, version, d.flock);
       if (!exclusive) {
         let fallback: string | null = null;
@@ -176,7 +176,7 @@ export async function installVersion(s: EngineSession, version: string, opts: In
       const staged = await stage(s, version, entry, opts.source);
       s.crash("after-download");
       try {
-        await storeManifest(l, version, vm); // A10: the signed manifest is stored before the binary appears
+        await storeManifest(l, version, vm); // the signed manifest is stored before the binary appears
       } catch (e) {
         await rm(staged, { force: true });
         throw e;
@@ -258,7 +258,7 @@ export async function installTarget(deps: EngineDeps, target: string, force: boo
   return run!;
 }
 
-/** `tcode install --self …`, run by install.sh from its temporary folder (spec §10.3). */
+/** `tcode install --self …`, run by install.sh from its temporary folder. */
 export async function installSelf(deps: EngineDeps, source: Extract<InstallSource, { kind: "self" }>, hooks: Hooks = {}): Promise<LockedRun<InstallOutcome>> {
   const run = await withInstallLock(deps, { wait: true, ...hooks }, (s) => installVersion(s, source.compiledVersion, { force: false, source }));
   return run!;
@@ -280,10 +280,10 @@ async function updateFloor(s: EngineSession): Promise<string | null> {
   return candidates.sort(compareVersions).at(-1) ?? null;
 }
 
-/** `tcode update` and background updates: only ever moves forward, never to a skipped version (spec §11). */
+/** `tcode update` and background updates: only ever moves forward, never to a skipped version. */
 export async function updateChannel(deps: EngineDeps, channel: Channel, opts: Hooks & { wait: boolean; background?: boolean }): Promise<LockedRun<UpdateResult> | null> {
   return withInstallLock(deps, opts, async (s, recovery): Promise<UpdateResult> => {
-    // Amendment A11: with no verified version active, a background run stops; installing is the user's call.
+    // With no verified version active, a background run stops; installing is the user's call.
     if (opts.background && recovery.fatal) throw new InstallError("integrity", recovery.fatal);
     const available = (await resolveChannel(channel, deps)).version;
     const floor = await updateFloor(s);

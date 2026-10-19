@@ -267,7 +267,7 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
 
   // The role each open session was created with, so the reaper can close an owner session when ownership moves.
   const roles = new Map<string, SessionRole>();
-  // The git worktrees chats in registered repos work in (spec §2.6).
+  // The git worktrees chats in registered repos work in.
   const worktreeStore = new WorktreeStore(home);
   const pool = new SessionPool({
     statePath: join(dir, "sessions.json"),
@@ -561,7 +561,7 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
     try {
       /**
        * A dashboard chat's runtime on its project's current context; `resume` continues that session after a reload.
-       * The dashboard is the owner's (spec §5.3): the owner's rules and modes, commands on the host like the terminal.
+       * The dashboard is the owner's: the owner's rules and modes, commands on the host like the terminal.
        */
       const dashboardRuntime = async (project: Project, resume?: { sessionId: string; mode: Mode }): Promise<Runtime> => {
         const { pc, release } = await contexts.acquire(project);

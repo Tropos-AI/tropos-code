@@ -60,7 +60,7 @@ export interface SpecialistDeps extends SubagentDeps {
 }
 
 /**
- * Read and edit denials for everything the chief keeps private (all of P5's workspaceOwnPaths) and for other
+ * Read and edit denials for everything the chief keeps private (all of workspaceOwnPaths) and for other
  * specialists' folders. Path rules don't see inside shell commands: see `execAsks` for how Bash is held back.
  */
 export function specialistDenyRules(home: string, spec: Specialist, others: string[]): Rule[] {

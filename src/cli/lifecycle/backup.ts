@@ -1,4 +1,4 @@
-// src/cli/lifecycle/backup.ts — `tcode backup`: create, verify, restore and list archives of ~/.tropos (spec §2.3).
+// src/cli/lifecycle/backup.ts — `tcode backup`: create, verify, restore and list archives of ~/.tropos.
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { BackupError, PARTS, createBackup, listBackups, parseParts, restoreBackup, verifyBackup, type ProgressFn } from "../../backup";

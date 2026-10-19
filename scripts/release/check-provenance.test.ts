@@ -31,7 +31,7 @@ const goodApi = (patch: Partial<ProvenanceApi> = {}): ProvenanceApi => ({
   ...patch,
 });
 
-describe("checkProvenance (R4.2)", () => {
+describe("checkProvenance", () => {
   test("accepts a successful tag build of this repository", async () => {
     expect(await checkProvenance(goodRun(), REPO, goodApi())).toEqual({ tag: "v1.2.3", version: "1.2.3", sha: SHA, runId: 7, zip });
   });
@@ -70,7 +70,7 @@ describe("checkProvenance (R4.2)", () => {
     await expect(checkProvenance(goodRun(), REPO, goodApi({ runArtifacts: async () => artifacts }))).rejects.toThrow("release-inputs");
   });
 
-  test("rejects a zip whose digest does not match what GitHub recorded (A4)", async () => {
+  test("rejects a zip whose digest does not match what GitHub recorded", async () => {
     await expect(checkProvenance(goodRun(), REPO, goodApi({ downloadArtifactZip: async () => new TextEncoder().encode("other") }))).rejects.toThrow("does not match its recorded digest");
   });
 
@@ -164,7 +164,7 @@ describe("ghApi", () => {
   });
 });
 
-describe("verifyReleaseInputs (A4)", () => {
+describe("verifyReleaseInputs", () => {
   let dir: string;
   beforeEach(async () => {
     dir = await makeTmpDir();

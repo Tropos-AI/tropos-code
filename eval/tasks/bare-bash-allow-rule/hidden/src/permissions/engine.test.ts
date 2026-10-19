@@ -106,7 +106,7 @@ describe("decide — rules", () => {
   });
 });
 
-describe("decide — fix round 1", () => {
+describe("decide — wrappers, interpreters and bare rules", () => {
   const holes = ctx({ allow: ["Bash(*)"], deny: ["Bash(rm:*)"] });
   test("redirect and path-qualified wrapper forms of a denied command are denied", () => {
     expect(decide(bash("2>&1 rm x"), holes).behavior).toBe("deny");
@@ -164,7 +164,7 @@ describe("decide — symlinks", () => {
   afterAll(() => removeDir(dir));
 
   test.todo("symlinked dir counts as outside once the path is canonicalized", async () => {
-    // @ts-ignore -- ../tools/paths arrives in Task 5; drop this comment when switching back to test(...)
+    // @ts-ignore -- ../tools/paths does not exist yet; drop this comment when switching back to test(...)
     const { resolveToolPath } = await import("../tools/paths");
     const target = resolveToolPath("link/new-file.ts", join(dir, "proj"));
     const c: PermissionContext = { ...ctx({ mode: "acceptEdits" }), cwd: join(dir, "proj"), allowedDirs: [join(dir, "proj")] };
