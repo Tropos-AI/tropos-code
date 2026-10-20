@@ -53,3 +53,30 @@ test("links never emit OSC 8 even when hyperlink support is forced before the mo
   expect(out).not.toContain("\x1b]8");
   expect(out).toContain("evil.example");
 });
+
+test("renders inline markup inside list items", () => {
+  const plain = Bun.stripANSI(renderMarkdown("- **`src/format.ts`**: new `formatJson()`\n- plain *item*\n\n1. **first** step", 60));
+  expect(plain).not.toContain("**");
+  expect(plain).not.toContain("`");
+  expect(plain).not.toContain("*item*");
+  expect(plain).toContain("* src/format.ts: new formatJson()");
+  expect(plain).toContain("1. first step");
+});
+
+test("wraps long list items within the width, under the item's text", () => {
+  const item = "writes the orders as an indented JSON array with the same four columns as the table output";
+  const lines = Bun.stripANSI(renderMarkdown(`- ${item}\n- short`, 40)).split("\n");
+  for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(40);
+  expect(lines[0]!.startsWith("  * writes")).toBe(true);
+  expect(lines[1]!.startsWith("    ")).toBe(true);
+  expect(lines.map((l) => l.trim()).join(" ")).toContain(item);
+});
+
+test("nests lists under the parent item's text and keeps task boxes and numbering", () => {
+  const plain = Bun.stripANSI(renderMarkdown("9. nine\n10. ten\n    - child\n\n- [x] done\n- [ ] open", 60));
+  expect(plain).toContain("  9.  nine");
+  expect(plain).toContain("  10. ten");
+  expect(plain).toContain("      * child");
+  expect(plain).toContain("* [X] done");
+  expect(plain).toContain("* [ ] open");
+});
