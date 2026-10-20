@@ -1,6 +1,6 @@
 // src/service/spec.test.ts
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { programArguments } from "./spec";
@@ -25,4 +25,15 @@ test("an installed version runs through the ~/.local/bin/tcode link, so updates 
   expect(programArguments(join(versions, "0.4.1"), undefined, env)).toEqual([join(versions, "0.4.1"), "gateway"]);
   expect(programArguments("/opt/tcode", undefined, env)).toEqual(["/opt/tcode", "gateway"]);
   expect(programArguments("/usr/bin/bun", "/src/cli.ts", env)).toEqual(["/usr/bin/bun", "/src/cli.ts", "gateway"]);
+});
+
+test("a Homebrew install runs through its opt link, which brew upgrade moves to the new version", async () => {
+  root = await makeTmpDir("svc-spec-");
+  const prefix = realpathSync(root);
+  const keg = join(prefix, "Cellar", "tcode", "0.5.4");
+  mkdirSync(join(keg, "bin"), { recursive: true });
+  writeFileSync(join(keg, "bin", "tcode"), "", { mode: 0o755 });
+  mkdirSync(join(prefix, "opt"));
+  symlinkSync(keg, join(prefix, "opt", "tcode"));
+  expect(programArguments(join(keg, "bin", "tcode"), undefined, { HOME: prefix })).toEqual([join(prefix, "opt", "tcode", "bin", "tcode"), "gateway"]);
 });

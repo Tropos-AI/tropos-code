@@ -62,6 +62,7 @@ import { dashboardLink } from "./dashboard-link";
 import { onReloadSignal } from "./reload-signal";
 import { createSelfUpdateWatcher, type SelfUpdateDeps, type SelfUpdateWatcher } from "./self-update";
 import { startDueGatewayUpdate } from "../install/autoupdate";
+import { homebrewInstall, homebrewLinkedVersion } from "../install/homebrew";
 import { nativeVersionOf, resolveLayout } from "../install/layout";
 import { readUserSettingsRaw } from "../config/store";
 import { serviceManager } from "../service";
@@ -788,20 +789,22 @@ const UPDATE_CHECK_GAP_MS = 60 * 60_000;
 function selfUpdateWatcher(run: GatewayRun, version: string, hooks: Pick<SelfUpdateDeps, "busy" | "notify" | "exit">): SelfUpdateWatcher | undefined {
   const seam = run.seams?.selfUpdate;
   const layout = resolveLayout(run.env);
-  if (!seam && nativeVersionOf(layout, process.execPath) === null) return undefined;
+  // Homebrew updates its own install: the gateway only follows `brew upgrade` to the version it linked.
+  const brew = seam ? null : homebrewInstall(process.execPath);
+  if (!seam && !brew && nativeVersionOf(layout, process.execPath) === null) return undefined;
   const userHome = run.seams?.userHome ?? homedir();
   // An update takes a while and records its check only at the end: one start per hour at most.
   let startedAt = -Infinity;
   return createSelfUpdateWatcher({
     version,
-    linked: () => nativeVersionOf(layout, layout.binLink),
+    linked: () => (brew ? homebrewLinkedVersion(brew) : nativeVersionOf(layout, layout.binLink)),
     // The service runs this very process (or the parent that re-ran it), so it starts the new version after the exit.
     supervised: async () => {
       const s = await serviceManager({ userHome }).status();
       return s.running && (s.pid === process.pid || s.pid === process.ppid);
     },
     checkForUpdates: async () => {
-      if (Date.now() - startedAt < UPDATE_CHECK_GAP_MS) return;
+      if (brew || Date.now() - startedAt < UPDATE_CHECK_GAP_MS) return;
       const settings = await readUserSettingsRaw(run.home).catch(() => ({}) as Record<string, unknown>);
       const started = await startDueGatewayUpdate({ env: run.env, execPath: process.execPath, layout, autoUpdates: settings.autoUpdates !== false, version });
       if (started) startedAt = Date.now();

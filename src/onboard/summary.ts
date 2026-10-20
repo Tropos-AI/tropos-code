@@ -2,6 +2,7 @@
 import { readUserSettingsRaw } from "../config/store";
 import { loadGatewayConfig, telegramToken } from "../gateway/config";
 import { TelegramApi } from "../gateway/telegram/api";
+import { homebrewInstall } from "../install/homebrew";
 import { dashboardPort } from "../web/links";
 import { DEFAULT_PORT } from "../web/protocol";
 import type { SetupSummaryView } from "../web/admin/api";
@@ -24,7 +25,8 @@ export async function botUsername(deps: OnboardDeps): Promise<string | null> {
 }
 
 /** How Tropos stays up to date: on by default for a new install, so the owner hears it once here. */
-export async function updatesLine(home: string): Promise<string> {
+export async function updatesLine(home: string, execPath: string = process.execPath): Promise<string> {
+  if (homebrewInstall(execPath)) return "Homebrew keeps Tropos up to date: run brew upgrade tcode, and the background service restarts into the new version when nothing is running.";
   const raw = await readUserSettingsRaw(home).catch(() => ({}) as Record<string, unknown>);
   if (raw.autoUpdates === false) return "Automatic updates are off: update from Settings, Service & updates, or ask me to update Tropos.";
   const channel = raw.autoUpdatesChannel === "stable" ? "stable" : "latest";

@@ -6,6 +6,12 @@ Each release's notes on GitHub are its section of this file.
 
 ## [Unreleased]
 
+### Added
+
+- Tropos Code can be installed with Homebrew: `brew install tropos-ai/tap/tcode`. Homebrew keeps that install up to
+  date (`brew upgrade tcode`), the background service follows each upgrade once nothing is running, and `tcode
+  update` and `tcode rollback` say to use `brew` instead.
+
 ## [0.5.4] - 2026-10-19
 
 Version 0.5.3 was tagged but never published; its changes are part of this release.

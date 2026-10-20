@@ -56,6 +56,15 @@ describe("runInstallCommand", () => {
     expect(err.join("")).toContain("not a native install; install with install.sh");
   });
 
+  test("a Homebrew install is updated with brew", async () => {
+    f = await makeEngineFixture();
+    const { c, err } = ctx({ execPath: "/opt/homebrew/Cellar/tcode/1.0.0/bin/tcode" });
+    expect(await runInstallCommand({ kind: "update", background: false, alias: "update" }, c)).toBe(73);
+    expect(err.join("")).toContain("installed with Homebrew; update it with: brew upgrade tcode");
+    expect(await runInstallCommand({ kind: "rollback" }, c)).toBe(73);
+    expect(err.join("")).toContain("Homebrew, which keeps no older version to go back to");
+  });
+
   test("install-self runs from a temporary folder", async () => {
     f = await makeEngineFixture();
     const r = await f.release("1.0.0");

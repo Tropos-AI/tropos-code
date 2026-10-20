@@ -6,6 +6,7 @@ import { IS_TEST_BUILD } from "./build-flags";
 import type { Channel } from "./channels";
 import type { EngineDeps } from "./engine";
 import { InstallError, describeError, exitCodeFor } from "./errors";
+import { BREW_ROLLBACK_HINT, BREW_UPGRADE_HINT, homebrewInstall } from "./homebrew";
 import { installSelf, installTarget, updateChannel, type Hooks } from "./installer";
 import { currentUser, ensureLayout, nativeVersionOf, resolveLayout } from "./layout";
 import { lockVersionShared, type LockInfo } from "./locks";
@@ -91,6 +92,7 @@ export async function runInstallCommand(cmd: InstallCommand, ctx: CommandContext
     }
     const running = nativeVersionOf(deps.layout, ctx.execPath);
     if (running === null) {
+      if (homebrewInstall(ctx.execPath)) throw new InstallError("local", cmd.kind === "rollback" ? BREW_ROLLBACK_HINT : BREW_UPGRADE_HINT);
       throw new InstallError("local", "not a native install; install with install.sh");
     }
     // Like any session, a command holds the in-use lock of the version it runs from, so neither its

@@ -17,6 +17,20 @@ Needs `curl` or `wget`, `sha256sum` or `shasum`, and `ssh-keygen` from OpenSSH 8
 (Debian/Ubuntu: `openssh-client`; Alpine: `apk add openssh-keygen`; Fedora: `openssh-clients`).
 `zstd` is optional and makes the download about three times smaller.
 
+### With Homebrew
+
+```sh
+brew install tropos-ai/tap/tcode
+tcode onboard
+```
+
+The formula's checksums come from the release's signed manifest: the
+[tap](https://github.com/Tropos-AI/homebrew-tap) only writes them after the manifest's signature checks out against
+the same release key. Homebrew then owns the install. Update with `brew upgrade tcode`; Tropos's background updates,
+`tcode update` and `tcode rollback` stay off for it. The background service runs
+`$(brew --prefix)/opt/tcode/bin/tcode`, so after `brew upgrade` it restarts into the new version once nothing is
+running. `brew uninstall tcode` removes the command and leaves `~/.tropos` alone.
+
 ### Flags and environment variables
 
 Flags go anywhere on the command line (`curl … | sh -s -- --dry-run stable`); a bare `--` is ignored and
