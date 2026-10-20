@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { FakeTelegramServer } from "../../test/helpers/telegram-fake-server";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { exampleAsks } from "./copy";
-import { botUsername, setupSummary } from "./summary";
+import { botUsername, setupSummary, updatesLine } from "./summary";
 import { testDeps } from "./testing";
 
 let home: string;
@@ -68,4 +68,10 @@ describe("botUsername", () => {
     await writeGateway({ telegram: { botToken: "999:wrong" } });
     expect(await botUsername(testDeps(home))).toBeNull();
   });
+});
+
+test("a Homebrew install hears that brew keeps it up to date", async () => {
+  expect(await updatesLine(home, "/opt/homebrew/Cellar/tcode/0.5.4/bin/tcode")).toBe(
+    "Homebrew keeps Tropos up to date: run brew upgrade tcode, and the background service restarts into the new version when nothing is running.",
+  );
 });

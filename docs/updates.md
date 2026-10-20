@@ -50,8 +50,9 @@ Turning it off:
 - `"autoUpdates": false` in `~/.tropos/settings.json`;
 - the environment variable `TROPOS_DISABLE_AUTOUPDATER=1`.
 
-Print mode (`-p`) and CI never update, a local build (`bun run install:local`) never updates, and repository settings
-files can't change these keys. The setup's last step (`tcode onboard`, and the dashboard's Setup page) says whether
+Print mode (`-p`) and CI never update, a local build (`bun run install:local`) never updates, a Homebrew install is
+updated with `brew upgrade tcode` instead (see [Install with Homebrew](install.md#with-homebrew)), and repository
+settings files can't change these keys. The setup's last step (`tcode onboard`, and the dashboard's Setup page) says whether
 automatic updates are on and where to turn them off.
 
 The background updater's output goes to `update.log`: `tcode logs update`.

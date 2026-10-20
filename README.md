@@ -73,6 +73,8 @@ Tropos Code runs on macOS and Linux (arm64 and x64).
 curl -fsSL https://troposlabs.com/install.sh | sh
 ```
 
+Or with Homebrew: `brew install tropos-ai/tap/tcode` ([how Homebrew installs are updated](docs/install.md#with-homebrew)).
+
 The installer verifies a signed manifest and the binary's checksum before it runs anything, installs `tcode` to
 `~/.local/bin`, and on a fresh install with a terminal starts the guided setup. If it didn't (no terminal, or
 `--no-onboard`), run it yourself:

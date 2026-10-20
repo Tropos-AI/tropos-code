@@ -1,5 +1,6 @@
 // src/service/spec.ts — what both service managers are told to run.
 import { basename } from "node:path";
+import { homebrewInstall } from "../install/homebrew";
 import { nativeVersionOf, realOrSelf, resolveLayout } from "../install/layout";
 
 /** Service managers give jobs a bare PATH; Docker lives in one of these. */
@@ -18,8 +19,11 @@ export function programArguments(execPath: string, scriptPath: string | undefine
 /**
  * An installed version runs as ~/.local/share/tropos/versions/<v>; the service is pointed at the ~/.local/bin/tcode
  * link to it instead, which every update moves, so a restart after an update runs the new version, not the old one.
+ * A Homebrew install is pointed at its opt link for the same reason: `brew upgrade` moves it and deletes the old keg.
  */
 function stableCommand(execPath: string, env: NodeJS.ProcessEnv): string {
+  const brew = homebrewInstall(execPath);
+  if (brew) return brew.command;
   const layout = resolveLayout(env);
   if (!nativeVersionOf(layout, execPath)) return execPath;
   return realOrSelf(layout.binLink) === realOrSelf(execPath) ? layout.binLink : execPath;
