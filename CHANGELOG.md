@@ -12,6 +12,11 @@ Each release's notes on GitHub are its section of this file.
   date (`brew upgrade tcode`), the background service follows each upgrade once nothing is running, and `tcode
   update` and `tcode rollback` say to use `brew` instead.
 
+### Fixed
+
+- In the terminal, bold text, italics and code inside a list now show as formatting instead of `**` and backticks,
+  and a long list item wraps under its own text instead of being cut wherever the window ends.
+
 ## [0.5.4] - 2026-10-19
 
 Version 0.5.3 was tagged but never published; its changes are part of this release.
