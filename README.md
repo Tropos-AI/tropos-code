@@ -16,6 +16,14 @@
   <a href="https://github.com/Tropos-AI/tropos-code/stargazers"><img src="https://img.shields.io/github/stars/Tropos-AI/tropos-code?style=flat" alt="GitHub stars"></a>
 </p>
 
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="A tcode session: asked to add a --json flag to a CLI's export command, Tropos reads the code, asks before editing, updates the source and tests, runs bun test (4 pass) and summarises the change" width="100%">
+</p>
+
+```sh
+curl -fsSL https://troposlabs.com/install.sh | sh
+```
+
 <br>
 
 ## What is Tropos Code?
