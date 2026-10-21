@@ -107,8 +107,10 @@ again is denied. See [Scheduling and the heartbeat](scheduling-and-heartbeat.md)
 
 - They are shown to the model you chose, so it can answer you. Like anything else you ask about, that goes to your
   provider.
-- They are not given to the background learning review, so other people's messages don't end up in your notes, skills
-  or journal. The review sees "a Messages result withheld" instead.
+- Turns that read texts are not learned from. Once a conversation has read or sent a text, the background learning
+  review skips it, so other people's messages don't end up in your notes, skills or journal, not even quoted in the
+  agent's own replies or in a compacted summary. (Should a review ever see such a conversation, every Messages result
+  in it is withheld as well.)
 - They are never written to the session search index.
 - They stay in your own session history, so a conversation can continue. That folder is private to you.
 
@@ -118,8 +120,6 @@ again is denied. See [Scheduling and the heartbeat](scheduling-and-heartbeat.md)
   program that runs as your user could ask it for your texts or ask it to send one. This is the same exposure as giving
   Full Disk Access to your Terminal. A per-install key stops programs that guess blindly; it does not stop one written
   to target Tropos.
-- **Quoted texts.** If the agent quotes a text in its own reply, or one ends up in a compacted summary of a long
-  conversation, that wording can reach the learning review.
 - **Hooks.** A `PreToolUse` hook you write that answers "allow" overrides the ask for a scheduled job's text. Hooks are
   your own code, so they are trusted.
 

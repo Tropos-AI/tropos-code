@@ -430,19 +430,36 @@ describe("LearningLoop", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("the review never sees what the Messages tools returned", async () => {
-    const { loop, calls, done } = harness();
+  test("a review window whose history used the Messages tools is skipped, its counters consumed as if reviewed", async () => {
+    const { loop, calls } = harness();
     const withTexts: MessageParam[] = [
       ...history,
       { role: "assistant", content: [{ type: "tool_use", id: "m1", name: "Messages", input: { action: "read", chat: "c" } }] },
       { role: "user", content: [{ type: "tool_result", tool_use_id: "m1", content: "Maria: the door code is 4711" }] },
+      { role: "assistant", content: [{ type: "text", text: "Maria says the door code is 4711." }] },
     ];
     for (let i = 0; i < 3; i++) loop.afterTurn("end_turn", withTexts);
-    expect(calls).toHaveLength(1);
-    expect(JSON.stringify(calls[0]!.history)).not.toContain("4711");
-    expect(JSON.stringify(calls[0]!.history)).toContain("[Messages result withheld from the learning review]");
-    done();
-    await loop.whenIdle();
+    expect(calls).toHaveLength(0);
+    expect(loop.running).toBe(false);
+    expect(loop.counters.turnsSinceMemory).toBe(0);
+    expect(loop.last).toEqual({ kind: "memory", startedAt: 42, changes: 0, skipped: true });
+  });
+
+  test("once this session used the Messages tools, later reviews are skipped too (a compacted summary may quote texts)", async () => {
+    const { loop, calls } = harness();
+    loop.onToolEnd("SendIMessage", "done");
+    // The history no longer shows the call, as after compaction.
+    turns(loop, 3);
+    expect(calls).toHaveLength(0);
+    expect(loop.counters.turnsSinceMemory).toBe(0);
+    // The final review is skipped the same way, and consumes its counters.
+    turns(loop, 2);
+    expect(loop.finalDue).toBe(true);
+    await loop.finish(1_000);
+    expect(calls).toHaveLength(0);
+    expect(loop.counters).toEqual({ turnsSinceMemory: 0, toolsSinceSkill: 0 });
+    expect(loop.last?.kind).toBe("final");
+    expect(loop.last?.skipped).toBe(true);
   });
 
   test("a skill review after `interval` tool calls; both due means combined", async () => {

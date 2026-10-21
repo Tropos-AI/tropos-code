@@ -18,6 +18,7 @@ import type { PermissionContext } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
 import type { AnyTool, ToolContext } from "../tools/types";
 import type { LearningCounters } from "./counters";
+import { MESSAGES_TOOLS } from "../messages/runtime";
 import { redactPrivateResults } from "./redact";
 import {
   COMBINED_REVIEW_PROMPT,
@@ -81,6 +82,13 @@ export interface LastReview {
   /** Set when the review threw; the loop never surfaces it beyond this. */
   failed?: boolean;
   aborted?: boolean;
+  /** Set when it never ran because the conversation read or sent texts (its counters were consumed all the same). */
+  skipped?: boolean;
+}
+
+/** True when the history holds a call to one of the Messages tools. */
+function usesTexts(history: readonly MessageParam[]): boolean {
+  return history.some((m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b.type === "tool_use" && MESSAGES_TOOLS.has(b.name)));
 }
 
 const NOTICE_PREFIX = "💡 Learned: ";
@@ -119,6 +127,11 @@ export class LearningLoop {
   private finishCancelled = false;
   /** Resolves a running finish() early: the session's end no longer waits for the review. */
   private skipFinish: (() => void) | undefined;
+  /**
+   * Set once this session called a Messages tool. From then on no review runs: the agent's own replies may quote
+   * the texts, and a compacted summary may carry them on after the calls themselves are gone from the history.
+   */
+  private sawTexts = false;
 
   constructor(private readonly deps: LearningLoopDeps) {
     this.turnsSinceMemory = deps.initial?.turnsSinceMemory ?? 0;
@@ -146,6 +159,7 @@ export class LearningLoop {
 
   /** The main agent's tool calls. Its own successful saves postpone the matching review. */
   onToolEnd(toolName: string, status: "done" | "error" | "denied"): void {
+    if (MESSAGES_TOOLS.has(toolName)) this.sawTexts = true;
     this.toolsSinceSkill++;
     if (status === "done") {
       if (toolName === "Memory") this.turnsSinceMemory = 0;
@@ -280,12 +294,23 @@ export class LearningLoop {
   private start(kind: ReviewKind, history: MessageParam[], before: { turnsSinceMemory: number; toolsSinceSkill: number; flushArmed: boolean }): void {
     const controller = new AbortController();
     const record: LastReview = { kind, startedAt: (this.deps.now ?? Date.now)(), changes: 0 };
+    // Turns that read or sent texts are not learned from: skipped as if reviewed, so the next window starts afresh.
+    if (this.sawTexts || usesTexts(history)) {
+      this.sawTexts = true;
+      this.lastReview = { ...record, skipped: true };
+      if (kind === "final") {
+        this.turnsSinceMemory = 0;
+        this.toolsSinceSkill = 0;
+        this.saveCounters();
+      }
+      return;
+    }
     this.controller = controller;
     this.lastReview = record;
     const run = async () => {
       try {
         // Inside the async body, so even a synchronous throw from runReview lands in the catch below.
-        // Other people's texts never reach the review, so they can't end up in notes, skills or the journal.
+        // Defence in depth (a history with texts never gets here): Messages results are withheld from the review.
         const result = await this.deps.runReview(kind, REVIEW_PROMPTS[kind], redactPrivateResults(history), controller.signal);
         if (controller.signal.aborted) record.aborted = true;
         record.changes = result.changes.length;
