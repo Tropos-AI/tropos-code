@@ -13,6 +13,7 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
+import { HARNESS_SUGGESTION_RULES, parseSuggestion, saveSuggestion } from "../harness/suggest";
 import { harnessRoot } from "../harness/tree";
 import { resolveLayoutPath, workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
@@ -250,6 +251,10 @@ export function makeAgent(
           // Only the reviews that may create a specialist see what was delegated lately.
           const withDelegations = kind === "skill" || kind === "combined" || kind === "final";
           if (withDelegations) prompt = `${prompt}\n\n${await delegationContext(ctx.home).catch(() => "")}`.trim();
+          // The same reviews may suggest standing rules for the harness; only the owner's sessions, and only untested
+          // candidates come of it (src/harness/suggest.ts).
+          const suggest = withDelegations && ctx.role === "owner" && ctx.settings.harness.suggest;
+          if (suggest) prompt = `${prompt}\n\n${HARNESS_SUGGESTION_RULES}`;
           const result = await runReviewAgent({
             model: ctx.model,
             tools: ctx.tools,
@@ -266,6 +271,8 @@ export function makeAgent(
             home: ctx.home,
           });
           agent?.addCost(result.costUsd);
+          const suggestion = suggest ? parseSuggestion(result.reply) : null;
+          if (suggestion) await saveSuggestion(ctx.home, ctx.cwd, { id: opts.session().id }, suggestion).catch(() => null);
           return result;
         },
       })
