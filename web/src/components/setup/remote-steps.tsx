@@ -302,6 +302,14 @@ export function MessagesStep({ onChanged, onSkip, onNext }: { onChanged: () => v
   return (
     <div className="flex flex-col gap-4">
       <MessagesPanel
+        unavailable={
+          <div className="flex flex-col items-start gap-3">
+            <Notice tone="info">Texts are only available on macOS.</Notice>
+            <Button variant="primary" icon="arrow-right" onClick={onNext}>
+              Next
+            </Button>
+          </div>
+        }
         footer={
           <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
             <Button variant="primary" icon="arrow-right" onClick={() => (onChanged(), onNext())}>

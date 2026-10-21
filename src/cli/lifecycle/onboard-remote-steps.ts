@@ -146,6 +146,10 @@ const MESSAGES_WAIT_MS = 120_000;
 
 export const messagesStep: StepHandler = async (io) => {
   const { flow, deps, cli } = io;
+  if (deps.messages.platform !== "darwin") {
+    flow.info("Texts are only available on macOS.");
+    return "skip";
+  }
   const want = await askYesNo(io, "Do you want me to read your texts on this Mac and send the ones you approve?", false);
   if (want === "back") return "back";
   if (want !== true) return "skip";
@@ -159,7 +163,12 @@ export const messagesStep: StepHandler = async (io) => {
     return "skip";
   }
 
-  if (view.status?.fullDiskAccess !== "yes") {
+  if (!view.status?.helper.installed) {
+    flow.error(wrapAll("I couldn't set up the Tropos Messages Helper, so texts are not ready. Run `tcode onboard` again, or check Settings > Channels."));
+    return "skip";
+  }
+
+  if (view.status.fullDiskAccess !== "yes") {
     try {
       await deps.messages.openSettings("fda");
     } catch {

@@ -79,6 +79,14 @@ describe("MessagesPanel", () => {
     expect(socket.adminOf("messages.get").length).toBe(3);
   });
 
+  test("does not poll while only the Messages-control step is to do", async () => {
+    jest.useFakeTimers();
+    const { socket } = await mountAdminPage(MessagesPanel, { "messages.get": () => ({ available: true, enabled: true, status: { ...ready, automation: "unknown" } }) });
+    await screen.findByRole("button", { name: "Test Messages access" });
+    await tick(MESSAGES_POLL_MS * 5);
+    expect(socket.adminOf("messages.get").length).toBe(1);
+  });
+
   test("leaves no timer behind on unmount", async () => {
     jest.useFakeTimers();
     const { socket } = await mountAdminPage(MessagesPanel, { "messages.get": () => ON_NO_FDA });
@@ -90,6 +98,15 @@ describe("MessagesPanel", () => {
 });
 
 describe("MessagesStep", () => {
+  test("off macOS it says so and Next still works", async () => {
+    const seen: string[] = [];
+    const Step = () => createElement(MessagesStep, { onChanged: () => void seen.push("changed"), onNext: () => void seen.push("next"), onSkip: () => void seen.push("skip") });
+    await mountAdminPage(Step, { "messages.get": () => ({ available: false, enabled: false }) });
+    expect(await screen.findByText("Texts are only available on macOS.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(seen).toEqual(["next"]);
+  });
+
   test("wraps the card with Next and Skip", async () => {
     const seen: string[] = [];
     const Step = () => createElement(MessagesStep, { onChanged: () => void seen.push("changed"), onNext: () => void seen.push("next"), onSkip: () => void seen.push("skip") });

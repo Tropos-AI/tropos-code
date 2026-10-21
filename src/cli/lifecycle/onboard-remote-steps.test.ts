@@ -266,6 +266,27 @@ describe("messagesStep", () => {
     expect(io.out()).toContain("Texts are ready.");
   });
 
+  test("off macOS it asks nothing and skips, even with --reset", async () => {
+    const messages = fakeMessages({ platform: "linux" });
+    const io = await wizardIO([], { messages }, { reset: true });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(io.questions).toEqual([]);
+    expect(messages.calls).toEqual([]);
+  });
+
+  test("a helper that could not be set up is reported and the Full Disk Access pane is not opened", async () => {
+    const messages = darwin();
+    messages.set = async () => {
+      messages.calls.push("set:true");
+      messages.view = { available: true, enabled: true, status: { ...status("no"), helper: { installed: false, current: 1 } } };
+      return messages.view;
+    };
+    const io = await wizardIO(["y"], { messages });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(messages.calls).toEqual(["set:true"]);
+    expect(flat(io.out())).toContain("couldn't set up the Tropos Messages Helper");
+  });
+
   test("gives up after two minutes without Full Disk Access and does not probe", async () => {
     const messages = darwin();
     const sleeps: number[] = [];

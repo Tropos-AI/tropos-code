@@ -32,7 +32,7 @@ function marksOf(view: MessagesView): Mark[] {
   ];
 }
 
-function MessagesBody({ initial, footer }: { initial: MessagesView; footer?: ReactNode }) {
+function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView; footer?: ReactNode; unavailable?: ReactNode }) {
   const admin = useAdmin();
   const toggle = useAction();
   const open = useAction();
@@ -42,7 +42,8 @@ function MessagesBody({ initial, footer }: { initial: MessagesView; footer?: Rea
   useEffect(() => setView(initial), [initial]);
 
   const marks = marksOf(view);
-  const waiting = view.enabled && marks.some((m) => !m.done);
+  // Only the helper and Full Disk Access change by themselves; the Messages-control mark changes when its button is pressed.
+  const waiting = view.enabled && marks.some((m) => m.id !== "automation" && !m.done);
   const busy = useRef(false);
   useEffect(() => {
     if (!waiting) return;
@@ -69,7 +70,7 @@ function MessagesBody({ initial, footer }: { initial: MessagesView; footer?: Rea
     };
   }, [admin, waiting]);
 
-  if (!view.available) return null;
+  if (!view.available) return <>{unavailable}</>;
 
   const setEnabled = async (enabled: boolean) => {
     const out = await toggle.run(() => admin("messages.set", { enabled }));
@@ -123,11 +124,12 @@ function MessagesBody({ initial, footer }: { initial: MessagesView; footer?: Rea
   );
 }
 
-export function MessagesPanel({ footer }: { footer?: ReactNode }) {
+/** `unavailable` is what shows where texts cannot be used (nothing in Settings; the setup step puts a note and Next there). */
+export function MessagesPanel({ footer, unavailable }: { footer?: ReactNode; unavailable?: ReactNode }) {
   const resource = useAdminResource("messages.get");
   return (
     <ResourceView resource={resource} noun="the texts settings">
-      {(view) => <MessagesBody initial={view} footer={footer} />}
+      {(view) => <MessagesBody initial={view} footer={footer} unavailable={unavailable} />}
     </ResourceView>
   );
 }
