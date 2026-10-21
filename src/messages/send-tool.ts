@@ -14,6 +14,7 @@ const SEND_TIMEOUT_MS = 180_000;
 /** After a send, chat.db is checked this often, for this long, until Messages marks the text delivered. */
 const CHECK_EVERY_MS = 1_000;
 const CHECK_FOR_MS = 10_000;
+const STOPPED = "Not sent: you stopped it before it went out.";
 
 /** Length in characters as a person counts them: an emoji is one, not two UTF-16 units. */
 const charCount = (text: string) => [...text].length;
@@ -121,24 +122,36 @@ export function createSendTool(o: {
       : client.request("send-handle", [r.handle!, service ?? "iMessage"], { body: text, timeoutMs: SEND_TIMEOUT_MS });
   }
 
-  /** Looks for the sent text in fresh snapshots: up to `polls` more times, a second apart, until it shows as delivered or failed. */
-  async function lookFor(r: Recipient, since: number, text: string, polls: number, signal: AbortSignal) {
+  /**
+   * Looks for the sent text in fresh snapshots, a second apart, until it shows as delivered or failed or `forMs`
+   * have passed since the first look (snapshot time included); `forMs` 0 looks once.
+   */
+  async function lookFor(r: Recipient, since: number, text: string, forMs: number, signal: AbortSignal) {
     const key = r.chat ?? r.handle!;
-    for (let i = 0; ; i++) {
+    const deadline = now() + forMs;
+    for (;;) {
       const row = await source.fresh((db) => db.sentSince(key, since, text));
       if (row && (row.delivered || row.error !== 0)) return row;
-      if (i >= polls || signal.aborted) return row;
+      if (signal.aborted || now() + CHECK_EVERY_MS > deadline) return row;
       await sleep(CHECK_EVERY_MS);
     }
   }
 
   async function deliver(r: Recipient, text: string, signal: AbortSignal): Promise<ToolOutput> {
     const service = r.handle !== undefined ? await serviceFor(r.handle) : undefined;
+    // Esc during the lookup: the agent has already told the model the call was interrupted, so nothing may go out.
+    if (signal.aborted) return fail(STOPPED);
     const since = now();
-    // Counted before the helper is asked, so failing and timed-out sends count too.
-    ledger.record(r.target, since);
+    // Checked and counted in one synchronous step right before the helper is asked, so two senders racing
+    // (a chat and a scheduled job) can't both take the last slot; failing and timed-out sends count too.
+    const { refuse } = ledger.tryReserve(r.target, since);
+    if (refuse) return fail(refuse);
     let reply = await request(r, text, service);
-    if (!reply.ok && reply.code !== "timeout" && service === "iMessage" && unreachable(reply)) reply = await request(r, text, "SMS");
+    if (!reply.ok && reply.code !== "timeout" && service === "iMessage" && unreachable(reply)) {
+      // iMessage refused the handle, so nothing went out yet; a stop now still means not sent.
+      if (signal.aborted) return fail(STOPPED);
+      reply = await request(r, text, "SMS");
+    }
     if (!reply.ok && reply.code === "-1743") return fail(new MessagesError("no-automation").message);
 
     // A timeout may still have sent the text: never send again, let chat.db say what happened.
@@ -147,11 +160,12 @@ export function createSendTool(o: {
     const timeoutNote = timedOut && !reply.ok ? ` Tropos stopped waiting for Messages: ${reply.message} It did not send the text again.` : "";
     let row: Awaited<ReturnType<typeof lookFor>>;
     try {
-      row = await lookFor(r, since, text, reply.ok || timedOut ? CHECK_FOR_MS / CHECK_EVERY_MS : 0, signal);
+      row = await lookFor(r, since, text, reply.ok || timedOut ? CHECK_FOR_MS : 0, signal);
     } catch (err) {
       const why = err instanceof MessagesError ? err.message : errorText(err);
       if (reply.ok) return { content: `Messages accepted the text for ${label(r)}, but Tropos couldn't check whether it was delivered: ${why}`, summary: "sent" };
-      return fail(`The text probably didn't go. ${helperError}${timeoutNote} Tropos couldn't check chat.db either: ${why}`);
+      const what = timedOut ? `Tropos can't tell whether the text went.${timeoutNote}` : `The text probably didn't go. ${helperError}`;
+      return fail(`${what} Tropos couldn't check chat.db either: ${why}`);
     }
     const who = nameOf(r) ?? r.target;
     if (row?.delivered) return { content: `Sent to ${who}: delivered.${timeoutNote}`, summary: "delivered" };
@@ -181,7 +195,9 @@ export function createSendTool(o: {
     },
     subject: (input) => {
       const { target } = recipientOf(input);
-      const { ask } = ledger.check(target, now());
+      const { ask, refuse } = ledger.check(target, now());
+      // At the hard limit there is nothing to ask: a throwing subject makes the agent refuse without a prompt.
+      if (refuse) throw new Error(refuse);
       return { paths: [], target, ...(ask ? { askReason: ask } : {}) };
     },
     preview: (input): PermissionPreview => ({ header: `To ${label(recipientOf(input))}`, text: input.text }),
@@ -190,8 +206,6 @@ export function createSendTool(o: {
       if (!parsed.success) return fail(parsed.error.issues.map((i) => i.message).join("; "));
       // Keyed by the object subject() saw, so the approved recipient is the one used.
       const r = recipientOf(raw as Input);
-      const { refuse } = ledger.check(r.target, now());
-      if (refuse) return fail(refuse);
       try {
         return await deliver(r, parsed.data.text, ctx.signal);
       } catch (err) {

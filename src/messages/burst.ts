@@ -39,6 +39,17 @@ export class SendLedger {
     return {};
   }
 
+  /**
+   * Checks the hard limits and, when they allow it, counts the send, in one synchronous step: of two
+   * senders racing for the last slot exactly one gets it. Returns the refusal when the limit is reached.
+   */
+  tryReserve(target: string, at: number): { refuse?: string } {
+    const { refuse } = this.check(target, at);
+    if (refuse) return { refuse };
+    this.record(target, at);
+    return {};
+  }
+
   /** Forgets sends older than the longest window. */
   private prune(at: number): void {
     if (this.sends.length > 0 && at - this.sends[0]!.at >= HOUR) this.sends = this.sends.filter((s) => at - s.at < HOUR);

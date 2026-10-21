@@ -32,6 +32,7 @@ let sleeps: number[];
 let source: MessagesSource;
 let client: { request: (action: string, args: string[], opts?: { body?: string; timeoutMs?: number }) => Promise<HelperReply> };
 let onSleep: (() => void) | undefined;
+let beforeSnapshot: (() => Promise<void>) | undefined;
 let ledger: SendLedger;
 
 function rebuild(): void {
@@ -51,6 +52,7 @@ function makeSource(): MessagesSource {
   client = {
     async request(action: string, args: string[], opts: { body?: string; timeoutMs?: number } = {}): Promise<HelperReply> {
       if (action === "snapshot") {
+        await beforeSnapshot?.();
         copyFileSync(join(root, "fixtures", "chat.db"), join(args[0]!, "chat.db"));
         return ok;
       }
@@ -121,6 +123,7 @@ beforeEach(() => {
   calls = [];
   sleeps = [];
   onSleep = undefined;
+  beforeSnapshot = undefined;
   clock = T0;
   ledger = new SendLedger();
   onSend = () => {
@@ -375,12 +378,88 @@ describe("SendIMessage — burst guard", () => {
     expect(tool.subject({ to: "+306900000002", text: "x" } as never, "/work").askReason).toBeUndefined();
   });
 
-  test("at the hard limit nothing is sent", async () => {
+  test("at the hard limit subject() refuses, so the agent never asks; run() refuses too", async () => {
     for (let i = 0; i < 10; i++) ledger.record(MARIA, T0 - i * 1000);
-    const out = await send(makeTool(), { to: MARIA, text: "x" });
+    const tool = makeTool();
+    const parsed = tool.schema.parse({ to: MARIA, text: "x" });
+    expect(() => tool.subject(parsed, "/work")).toThrow("Not sent: 10 texts");
+    const out = await tool.run(parsed, ctx);
     expect(out.isError).toBe(true);
     expect(text(out)).toContain("Not sent");
     expect(sends()).toHaveLength(0);
+  });
+
+  test("two sends racing for the last slot: exactly one goes out", async () => {
+    for (let i = 0; i < 9; i++) ledger.record(MARIA, T0 - i * 1000);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    beforeSnapshot = () => gate;
+    const tool = makeTool();
+    const a = tool.schema.parse({ to: MARIA, text: "one" });
+    const b = tool.schema.parse({ to: MARIA, text: "two" });
+    // Both are approved at 9 sends, then both wait in the chat lookup before sending.
+    expect(tool.subject(a, "/work").askReason).toBeDefined();
+    expect(tool.subject(b, "/work").askReason).toBeDefined();
+    // Each run reaches the gated snapshot (the second joins the first's) before run() returns its promise.
+    const running = [tool.run(a, ctx), tool.run(b, ctx)];
+    beforeSnapshot = undefined;
+    release();
+    const outs = await Promise.all(running);
+    expect(sends()).toHaveLength(1);
+    expect(outs.filter((o) => text(o).includes("Not sent: 10 texts"))).toHaveLength(1);
+  });
+
+  test("Esc while the chat lookup runs: nothing is sent and nothing is counted", async () => {
+    for (let i = 0; i < 4; i++) ledger.record(MARIA, T0 - i * 1000);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    beforeSnapshot = () => {
+      entered();
+      return gate;
+    };
+    const tool = makeTool();
+    const parsed = tool.schema.parse({ to: MARIA, text: "hello" });
+    tool.subject(parsed, "/work");
+    const stop = new AbortController();
+    const running = tool.run(parsed, { signal: stop.signal } as unknown as ToolContext);
+    await started;
+    stop.abort();
+    beforeSnapshot = undefined;
+    release();
+    const out = await running;
+    expect(text(out)).toBe("Not sent: you stopped it before it went out.");
+    expect(out.isError).toBe(true);
+    expect(sends()).toHaveLength(0);
+    // Still 4 sends: a fifth would have made the next call ask.
+    expect(ledger.check(MARIA, clock)).toEqual({});
+  });
+
+  test("the delivery check stops 10 s after it started, counting the time snapshots take", async () => {
+    onSend = () => ok;
+    // Every snapshot takes 2.5 s of the clock.
+    beforeSnapshot = async () => {
+      clock += 2_500;
+    };
+    const out = await send(makeTool(), { to: MARIA, text: "hello" });
+    expect(out.summary).toBe("not recorded");
+    // Looks at 0+2.5, then 1 s pauses with 2.5 s snapshots: 6, 9.5; another pause would pass 10 s.
+    expect(sleeps).toEqual([1000, 1000]);
+  });
+
+  test("a timeout with chat.db unreadable says it can't tell, without repeating the timeout", async () => {
+    onSend = () => ({ ok: false, code: "timeout", message: "Tropos Messages Helper didn't answer within 180 s (it took the request but didn't finish)." });
+    const tool = makeTool();
+    const parsed = tool.schema.parse({ chat: "iMessage;+;chat1", text: "hello" });
+    tool.subject(parsed, "/work");
+    beforeSnapshot = async () => {
+      throw new Error("disk gone");
+    };
+    const out = await tool.run(parsed, ctx);
+    expect(out.isError).toBe(true);
+    expect(text(out)).toStartWith("Tropos can't tell whether the text went.");
+    expect(text(out).match(/answer/g)).toHaveLength(1);
   });
 
   test("a failed send still counts", async () => {

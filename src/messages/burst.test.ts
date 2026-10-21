@@ -49,6 +49,16 @@ describe("SendLedger", () => {
     expect(ledger.check(MARIA, T0 + 61 * MIN)).toEqual({});
   });
 
+  test("tryReserve counts a send only when the hard limits allow it", () => {
+    const ledger = new SendLedger();
+    for (let i = 0; i < 9; i++) ledger.record(MARIA, T0 + i * 1000);
+    expect(ledger.tryReserve(MARIA, T0 + 10_000)).toEqual({});
+    expect(ledger.tryReserve(MARIA, T0 + 11_000).refuse).toContain("10 texts");
+    // The refused attempt wasn't counted: still 10.
+    expect(ledger.check(MARIA, T0 + 12_000).refuse).toContain("10 texts");
+    expect(ledger.tryReserve("+306900000001", T0 + 12_000)).toEqual({});
+  });
+
   test("a recipient is matched by its target string, the same one the permission rule uses", () => {
     const ledger = new SendLedger();
     for (let i = 0; i < 5; i++) ledger.record("chat:iMessage;+;chat1", T0 + i * 1000);
