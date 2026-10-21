@@ -116,6 +116,7 @@ export function createCronService(opts: CronServiceOptions = {}): CronService & 
       let status: RunStatus = "ok";
       let text = "";
       let error: string | undefined;
+      // Only the owner can set harnessRecursion (the Cron tool refuses it elsewhere), so the longer limit is theirs.
       const limit = job.maxRuntimeMs ?? (job.harnessRecursion ? RECURSIVE_MAX_RUNTIME_MS : DEFAULT_MAX_RUNTIME_MS);
       let timedOut = false;
       const watchdog = setTimer(() => {

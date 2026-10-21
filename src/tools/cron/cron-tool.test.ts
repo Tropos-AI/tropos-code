@@ -174,3 +174,16 @@ test("a job made in a chat records that chat as its origin, even when it deliver
   await createCronTool({ store }).run({ action: "add", name: "local", schedule: "every 5m", prompt: "p" }, makeToolContext());
   expect(store.list().find((j) => j.name === "local")!.origin).toBeUndefined();
 });
+
+test("a job through the harness lab always asks, shows it in the preview, and is the owner's alone", async () => {
+  const owner = createCronTool({ store, seeAll: true, defaultDeliver: () => "telegram:1" });
+  const input = { action: "add" as const, name: "nightly", schedule: "every day at 03:00", prompt: "fix flaky tests", harnessRecursion: 2 };
+  expect(owner.subject(input, "/x").askReason).toContain("harness lab");
+  expect(owner.preview!(input)?.text).toContain("through the harness lab: k=2");
+  await owner.run(input, { ...makeToolContext({ root: home }), signal: new AbortController().signal });
+  expect(store.list()[0]?.harnessRecursion).toBe(2);
+  const guest = createCronTool({ store, defaultDeliver: () => "telegram:2" });
+  const refused = await guest.run(input, { ...makeToolContext({ root: home }), signal: new AbortController().signal });
+  expect(text(refused)).toContain("Only the owner can schedule a job through the harness lab.");
+  expect(store.list()).toHaveLength(1);
+});

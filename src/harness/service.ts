@@ -201,6 +201,8 @@ export async function labOnTask(
   const result: LabTaskResult = { run, reflection };
   if (candidate && o.autoAdopt) {
     if (candidateRunsCode(candidate)) result.pending = "it adds scripts, which only the owner adopts";
+    // A session's review wrote those rules from a conversation that may quote anything: the owner decides.
+    else if (suggestions.length > 0) result.pending = "it was composed with a session review's suggestion, which only the owner adopts";
     else {
       const adopted = await adoptCandidate(o.home, candidate.id, { ledger: o.ledger, actor: "review" });
       if (adopted.ok) result.adopted = adopted.candidate;

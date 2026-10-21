@@ -77,7 +77,8 @@ export function recursiveJobRunner(o: { home: string; command: string[]; env: No
       scope: "global",
       k: job.harnessRecursion ?? 1,
       mode: "parallel",
-      autoAdopt: settings.harness.autoAdopt,
+      // A job the agent created may have been talked into: its harness changes wait for the owner.
+      autoAdopt: settings.harness.autoAdopt && job.createdBy !== "agent",
       ledger: new Ledger(o.home),
       signal,
     });

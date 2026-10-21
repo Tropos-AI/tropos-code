@@ -45,6 +45,7 @@ export interface CronToolOptions {
 }
 
 const TEXTS_REASON = "This job may read or send your texts.";
+const RECURSION_REASON = "This job runs through the harness lab: its task runs four or more times on your model, and a branch is created in the project.";
 
 /** True when a job's rules name the Messages or SendIMessage tool, bare or with a pattern. */
 function touchesTexts(rules: string[] | undefined): boolean {
@@ -71,9 +72,10 @@ export function createCronTool(opts: CronToolOptions) {
     return input.deliverTo?.trim() || opts.defaultDeliver?.() || "none";
   }
 
-  function jobText(j: Pick<CronJob, "name" | "schedule" | "prompt" | "deliver" | "project" | "allowCommands">): string {
+  function jobText(j: Pick<CronJob, "name" | "schedule" | "prompt" | "deliver" | "project" | "allowCommands" | "harnessRecursion">): string {
     const lines = [`name: ${j.name}`, `schedule: ${describeSchedule(j.schedule)}`, `project: ${j.project}`, `deliver: ${j.deliver}`];
     if (j.allowCommands?.length) lines.push(`runs without asking: ${j.allowCommands.join(", ")}`);
+    if (j.harnessRecursion) lines.push(`through the harness lab: k=${j.harnessRecursion} (four or more runs; the best becomes a branch)`);
     lines.push("prompt:", j.prompt);
     return lines.join("\n");
   }
@@ -117,14 +119,18 @@ export function createCronTool(opts: CronToolOptions) {
     summarize: (input) => (input.action === "add" ? `add job ${input.name ?? ""}`.trim() : input.id ? `${input.action} ${input.id}` : input.action),
     // A job that may read or send texts asks every time, even when Cron adds were always allowed: a text the agent
     // read could otherwise plant a job that sends the owner's messages somewhere, with nobody asked.
-    subject: (input) => ({ paths: [], target: `cron:${input.action}`, ...(input.action === "add" && touchesTexts(input.allowCommands) ? { askReason: TEXTS_REASON } : {}) }),
+    // So does one through the harness lab: it spends many runs of the owner's model.
+    subject: (input) => {
+      const reason = input.action !== "add" ? undefined : touchesTexts(input.allowCommands) ? TEXTS_REASON : input.harnessRecursion ? RECURSION_REASON : undefined;
+      return { paths: [], target: `cron:${input.action}`, ...(reason ? { askReason: reason } : {}) };
+    },
     preview(input): PermissionPreview | undefined {
       try {
         if (input.action === "add") {
           if (!input.name || !input.schedule || !input.prompt) return { header: "Cron: add job", text: "(incomplete request)" };
           return {
             header: "Cron: add job (runs later without anyone watching)",
-            text: jobText({ name: input.name, schedule: resolveSchedule(input.schedule), prompt: input.prompt, project: input.project ?? "default", deliver: target(input), allowCommands: input.allowCommands }),
+            text: jobText({ name: input.name, schedule: resolveSchedule(input.schedule), prompt: input.prompt, project: input.project ?? "default", deliver: target(input), allowCommands: input.allowCommands, harnessRecursion: input.harnessRecursion }),
           };
         }
         if (input.action === "list") return undefined;
@@ -151,6 +157,8 @@ export function createCronTool(opts: CronToolOptions) {
             if (requested && requested !== "none" && requested !== opts.defaultDeliver?.()) {
               throw new Error(`A job can only be delivered to the chat that creates it, or to none (got "${requested}").`);
             }
+            // Only the owner's sessions: a guest's job never runs through the lab (src/gateway/cron/runner.ts).
+            if (input.harnessRecursion && !opts.seeAll) throw new Error("Only the owner can schedule a job through the harness lab.");
             const job = store.add({
               name: input.name.trim(),
               schedule,

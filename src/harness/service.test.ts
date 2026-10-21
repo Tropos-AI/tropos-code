@@ -93,7 +93,7 @@ class FakeRunner implements ProbeRunner {
   }
 }
 
-test("labOnTask: lab, reflection, auto-adoption, and review suggestions marked as tested", async () => {
+test("labOnTask: lab, reflection, review suggestions marked as tested and never auto-adopted", async () => {
   await saveCandidate(home, {
     id: "20261020-000000-0000", createdAt: "", source: "review", scope: "global", domain: "ts-bun", task: { id: "s", title: "from a session" },
     changes: { "guardrails.md": "Run the tests." }, rationale: "the session forgot tests", status: "pending",
@@ -111,8 +111,9 @@ test("labOnTask: lab, reflection, auto-adoption, and review suggestions marked a
     autoAdopt: true, ledger: new Ledger(home), signal: new AbortController().signal,
   });
   expect(r.run.probes.map((p) => p.label)).toEqual(["ref", "sug-1", "comp-1"]);
-  expect(r.adopted?.status).toBe("adopted");
-  expect(readFileSync(join(globalHarnessDir(home), "guardrails.md"), "utf8")).toBe("Run the tests.");
+  // Composed with a review's suggestion: it waits for the owner even with autoAdopt on.
+  expect(r.adopted).toBeUndefined();
+  expect(r.pending).toBe("it was composed with a session review's suggestion, which only the owner adopts");
   expect(r.reflection.stored).toBe(true); // the harness did better: an entry even without lessons
   expect((await readCandidate(home, "20261020-000000-0000"))?.status).toBe("discarded");
 });

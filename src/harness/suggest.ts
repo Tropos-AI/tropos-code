@@ -4,7 +4,7 @@
 import { scanText } from "../learning/threats";
 import { saveCandidate, newId, type Candidate } from "./candidates";
 import { detectDomain } from "./domain";
-import { loadHarness } from "./tree";
+import { adoptedTree } from "./service";
 
 export const HARNESS_SUGGESTION_RULES =
   "Harness suggestions: if the conversation above shows a mistake in how you work — how you used tools, checked your work, planned or delegated — " +
@@ -47,8 +47,11 @@ export function parseSuggestion(reply: string): Suggestion | null {
 export async function saveSuggestion(home: string, cwd: string, session: { id: string; title?: string }, suggestion: Suggestion, now: Date = new Date()): Promise<Candidate | null> {
   const rules = suggestion.rules.filter((r) => scanText(r).ok);
   if (rules.length === 0) return null;
-  const current = (await loadHarness({ home, cwd })).tree.get("guardrails.md") ?? "";
+  // The candidate is for every project, so it builds on the adopted global layer only, never on this project's.
+  const current = (await adoptedTree(home, cwd, "global")).get("guardrails.md") ?? "";
   const guardrails = `${current.trimEnd()}${current.trim() ? "\n" : ""}${rules.map((r) => `- ${r}`).join("\n")}\n`;
+  // The whole file it would write, not only the new lines: that is what a session would read.
+  if (!scanText(guardrails).ok) return null;
   const candidate: Candidate = {
     id: newId(now),
     createdAt: now.toISOString(),
