@@ -113,10 +113,10 @@ describe("SidebarContent", () => {
     expect(store.getState().toasts.at(-1)?.description).toContain("disk full");
   });
 
-  test("nine entries in three groups", async () => {
+  test("ten entries in three groups", async () => {
     await mount();
     const nav = screen.getByRole("navigation", { name: "Pages" });
-    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Projects", "Schedule", "Skills", "Agents", "Memory", "Extensions", "Status", "Settings"]);
+    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Projects", "Schedule", "Skills", "Agents", "Memory", "Harness", "Extensions", "Status", "Settings"]);
     expect(within(nav).getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Work", "Agent", "Control"]);
   });
 

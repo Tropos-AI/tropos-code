@@ -29,8 +29,8 @@ describe("redirectHash", () => {
 });
 
 describe("pages and tabs", () => {
-  test("nine navigable pages plus Setup, and the tab ids other code relies on", () => {
-    expect(PAGES.map((p) => p.id)).toEqual(["chat", "projects", "cron", "skills", "agents", "memory", "extensions", "status", "settings", "setup"]);
+  test("ten navigable pages plus Setup, and the tab ids other code relies on", () => {
+    expect(PAGES.map((p) => p.id)).toEqual(["chat", "projects", "cron", "skills", "agents", "memory", "harness", "extensions", "status", "settings", "setup"]);
     expect(PAGES.filter((p) => "nav" in p && p.nav === false).map((p) => p.id)).toEqual(["setup"]);
     expect(SETTINGS_TABS).toEqual(["models", "autonomy", "channels", "phone", "suggestions", "service", "backups", "advanced"]);
     expect(STATUS_TABS).toEqual(["health", "logs", "usage"]);
