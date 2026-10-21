@@ -30,6 +30,15 @@ describe("handleKeys / sameHandle", () => {
     expect(sameHandle("+30 691-234 5678", "00306912345678")).toBe(true);
     expect(sameHandle("Maria@Example.com", "maria@example.com")).toBe(true);
   });
+  test("two different country codes never match, a missing one does", () => {
+    expect(sameHandle("+306912345678", "+446912345678")).toBe(false);
+    expect(sameHandle("6912345678", "+306912345678")).toBe(true);
+    expect(sameHandle("00306912345678", "+30 691-234 5678")).toBe(true);
+  });
+  test("empty handles never match", () => {
+    expect(sameHandle("", "")).toBe(false);
+    expect(sameHandle(" ", "+")).toBe(false);
+  });
   test("different people do not match", () => {
     expect(sameHandle("+306912345678", "+306912345679")).toBe(false);
     expect(sameHandle("maria1@example.com", "+301")).toBe(false);
@@ -49,6 +58,15 @@ describe("targetOf", () => {
   });
   test("neither field is an error", () => {
     expect(() => targetOf({})).toThrow();
+  });
+  test("both fields is an error", () => {
+    expect(() => targetOf({ to: "+306912345678", chat: "iMessage;-;+447700900123" })).toThrow();
+  });
+  test("empty handles are errors", () => {
+    expect(() => targetOf({ to: "" })).toThrow();
+    expect(() => targetOf({ to: "+" })).toThrow();
+    expect(() => targetOf({ chat: "iMessage;-;" })).toThrow();
+    expect(() => targetOf({ chat: "" })).toThrow();
   });
 });
 
