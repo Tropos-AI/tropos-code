@@ -309,8 +309,11 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
       case "messages.set": {
         if (input.enabled === undefined) refuse("Say whether texts should be on or off.");
         const on = input.enabled === true;
+        // A terminal session got its tools when it started; the gateway's chats are reloaded by the admin call. Off
+        // needs no note: the tools re-read the switch at every call and refuse.
+        const terminalNote = on && !deps.inGateway ? " New sessions pick texts up; this one started without them, so start a new one (/new) to use them here." : "";
         return changing([{ file: "settings", paths: ["messages"] }], input, ctx, `texts (Messages) ${on ? "on" : "off"}`, async () =>
-          messagesText((await admin.handle("messages.set", { enabled: on })) as MessagesView),
+          messagesText((await admin.handle("messages.set", { enabled: on })) as MessagesView) + terminalNote,
         );
       }
       case "autonomy.lower": {

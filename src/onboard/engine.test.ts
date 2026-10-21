@@ -5,7 +5,7 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FilePairing } from "../gateway/pairing";
 import { BOOTSTRAP_TEXT, saveIdentity } from "../context/identity";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
-import { checkSandbox, computeOnboardState, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
+import { checkSandbox, computeOnboardState, defaultMessages, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
 import { STEP_WHY } from "./copy";
 import { GOOD_KEY, fakeDocker, fakeMessages, fakeNet, fakeService, testDeps } from "./testing";
 
@@ -53,6 +53,16 @@ describe("computeOnboardState", () => {
     expect(await telegramState(testDeps(home))).toEqual({ token: true, owner: { channel: "telegram", senderId: "7" } });
     expect(await phoneEnabled(home)).toBe(true);
     expect(await registeredProjectCount(home)).toBe(1);
+  });
+
+  test.skipIf(process.platform !== "darwin")("the real Texts operations tell a running gateway through the reload signal", async () => {
+    const reloads: string[] = [];
+    const ops = defaultMessages({ home, userHome: home, env: {}, execPath: "x", fetch, now: Date.now, reload: async () => void reloads.push("reload") });
+    // Turning texts off builds nothing, so this never reaches the helper.
+    const view = await ops.set(false);
+    expect(view).toEqual({ available: true, enabled: false });
+    expect(reloads).toEqual(["reload"]);
+    expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).messages).toBe(false);
   });
 
   describe("the Texts step", () => {

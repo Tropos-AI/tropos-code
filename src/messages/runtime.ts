@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { MessagesStatus } from "../web/admin/api";
+import { configFile, readConfigRaw } from "../config/store";
 import { errorText } from "../error-text";
 import { resolveLayout, type Layout } from "../install/layout";
 import type { AnyTool, ToolOutput } from "../tools/types";
@@ -35,6 +36,9 @@ export interface MessagesRuntime {
   /** Closes the snapshot and deletes the folders this runtime made; the tools refuse afterwards. */
   dispose(): void;
 }
+
+/** How long one read of the `messages` switch is trusted: turning texts off reaches a running session this fast. */
+const SWITCH_CACHE_MS = 2_000;
 
 /** The automation probe may wait on the macOS prompt; the helper itself gives Messages 30 s. */
 const PROBE_TIMEOUT_MS = 60_000;
@@ -94,7 +98,15 @@ const defaultExec: Exec = async (cmd, args, timeoutMs) => {
  * moved to the Trash after setup is rebuilt on its next use rather than failing. The helper's files live beside
  * the app (`helperRunDir`), shared by every Tropos home of this install, so `home` places nothing.
  */
-export function createMessagesRuntime(o: { home: string; userHome: string; exec?: Exec; layout?: Layout; now?: () => number }): MessagesRuntime {
+export function createMessagesRuntime(o: {
+  home: string;
+  userHome: string;
+  exec?: Exec;
+  layout?: Layout;
+  now?: () => number;
+  /** Whether texts are on now; defaults to the `messages` key of the user's own settings.json. */
+  enabled?: () => Promise<boolean>;
+}): MessagesRuntime {
   const exec = o.exec ?? defaultExec;
   const layout = o.layout ?? resolveLayout(process.env, o.userHome);
   const appPath = helperAppPath(layout);
@@ -104,6 +116,18 @@ export function createMessagesRuntime(o: { home: string; userHome: string; exec?
   let disposed = false;
   const now = o.now ?? Date.now;
   const probePath = probeRecordPath(runDir);
+  // Only the user's own layer can turn texts on (repo layers are ignored), so that is the file re-read here; one
+  // that can't be read counts as off.
+  const readSwitch = o.enabled ?? (() => readConfigRaw(configFile(o.home, "settings")).then((raw) => raw.messages === true));
+  let switchAt = -Infinity;
+  let switchOn = false;
+  const isOn = async (): Promise<boolean> => {
+    const t = now();
+    if (t - switchAt < SWITCH_CACHE_MS) return switchOn;
+    switchOn = await readSwitch().catch(() => false);
+    switchAt = t;
+    return switchOn;
+  };
 
   /** One build at a time: calls arriving while one runs share it. */
   let building: Promise<unknown> | undefined;
@@ -112,11 +136,15 @@ export function createMessagesRuntime(o: { home: string; userHome: string; exec?
       building = undefined;
     }));
 
-  /** The tool, behind a check that the runtime is open and the helper app is in place. */
+  /**
+   * The tool, behind a check that the runtime is open, texts are still on (a session started while they were on
+   * keeps its tools, so turning them off is enforced here, at call time) and the helper app is in place.
+   */
   const guarded = (tool: AnyTool): AnyTool => ({
     ...tool,
     async run(input, ctx): Promise<ToolOutput> {
       if (disposed) return { content: new MessagesError("helper", "Messages was shut down").message, isError: true };
+      if (!(await isOn())) return { content: new MessagesError("off").message, isError: true };
       try {
         await ensure();
       } catch (err) {

@@ -274,6 +274,8 @@ test("messages.set turns texts on through the admin, records the change and name
   expect(text(out)).toStartWith("Texts are on. Next: ");
   expect(text(out)).toContain("Full Disk Access");
   expect(text(out)).toContain("settings/channels");
+  // This test's tool runs outside the gateway, as in the terminal.
+  expect(text(out)).toContain("New sessions pick texts up");
   expect((await ledger.list()).map((e) => e.configPath)).toContain("messages");
   expect(tool.preview!({ action: "messages.set", enabled: true })!.text).toContain("→ on");
 });
@@ -287,6 +289,11 @@ test("messages.set: the live check, and Messages not signed in or with no histor
   expect(await reply({ ...ready, chats: 37 })).toStartWith("Texts are on and set up. I can see 37 chats.");
   expect(await reply({ ...ready, signedIn: "no", chats: 0 })).toStartWith("Texts are on. I can see 0 chats. Next: Messages isn't signed in on this Mac");
   expect(await reply({ ...ready, fullDiskAccess: "unknown", signedIn: "no", noHistory: true })).toContain("Messages has no history on this Mac yet");
+  // In the gateway the admin call reloads the chats, and turning off needs no note anywhere.
+  const inGateway = createSetupTool(deps({ inGateway: true }));
+  expect(text(await inGateway.run({ action: "messages.set", enabled: true }, makeToolContext()))).not.toContain("New sessions");
+  answers["messages.set"] = async () => ({ available: true, enabled: false });
+  expect(text(await tool.run({ action: "messages.set", enabled: false }, makeToolContext()))).toBe("Texts are off.");
 });
 
 test("a guest cannot turn texts on", async () => {

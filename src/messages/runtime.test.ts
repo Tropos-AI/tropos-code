@@ -10,6 +10,7 @@ import { HELPER_VERSION } from "./helper/applet";
 import { helperAppPath, helperRunDir, type Exec } from "./helper/install";
 import { MESSAGES_PREAMBLE } from "./messages-tool";
 import { createMessagesRuntime, MESSAGES_TOOLS, probeRecordPath, type MessagesRuntime } from "./runtime";
+import { MessagesError } from "./source";
 import { buildChatDb } from "./testkit";
 
 let root: string;
@@ -71,7 +72,15 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const make = () => (runtime = createMessagesRuntime({ home: join(root, "tropos"), userHome: join(root, "user"), exec, layout }));
+/** Texts are on in the user's settings unless a test says otherwise. */
+function setSwitch(on: boolean): void {
+  mkdirSync(join(root, "tropos"), { recursive: true });
+  writeFileSync(join(root, "tropos", "settings.json"), JSON.stringify({ messages: on }));
+}
+const make = () => {
+  setSwitch(true);
+  return (runtime = createMessagesRuntime({ home: join(root, "tropos"), userHome: join(root, "user"), exec, layout }));
+};
 const messagesTool = (r: MessagesRuntime) => r.tools().find((t) => t.name === "Messages")!;
 
 describe("createMessagesRuntime", () => {
@@ -179,6 +188,7 @@ describe("createMessagesRuntime", () => {
 
   test("a helper that can't be built gives a plain error and never asks for data", async () => {
     const failing: Exec = async (cmd, args, t) => (cmd.endsWith("osacompile") ? { code: 1, stdout: "", stderr: "no compiler here" } : exec(cmd, args, t));
+    setSwitch(true);
     runtime = createMessagesRuntime({ home: join(root, "tropos"), userHome: join(root, "user"), exec: failing, layout });
     const out = await messagesTool(runtime).run({ action: "chats" }, makeToolContext());
     expect(out.isError).toBe(true);
@@ -187,6 +197,39 @@ describe("createMessagesRuntime", () => {
     const send = await runtime.tools()[1]!.run({ to: "+306912345678", text: "hi" }, makeToolContext());
     expect(send.isError).toBe(true);
     expect(calls).not.toContain("request:send-handle");
+  });
+
+  test("texts turned off while a session runs: its tools refuse at the next call, within 2 s, without asking the helper", async () => {
+    setSwitch(true);
+    let t = 1_000;
+    const r = (runtime = createMessagesRuntime({ home: join(root, "tropos"), userHome: join(root, "user"), exec, layout, now: () => t }));
+    expect((await messagesTool(r).run({ action: "chats" }, makeToolContext())).isError).toBeFalsy();
+    setSwitch(false);
+    // Read at most every 2 s.
+    t += 1_000;
+    expect((await messagesTool(r).run({ action: "chats" }, makeToolContext())).isError).toBeFalsy();
+    t += 1_500;
+    calls = [];
+    const off = await messagesTool(r).run({ action: "chats" }, makeToolContext());
+    expect(off).toEqual({ content: new MessagesError("off").message, isError: true });
+    const send = await r.tools()[1]!.run({ to: "+306912345678", text: "hi" }, makeToolContext());
+    expect(send.content).toBe(new MessagesError("off").message);
+    expect(calls).toEqual([]);
+    // A settings file that can't be read counts as off.
+    writeFileSync(join(root, "tropos", "settings.json"), "{ not json");
+    t += 5_000;
+    expect((await messagesTool(r).run({ action: "chats" }, makeToolContext())).content).toBe(new MessagesError("off").message);
+    setSwitch(true);
+    t += 5_000;
+    expect((await messagesTool(r).run({ action: "chats" }, makeToolContext())).isError).toBeFalsy();
+  });
+
+  test("the guarded tools keep the inner tool's subject, target and preview", () => {
+    const send = make().tools()[1]!;
+    const input = send.schema.parse({ to: "+30 691 234 5678", text: "hi" });
+    expect(send.subject(input, "/w")).toMatchObject({ target: "+306912345678" });
+    expect(send.preview!(input)).toEqual({ header: "To +306912345678", text: "hi" });
+    expect(send.summarize(input)).toBe("Text +306912345678");
   });
 
   test("after dispose the tools refuse", async () => {

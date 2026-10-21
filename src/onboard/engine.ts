@@ -114,11 +114,27 @@ export function makeOnboardDeps(input: OnboardDepsInput): OnboardDeps {
   };
 }
 
-/** The real Texts operations: the dashboard's own `messages.*` handlers, loaded on first use. */
-function defaultMessages(c: { home: string; userHome: string; env: NodeJS.ProcessEnv; execPath: string; fetch: typeof fetch; now(): number }): OnboardDeps["messages"] {
+/**
+ * The real Texts operations: the dashboard's own `messages.*` handlers, loaded on first use. A gateway already
+ * running is told by the reload signal, so its chats pick the change up now rather than at its next restart.
+ */
+export function defaultMessages(c: {
+  home: string;
+  userHome: string;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  fetch: typeof fetch;
+  now(): number;
+  reload?: () => Promise<unknown>;
+}): OnboardDeps["messages"] {
+  const reload = c.reload ?? (() => requestGatewayReload(c.home));
   const handlers = async () => {
     const { messagesHandlers } = await import("../web/admin/messages");
-    return messagesHandlers({ home: c.home, userHome: c.userHome, env: c.env, version: "", execPath: c.execPath, cwd: c.userHome, now: c.now, fetch: c.fetch });
+    const noCron = async () => {
+      throw new Error("Running a job now needs the gateway.");
+    };
+    const gateway = { runCronNow: noCron, reload: async () => void (await reload()), devicesChanged: async () => void (await reload()) };
+    return messagesHandlers({ home: c.home, userHome: c.userHome, env: c.env, version: "", execPath: c.execPath, cwd: c.userHome, now: c.now, fetch: c.fetch, gateway });
   };
   return {
     platform: process.platform,
