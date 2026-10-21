@@ -20,12 +20,15 @@ export interface FixtureMessage {
   bodyOnly?: string;
   /** Unix milliseconds. */
   at: number;
+  /** Stored `date` verbatim, for sub-millisecond precision; overrides `at`. */
+  rawDate?: number;
   read?: boolean;
   delivered?: boolean;
   error?: number;
   assocType?: number;
   assocGuid?: string;
   replyTo?: string;
+  threadOriginator?: string;
   attachments?: Array<{ filename: string; mime?: string; name?: string; bytes?: number }>;
 }
 export interface ChatDbFixture {
@@ -92,15 +95,15 @@ export function buildChatDb(path: string, fixture: ChatDbFixture): void {
     for (const handle of chat.handles) db.query("INSERT INTO chat_handle_join VALUES (?, ?)").run(rowid, handleId(handle));
   }
   for (const m of fixture.messages) {
-    const date = toAppleNs(m.at);
+    const date = m.rawDate ?? toAppleNs(m.at);
     const columns = ["guid", "text", "handle_id", "is_from_me", "is_read", "is_delivered", "error", "date", "associated_message_type", "associated_message_guid", "reply_to_guid", "cache_has_attachments"];
     const values: Array<string | number | Uint8Array | null> = [
       m.guid, m.text ?? null, m.handle ? handleId(m.handle) : 0, m.fromMe ? 1 : 0, m.read === false ? 0 : 1,
       m.delivered === false ? 0 : 1, m.error ?? 0, date, m.assocType ?? 0, m.assocGuid ?? null, m.replyTo ?? null, m.attachments?.length ? 1 : 0,
     ];
     if (!older) {
-      columns.push("attributedBody");
-      values.push(m.bodyOnly === undefined ? null : typedstream(m.bodyOnly));
+      columns.push("attributedBody", "thread_originator_guid");
+      values.push(m.bodyOnly === undefined ? null : typedstream(m.bodyOnly), m.threadOriginator ?? null);
     }
     const rowid = db
       .query(`INSERT INTO message (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)

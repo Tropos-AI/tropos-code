@@ -12,12 +12,10 @@ export interface Message { guid: string; at: number; fromMe: boolean; sender?: P
 export interface SearchHit { chat: ChatSummary; message: Message }
 export interface ActivityRow { chat: ChatSummary; received: number; sent: number; last?: Message }
 
-const APPLE_EPOCH_SECONDS = 978307200;
 const TAPBACKS = ["❤️", "👍", "👎", "😂", "‼️", "❓"];
 const TARGET_PREFIX = /^(p:\d+\/|bp:)/;
-const NOT_A_REACTION = "COALESCE(m.associated_message_type, 0) NOT BETWEEN 2000 AND 3999";
-/** Message date in seconds since 2001, whichever unit this macOS version stores. */
-const DATE_SECONDS = "(CASE WHEN m.date > 1e12 THEN m.date / 1e9 ELSE m.date END)";
+/** Message date as Unix milliseconds, computed exactly as appleToUnixMs does so cursors compare on the value callers see. */
+const DATE_MS = "CAST(ROUND(((CASE WHEN m.date > 1e12 THEN m.date / 1e9 ELSE m.date END) + 978307200) * 1000) AS INTEGER)";
 
 interface MessageRow {
   rowid: number;
@@ -34,13 +32,11 @@ interface MessageRow {
 interface ChatRow { rowid: number; guid: string; display: string | null; ident: string | null; service: string | null; style: number | null }
 type Reactions = Map<string, string[]>;
 
-function secondsOf(unixMs: number): number {
-  return unixMs / 1000 - APPLE_EPOCH_SECONDS;
-}
-
 /** Read-only view of a chat.db copy; every query adapts to the columns this macOS version has. */
 export class MessagesDb {
   private readonly columns: Set<string>;
+  /** SQL condition that drops tapback rows; always true on schemas without tapbacks. */
+  private readonly notReaction: string;
 
   constructor(
     private readonly db: Database,
@@ -49,6 +45,7 @@ export class MessagesDb {
   ) {
     const info = db.query("PRAGMA table_info(message)").all() as Array<{ name: string }>;
     this.columns = new Set(info.map((c) => c.name));
+    this.notReaction = this.columns.has("associated_message_type") ? "COALESCE(m.associated_message_type, 0) NOT BETWEEN 2000 AND 3999" : "1 = 1";
   }
 
   /** Every handle stored in the database, normalized and without repeats. */
@@ -66,7 +63,7 @@ export class MessagesDb {
       all = all.filter(
         (chat) =>
           chat.name.toLowerCase().includes(needle) ||
-          chat.participants.some((p) => (p.name ?? "").toLowerCase().includes(needle) || p.handle.toLowerCase().includes(compact)),
+          chat.participants.some((p) => (p.name ?? "").toLowerCase().includes(needle) || (compact !== "" && p.handle.toLowerCase().includes(compact))),
       );
     }
     return all.slice(0, opts.limit);
@@ -74,10 +71,10 @@ export class MessagesDb {
 
   /** Messages of one chat, oldest to newest: the newest `limit` (before a time, if given), or the first `limit` after a time. */
   read(chatId: string, opts: { before?: number; after?: number; limit: number }): Message[] {
-    const where = ["c.guid = ?", NOT_A_REACTION];
+    const where = ["c.guid = ?", this.notReaction];
     const params: Array<string | number> = [chatId];
-    if (opts.before !== undefined) { where.push(`${DATE_SECONDS} < ?`); params.push(secondsOf(opts.before)); }
-    if (opts.after !== undefined) { where.push(`${DATE_SECONDS} > ?`); params.push(secondsOf(opts.after)); }
+    if (opts.before !== undefined) { where.push(`${DATE_MS} < ?`); params.push(opts.before); }
+    if (opts.after !== undefined) { where.push(`${DATE_MS} > ?`); params.push(opts.after); }
     const ascending = opts.after !== undefined && opts.before === undefined;
     const dir = ascending ? "ASC" : "DESC";
     const rows = this.db
@@ -93,10 +90,10 @@ export class MessagesDb {
   search(query: string, opts: { chat?: string; since?: number; limit: number }): SearchHit[] {
     const needle = query.toLowerCase();
     if (!needle) return [];
-    const where = [NOT_A_REACTION];
+    const where = [this.notReaction];
     const params: Array<string | number> = [];
     if (opts.chat !== undefined) { where.push("c.guid = ?"); params.push(opts.chat); }
-    if (opts.since !== undefined) { where.push(`${DATE_SECONDS} >= ?`); params.push(secondsOf(opts.since)); }
+    if (opts.since !== undefined) { where.push(`${DATE_MS} >= ?`); params.push(opts.since); }
     const chats = this.allChats();
     const reactionCache = new Map<number, Reactions>();
     const hits: SearchHit[] = [];
@@ -118,8 +115,8 @@ export class MessagesDb {
     const chats = this.allChats();
     const byChat = new Map<string, ActivityRow>();
     const rows = this.db
-      .query(`${this.select()} WHERE ${NOT_A_REACTION} AND ${DATE_SECONDS} >= ? ORDER BY m.date DESC, m.ROWID DESC`)
-      .all(secondsOf(since)) as MessageRow[];
+      .query(`${this.select()} WHERE ${this.notReaction} AND ${DATE_MS} >= ? ORDER BY m.date DESC, m.ROWID DESC`)
+      .all(since) as MessageRow[];
     for (const row of rows) {
       const chat = chats.get(row.chatGuid);
       if (!chat) continue;
@@ -154,10 +151,10 @@ export class MessagesDb {
     const error = this.columns.has("error") ? "m.error" : "0";
     const rows = this.db
       .query(
-        `${this.select(`${delivered} AS delivered, ${error} AS error`)} WHERE m.is_from_me = 1 AND ${NOT_A_REACTION}
-         AND c.guid IN (${ids.map(() => "?").join(", ")}) AND ${DATE_SECONDS} >= ? ORDER BY m.date DESC`,
+        `${this.select(`${delivered} AS delivered, ${error} AS error`)} WHERE m.is_from_me = 1 AND ${this.notReaction}
+         AND c.guid IN (${ids.map(() => "?").join(", ")}) AND ${DATE_MS} >= ? ORDER BY m.date DESC`,
       )
-      .all(...ids, secondsOf(sinceMs) - 1) as Array<MessageRow & { delivered: number | null; error: number | null }>;
+      .all(...ids, sinceMs) as Array<MessageRow & { delivered: number | null; error: number | null }>;
     const wanted = text.trim();
     for (const row of rows) {
       if (appleToUnixMs(row.date) < sinceMs || this.textOf(row) !== wanted) continue;
@@ -168,7 +165,7 @@ export class MessagesDb {
 
   private select(extra?: string): string {
     const body = this.columns.has("attributedBody") ? "m.attributedBody" : "NULL";
-    const reply = [this.columns.has("reply_to_guid") && "m.reply_to_guid", this.columns.has("thread_originator_guid") && "m.thread_originator_guid"].filter(Boolean);
+    const reply = [this.columns.has("reply_to_guid") && "NULLIF(m.reply_to_guid, '')", this.columns.has("thread_originator_guid") && "NULLIF(m.thread_originator_guid, '')"].filter(Boolean);
     return `SELECT m.ROWID AS rowid, m.guid AS guid, m.text AS text, ${body} AS body, h.id AS handle, m.is_from_me AS fromMe, m.date AS date,
       ${reply.length > 1 ? `COALESCE(${reply.join(", ")})` : (reply[0] ?? "NULL")} AS reply, c.guid AS chatGuid, c.ROWID AS chatRowid${extra ? `, ${extra}` : ""}
       FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID JOIN chat c ON c.ROWID = j.chat_id LEFT JOIN handle h ON h.ROWID = m.handle_id`;
@@ -245,11 +242,11 @@ export class MessagesDb {
       members.set(r.chat, list);
     }
     const last = new Map<number, number>();
-    const lastRows = this.db.query(`SELECT j.chat_id AS chat, MAX(m.date) AS date FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID WHERE ${NOT_A_REACTION} GROUP BY j.chat_id`).all() as Array<{ chat: number; date: number }>;
+    const lastRows = this.db.query(`SELECT j.chat_id AS chat, MAX(m.date) AS date FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID WHERE ${this.notReaction} GROUP BY j.chat_id`).all() as Array<{ chat: number; date: number }>;
     for (const r of lastRows) last.set(r.chat, r.date);
     const unread = new Map<number, number>();
     if (this.columns.has("is_read")) {
-      const unreadRows = this.db.query(`SELECT j.chat_id AS chat, COUNT(*) AS n FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID WHERE m.is_from_me = 0 AND m.is_read = 0 AND ${NOT_A_REACTION} GROUP BY j.chat_id`).all() as Array<{ chat: number; n: number }>;
+      const unreadRows = this.db.query(`SELECT j.chat_id AS chat, COUNT(*) AS n FROM message m JOIN chat_message_join j ON j.message_id = m.ROWID WHERE m.is_from_me = 0 AND m.is_read = 0 AND ${this.notReaction} GROUP BY j.chat_id`).all() as Array<{ chat: number; n: number }>;
       for (const r of unreadRows) unread.set(r.chat, r.n);
     }
     const out = new Map<string, ChatSummary>();

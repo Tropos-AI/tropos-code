@@ -1,6 +1,6 @@
 // src/messages/contacts.ts — read-only lookups of names for phone numbers and emails in the macOS address book
 import { Database } from "bun:sqlite";
-import { handleKeys, normalizeHandle } from "./handles";
+import { handleKeys, normalizeHandle, sameHandle } from "./handles";
 
 interface Entry {
   name: string;
@@ -12,9 +12,17 @@ function personName(first: string | null, last: string | null, org: string | nul
   return person || org?.trim() || undefined;
 }
 
+/** Like sameHandle, but two numbers that both carry a country code must match in full: +1 691… is not +30 691…. */
+function sameContactHandle(a: string, b: string): boolean {
+  const na = normalizeHandle(a);
+  const nb = normalizeHandle(b);
+  if (na.startsWith("+") && nb.startsWith("+")) return na === nb;
+  return sameHandle(a, b);
+}
+
 /** Names from one or more AddressBook-v22.abcddb files, indexed by every key a handle can be written with. */
 export class Contacts {
-  private readonly byKey = new Map<string, string>();
+  private readonly byKey = new Map<string, Array<{ name: string; handle: string }>>();
 
   private constructor(
     private readonly entries: Entry[],
@@ -22,7 +30,11 @@ export class Contacts {
   ) {
     for (const entry of entries) {
       for (const handle of entry.handles) {
-        for (const key of handleKeys(handle)) if (!this.byKey.has(key)) this.byKey.set(key, entry.name);
+        for (const key of handleKeys(handle)) {
+          const list = this.byKey.get(key) ?? [];
+          list.push({ name: entry.name, handle });
+          this.byKey.set(key, list);
+        }
       }
     }
   }
@@ -71,8 +83,7 @@ export class Contacts {
   /** The contact name for a phone number or email, written any way. */
   nameOf(handle: string): string | undefined {
     for (const key of handleKeys(handle)) {
-      const name = this.byKey.get(key);
-      if (name) return name;
+      for (const candidate of this.byKey.get(key) ?? []) if (sameContactHandle(handle, candidate.handle)) return candidate.name;
     }
     return undefined;
   }
@@ -83,7 +94,7 @@ export class Contacts {
     if (!needle) return [];
     const compact = normalizeHandle(needle);
     return this.entries
-      .filter((e) => e.name.toLowerCase().includes(needle) || e.handles.some((h) => h.toLowerCase().includes(compact)))
+      .filter((e) => e.name.toLowerCase().includes(needle) || (compact !== "" && e.handles.some((h) => h.toLowerCase().includes(compact))))
       .slice(0, limit)
       .map((e) => ({ name: e.name, handles: [...e.handles] }));
   }

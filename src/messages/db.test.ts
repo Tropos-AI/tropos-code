@@ -106,6 +106,37 @@ describe("read", () => {
   });
 });
 
+describe("cursors and degenerate input", () => {
+  const n1 = 700000000123456789;
+  const n2 = 700000001123456789;
+  const withNanos = (): ChatDbFixture => ({
+    chats: [{ guid: MARIA, handles: ["+306912345678"] }],
+    messages: [
+      { guid: "n1", chat: MARIA, handle: "+306912345678", text: "one", at: 0, rawDate: n1 },
+      { guid: "n2", chat: MARIA, handle: "+306912345678", text: "two", at: 0, rawDate: n2 },
+    ],
+  });
+  test("a cursor taken from a message never returns that message again", () => {
+    const db = open(withNanos());
+    const [first, second] = db.read(MARIA, { limit: 50 });
+    expect(first?.guid).toBe("n1");
+    expect(db.read(MARIA, { before: second!.at, limit: 50 }).map((m) => m.guid)).toEqual(["n1"]);
+    expect(db.read(MARIA, { before: first!.at, limit: 50 })).toEqual([]);
+    expect(db.read(MARIA, { after: first!.at, limit: 50 }).map((m) => m.guid)).toEqual(["n2"]);
+    expect(db.read(MARIA, { after: second!.at, limit: 50 })).toEqual([]);
+  });
+  test("a query with no letters or digits does not match every chat", () => {
+    const db = open();
+    expect(db.chats({ query: "-", limit: 50 })).toEqual([]);
+    expect(db.chats({ query: "()", limit: 50 })).toEqual([]);
+  });
+  test("an empty reply_to_guid falls through to the thread originator", () => {
+    const fx = fixture();
+    fx.messages.push({ guid: "r1", chat: MARIA, fromMe: true, text: "re", replyTo: "", threadOriginator: "m1", at: T + 6 * MIN });
+    expect(open(fx).read(MARIA, { limit: 1 })[0]?.replyTo).toBe("m1");
+  });
+});
+
 describe("search", () => {
   test("finds text that lives only in attributedBody", () => {
     const hits = open().search("INVOICE", { limit: 25 });

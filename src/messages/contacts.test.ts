@@ -41,6 +41,23 @@ describe("Contacts", () => {
     expect(contacts.nameOf("+15550001111")).toBeUndefined();
   });
 
+  test("the same digits under another country code are a different person", () => {
+    const file = join(folder(), "a.abcddb");
+    buildAddressBook(file, people);
+    expect(Contacts.open([file]).nameOf("+16912345678")).toBeUndefined();
+    buildAddressBook(file, [...people, { first: "Mary", phones: ["+1 691 234 5678"] }]);
+    const contacts = Contacts.open([file]);
+    expect(contacts.nameOf("+16912345678")).toBe("Mary");
+    expect(contacts.nameOf("+306912345678")).toBe("Maria Papadopoulou");
+    expect(contacts.nameOf("6912345678")).toBe("Maria Papadopoulou");
+  });
+
+  test("a query with no letters or digits finds nothing", () => {
+    const file = join(folder(), "a.abcddb");
+    buildAddressBook(file, people);
+    expect(Contacts.open([file]).find("-")).toEqual([]);
+  });
+
   test("find returns the contact with normalized handles", () => {
     const file = join(folder(), "a.abcddb");
     buildAddressBook(file, people);
