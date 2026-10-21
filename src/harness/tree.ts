@@ -43,6 +43,11 @@ export interface Harness {
   hooksFile?: string;
 }
 
+/** Everything the harness keeps: adopted layers, candidates, lab runs and the library. */
+export function harnessRoot(home: string): string {
+  return join(home, "harness");
+}
+
 export function globalHarnessDir(home: string): string {
   return join(home, "harness", "active");
 }

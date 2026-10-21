@@ -64,6 +64,8 @@ export interface ConfinedBackendOptions {
   protectInstructions?: boolean;
   /** The owner's other projects, whose `.env` files the command may not read (ConfinementPaths.otherProjectSecrets). */
   otherProjects?: readonly string[];
+  /** Folders inside the denied homes the command may still read: the harness in effect (ConfinementPaths.readCarveOuts). */
+  readable?: readonly string[];
 }
 
 /** The checks one command gets after it ran. */
@@ -108,7 +110,7 @@ export class ConfinedBackend implements ExecBackend {
     if (platform !== "darwin" && platform !== "linux") {
       throw new ConfinementError(`Commands can't be confined on ${platform}: only macOS (sandbox-exec) and Linux (bwrap) are supported.`);
     }
-    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform, protectInstructions: opts.protectInstructions, otherProjects: opts.otherProjects });
+    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform, protectInstructions: opts.protectInstructions, otherProjects: opts.otherProjects, readable: opts.readable });
     this.env = chatEnv(opts.env, { project: opts.project, troposHome: opts.home });
     // The marker must be writable inside: the confined temp dir when it is one of the writable paths, else the
     // system temp dir (always writable). Real paths, so the file is the same inside and on the host.
@@ -303,7 +305,15 @@ export class ConfinedBackend implements ExecBackend {
   }
 }
 
-export function confinedBackend(opts: { project: string; home: string; userHome: string; env: NodeJS.ProcessEnv; protectInstructions?: boolean; otherProjects?: readonly string[] }): ExecBackend {
+export function confinedBackend(opts: {
+  project: string;
+  home: string;
+  userHome: string;
+  env: NodeJS.ProcessEnv;
+  protectInstructions?: boolean;
+  otherProjects?: readonly string[];
+  readable?: readonly string[];
+}): ExecBackend {
   return new ConfinedBackend(opts);
 }
 

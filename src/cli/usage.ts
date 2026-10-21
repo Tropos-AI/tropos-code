@@ -57,6 +57,7 @@ Options:
                                    approve every action without asking
       --add-dir <dir>              let tools work in another directory (repeatable)
       --confine                    run commands in the sandbox and keep tools inside the project
+                                   (your own hooks and MCP servers still run as configured)
       --harness-dir <dir>          run with this harness folder instead of the adopted one
   -v, --version                    print the version
   -h, --help                       show this help

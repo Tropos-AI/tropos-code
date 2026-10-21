@@ -13,6 +13,7 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
+import { harnessRoot } from "../harness/tree";
 import { resolveLayoutPath, workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
@@ -133,7 +134,8 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     confine: ctx.origin === "channel" || ctx.confined === true,
     role: ctx.role,
     autonomy: ctx.autonomy?.(),
-    ownFiles: ownFileGuards(ctx.home),
+    // The harness too: what is there becomes the next session's prompt, skills and hooks, so no broad allow rule writes it.
+    ownFiles: ownFileGuards(ctx.home, [...workspaceOwnPaths(ctx.home), harnessRoot(ctx.home)]),
     instructionFiles: ownFileGuards(ctx.home, workspaceInstructionPaths(ctx.home)),
     stores: {
       // The journal (workspace/memory) is in troposStorePaths; the project's old notes folder stays a store, held to the same no-links check.

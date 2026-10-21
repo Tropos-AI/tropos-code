@@ -314,13 +314,16 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
       err("tcode: --confine needs sandbox-exec (macOS) or bwrap (Linux), and neither works here.\n");
       return 1;
     }
-    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env });
+    // The harness folders in effect stay readable: its scripts are meant to be run.
+    const readable = harness.layers.flatMap((layer) => (layer.applied && layer.dir && layer.files.length > 0 ? [layer.dir] : []));
+    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable });
     ctx.confined = true;
   }
-  // The owner's terminal can schedule too; results go to the owner's chat.
-  ctx.tools = [...ctx.tools, await ownerCronTool(home)];
+  // The owner's terminal can schedule too; results go to the owner's chat. A confined session (a harness probe) gets
+  // neither this nor setup: both act outside the sandbox, on the owner's jobs and configuration.
+  if (!ctx.confined) ctx.tools = [...ctx.tools, await ownerCronTool(home)];
   // And change Tropos's setup, through the dashboard's own handlers; a running gateway is told to reload by signal.
-  if (ctx.role === "owner") {
+  if (ctx.role === "owner" && !ctx.confined) {
     ctx.tools = [
       ...ctx.tools,
       createSetupTool({ home, userHome: homedir(), who: { role: ctx.role, origin: "local" }, admin: sessionAdmin(home, env, homedir()), ledger: ext.ledger, reload: () => requestGatewayReload(home), secrets: ctx.secrets, providers: router }),
