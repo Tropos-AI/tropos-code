@@ -67,6 +67,11 @@ export class Contacts {
     return new Contacts(entries, readAny);
   }
 
+  /** Every handle in the address book, normalized and without repeats. */
+  handles(): string[] {
+    return [...new Set(this.entries.flatMap((e) => e.handles))];
+  }
+
   /** No address book at all: every lookup comes back empty. */
   static none(): Contacts {
     return new Contacts([], false);
