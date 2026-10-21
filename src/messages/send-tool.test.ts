@@ -254,6 +254,30 @@ describe("SendIMessage — sending", () => {
     expect(out.summary).toBe("delivered");
   });
 
+  test("newer macOS ids every chat any;-;…, so the chat's service decides, not its id", async () => {
+    fixture.chats[0] = { guid: `any;-;${MARIA}`, handles: [MARIA], service: "iMessage" };
+    fixture.messages = [{ guid: "m1", chat: `any;-;${MARIA}`, handle: MARIA, text: "hi", at: T0 - 60_000 }];
+    rebuild();
+    onSend = () => {
+      record({ delivered: true }, `any;-;${MARIA}`);
+      return ok;
+    };
+    await send(makeTool(), { to: MARIA, text: "hello" });
+    expect(sends().map((c) => c.args)).toEqual([[MARIA, "iMessage"]]);
+  });
+
+  test("an any;-;… chat whose service is SMS gets an SMS", async () => {
+    fixture.chats[0] = { guid: `any;-;${MARIA}`, handles: [MARIA], service: "SMS" };
+    fixture.messages = [{ guid: "m1", chat: `any;-;${MARIA}`, handle: MARIA, text: "hi", at: T0 - 60_000 }];
+    rebuild();
+    onSend = () => {
+      record({ delivered: true }, `any;-;${MARIA}`);
+      return ok;
+    };
+    await send(makeTool(), { to: MARIA, text: "hello" });
+    expect(sends().map((c) => c.args)).toEqual([[MARIA, "SMS"]]);
+  });
+
   test("an unreachable iMessage handle is tried once more as SMS", async () => {
     onSend = (call) => {
       if (call.args[1] === "iMessage") return { ok: false, code: "-1728", message: "Can't get participant." };
@@ -282,6 +306,24 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
     expect(text(out)).toBe("Sent to Maria Papadopoulou: delivered.");
     expect(out.summary).toBe("delivered");
     expect(out.isError).toBeFalsy();
+  });
+
+  test("a text Messages marks with an error is reported as not delivered, and an SMS says why it may fail", async () => {
+    fixture.chats[0] = { guid: `any;-;${MARIA}`, handles: [MARIA], service: "SMS" };
+    fixture.messages = [{ guid: "m1", chat: `any;-;${MARIA}`, handle: MARIA, text: "hi", at: T0 - 60_000 }];
+    rebuild();
+    onSend = () => {
+      record({ delivered: false, error: 4 }, `any;-;${MARIA}`);
+      return ok;
+    };
+    const out = await send(makeTool(), { to: MARIA, text: "hello" });
+    expect(out.isError).toBe(true);
+    expect(out.summary).toBe("not delivered");
+    expect(text(out)).toContain("Messages couldn't deliver the text to Maria Papadopoulou (error 4)");
+    expect(text(out)).toContain("Text Message Forwarding");
+    // A failure is final: no second look, and no second send.
+    expect(sleeps).toHaveLength(0);
+    expect(sends()).toHaveLength(1);
   });
 
   test("recorded but not delivered yet, after checking every 2 s for 10 s", async () => {

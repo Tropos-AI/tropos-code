@@ -102,14 +102,17 @@ export function createSendTool(o: {
     return name ? `${name} (${r.target})` : r.target;
   }
 
-  /** SMS when the person's newest one-to-one chat in Messages is an SMS (or any-service) chat, else iMessage. */
+  /**
+   * SMS when the person's newest one-to-one chat in Messages is an SMS chat, else iMessage. The chat's service, not
+   * its id: newer macOS starts every chat id with `any;`, iMessage chats too.
+   */
   async function serviceFor(handle: string): Promise<"iMessage" | "SMS"> {
     try {
       const chats = (await source.with((db) => db.chats({ limit: Number.MAX_SAFE_INTEGER }))).filter((c) => !c.isGroup);
       const own =
         chats.find((c) => c.participants.some((p) => normalizeHandle(p.handle) === handle)) ??
         chats.find((c) => c.participants.some((p) => sameHandle(p.handle, handle)));
-      return own && /^(SMS|any);/.test(own.id) ? "SMS" : "iMessage";
+      return own?.service === "SMS" ? "SMS" : "iMessage";
     } catch {
       // Can't read the history: iMessage first, with the SMS retry below if the person isn't on iMessage.
       return "iMessage";
@@ -171,10 +174,11 @@ export function createSendTool(o: {
     }
     const who = nameOf(r) ?? r.target;
     if (row?.delivered) return { content: `Sent to ${who}: delivered.${timeoutNote}`, summary: "delivered" };
-    if (row) {
-      const failed = row.error !== 0 ? ` Messages marked it with error ${row.error}, so it may have failed.` : "";
-      return { content: `Sent to ${who}; Messages shows it as not delivered yet.${failed}${timeoutNote}`, summary: "not delivered yet" };
+    if (row && row.error !== 0) {
+      const sms = service === "SMS" ? " It went as an SMS, which this Mac sends through the user's iPhone (Text Message Forwarding), so check the iPhone is nearby and forwarding is on." : "";
+      return { content: `Messages couldn't deliver the text to ${who} (error ${row.error}); it shows as Not Delivered.${sms}${timeoutNote}`, isError: true, summary: "not delivered" };
     }
+    if (row) return { content: `Sent to ${who}; Messages shows it as not delivered yet.${timeoutNote}`, summary: "not delivered yet" };
     const why = timedOut ? timeoutNote : helperError ? ` ${helperError}` : "";
     return { content: `Messages hasn't recorded the text yet, so it may not have gone.${why}`, isError: true, summary: "not recorded" };
   }

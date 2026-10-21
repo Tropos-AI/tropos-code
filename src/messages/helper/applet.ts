@@ -199,15 +199,10 @@ on doProbe()
 	try
 		with timeout of 30 seconds
 			tell application "Messages"
+				-- Asked per service, not per account: some accounts (FaceTime and the like) fail on "service type".
 				set found to {}
-				repeat with acct in (every account whose enabled is true)
-					set kind to service type of acct
-					if kind is iMessage then
-						set end of found to "iMessage"
-					else if kind is SMS then
-						set end of found to "SMS"
-					end if
-				end repeat
+				if (count of (every account whose service type = iMessage and enabled is true)) > 0 then set end of found to "iMessage"
+				if (count of (every account whose service type = SMS and enabled is true)) > 0 then set end of found to "SMS"
 			end tell
 		end timeout
 	on error errMsg number errNum
