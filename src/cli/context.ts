@@ -96,10 +96,12 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   };
   const newSessionContext = async (): Promise<SessionContext> => {
     await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));
+    // Re-read too, so a harness adopted while the gateway runs reaches the next session; never throws.
+    const sessionHarness = await loadHarness({ home, cwd });
     const holder: SubagentHolder = {};
     let current = "";
     return {
-      ctx: { ...ctx, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
+      ctx: { ...ctx, system: sessionHarness.system, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
       setSessionId: (id) => {
         current = id;
       },
