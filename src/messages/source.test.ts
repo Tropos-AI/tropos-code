@@ -87,6 +87,60 @@ describe("MessagesSource", () => {
     s.dispose();
   });
 
+  test("the current snapshot is closed and deleted once it is older than the cache time", async () => {
+    const client = fakeClient();
+    const clock = { t: 1000 };
+    const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+    const s = new MessagesSource({
+      client: client as never,
+      runDir,
+      userHome: join(root, "home"),
+      now: () => clock.t,
+      setTimer: (fn, ms) => {
+        const t = { fn, ms, cancelled: false };
+        timers.push(t);
+        return () => void (t.cancelled = true);
+      },
+    });
+    await s.with(() => 0);
+    expect(snaps()).toHaveLength(1);
+    expect(timers.at(-1)!.ms).toBe(30_000);
+    // Fired early (the clock says 10 s): it waits out the remaining 20 s instead.
+    clock.t += 10_000;
+    timers.at(-1)!.fn();
+    expect(snaps()).toHaveLength(1);
+    expect(timers.at(-1)!.ms).toBe(20_000);
+    clock.t += 20_000;
+    timers.at(-1)!.fn();
+    expect(snaps()).toHaveLength(0);
+    // The names learned from it stay in memory for prompts.
+    expect(s.canonicalHandle("+30 691-234 5678")).toBe("+306912345678");
+    await s.with(() => 0);
+    expect(count(client)).toBe(2);
+    expect(snaps()).toHaveLength(1);
+    s.dispose();
+    expect(timers.at(-1)!.cancelled).toBe(true);
+  });
+
+  test("a snapshot that expires while it is read is deleted when the reader finishes", async () => {
+    const clock = { t: 1 };
+    let fire!: () => void;
+    const s = new MessagesSource({ client: fakeClient() as never, runDir, userHome: join(root, "home"), now: () => clock.t, setTimer: (fn) => ((fire = fn), () => {}) });
+    let release!: () => void;
+    const slow = s.with(async (db) => {
+      await new Promise<void>((r) => (release = r));
+      return db.chats({ limit: 5 }).length;
+    });
+    await Bun.sleep(20);
+    clock.t += 30_000;
+    fire();
+    expect(snaps()).toHaveLength(1);
+    release();
+    expect(await slow).toBe(1);
+    expect(snaps()).toHaveLength(0);
+    s.dispose();
+  });
+
   test("fresh always takes a new snapshot", async () => {
     const client = fakeClient();
     const s = source(client, { t: 1 });
@@ -246,5 +300,20 @@ describe("MessagesSource", () => {
     await expect(s.attachmentCopy(99)).rejects.toBeInstanceOf(MessagesError);
     s.dispose();
     expect(existsSync(ok.path)).toBe(false);
+  });
+
+  test("releaseAttachment deletes the copy's folder at once; other paths are left alone", async () => {
+    buildChatDb(join(fixtures, "chat.db"), {
+      chats: [{ guid: "c", handles: ["+306912345678"] }],
+      messages: [{ guid: "a", chat: "c", handle: "+306912345678", text: "p", at: 1, attachments: [{ filename: "~/Library/Messages/Attachments/ab/pic.jpg", mime: "image/jpeg", name: "pic.jpg" }] }],
+    });
+    const s = source(fakeClient(), { t: 1 }, join(root, "home"));
+    const copy = await s.attachmentCopy(1);
+    expect(snaps().filter((n) => n.startsWith("snap-att-"))).toHaveLength(1);
+    s.releaseAttachment(join(fixtures, "chat.db"));
+    expect(existsSync(join(fixtures, "chat.db"))).toBe(true);
+    s.releaseAttachment(copy.path);
+    expect(snaps().filter((n) => n.startsWith("snap-att-"))).toHaveLength(0);
+    s.dispose();
   });
 });

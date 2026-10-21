@@ -40,9 +40,12 @@ function setup(opts: { count: number; long?: boolean }) {
   buildChatDb(join(root, "fixtures", "chat.db"), { chats: [{ guid: CHAT, handles: ["+306912345678"] }], messages });
 }
 
+let requests: string[] = [];
+
 function makeSource(): MessagesSource {
   const client = {
     async request(action: string, args: string[]) {
+      requests.push(action);
       if (failWith) return { ok: false as const, code: "eperm", message: "x" };
       if (action === "snapshot") {
         copyFileSync(join(root, "fixtures", "chat.db"), join(args[0], "chat.db"));
@@ -75,6 +78,7 @@ beforeEach(() => {
   mkdirSync(join(root, "fixtures"));
   buildAddressBook(join(root, "fixtures", "book.abcddb"), [{ first: "Maria", last: "Papadopoulou", phones: ["+30 691 234 5678"] }]);
   failWith = undefined;
+  requests = [];
 });
 afterEach(() => {
   source?.dispose();
@@ -159,6 +163,27 @@ describe("Messages tool", () => {
     expect(out.isError).toBeUndefined();
     expect(text(out)).toContain("note.txt");
     expect(text(out)).toContain("text/plain");
+    expect(text(out)).toContain("5 B");
+    // chat.db already says what it is, so nothing is copied out of Messages.
+    expect(requests).not.toContain("attachment");
+    expect(readdirSync(join(root, "run")).filter((n) => n.startsWith("snap-att-"))).toEqual([]);
+  });
+
+  test("an attachment of unknown type is copied to look at it, and the copy is deleted right after", async () => {
+    setup({ count: 1 });
+    const blob = join(root, "home", "Library", "Messages", "Attachments", "ab", "blob");
+    writeFileSync(blob, "not a picture");
+    buildChatDb(join(root, "fixtures", "chat.db"), {
+      chats: [{ guid: CHAT, handles: ["+306912345678"] }],
+      messages: [{ guid: "u", chat: CHAT, handle: "+306912345678", text: "?", at: T0, attachments: [{ filename: blob, name: "blob" }] }],
+    });
+    source = makeSource();
+    const [att] = await source.with((db) => db.read(CHAT, { limit: 5 }).flatMap((m) => m.attachments));
+    const out = await run({ action: "attachment", id: att?.id });
+    expect(out.isError).toBeUndefined();
+    expect(text(out)).toContain("not an image");
+    expect(requests).toContain("attachment");
+    expect(readdirSync(join(root, "run")).filter((n) => n.startsWith("snap-att-"))).toEqual([]);
   });
 
   test.skipIf(process.platform !== "darwin")("an image attachment comes back as a downscaled jpeg image block", async () => {
@@ -172,6 +197,8 @@ describe("Messages tool", () => {
     expect(block.type).toBe("image");
     expect(block.source?.media_type).toBe("image/jpeg");
     expect(Buffer.from(block.source?.data ?? "", "base64")[0]).toBe(0xff);
+    // The copy and its resized jpeg are gone once the image is in the result.
+    expect(readdirSync(join(root, "run")).filter((n) => n.startsWith("snap-att-"))).toEqual([]);
   });
 
   test("an image result opens with the preamble before the image", async () => {
@@ -203,7 +230,7 @@ describe("Messages tool", () => {
     closeSync(fd);
     const msgs = [
       { guid: "b1", chat: CHAT, handle: "+306912345678", text: "known", at: T0, attachments: [{ filename: big, mime: "application/octet-stream", name: "evil\nname.bin", bytes: 101 * 1024 * 1024 }] },
-      { guid: "b2", chat: CHAT, handle: "+306912345678", text: "unknown", at: T0 + 1, attachments: [{ filename: big, mime: "application/octet-stream", name: "evil\nname.bin" }] },
+      { guid: "b2", chat: CHAT, handle: "+306912345678", text: "unknown", at: T0 + 1, attachments: [{ filename: big, name: "evil\nname.bin" }] },
     ];
     buildChatDb(join(root, "fixtures", "chat.db"), { chats: [{ guid: CHAT, handles: ["+306912345678"] }], messages: msgs as never });
     source = makeSource();

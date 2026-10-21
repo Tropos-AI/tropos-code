@@ -146,7 +146,8 @@ export function formatContacts(found: Array<{ name: string; handles: string[] }>
 }
 
 /** One attachment's description (name, type, size), inside the envelope; shown with the image when it is one. */
-export function formatAttachment(id: number, name: string, type: string, bytes: number, isImage: boolean): string {
+export function formatAttachment(id: number, name: string, type: string, bytes: number | undefined, isImage: boolean): string {
   const detail = isImage ? "an image, shown below, resized" : "not an image, so its contents are not shown";
-  return wrap(`kind="attachment" id="${id}"`, [{ text: `${safe(name)}, ${safe(type)}, ${formatBytes(bytes)}; ${detail}` }], "newest-first", NARROW);
+  const size = bytes !== undefined ? formatBytes(bytes) : "size unknown";
+  return wrap(`kind="attachment" id="${id}"`, [{ text: `${safe(name)}, ${safe(type)}, ${size}; ${detail}` }], "newest-first", NARROW);
 }

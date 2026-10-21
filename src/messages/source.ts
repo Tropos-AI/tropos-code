@@ -71,9 +71,20 @@ interface Snapshot {
   retired: boolean;
 }
 
+/** Calls `fn` after `ms` without keeping the process alive; returns what cancels it. */
+export type SetTimer = (fn: () => void, ms: number) => () => void;
+
+const unrefTimer: SetTimer = (fn, ms) => {
+  const t = setTimeout(fn, ms);
+  t.unref?.();
+  return () => clearTimeout(t);
+};
+
 /**
  * The reader's source of data: asks the helper for a copy of chat.db and the address book, opens the copy
- * read-only and reuses it for `cacheMs`. A replaced snapshot's folder is deleted once nobody is reading it.
+ * read-only and reuses it for `cacheMs`. The copies sit outside what Full Disk Access protects, so none is kept
+ * longer than needed: a replaced snapshot's folder is deleted once nobody is reading it, and the current one is
+ * retired the same way once it is older than `cacheMs` (on a timer that never keeps the process alive).
  */
 export class MessagesSource {
   private readonly client: HelperClient;
@@ -90,13 +101,16 @@ export class MessagesSource {
   private lastBook: Contacts | undefined;
   private lastHandles: string[] = [];
   private readonly extraDirs = new Set<string>();
+  private readonly setTimer: SetTimer;
+  private cancelExpiry: (() => void) | undefined;
 
-  constructor(o: { client: HelperClient; runDir: string; userHome: string; now?: () => number; cacheMs?: number }) {
+  constructor(o: { client: HelperClient; runDir: string; userHome: string; now?: () => number; cacheMs?: number; setTimer?: SetTimer }) {
     this.client = o.client;
     this.runDir = o.runDir;
     this.userHome = o.userHome;
     this.now = o.now ?? Date.now;
     this.cacheMs = o.cacheMs ?? CACHE_MS;
+    this.setTimer = o.setTimer ?? unrefTimer;
   }
 
   /** Runs `fn` on a snapshot no older than the cache time. */
@@ -162,8 +176,18 @@ export class MessagesSource {
     return { path: copied, ...(found.mime ? { mime: found.mime } : {}), name: found.name };
   }
 
+  /** Deletes an attachment copy's folder once its reader is done with it. */
+  releaseAttachment(path: string): void {
+    const dir = resolve(path, "..");
+    if (!this.extraDirs.has(dir)) return;
+    rmSync(dir, { recursive: true, force: true });
+    this.extraDirs.delete(dir);
+  }
+
   /** Closes the snapshot and deletes every folder this source made. */
   dispose(): void {
+    this.cancelExpiry?.();
+    this.cancelExpiry = undefined;
     if (this.current) this.retire(this.current);
     this.current = undefined;
     this.lastBook = undefined;
@@ -203,6 +227,20 @@ export class MessagesSource {
     rmSync(snap.dir, { recursive: true, force: true });
   }
 
+  /** Retires `snap` once it is older than the cache time; a newer snapshot replaces the timer. */
+  private expireLater(snap: Snapshot): void {
+    this.cancelExpiry?.();
+    const wait = Math.max(0, snap.takenAt + this.cacheMs - this.now());
+    this.cancelExpiry = this.setTimer(() => {
+      this.cancelExpiry = undefined;
+      if (this.current !== snap) return;
+      // A timer that fired early (clock skew) waits out the rest.
+      if (this.now() - snap.takenAt < this.cacheMs) return this.expireLater(snap);
+      this.current = undefined;
+      this.retire(snap);
+    }, wait);
+  }
+
   /** One snapshot at a time; callers arriving meanwhile get the same one. */
   private take(): Promise<Snapshot> {
     if (!this.pending) {
@@ -234,6 +272,7 @@ export class MessagesSource {
       this.lastBook = contacts;
       this.lastHandles = handles;
       if (previous) this.retire(previous);
+      this.expireLater(snap);
       return snap;
     } catch (err) {
       try {

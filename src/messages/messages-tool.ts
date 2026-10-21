@@ -1,6 +1,5 @@
 // src/messages/messages-tool.ts — the owner-only, read-only Messages tool: chats, messages, search, activity, contacts and attachments
 import { open, readFile, rm, stat } from "node:fs/promises";
-import { dirname } from "node:path";
 import { z } from "zod";
 import { sniffImage } from "../attachments/attachments";
 import { errorText } from "../error-text";
@@ -66,7 +65,7 @@ async function downscale(copy: string): Promise<string | undefined> {
   let ok = false;
   const timer: { id?: ReturnType<typeof setTimeout> } = {};
   try {
-    const proc = Bun.spawn(["sips", "-Z", "1600", "-s", "format", "jpeg", copy, "--out", out], { stdout: "ignore", stderr: "ignore" });
+    const proc = Bun.spawn(["/usr/bin/sips", "-Z", "1600", "-s", "format", "jpeg", copy, "--out", out], { stdout: "ignore", stderr: "ignore" });
     timer.id = setTimeout(() => proc.kill(), SIPS_TIMEOUT_MS);
     ok = (await proc.exited) === 0;
   } catch {
@@ -92,22 +91,25 @@ async function head(path: string): Promise<Uint8Array> {
 
 const tooBig = (bytes: number) => fail(`That attachment is ${formatBytes(bytes)}; files over 100 MB are not opened.`);
 
+/**
+ * One attachment. A file chat.db already types as something other than an image is described from chat.db alone,
+ * so nothing is copied; otherwise the helper copies it to look at it, and the copy (with its resized jpeg) is
+ * deleted as soon as the result is made, since it sits outside what Full Disk Access protects.
+ */
 async function attachment(source: MessagesSource, id: number): Promise<ToolOutput> {
   const known = await source.with((db) => db.attachment(id));
   if (!known) return fail(`No attachment ${id}.`);
   if (known.bytes !== undefined && known.bytes > MAX_ATTACHMENT_BYTES) return tooBig(known.bytes);
+  if (known.mime && !/^image\//i.test(known.mime)) return { content: formatAttachment(id, known.name, known.mime, known.bytes, false), summary: "file" };
   const copy = await source.attachmentCopy(id);
-  const size = (await stat(copy.path)).size;
-  if (size > MAX_ATTACHMENT_BYTES) {
-    await rm(dirname(copy.path), { recursive: true, force: true });
-    return tooBig(size);
-  }
-  const type = copy.mime ?? "unknown type";
-  const isImage = sniffImage(await head(copy.path)) !== null || /^image\/hei[cf]/i.test(copy.mime ?? "");
-  if (!isImage) return { content: formatAttachment(id, copy.name, type, size, false), summary: "file" };
-  const jpg = await downscale(copy.path);
-  if (!jpg) return fail(`Attachment ${id} is an image, but it could not be resized to show.`);
   try {
+    const size = (await stat(copy.path)).size;
+    if (size > MAX_ATTACHMENT_BYTES) return tooBig(size);
+    const type = copy.mime ?? "unknown type";
+    const isImage = sniffImage(await head(copy.path)) !== null || /^image\/hei[cf]/i.test(copy.mime ?? "");
+    if (!isImage) return { content: formatAttachment(id, copy.name, type, size, false), summary: "file" };
+    const jpg = await downscale(copy.path);
+    if (!jpg) return fail(`Attachment ${id} is an image, but it could not be resized to show.`);
     const data = (await readFile(jpg)).toString("base64");
     return {
       content: [
@@ -117,7 +119,7 @@ async function attachment(source: MessagesSource, id: number): Promise<ToolOutpu
       summary: `image, ${formatBytes(size)}`,
     };
   } finally {
-    await rm(jpg, { force: true });
+    source.releaseAttachment(copy.path);
   }
 }
 
