@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { labDir, type LabRun } from "../../harness/lab";
 import type { ProbeResult } from "../../harness/probe";
-import { deliverable, handOver } from "./harness-recursion";
+import { deliverable, handOver, recursiveJobRunner } from "./harness-recursion";
 import type { CronJob } from "./types";
 
 let dir: string;
@@ -75,4 +75,21 @@ test("an attempt that changed nothing, or no valid attempt, is reported without 
   expect(empty.text).toContain("the best attempt (2/2 checks) changed nothing");
   const none = await handOver({ home, job, repo, result: { run: labRun([probe("ref", 0, { error: "x" })], { verdict: { outcome: "invalid", reasons: [] }, candidate: undefined }), reflection: { lessons: [], dropped: [], stored: false, costUsd: 0 } } });
   expect(none.text).toContain("no attempt finished without errors");
+});
+
+test("the job runner builds the task from the job's prompt and hands the lab's best attempt over", async () => {
+  const seen: string[] = [];
+  const recursive = recursiveJobRunner({
+    home, command: ["tcode"], env: {},
+    runTask: async (task, settings, j) => {
+      seen.push(`${task.prompt}|${task.repo}|${settings.model}|${j.id}`);
+      return { run: labRun([probe("ref", 2)], { task: { ...labRun([]).task, repo: task.repo } }), reflection: { lessons: [], dropped: [], stored: false, costUsd: 0 } };
+    },
+  });
+  const out = await recursive(job, repo, new AbortController().signal);
+  expect(seen).toEqual([`Fix a|${repo}|claude-opus-5-5|j1`]);
+  expect(out.text).toContain("changed nothing");
+  const stopped = new AbortController();
+  stopped.abort();
+  await expect(recursive(job, repo, stopped.signal)).rejects.toThrow("stopped");
 });

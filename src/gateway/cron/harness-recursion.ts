@@ -8,10 +8,9 @@ import { weakenedTests } from "../../harness/audit";
 import { checksPassed, rankProbes } from "../../harness/gate";
 import { labDir, type LabRun } from "../../harness/lab";
 import type { ProbeResult } from "../../harness/probe";
-import { labOnTask, labTools, taskFromPrompt, type LabTaskResult } from "../../harness/service";
-import { loadSettings, settingsPaths } from "../../config/settings";
-import { Ledger } from "../../learning/ledger";
-import { ProviderRouter } from "../../providers/router";
+import { labFromSettings, taskFromPrompt, type LabTaskResult } from "../../harness/service";
+import type { LabTask } from "../../harness/probe";
+import { loadSettings, settingsPaths, type Settings } from "../../config/settings";
 import { createWorktree, hostGit, type GitRun } from "../worktrees";
 import type { CronJob } from "./types";
 
@@ -56,32 +55,24 @@ export async function handOver(o: { home: string; job: CronJob; repo: string; re
 }
 
 /** The daemon's `recursive` for the job runner: the lab with the owner's settings, then the hand-over. */
-export function recursiveJobRunner(o: { home: string; command: string[]; env: NodeJS.ProcessEnv }): (job: CronJob, cwd: string, signal: AbortSignal) => Promise<{ text: string }> {
+export function recursiveJobRunner(o: {
+  home: string;
+  command: string[];
+  env: NodeJS.ProcessEnv;
+  /** Tests stand in for the lab. */
+  runTask?: (task: LabTask, settings: Settings, job: CronJob, signal: AbortSignal) => Promise<LabTaskResult>;
+}): (job: CronJob, cwd: string, signal: AbortSignal) => Promise<{ text: string }> {
   return async (job, cwd, signal) => {
     const { settings } = await loadSettings(settingsPaths(cwd, o.home));
-    const env = { ...o.env, ...settings.env };
     const task = await taskFromPrompt(cwd, job.prompt);
-    const { runner, llm } = await labTools({
-      home: o.home,
-      env,
-      command: o.command,
-      router: new ProviderRouter({ home: o.home, env, settings: settings.providers }),
-      providers: settings.providers as Record<string, unknown>,
-      models: { model: settings.model, effort: settings.effort, ...(settings.harness.editorModel ? { editorModel: settings.harness.editorModel } : {}) },
-    });
-    const result = await labOnTask(task, {
-      home: o.home,
-      runner,
-      llm,
-      model: settings.model,
-      scope: "global",
-      k: job.harnessRecursion ?? 1,
-      mode: "parallel",
-      // A job the agent created may have been talked into: its harness changes wait for the owner.
-      autoAdopt: settings.harness.autoAdopt && job.createdBy !== "agent",
-      ledger: new Ledger(o.home),
-      signal,
-    });
+    const result = o.runTask
+      ? await o.runTask(task, settings, job, signal)
+      : await labFromSettings({ home: o.home, command: o.command, env: o.env, settings }, task, {
+          k: job.harnessRecursion ?? 1,
+          // A job the agent created may have been talked into: its harness changes wait for the owner.
+          autoAdopt: job.createdBy !== "agent",
+          signal,
+        });
     if (signal.aborted) throw new Error("stopped");
     return { text: (await handOver({ home: o.home, job, repo: task.repo, result })).text };
   };

@@ -10,7 +10,9 @@ import { gitRoot } from "../context/memory";
 import { loadGatewayConfig } from "../gateway/config";
 import { hostGit } from "../gateway/worktrees";
 import { guestWorkspaceDir, workspaceDir } from "../paths";
-import type { Ledger } from "../learning/ledger";
+import type { Settings } from "../config/settings";
+import { Ledger } from "../learning/ledger";
+import { ProviderRouter } from "../providers/router";
 import { readCredentials, resolveApiKey } from "../providers/credentials";
 import { parseModelId } from "../providers/registry";
 import { projectDir, readSessionFile } from "../session/store";
@@ -228,4 +230,38 @@ export async function labOnTask(
     }
   }
   return result;
+}
+
+/**
+ * The lab on one task with the owner's settings: the session model for the runs, settings.harness for the editors' model,
+ * and auto-adoption unless `autoAdopt` is false. The gateway's weekly lab and scheduled jobs use it.
+ */
+export async function labFromSettings(
+  o: { home: string; command: string[]; env: NodeJS.ProcessEnv; settings: Settings; router?: Model },
+  task: LabTask,
+  run: { k: number; autoAdopt: boolean; signal: AbortSignal; log?: (line: string) => void },
+): Promise<LabTaskResult> {
+  const { settings } = o;
+  const env = { ...o.env, ...settings.env };
+  const { runner, llm } = await labTools({
+    home: o.home,
+    env,
+    command: o.command,
+    router: o.router ?? new ProviderRouter({ home: o.home, env, settings: settings.providers }),
+    providers: settings.providers as Record<string, unknown>,
+    models: { model: settings.model, effort: settings.effort, ...(settings.harness.editorModel ? { editorModel: settings.harness.editorModel } : {}) },
+  });
+  return labOnTask(task, {
+    home: o.home,
+    runner,
+    llm,
+    model: settings.model,
+    scope: "global",
+    k: run.k,
+    mode: "parallel",
+    autoAdopt: run.autoAdopt && settings.harness.autoAdopt,
+    ledger: new Ledger(o.home),
+    signal: run.signal,
+    ...(run.log ? { log: run.log } : {}),
+  });
 }

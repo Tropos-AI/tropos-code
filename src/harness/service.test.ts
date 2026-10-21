@@ -10,7 +10,9 @@ import { projectDir } from "../session/store";
 import { BASE_TREE } from "./base";
 import { readCandidate, saveCandidate } from "./candidates";
 import type { ProbeInput, ProbeResult, ProbeRunner } from "./probe";
-import { adoptedTree, firstPrompt, labOnTask, probeKey, replayTasks, taskFromFile, taskFromPrompt } from "./service";
+import { DEFAULT_SETTINGS } from "../config/settings";
+import { confinementAvailable } from "../exec/confined";
+import { adoptedTree, firstPrompt, labFromSettings, labOnTask, probeKey, replayTasks, taskFromFile, taskFromPrompt } from "./service";
 import { globalHarnessDir } from "./tree";
 
 let dir: string;
@@ -142,4 +144,19 @@ test("an improvement only in steps, from one run each, waits for the owner", asy
   expect(r.run.verdict).toEqual({ outcome: "better", reasons: ["turns 20 → 5"] });
   expect(r.adopted).toBeUndefined();
   expect(r.pending).toContain("only on steps or tool errors");
+});
+
+test("labFromSettings runs the lab with the owner's model and settings", async () => {
+  if (!(await confinementAvailable())) return;
+  const agent = join(dir, "agent.sh");
+  await writeFile(agent, ["#!/bin/sh", `echo '${JSON.stringify({ type: "turn_end", reason: "end_turn" })}'`].join("\n"));
+  const nothing = () => reply([textBlock('{"files": {}}')]);
+  const router = new FakeModel([nothing, nothing, nothing, () => reply([textBlock('{"lessons": []}')])]);
+  const settings = { ...DEFAULT_SETTINGS, model: "claude-haiku-5-5", harness: { ...DEFAULT_SETTINGS.harness, editorModel: "claude-opus-5-5" } };
+  const r = await labFromSettings({ home, command: ["/bin/sh", agent], env: { ANTHROPIC_API_KEY: "k" }, settings, router }, await taskFromPrompt(repo, "Fix the date parser", { setup: "true", checks: ["true"] }), {
+    k: 1, autoAdopt: true, signal: new AbortController().signal,
+  });
+  expect(r.run).toMatchObject({ model: "claude-haiku-5-5", editorModel: "claude-opus-5-5", scope: "global" });
+  expect(r.run.verdict.reasons).toEqual(["no proposal changed the harness"]);
+  expect(router.requests[0]?.model).toBe("claude-opus-5-5");
 });

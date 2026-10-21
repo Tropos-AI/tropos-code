@@ -6,10 +6,8 @@ import { dirname, join } from "node:path";
 import { loadSettings, settingsPaths, type Settings } from "../config/settings";
 import { gitRoot } from "../context/memory";
 import { labDir } from "../harness/lab";
-import { labOnTask, labTools, replayTasks, type LabTaskResult } from "../harness/service";
+import { labFromSettings, replayTasks, type LabTaskResult } from "../harness/service";
 import type { LabTask } from "../harness/probe";
-import { Ledger } from "../learning/ledger";
-import { ProviderRouter } from "../providers/router";
 import type { GatewayService, GatewayServiceDeps } from "./types";
 
 const WEEK_MS = 7 * 24 * 3_600_000;
@@ -59,31 +57,6 @@ export function createHarnessLabService(opts: { command: string[]; env: NodeJS.P
   let running = false;
   const controller = new AbortController();
 
-  async function realRunTask(deps: GatewayServiceDeps, task: LabTask, settings: Settings, signal: AbortSignal): Promise<LabTaskResult> {
-    const env = { ...opts.env, ...settings.env };
-    const { runner, llm } = await labTools({
-      home: deps.home,
-      env,
-      command: opts.command,
-      router: new ProviderRouter({ home: deps.home, env, settings: settings.providers }),
-      providers: settings.providers as Record<string, unknown>,
-      models: { model: settings.model, effort: settings.effort, ...(settings.harness.editorModel ? { editorModel: settings.harness.editorModel } : {}) },
-    });
-    return labOnTask(task, {
-      home: deps.home,
-      runner,
-      llm,
-      model: settings.model,
-      scope: "global",
-      k: 1,
-      mode: "parallel",
-      autoAdopt: settings.harness.autoAdopt,
-      ledger: new Ledger(deps.home),
-      signal,
-      log: (line) => log(line),
-    });
-  }
-
   async function tick(deps: GatewayServiceDeps): Promise<void> {
     if (running) return;
     running = true;
@@ -108,7 +81,11 @@ export function createHarnessLabService(opts: { command: string[]; env: NodeJS.P
       for (const task of tasks.slice(0, MAX_TASKS)) {
         if (controller.signal.aborted) break;
         try {
-          results.push(await (opts.runTask ? opts.runTask(task, settings, controller.signal) : realRunTask(deps, task, settings, controller.signal)));
+          results.push(
+            await (opts.runTask
+              ? opts.runTask(task, settings, controller.signal)
+              : labFromSettings({ home: deps.home, command: opts.command, env: opts.env, settings }, task, { k: 1, autoAdopt: true, signal: controller.signal, log })),
+          );
         } catch (e) {
           log(`${task.title}: ${e instanceof Error ? e.message : String(e)}`);
         }
