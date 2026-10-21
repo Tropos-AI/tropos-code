@@ -195,6 +195,10 @@ export class LocalProbeRunner implements ProbeRunner {
       input.task.prompt,
       "--output-format",
       "stream-json",
+      // Nobody is there to approve, so nothing asks; --confine is what holds it in. File tools' paths are resolved
+      // through links and denied outside the copy before the bypass applies, Bash runs in the sandbox, and a confined
+      // session has neither Cron nor TroposSetup. Its home is fresh, so no hooks or MCP servers come with it, and a
+      // repository's settings can't add them.
       "--dangerously-skip-permissions",
       "--confine",
       "--harness-dir",
