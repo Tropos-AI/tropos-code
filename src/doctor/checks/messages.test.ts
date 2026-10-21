@@ -1,6 +1,7 @@
 // src/doctor/checks/messages.test.ts
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HELPER_VERSION } from "../../messages/helper/applet";
 import type { MessagesRuntime, MessagesStatus } from "../../messages/runtime";
@@ -58,4 +59,30 @@ test("a missing helper is a fixable warning, and the fix builds it", async () =>
   expect(f).toMatchObject({ level: "warn", fixable: true, safe: true, fixed: true });
   expect(calls).toContain("/usr/bin/osacompile");
   expect(existsSync(join(fx.userHome, ".local", "share", "tropos", "helpers", "Tropos Messages Helper.app"))).toBe(true);
+});
+
+test("an outdated helper is fixable but not safe, and its fix says the permissions must be granted again", async () => {
+  fx = await makeFixture();
+  await on();
+  const app = join(fx.userHome, ".local", "share", "tropos", "helpers", "Tropos Messages Helper.app");
+  await mkdir(join(app, "Contents", "Resources"), { recursive: true });
+  await writeFile(join(app, "Contents", "Resources", "tropos-helper-version"), "0\n");
+  const exec = async (cmd: string, args: string[]) => {
+    if (cmd.endsWith("osacompile")) await mkdir(join(args[1]!, "Contents", "Resources"), { recursive: true });
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const check = messagesCheckWith(fakeRuntime(status({ helper: { installed: true, version: 0, current: HELPER_VERSION } })));
+  const asked = await runOne(fx, check, { platform: "darwin", fix: "safe", runner: { exec } });
+  expect(byId(asked, "messages.helper")).toMatchObject({ level: "warn", fixable: true });
+  expect(byId(asked, "messages.helper")!.safe).toBeUndefined();
+  expect(byId(asked, "messages.helper")!.fixed).toBeFalsy();
+  const fixed = await runOne(fx, check, { platform: "darwin", fix: true, runner: { exec } });
+  expect(byId(fixed, "messages.helper")!.fixMessage).toContain("Full Disk Access");
+});
+
+test("Full Disk Access that could not be checked is only info", async () => {
+  fx = await makeFixture();
+  await on();
+  const r = await runOne(fx, messagesCheckWith(fakeRuntime(status({ fullDiskAccess: "unknown" }))), { platform: "darwin" });
+  expect(byId(r, "messages.fda")!.level).toBe("info");
 });

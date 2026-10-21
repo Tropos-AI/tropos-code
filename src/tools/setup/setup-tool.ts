@@ -177,6 +177,11 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
 
   /** What is left to do after turning texts on: the first missing step, and where the dashboard guides it. */
   function messagesText(v: MessagesView): string {
+    const text = textsState(v);
+    return v.note ? `${text} ${v.note}` : text;
+  }
+
+  function textsState(v: MessagesView): string {
     if (!v.enabled) return "Texts are off.";
     const st = v.status;
     const where = link("settings/channels");

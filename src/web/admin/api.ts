@@ -1,7 +1,6 @@
 // src/web/admin/api.ts — the host-level admin API of `tcode web` and the gateway. No Node imports: the
 // browser app imports this too. Each area's methods live in their own interface so the pieces that implement and use
 // them can be written side by side; AdminMap is their union. Secrets are write-only: nothing here returns a key.
-import type { MessagesStatus } from "../../messages/runtime";
 
 // ---------- status ----------
 
@@ -209,12 +208,23 @@ export interface SkillsAdmin {
 
 // ---------- texts (Messages) ----------
 
+type MessagesAnswer = "yes" | "no" | "unknown";
+
+/** How far setup has got: the helper app, and the two macOS permissions it needs. */
+export interface MessagesStatus {
+  helper: { installed: boolean; version?: number; current: number };
+  fullDiskAccess: MessagesAnswer;
+  automation: MessagesAnswer;
+}
+
 export interface MessagesView {
   /** True on macOS, the only place texts exist. */
   available: boolean;
   enabled: boolean;
   /** Setup progress; present only while texts are on. */
   status?: MessagesStatus;
+  /** Set when the change was saved but the running gateway could not be told: running chats pick it up after a restart. */
+  note?: string;
 }
 
 export interface MessagesAdmin {

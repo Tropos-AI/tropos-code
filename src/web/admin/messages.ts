@@ -2,6 +2,7 @@
 // permissions the helper needs. The switch is the `messages` key of the user's settings.json; macOS only.
 import { ConfigStoreError, configFile, readConfigRaw, setAt, updateConfigFile } from "../../config/store";
 import type { Exec } from "../../messages/helper/install";
+import { resolveLayout } from "../../install/layout";
 import { createMessagesRuntime, type MessagesRuntime } from "../../messages/runtime";
 import type { MessagesView } from "./api";
 import { AdminError, type AdminContext, type AdminHandlers } from "./context";
@@ -24,7 +25,7 @@ const MACOS_ONLY = "Texts are only available on macOS.";
 
 export function messagesHandlers(ctx: AdminContext, deps: MessagesDeps = {}): AdminHandlers {
   const platform = deps.platform ?? process.platform;
-  const runtime = deps.runtime ?? (() => createMessagesRuntime({ home: ctx.home, userHome: ctx.userHome }));
+  const runtime = deps.runtime ?? (() => createMessagesRuntime({ home: ctx.home, userHome: ctx.userHome, layout: resolveLayout(ctx.env, ctx.userHome) }));
   const darwin = (): void => {
     if (platform !== "darwin") throw new AdminError(MACOS_ONLY);
   };
@@ -69,8 +70,9 @@ export function messagesHandlers(ctx: AdminContext, deps: MessagesDeps = {}): Ad
         if (err instanceof ConfigStoreError) throw new AdminError(err.message);
         throw err;
       }
-      await ctx.gateway?.reload().catch(() => undefined);
-      return view(false);
+      const reloaded = await ctx.gateway?.reload().then(() => true, () => false);
+      const out = await view(false);
+      return reloaded === false ? { ...out, note: "Saved; restart the service for running chats to pick it up." } : out;
     },
 
     async "messages.openSettings"(params) {

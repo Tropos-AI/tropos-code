@@ -1,4 +1,5 @@
 // src/messages/runtime.ts — one session host's Messages tools, their helper and source, and the setup status the doctor and dashboard show
+import type { MessagesStatus } from "../web/admin/api";
 import { errorText } from "../error-text";
 import { resolveLayout, type Layout } from "../install/layout";
 import type { AnyTool, ToolOutput } from "../tools/types";
@@ -12,14 +13,9 @@ import { MessagesError, MessagesSource } from "./source";
 /** The tools that read or send texts: owner-only, and kept from everyone and everything else that could see their results. */
 export const MESSAGES_TOOLS: ReadonlySet<string> = new Set([MESSAGES_TOOL, SEND_TOOL]);
 
-type Answer = "yes" | "no" | "unknown";
+type Answer = MessagesStatus["fullDiskAccess"];
 
-/** How far setup has got: the helper app, and the two macOS permissions it needs. */
-export interface MessagesStatus {
-  helper: { installed: boolean; version?: number; current: number };
-  fullDiskAccess: Answer;
-  automation: Answer;
-}
+export type { MessagesStatus };
 
 export interface MessagesRuntime {
   /** `[Messages, SendIMessage]`, the same objects on every call. */

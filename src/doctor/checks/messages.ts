@@ -23,13 +23,15 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
         if (!st.helper.installed) {
           out.push(finding("messages.helper", "warn", "The Messages helper is not installed", { fixable: true, safe: true }));
         } else if ((st.helper.version ?? 0) < st.helper.current) {
-          out.push(finding("messages.helper", "warn", `The Messages helper is out of date (version ${st.helper.version}, current ${st.helper.current})`, { fixable: true, safe: true }));
+          out.push(finding("messages.helper", "warn", `The Messages helper is out of date (version ${st.helper.version}, current ${st.helper.current})`, { fixable: true }));
         } else {
           out.push(finding("messages.helper", "ok", "The Messages helper is installed"));
         }
         if (st.fullDiskAccess === "no") {
           out.push(finding("messages.fda", "error", "Full Disk Access is not allowed for the Tropos Messages Helper", { detail: "System Settings → Privacy & Security → Full Disk Access." }));
-        } else if (st.fullDiskAccess === "yes") {
+        } else if (st.fullDiskAccess === "unknown") {
+          out.push(finding("messages.fda", "info", "Full Disk Access could not be checked", { detail: "It is checked once the helper is installed and answering." }));
+        } else {
           out.push(finding("messages.fda", "ok", "Full Disk Access is allowed"));
         }
         if (st.automation === "no") {
@@ -50,7 +52,10 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
       if (f.id !== "messages.helper") return { ok: false, message: "nothing to fix here" };
       try {
         const r = await ensureHelper({ userHome: env.userHome, exec: env.runner.exec, layout: resolveLayout(env.env, env.userHome) });
-        return { ok: true, message: r.installed === "already" ? "The helper was already up to date" : "Installed the Messages helper" };
+        if (r.installed === "already") return { ok: true, message: "The helper was already up to date" };
+        // A rebuild re-signs the app, and macOS ties its permissions to the signature.
+        if (r.installed === "upgraded") return { ok: true, message: "Rebuilt the Messages helper. Switch Tropos Messages Helper on again in System Settings → Privacy & Security → Full Disk Access (and Automation if asked)." };
+        return { ok: true, message: "Installed the Messages helper" };
       } catch (err) {
         return { ok: false, message: errorText(err) };
       }

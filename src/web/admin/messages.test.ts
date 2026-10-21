@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HELPER_VERSION } from "../../messages/helper/applet";
+import type { MessagesView } from "./api";
 import type { MessagesRuntime, MessagesStatus } from "../../messages/runtime";
 import { adminWith, failure, makeKit, type Kit } from "./host-testkit";
 import { messagesHandlers, type MessagesDeps } from "./messages";
@@ -77,4 +78,13 @@ test("probe asks Messages now; openSettings opens the named pane", async () => {
   expect(await a.handle("messages.openSettings", { pane: "fda" })).toEqual({ ok: true });
   expect(opened).toEqual(["/usr/bin/open x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"]);
   expect(await failure(a, "messages.openSettings", { pane: "x" as never })).toContain("pane");
+});
+
+test("a reload that fails is said in the answer; the setting is still saved", async () => {
+  kit.ctx.gateway!.reload = async () => {
+    throw new Error("gone");
+  };
+  const out = (await admin().handle("messages.set", { enabled: true })) as MessagesView;
+  expect(out.note).toContain("restart the service");
+  expect((await settings()).messages).toBe(true);
 });
