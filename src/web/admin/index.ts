@@ -14,6 +14,7 @@ import { logsHandlers } from "./logs";
 import { memoryHandlers } from "./memory";
 import { onboardHandlers } from "./onboard";
 import { pairingHandlers } from "./pairing";
+import { messagesHandlers } from "./messages";
 import { proactiveHandlers } from "./proactive";
 import { projectsHandlers } from "./projects";
 import { remoteHandlers } from "./remote";
@@ -52,6 +53,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...remoteHandlers(ctx),
     ...agentsHandlers(ctx),
     ...proactiveHandlers(ctx),
+    ...messagesHandlers(ctx),
     ...memoryHandlers(ctx),
     ...skillsHandlers(ctx),
     ...extra,

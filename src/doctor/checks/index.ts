@@ -9,6 +9,7 @@ import { gatewayStateCheck } from "./gateway-state";
 import { homeLayoutCheck } from "./home-layout";
 import { installCheck } from "./install";
 import { mcpCheck } from "./mcp";
+import { messagesCheck } from "./messages";
 import { permissionsCheck } from "./permissions";
 import { providersCheck } from "./providers";
 import { securityGatewayCheck } from "./security-gateway";
@@ -38,6 +39,7 @@ export const ALL_CHECKS: Check[] = [
   driftCheck,
   mcpCheck,
   toolsCheck,
+  messagesCheck,
   securityGatewayCheck,
   securityPairingCheck,
   securitySettingsCheck,

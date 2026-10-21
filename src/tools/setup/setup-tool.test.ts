@@ -263,6 +263,28 @@ test("mcp.disable and proactive.set go through the admin and are recorded", asyn
   expect(paths).toContain("proactive");
 });
 
+test("messages.set turns texts on through the admin, records the change and names the first missing step", async () => {
+  answers["messages.set"] = async (p) => {
+    await writeFile(join(home, "settings.json"), JSON.stringify({ messages: (p as { enabled: boolean }).enabled }));
+    return { available: true, enabled: true, status: { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "no", automation: "unknown" } };
+  };
+  expect(toolKind(tool)).toBe("exec");
+  const out = await tool.run({ action: "messages.set", enabled: true }, makeToolContext());
+  expect(calls).toContainEqual(["messages.set", { enabled: true }]);
+  expect(text(out)).toStartWith("Texts are on. Next: ");
+  expect(text(out)).toContain("Full Disk Access");
+  expect(text(out)).toContain("settings/channels");
+  expect((await ledger.list()).map((e) => e.configPath)).toContain("messages");
+  expect(tool.preview!({ action: "messages.set", enabled: true })!.text).toContain("→ on");
+});
+
+test("a guest cannot turn texts on", async () => {
+  const out = await createSetupTool(deps({ who: { role: "guest", origin: "channel" } })).run({ action: "messages.set", enabled: true }, makeToolContext());
+  expect(out.isError).toBe(true);
+  expect(text(out)).toContain("Only the owner");
+  expect(calls).toEqual([]);
+});
+
 test("an admin failure comes back as an error with secrets scrubbed", async () => {
   answers["config.set"] = () => {
     throw new Error(`bad value ${KEY}`);

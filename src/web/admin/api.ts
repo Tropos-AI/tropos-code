@@ -1,6 +1,7 @@
 // src/web/admin/api.ts — the host-level admin API of `tcode web` and the gateway. No Node imports: the
 // browser app imports this too. Each area's methods live in their own interface so the pieces that implement and use
 // them can be written side by side; AdminMap is their union. Secrets are write-only: nothing here returns a key.
+import type { MessagesStatus } from "../../messages/runtime";
 
 // ---------- status ----------
 
@@ -204,6 +205,24 @@ export interface SkillsAdmin {
   "skills.delete": { params: { source: SkillSource; name: string }; result: { ok: true } };
   "skills.archived": { params: undefined; result: ArchivedSkillView[] };
   "skills.restore": { params: { id: string }; result: { name: string } };
+}
+
+// ---------- texts (Messages) ----------
+
+export interface MessagesView {
+  /** True on macOS, the only place texts exist. */
+  available: boolean;
+  enabled: boolean;
+  /** Setup progress; present only while texts are on. */
+  status?: MessagesStatus;
+}
+
+export interface MessagesAdmin {
+  "messages.get": { params: undefined; result: MessagesView };
+  "messages.set": { params: { enabled: boolean }; result: MessagesView };
+  "messages.openSettings": { params: { pane: "fda" | "automation" }; result: { ok: true } };
+  /** Asks Messages now, which shows macOS's Automation prompt the first time. */
+  "messages.probe": { params: undefined; result: MessagesView };
 }
 
 export interface ProactiveAdmin {
@@ -601,6 +620,7 @@ export type AdminMap = StatusAdmin &
   RemoteAdmin &
   AgentsAdmin &
   ProactiveAdmin &
+  MessagesAdmin &
   MemoryAdmin &
   SkillsAdmin;
 
@@ -665,6 +685,10 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "mcp.setEnabled",
   "proactive.get",
   "proactive.set",
+  "messages.get",
+  "messages.set",
+  "messages.openSettings",
+  "messages.probe",
   "memory.edit",
   "memory.delete",
   "skills.read",

@@ -7,7 +7,7 @@ import { createProject } from "../../gateway/projects";
 import { recordSetupChange, type Ledger } from "../../learning/ledger";
 import type { ProviderControl } from "../../ui/runtime";
 import type { Admin } from "../../web/admin";
-import type { DoctorReport, ProactiveView, ServiceInfo } from "../../web/admin/api";
+import type { DoctorReport, MessagesView, ProactiveView, ServiceInfo } from "../../web/admin/api";
 import { AdminError } from "../../web/admin/context";
 import { messageOf, scrub } from "../../web/admin/util";
 import { defineTool, type AnyTool, type ToolContext, type ToolOutput } from "../types";
@@ -74,7 +74,8 @@ const DESCRIPTION =
   "plugin's name, or a local folder; one that runs programs installs switched off), plugin.enable, plugin.disable, plugin.remove, " +
   "plugin.list; skill.install (a SKILL.md URL, or a repo and the skill's folder); download (an https file into the current project, " +
   "at most 200 MB, never over an existing file unless the user asked: overwrite); proactive.set (messages I start myself, their " +
-  "active hours and daily limit; \"stop messaging me\" is enabled: false); autonomy.lower (never raises); doctor.run (read-only) and " +
+  "active hours and daily limit; \"stop messaging me\" is enabled: false); messages.set (texts: reading and sending the user's " +
+  "Messages on this Mac, macOS only; enabled on or off); autonomy.lower (never raises); doctor.run (read-only) and " +
   "doctor.fix (one finding, at the computer only); service.restart; tropos.update. Use it whenever the user asks to change any of these: " +
   "never edit settings.json or gateway.json yourself. Keys and tokens the user pasted appear as [secret:<n>: …]; pass the ref " +
   "\"secret:<n>\" (in `secret`, or as an MCP env value), never the key itself. Raising autonomy, phone access, approving people, " +
@@ -172,6 +173,22 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
 
   function proactiveText(v: ProactiveView): string {
     return `Saved. Proactive messages are ${v.enabled ? "on" : "off"}; active hours ${v.activeHours.start}–${v.activeHours.end}, at most ${v.maxPerDay} a day.`;
+  }
+
+  /** What is left to do after turning texts on: the first missing step, and where the dashboard guides it. */
+  function messagesText(v: MessagesView): string {
+    if (!v.enabled) return "Texts are off.";
+    const st = v.status;
+    const where = link("settings/channels");
+    const next =
+      st && !st.helper.installed
+        ? `the Messages helper isn't installed yet; open ${where} to set it up`
+        : st?.fullDiskAccess !== "yes"
+          ? `allow Full Disk Access for the Tropos Messages Helper in System Settings → Privacy & Security; ${where} walks through it`
+          : st.automation !== "yes"
+            ? `allow Automation (the Messages prompt) for the helper; ${where} checks it`
+            : "";
+    return next ? `Texts are on. Next: ${next}.` : "Texts are on and set up.";
   }
 
   async function perform(input: SetupInput, ctx: ToolContext, taken: string[]): Promise<string> {
@@ -277,6 +294,13 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
         };
         if (!Object.keys(patch).length) refuse("Say what to change: on or off, the active hours, how often, or how many a day.");
         return changing(gatewayPaths("proactive"), input, ctx, "proactive messages", async () => proactiveText((await admin.handle("proactive.set", patch)) as ProactiveView));
+      }
+      case "messages.set": {
+        if (input.enabled === undefined) refuse("Say whether texts should be on or off.");
+        const on = input.enabled === true;
+        return changing([{ file: "settings", paths: ["messages"] }], input, ctx, `texts (Messages) ${on ? "on" : "off"}`, async () =>
+          messagesText((await admin.handle("messages.set", { enabled: on })) as MessagesView),
+        );
       }
       case "autonomy.lower": {
         const level = need(input.level, "Say which level: ask or balanced.");
