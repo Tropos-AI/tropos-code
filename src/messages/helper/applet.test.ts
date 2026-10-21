@@ -89,6 +89,16 @@ describe("appletSource", () => {
     expect(source).not.toMatch(/^\s*(property|global)\b/m);
   });
 
+  test("copies are APFS clones made in a fresh private folder, with the byte copy as the fallback", () => {
+    const source = appletSource(ONEIL);
+    const copy = source.split("\n").find((l) => l.includes("on copyChecked"))!;
+    const body = source.slice(source.indexOf(copy), source.indexOf("end copyChecked"));
+    expect(body).toContain("/usr/bin/mktemp -d ./.copy-XXXXXX");
+    expect(body).toContain("/bin/cp -c -- ");
+    expect(body).toContain("/bin/cat -- ");
+    expect(body).toContain("/bin/mv -f -h ");
+  });
+
   test.skipIf(process.platform !== "darwin")("osacompile compiles it", () => {
     const dir = mkdtempSync(join(tmpdir(), "tropos-applet-"));
     try {
@@ -175,6 +185,9 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       expect(readFileSync(join(snap, "chat.db-wal"), "utf8")).toBe("wal");
       expect(readFileSync(join(snap, "Καλημέρα 👍.jpg"), "utf8")).toBe("pic");
       expect(readFileSync(join(snap, "contacts-1", "AddressBook-v22.abcddb"), "utf8")).toBe("ab");
+      // The private folders the copies were cloned into are gone.
+      expect(readdirSync(snap).sort()).toEqual(["chat.db", "chat.db-wal", "contacts-1", "Καλημέρα 👍.jpg"].sort());
+      expect(readdirSync(join(snap, "contacts-1"))).toEqual(["AddressBook-v22.abcddb"]);
       expect(existsSync(join(dir, "elsewhere"))).toBe(false);
       expect(existsSync(join(runDir, "snap-missing"))).toBe(false);
       // Every request was consumed and every reply was renamed into place.
@@ -202,6 +215,8 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       symlinkSync(join(dir, "victim"), join(snap, "chat.db"));
       writeFileSync(join(dir, "victim2"), "victim2");
       symlinkSync(join(dir, "victim2"), join(runDir, "res-15.txt.tmp"));
+      // A dangling link would make cp create its target; the copy must replace it instead.
+      symlinkSync(join(dir, "ghost"), join(snap, "chat.db-wal"));
 
       request(runDir, "11", ["snapshot", join(runDir, "snap-link")]);
       request(runDir, "12", ["attachment", join(attachments, "link.jpg"), snap]);
@@ -221,6 +236,10 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       expect(lstatSync(join(snap, "chat.db")).isSymbolicLink()).toBe(false);
       expect(readFileSync(join(snap, "chat.db"), "utf8")).toBe("db");
       expect(readFileSync(join(dir, "victim"), "utf8")).toBe("victim");
+      expect(lstatSync(join(snap, "chat.db-wal")).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(snap, "chat.db-wal"), "utf8")).toBe("wal");
+      expect(existsSync(join(dir, "ghost"))).toBe(false);
+      expect(readdirSync(snap).sort()).toEqual(["chat.db", "chat.db-wal"]);
       // So is one at the reply's temporary name.
       expect(reply(runDir, "15")).toBe("ok\n0\nfda=yes");
       expect(readFileSync(join(dir, "victim2"), "utf8")).toBe("victim2");

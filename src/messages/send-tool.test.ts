@@ -284,7 +284,7 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
     expect(out.isError).toBeFalsy();
   });
 
-  test("recorded but not delivered yet, after checking every second for 10 s", async () => {
+  test("recorded but not delivered yet, after checking every 2 s for 10 s", async () => {
     onSend = () => {
       record({ delivered: false });
       return ok;
@@ -293,8 +293,10 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
     expect(text(out)).toBe("Sent to Maria Papadopoulou; Messages shows it as not delivered yet.");
     expect(out.summary).toBe("not delivered yet");
     expect(out.isError).toBeFalsy();
-    expect(sleeps.every((ms) => ms === 1000)).toBe(true);
+    expect(sleeps.every((ms) => ms === 2000)).toBe(true);
     expect(sleeps.reduce((a, b) => a + b, 0)).toBe(10_000);
+    // One look right away, then one per pause: six fresh copies of chat.db at most.
+    expect(sleeps).toHaveLength(5);
   });
 
   test("delivered on a later check", async () => {
@@ -310,7 +312,7 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
     };
     const out = await send(makeTool(), { to: MARIA, text: "hello" });
     expect(out.summary).toBe("delivered");
-    expect(sleeps).toEqual([1000, 1000, 1000]);
+    expect(sleeps).toEqual([2000, 2000, 2000]);
   });
 
   test("not recorded: the helper said ok but no row appeared", async () => {
@@ -444,8 +446,8 @@ describe("SendIMessage — burst guard", () => {
     };
     const out = await send(makeTool(), { to: MARIA, text: "hello" });
     expect(out.summary).toBe("not recorded");
-    // Looks at 0+2.5, then 1 s pauses with 2.5 s snapshots: 6, 9.5; another pause would pass 10 s.
-    expect(sleeps).toEqual([1000, 1000]);
+    // Looks at 0+2.5, then 2 s pauses with 2.5 s snapshots: 7, 11.5; another pause would pass 10 s.
+    expect(sleeps).toEqual([2000, 2000]);
   });
 
   test("a timeout with chat.db unreadable says it can't tell, without repeating the timeout", async () => {

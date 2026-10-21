@@ -45,6 +45,8 @@ export function errorFromReply(reply: Extract<HelperReply, { ok: false }>): Mess
 }
 
 const BOOK_FILE = "AddressBook-v22.abcddb";
+/** How long one copy of chat.db answers reads: each new copy is a whole chat.db, so they are not taken often. */
+export const CACHE_MS = 30_000;
 
 /** True when `path` (already resolved) lies strictly inside `dir`. */
 function inside(dir: string, path: string): boolean {
@@ -94,7 +96,7 @@ export class MessagesSource {
     this.runDir = o.runDir;
     this.userHome = o.userHome;
     this.now = o.now ?? Date.now;
-    this.cacheMs = o.cacheMs ?? 5_000;
+    this.cacheMs = o.cacheMs ?? CACHE_MS;
   }
 
   /** Runs `fn` on a snapshot no older than the cache time. */

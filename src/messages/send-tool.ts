@@ -11,8 +11,8 @@ export const SEND_TOOL = "SendIMessage";
 
 const MAX_CHARS = 4_000;
 const SEND_TIMEOUT_MS = 180_000;
-/** After a send, chat.db is checked this often, for this long, until Messages marks the text delivered. */
-const CHECK_EVERY_MS = 1_000;
+/** After a send, chat.db is checked at most this often, for this long, until Messages marks the text delivered. */
+const CHECK_EVERY_MS = 2_000;
 const CHECK_FOR_MS = 10_000;
 const STOPPED = "Not sent: you stopped it before it went out.";
 
@@ -123,7 +123,7 @@ export function createSendTool(o: {
   }
 
   /**
-   * Looks for the sent text in fresh snapshots, a second apart, until it shows as delivered or failed or `forMs`
+   * Looks for the sent text in fresh snapshots, two seconds apart, until it shows as delivered or failed or `forMs`
    * have passed since the first look (snapshot time included); `forMs` 0 looks once.
    */
   async function lookFor(r: Recipient, since: number, text: string, forMs: number, signal: AbortSignal) {

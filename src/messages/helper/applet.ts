@@ -42,7 +42,8 @@ export function helperTokenPath(runDir: string): string {
  * symlink) whose physical folder lies inside the physical Attachments folder. Every write then happens in
  * one shell step that changes into the checked folder's physical path and confirms it with `pwd -P` before
  * touching anything, so swapping a folder for a symlink after the check can't redirect it; files are
- * created with the shell's noclobber (`set -C`), which never writes through a link planted at the name.
+ * created with the shell's noclobber (`set -C`), which never writes through a link planted at the name, or
+ * cloned (`cp -c`) inside a fresh folder `mktemp -d` makes, then renamed into place with `mv -h`.
  *
  * The script has no `property` or `global`: an applet saves those back into its bundle when it quits, which
  * would break the signature and with it the grants.
@@ -438,9 +439,13 @@ on pinTo(physFolder)
 	return "cd -P -- " & quoted form of physFolder & " || exit 1; [ \\"$(/bin/pwd -P)\\" = " & quoted form of physFolder & " ] || { echo 'the folder changed before the copy' >&2; exit 1; }; set -C; "
 end pinTo
 
--- Copies src (never a symlink) to fileName inside the checked folder physFolder, in one shell step.
+-- Copies src (never a symlink) to fileName inside the checked folder physFolder, in one shell step. The copy is an
+-- APFS clone (cp -c, which costs no space and almost no time) made inside a fresh private folder that mktemp creates
+-- under a random name, since cp follows a link planted at its target; it must come out a regular file, else the step
+-- falls back to the byte copy with noclobber. mv -h then renames it into place, replacing a link at the name instead
+-- of following it.
 on copyChecked(src, physFolder, fileName)
-	do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; /bin/rm -f ./" & quoted form of fileName & " && /bin/cat -- " & quoted form of src & " > ./" & quoted form of fileName
+	do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; d=$(/usr/bin/mktemp -d ./.copy-XXXXXX) || exit 1; if ! { /bin/cp -c -- " & quoted form of src & " \\"$d/f\\" 2>/dev/null && [ -f \\"$d/f\\" ] && [ ! -L \\"$d/f\\" ]; }; then /bin/rm -rf \\"$d\\"; d=$(/usr/bin/mktemp -d ./.copy-XXXXXX) || exit 1; /bin/cat -- " & quoted form of src & " > \\"$d/f\\" || { /bin/rm -rf \\"$d\\"; exit 1; }; fi; /bin/mv -f -h \\"$d/f\\" ./" & quoted form of fileName & "; rc=$?; /bin/rm -rf \\"$d\\"; exit $rc"
 end copyChecked
 
 on copyIfExists(src, physFolder, fileName)

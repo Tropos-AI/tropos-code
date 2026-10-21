@@ -68,12 +68,12 @@ const snaps = () => readdirSync(runDir).filter((n) => n.startsWith("snap-"));
 const count = (c: Fake) => c.calls.filter((x) => x.action === "snapshot").length;
 
 describe("MessagesSource", () => {
-  test("two reads within 5 s share one snapshot; later a new one replaces it and the old folder is gone", async () => {
+  test("two reads within 30 s share one snapshot; later a new one replaces it and the old folder is gone", async () => {
     const client = fakeClient();
     const clock = { t: 1000 };
     const s = source(client, clock);
     await s.with((db) => db.chats({ limit: 10 }));
-    clock.t += 4_000;
+    clock.t += 29_000;
     const chats = await s.with((db, contacts) => db.chats({ limit: 10 }).map((c) => c.name) && contacts.available);
     expect(chats).toBe(true);
     expect(count(client)).toBe(1);
@@ -153,7 +153,7 @@ describe("MessagesSource", () => {
       return db.chats({ limit: 5 }).length;
     });
     await Bun.sleep(20);
-    clock.t += 10_000;
+    clock.t += 31_000;
     await s.with(() => 0);
     expect(snaps()).toHaveLength(2);
     release();
