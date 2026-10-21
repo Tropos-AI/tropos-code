@@ -3,11 +3,13 @@
 // (~/.tropos/harness/projects/<key>/active). A layer holds only the files it changes; the rest is inherited.
 // Both overlays live under the Tropos home, never in the repository: a repository doesn't configure the agent.
 import { createTwoFilesPatch } from "diff";
+import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { errorText } from "../error-text";
 import { projectKey, readSmallFileSync } from "../paths";
 import { BASE_TREE } from "./base";
+import { detectDomain, type Domain } from "./domain";
 import { ALWAYS_ON, ALWAYS_ON_CHARS, MAX_FILE_BYTES, MAX_FILES, surfaceKind, type SurfaceKind } from "./surface";
 
 /** Relative path ("/"-separated) → file text. */
@@ -46,6 +48,11 @@ export interface Harness {
 /** Everything the harness keeps: adopted layers, candidates, lab runs and the library. */
 export function harnessRoot(home: string): string {
   return join(home, "harness");
+}
+
+/** The folder holding a domain's lessons skill (src/harness/library.ts), which sessions in its projects load. */
+export function lessonsSkillDir(home: string, domain: Domain): string {
+  return join(harnessRoot(home), "library", domain, "skill");
 }
 
 export function globalHarnessDir(home: string): string {
@@ -160,11 +167,13 @@ export async function loadHarness(opts: { home: string; cwd: string; base?: Harn
     [...new Set(filesOf(kind).map((path) => origin.get(path)!))].map((dir) => join(dir, folder));
   const scripts = filesOf("script").map((path) => join(origin.get(path)!, path));
   const hooksDir = opts.dir === undefined ? origin.get("hooks.json") : undefined;
+  const lessons = lessonsSkillDir(opts.home, detectDomain(opts.cwd));
   return {
     tree,
     system: [assembleSystem(tree), scriptsSection(scripts)].filter(Boolean).join("\n\n"),
     layers,
-    skillDirs: orderByLayers(foldersOf("skill", "skills"), overlays),
+    // Then the library's lessons for this kind of project; never in a probe, whose harness must be only what is tested.
+    skillDirs: [...orderByLayers(foldersOf("skill", "skills"), overlays), ...(opts.dir === undefined && existsSync(lessons) ? [lessons] : [])],
     agentDirs: orderByLayers(foldersOf("agent", "agents"), overlays),
     scripts,
     ...(hooksDir ? { hooksFile: join(hooksDir, "hooks.json") } : {}),
