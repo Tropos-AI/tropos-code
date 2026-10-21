@@ -74,6 +74,8 @@ export interface PermissionSubject {
   destructive?: boolean;
   /** Where a command runs, so relative paths in it are judged from there (autonomy, src/permissions/engine.ts). */
   cwd?: string;
+  /** When set, the call always asks (this text is the reason shown), whatever an allow rule or the autonomy level says. A deny rule still wins. */
+  askReason?: string;
 }
 
 export interface Tool<S extends z.ZodType = z.ZodType> {

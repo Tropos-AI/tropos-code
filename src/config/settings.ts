@@ -42,6 +42,8 @@ export interface Settings {
   disabledPlugins: string[];
   /** The background learning review and memory flush (src/learning). User layers only: it spends tokens and writes prompt text. */
   learning: LearningSettings;
+  /** Texts on this Mac through the Messages and SendIMessage tools (src/messages). User layers only: it reads other people's messages. */
+  messages: boolean;
 }
 
 export interface LearningSettings {
@@ -128,6 +130,7 @@ export const DEFAULT_SETTINGS: Settings = {
   memory: true,
   disabledPlugins: [],
   learning: { review: true, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false },
+  messages: false,
 };
 
 export interface SettingsPaths {
@@ -237,6 +240,7 @@ const layerSchema = z.object({
     })
     .partial()
     .optional(),
+  messages: z.boolean().optional(),
 });
 
 /** Drops undefined values so a partial layer never blanks a field it didn't set. */
@@ -272,6 +276,7 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     memory: layer.memory ?? base.memory,
     disabledPlugins: union(base.disabledPlugins, layer.disabledPlugins),
     learning: { ...base.learning, ...definedOnly(layer.learning) },
+    messages: layer.messages ?? base.messages,
   };
 }
 
@@ -334,7 +339,7 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.autoUpdatesChannel !== undefined) ignored.push("autoUpdatesChannel");
   // Hooks, MCP servers, formatters and language servers run programs; plugins choose which run.
   // Learning spends the user's tokens in the background and writes prompt text under ~/.tropos.
-  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins", "learning"] as const) {
+  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins", "learning", "messages"] as const) {
     if (layer[key] !== undefined) ignored.push(key);
   }
   // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic
