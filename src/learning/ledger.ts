@@ -2,6 +2,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, lstat, mkdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { surfaceKind } from "../harness/surface";
 import { legacyToCurrent } from "../home/layout";
 import { atomicWrite } from "../memory/notes";
 import { LEARNED_SKILLS_DIR } from "../extensions/sources";
@@ -9,7 +10,7 @@ import { configFile, getAt, parsePath, readConfigRaw, sameJson, setAt, stripSecr
 import { isInside } from "../paths";
 import type { Actor } from "../tools/types";
 
-export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily" | "agent" | "setup";
+export type LedgerKind = "memory" | "user" | "skill" | "identity" | "daily" | "agent" | "setup" | "harness";
 
 /**
  * One change to a learned file. `before` and `after` are sha256 hashes of the file's contents
@@ -99,6 +100,11 @@ export function isLearnedPath(home: string, kind: LedgerKind, path: string): boo
     case "agent":
       if (inSpecialist(parts)) return parts.length === 3 && parts[2] === "AGENT.md";
       return parts.length === 2 && parts[0] === "agents" && parts[1]!.endsWith(".md") && !parts[1]!.startsWith(".");
+    case "harness": {
+      // A file on the harness surface inside an adopted layer: harness/active/… or harness/projects/<key>/active/….
+      const layer = parts[1] === "active" ? 2 : parts[1] === "projects" && parts.length > 3 && parts[3] === "active" ? 4 : 0;
+      return parts[0] === "harness" && layer > 0 && parts.length > layer && surfaceKind(parts.slice(layer).join("/")) !== null;
+    }
     default:
       return false;
   }

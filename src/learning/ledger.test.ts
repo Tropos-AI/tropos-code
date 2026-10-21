@@ -177,6 +177,9 @@ test("isLearnedPath allows only the files each kind writes, under the home", () 
     ["memory", "agents/reviewer/MEMORY.md"],
     ["daily", "agents/reviewer/memory/2026-10-16.md"],
     ["skill", "agents/reviewer/skills/lint/SKILL.md"],
+    ["harness", "harness/active/guardrails.md"],
+    ["harness", "harness/active/skills/bun-tests/SKILL.md"],
+    ["harness", "harness/projects/-r-app-0123456789ab/active/scripts/check.sh"],
   ];
   for (const [kind, rel] of ok) expect({ kind, rel, ok: isLearnedPath(home, kind, join(home, rel)) }).toEqual({ kind, rel, ok: true });
   const no: Array<[LedgerKind, string]> = [
@@ -205,6 +208,11 @@ test("isLearnedPath allows only the files each kind writes, under the home", () 
     ["skill", "agents/reviewer/skills/SKILL.md"],
     ["skill", "agents/reviewer/skills/.archive/x/SKILL.md"],
     ["daily", "agents/reviewer/memory/today.md"],
+    ["harness", "harness/active/settings.json"],
+    ["harness", "harness/candidates/x/guardrails.md"],
+    ["harness", "harness/projects/k/guardrails.md"],
+    ["harness", "harness/active"],
+    ["harness", "harness/lab/r/ref/harness/system.md"],
   ];
   for (const [kind, rel] of no) expect({ kind, rel, ok: isLearnedPath(home, kind, join(home, rel)) }).toEqual({ kind, rel, ok: false });
   expect(isLearnedPath(home, "memory", join(outside, "memories", "MEMORY.md"))).toBe(false);
