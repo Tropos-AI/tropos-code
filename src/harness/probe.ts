@@ -74,6 +74,8 @@ export interface LocalProbeOptions {
   checkTimeoutMs?: number;
   /** Keep the copy of the project after the probe (the selector's winner is kept for its patch only). */
   keepWorkspace?: boolean;
+  /** The owner's Tropos home: hidden from the probe's commands and checks, whatever folder it is. */
+  ownerHome: string;
 }
 
 const RESULT_TEXT_CHARS = 4_000;
@@ -126,7 +128,7 @@ export class LocalProbeRunner implements ProbeRunner {
       const diff = await workspaceDiff(ws);
       result.audit = diff.audit;
       await writeFile(join(dir, "patch.diff"), diff.patch);
-      const backend = confinedBackend({ project: ws, home, userHome, env: process.env });
+      const backend = confinedBackend({ project: ws, home, userHome, env: process.env, denied: [this.opts.ownerHome] });
       try {
         for (const check of task.checks) {
           if (signal.aborted) break;
@@ -167,7 +169,14 @@ export class LocalProbeRunner implements ProbeRunner {
       "--max-turns",
       String(o.maxTurns),
     ];
-    const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: userHome, TROPOS_HOME: home, TMPDIR: process.env.TMPDIR ?? "/tmp", LANG: process.env.LANG ?? "en_US.UTF-8" };
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: userHome,
+      TROPOS_HOME: home,
+      TROPOS_CONFINE_DENY: o.ownerHome,
+      TMPDIR: process.env.TMPDIR ?? "/tmp",
+      LANG: process.env.LANG ?? "en_US.UTF-8",
+    };
     if (o.key) env[o.key.name] = o.key.value;
     const child = Bun.spawn(args, { cwd: ws, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const kill = () => child.kill("SIGKILL");

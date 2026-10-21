@@ -66,6 +66,8 @@ export interface ConfinedBackendOptions {
   otherProjects?: readonly string[];
   /** Folders inside the denied homes the command may still read: the harness in effect (ConfinementPaths.readCarveOuts). */
   readable?: readonly string[];
+  /** More folders the command may not read: the owner's Tropos home, for a session that runs on another one. */
+  denied?: readonly string[];
 }
 
 /** The checks one command gets after it ran. */
@@ -110,7 +112,7 @@ export class ConfinedBackend implements ExecBackend {
     if (platform !== "darwin" && platform !== "linux") {
       throw new ConfinementError(`Commands can't be confined on ${platform}: only macOS (sandbox-exec) and Linux (bwrap) are supported.`);
     }
-    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform, protectInstructions: opts.protectInstructions, otherProjects: opts.otherProjects, readable: opts.readable });
+    this.paths = confinementPaths({ project: opts.project, home: opts.home, userHome: opts.userHome, env: opts.env, platform, protectInstructions: opts.protectInstructions, otherProjects: opts.otherProjects, readable: opts.readable, denied: opts.denied });
     this.env = chatEnv(opts.env, { project: opts.project, troposHome: opts.home });
     // The marker must be writable inside: the confined temp dir when it is one of the writable paths, else the
     // system temp dir (always writable). Real paths, so the file is the same inside and on the host.
@@ -313,6 +315,7 @@ export function confinedBackend(opts: {
   protectInstructions?: boolean;
   otherProjects?: readonly string[];
   readable?: readonly string[];
+  denied?: readonly string[];
 }): ExecBackend {
   return new ConfinedBackend(opts);
 }

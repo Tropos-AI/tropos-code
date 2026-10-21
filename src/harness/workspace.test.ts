@@ -41,6 +41,24 @@ test("a probe's copy inside the Tropos home is readable in the sandbox; the owne
   }
 });
 
+test("a custom owner home is hidden too, wherever it is", async () => {
+  if (!(await confinementAvailable())) return;
+  const ws = join(dir, "ws");
+  const owner = join(dir, "elsewhere", "tropos");
+  await mkdir(ws, { recursive: true });
+  await mkdir(owner, { recursive: true });
+  await writeFile(join(owner, "credentials.json"), "secret");
+  const open = confinedBackend({ project: ws, home: join(dir, "h"), userHome: join(dir, "u"), env: process.env });
+  const hidden = confinedBackend({ project: ws, home: join(dir, "h"), userHome: join(dir, "u"), env: process.env, denied: [owner] });
+  try {
+    expect((await runBackendCommand(open, `cat ${join(owner, "credentials.json")}`, ws, {}, 30_000)).ok).toBe(true);
+    expect((await runBackendCommand(hidden, `cat ${join(owner, "credentials.json")}`, ws, {}, 30_000)).ok).toBe(false);
+  } finally {
+    await open.close();
+    await hidden.close();
+  }
+});
+
 test("host commands report exit, output and timeouts", async () => {
   expect(await runHostCommand("echo hi; exit 2", dir, 10_000)).toMatchObject({ ok: false, exit: 2, timedOut: false, tail: "hi\n" });
   expect(await runHostCommand("sleep 5", dir, 100)).toMatchObject({ ok: false, timedOut: true });

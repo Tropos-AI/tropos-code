@@ -53,7 +53,7 @@ import type { LifecycleContext } from "./lifecycle/types";
 import { GatewayConfigError, configPermissionWarning, gatewayDir, loadGatewayConfig } from "../gateway/config";
 import { runGateway, type GatewayRun } from "../gateway/daemon";
 import { FilePairing } from "../gateway/pairing";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 /** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
 export const EXIT_USAGE = 64;
@@ -316,7 +316,9 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     }
     // The harness folders in effect stay readable: its scripts are meant to be run.
     const readable = harness.layers.flatMap((layer) => (layer.applied && layer.dir && layer.files.length > 0 ? [layer.dir] : []));
-    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable });
+    // TROPOS_CONFINE_DENY names more folders to hide (the owner's Tropos home, from a probe); it can only add denials.
+    const denied = (env.TROPOS_CONFINE_DENY ?? "").split(delimiter).filter((p) => isAbsolute(p));
+    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable, denied });
     ctx.confined = true;
   }
   // The owner's terminal can schedule too; results go to the owner's chat. A confined session (a harness probe) gets

@@ -48,7 +48,7 @@ const task = (over: Partial<LabTask> = {}): LabTask => ({
 
 test("a probe runs the agent in a fresh copy with its own home, then audits and checks the result", async () => {
   if (!(await confinementAvailable())) return; // needs sandbox-exec or bwrap
-  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: { name: "X_KEY", value: "k" } });
+  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: { name: "X_KEY", value: "k" }, ownerHome: join(dir, "owner") });
   const probeDir = join(dir, "lab", "ref");
   await mkdir(probeDir, { recursive: true });
   const r = await runner.run({ task: task(), harnessDir: join(dir, "h"), dir: probeDir, id: "r1-ref", label: "ref", harnessFiles: [] }, new AbortController().signal);
@@ -72,7 +72,7 @@ test("a probe runs the agent in a fresh copy with its own home, then audits and 
 
 test("a failed setup is the probe's error, not the agent's", async () => {
   if (!(await confinementAvailable())) return;
-  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: null });
+  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: null, ownerHome: join(dir, "owner") });
   const probeDir = join(dir, "lab", "x");
   await mkdir(probeDir, { recursive: true });
   const r = await runner.run({ task: task({ setup: "exit 3" }), harnessDir: dir, dir: probeDir, id: "r1-x", label: "x", harnessFiles: [] }, new AbortController().signal);
