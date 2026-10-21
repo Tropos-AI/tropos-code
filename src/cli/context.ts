@@ -4,6 +4,7 @@
 import type { Model } from "../api/model";
 import { errorText } from "../error-text";
 import { ModelPrefs } from "../config/model-prefs";
+import { harnessWarnings, loadHarness } from "../harness/tree";
 import { SettingsError, loadSettings, settingsPaths } from "../config/settings";
 import { compileRules } from "../permissions/engine";
 import { ProviderRouter } from "../providers/router";
@@ -71,6 +72,8 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   const router = new ProviderRouter({ home, env, settings: settings.providers });
   const ext = await loadExtensions({ cwd, home, settings, env });
   warnings.push(...ext.warnings);
+  const harness = await loadHarness({ home, cwd });
+  warnings.push(...harnessWarnings(harness));
   const rgPath = Bun.which("rg");
   const ctx: AppContext = {
     cwd,
@@ -89,6 +92,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     env,
     modelPrefs: new ModelPrefs(home),
     role: "owner",
+    system: harness.system,
   };
   const newSessionContext = async (): Promise<SessionContext> => {
     await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));

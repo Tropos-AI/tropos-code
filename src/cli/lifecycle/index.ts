@@ -31,5 +31,7 @@ export async function loadLifecycle(name: LifecycleName): Promise<LifecycleRun> 
       return (await import("./dashboard")).default;
     case "migrate":
       return (await import("./migrate")).default;
+    case "harness":
+      return (await import("./harness")).default;
   }
 }

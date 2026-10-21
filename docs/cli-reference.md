@@ -49,7 +49,8 @@ Print mode exits 0 only when the answer is complete:
 | 6 | A hook blocked the prompt or stopped the turn |
 | 130 | Interrupted |
 
-With `--output-format json`, `cost_usd` is `null` when a model without a known price answered. `tcode -p "/review
+With `--output-format json`, `cost_usd` is `null` when a model without a known price answered, and
+`num_tool_calls` / `num_tool_errors` count the finished tool calls and those that failed. `tcode -p "/review
 main"` runs a custom command or skill, as typing it in a session would. Print mode reads piped stdin until EOF: in
 scripts and CI with no input, pass `</dev/null`. Print mode never updates Tropos and has no learning review. Edits
 and commands that would ask are denied in print mode; allow what a script needs with `--allowed-tools` or settings
@@ -315,6 +316,23 @@ Brings identity, memory and skills from OpenClaw or Hermes into Tropos. The sour
 
 The plan lists each file with its size and the start of its content and asks before importing. Channel tokens are
 never imported; the model choice is only suggested; re-running skips what is unchanged.
+
+## tcode harness
+
+```
+tcode harness [status|diff|show [<file>]] [--json]
+```
+
+The harness is what the agent runs with besides the model: its system prompt (`system.md`, plus `guardrails.md` and
+`tool-guidance.md` when they exist) and, later, skills, scripts, agents and hooks. It is built in layers: the one in
+Tropos, then `~/.tropos/harness/active/` for every project, then `~/.tropos/harness/projects/<key>/active/` for one
+project. A layer holds only the files it changes; the rest comes from the layer below. The always-on files share a
+limit of 24,000 characters, and a layer that breaks it, or empties `system.md`, is skipped whole and named in the
+session's warnings. Links and files the harness doesn't know are ignored.
+
+`status` shows which layers apply in the current folder and their files, `diff` prints what the adopted layers change
+against the built-in harness, and `show` prints one file or the whole system prompt. Nothing writes these folders
+yet; a session reads them once, when it starts.
 
 ## tcode reset
 

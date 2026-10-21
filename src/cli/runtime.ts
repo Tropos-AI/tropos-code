@@ -85,6 +85,8 @@ export interface AppContext {
   contextBlocks?: () => Promise<string[]>;
   /** Owner sessions only: sees the agent's events to note whether a project's pinned test commands pass (src/suggest). */
   testWatch?: { observe(e: AgentEvent): void };
+  /** The system prompt from the project's harness tree (src/harness/tree.ts); the built-in one when unset. */
+  system?: string;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -200,6 +202,8 @@ export function makeAgent(
   },
 ): Agent {
   const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
+  // Read once when the context was built: a fixed prompt keeps the cache prefix stable for the whole session.
+  const system = ctx.system ?? SYSTEM_PROMPT;
   const permissions = () => permissionContext(ctx, opts.state().mode);
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
@@ -245,7 +249,7 @@ export function makeAgent(
           const result = await runReviewAgent({
             model: ctx.model,
             tools: ctx.tools,
-            system: SYSTEM_PROMPT,
+            system,
             config,
             permissions,
             hooks: opts.hooks,
@@ -266,7 +270,7 @@ export function makeAgent(
   ctx.subagents.deps = {
     model: ctx.model,
     tools: ctx.tools,
-    system: SYSTEM_PROMPT,
+    system,
     config,
     // Without the role and stores: a subagent's saves to Tropos's stores ask through the shared queue, because
     // its tool results never reach the user as a learned notice.
@@ -313,7 +317,7 @@ export function makeAgent(
     {
       model: ctx.model,
       tools: ctx.tools,
-      system: SYSTEM_PROMPT,
+      system,
       config,
       permissions,
       askPermission,

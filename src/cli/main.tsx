@@ -45,6 +45,7 @@ import {
 import { closeRuntime } from "./shutdown";
 import { USAGE } from "./usage";
 import { runGatewayCommand } from "../gateway/commands";
+import { harnessWarnings, loadHarness } from "../harness/tree";
 import { createLifecycleContext } from "./lifecycle/context";
 import { loadLifecycle } from "./lifecycle";
 import type { LifecycleContext } from "./lifecycle/types";
@@ -281,7 +282,8 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   await layoutAtStart(home, VERSION, err);
   const ext = await loadExtensions({ cwd, home, settings, env });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
-  for (const warning of ext.warnings) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
+  const harness = await loadHarness({ home, cwd });
+  for (const warning of [...ext.warnings, ...harnessWarnings(harness)]) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
   const subagents: SubagentHolder = {};
   // The current session, for SessionSearch to skip; set once the session is open below.
   let sessionId = "";
@@ -303,6 +305,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     modelPrefs: new ModelPrefs(home),
     role: "owner",
     secrets: new SecretVault(),
+    system: harness.system,
   };
   // The owner's terminal can schedule too; results go to the owner's chat.
   ctx.tools = [...ctx.tools, await ownerCronTool(home)];
