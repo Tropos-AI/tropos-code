@@ -26,7 +26,7 @@ const schema = z.object({
   prompt: z.string().optional().describe("For add: what the scheduled run should do. It runs alone, without this conversation, so say everything it needs."),
   project: z.string().optional().describe('For add: the project id the run works in; "default" when omitted.'),
   deliverTo: z.string().optional().describe('For add: where the result goes, a chat key like "telegram:123" or "none". Defaults to this chat when known.'),
-  allowCommands: z.array(z.string()).optional().describe('For add: rules like "Bash(npm test:*)" the run may use without asking. Leave out unless needed.'),
+  allowCommands: z.array(z.string()).optional().describe('For add: rules like "Bash(npm test:*)" the run may use without asking. Jobs may also list "Messages" (to read the user\'s texts) and "SendIMessage(<exact +E.164 number or email>)" (to send to that one recipient). Leave out unless needed.'),
 });
 
 type Input = z.infer<typeof schema>;

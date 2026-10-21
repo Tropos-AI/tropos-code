@@ -38,6 +38,7 @@ New here? Read [Getting started](getting-started.md) first; it takes about ten m
 |---|---|
 | [MCP servers, plugins and skills](mcp-plugins-skills.md) | Asking the agent to install or remove them, the dashboard, file formats, hooks and commands |
 | [Providers and models](providers-and-models.md) | Built-in providers, keys, custom endpoints, choosing models, per-specialist models |
+| [Texts on your Mac](messages.md) | Reading and sending iMessage and SMS: setup, approvals, privacy, troubleshooting |
 | [Images and attachments](images-and-attachments.md) | Images and text files in the dashboard and Telegram, limits, models without vision |
 | [Scheduling and the heartbeat](scheduling-and-heartbeat.md) | Scheduled jobs, what they may run, messages the agent sends by itself |
 

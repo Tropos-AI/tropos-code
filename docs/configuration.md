@@ -59,6 +59,7 @@ rules. Anything else in them is ignored with a warning naming it. Put the rest i
 | `formatter` | boolean or object | `false` | Format files after edits: `true` for built-ins on `PATH`, or named `{ command: [...,"$FILE"], extensions: [".md"], disabled }` |
 | `lsp` | boolean or object | `false` | Add language-server errors to edit results; same shape as `formatter` |
 | `snapshots` | boolean | `true` | Shadow-git snapshots before each turn, for `/undo` and `/redo` (git repositories only; stored under `~/.tropos/snapshots/`, never in your `.git`) |
+| `messages` | boolean | `false` | macOS only: the agent can read and send your texts, with approval for each send. Honored only from your own settings, never from a repository. See [Texts on your Mac](messages.md) |
 | `memory` | boolean | `true` | The agent's notes (`USER.md`, `MEMORY.md`) |
 | `disabledPlugins` | list of names | `[]` | Plugins under `~/.tropos/plugins` that stay off |
 | `learning.review` | boolean | `true` | The background learning review |
