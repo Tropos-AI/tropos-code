@@ -2,12 +2,10 @@
 // `tcode -p` in a fresh copy of the project, with a Tropos home of its own (none of the owner's memory, skills or
 // sessions), Bash confined to the copy (`--confine`), and the harness under test as its only overlay (`--harness-dir`).
 // The trajectory, the diff and the project's own checks are what the editors and the composer read.
-import { constants } from "node:fs";
-import { copyFile, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { confinedBackend, confinementAvailable } from "../exec/confined";
-import { isInside } from "../paths";
 import type { DiffAudit } from "./audit";
 import type { Domain } from "./domain";
 import { behaviourSignals, parseTrajectory, type BehaviourSignals } from "./signals";
@@ -97,28 +95,20 @@ function finalText(stdout: string): string {
   return text.length > RESULT_TEXT_CHARS ? `${text.slice(0, RESULT_TEXT_CHARS)}…` : text;
 }
 
+const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
 /**
- * Copies `source` to `rel` inside `root` without following anything the agent left there: a link in place of a folder
- * or of the file itself is removed first, and the file is created new. The copy runs on the host, so a planted link
- * must never point it at the owner's files.
+ * The shell script that puts the hidden files in place. It runs in the sandbox, which writes only inside the copy: a
+ * link the agent left in place of a file or a folder can't send the copy anywhere else, even mid-copy.
  */
-export async function copyInto(root: string, source: string, rel: string): Promise<void> {
-  const parts = rel.split("/").filter((p) => p && p !== ".");
-  if (parts.length === 0 || parts.includes("..")) throw new Error(`${rel} is not a path inside the project`);
-  let dir = root;
-  for (const part of parts.slice(0, -1)) {
-    dir = join(dir, part);
-    const info = await lstat(dir).catch(() => null);
-    if (info && !info.isDirectory()) await rm(dir, { force: true });
-    if (!info || !info.isDirectory()) await mkdir(dir);
-  }
-  const realRoot = await realpath(root);
-  if (!isInside(await realpath(dir), realRoot)) throw new Error(`${rel} leads outside the project`);
-  const target = join(dir, parts.at(-1)!);
-  const existing = await lstat(target).catch(() => null);
-  if (existing?.isDirectory()) await rm(target, { recursive: true, force: true });
-  else if (existing) await rm(target, { force: true });
-  await copyFile(source, target, constants.COPYFILE_EXCL);
+export function copyScript(from: string, files: string[]): string {
+  return files
+    .map((rel) => {
+      if (rel.split("/").includes("..") || rel.startsWith("/")) throw new Error(`${rel} is not a path inside the project`);
+      const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : ".";
+      return `mkdir -p ${quote(dir)} && rm -rf ${quote(rel)} && cp ${quote(join(from, rel))} ${quote(rel)}`;
+    })
+    .join(" && ");
 }
 
 /** Probes on this machine: the copy, the agent's commands and the checks all stay inside the sandbox. */
@@ -168,8 +158,14 @@ export class LocalProbeRunner implements ProbeRunner {
           result.checks.push(await runBackendCommand(backend, check, ws, {}, this.opts.checkTimeoutMs ?? 600_000));
         }
         if (input.measure && !signal.aborted) {
-          for (const file of input.measure.files) await copyInto(ws, join(input.measure.from, file), file);
-          result.measured = await runBackendCommand(backend, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000);
+          // A sandbox of its own that may also read the hidden files; the copy happens inside it.
+          const measuring = confinedBackend({ project: ws, home, userHome, env: process.env, denied: [this.opts.ownerHome], readable: [input.measure.from] });
+          try {
+            const copied = await runBackendCommand(measuring, copyScript(input.measure.from, input.measure.files), ws, {}, 60_000);
+            result.measured = copied.ok ? await runBackendCommand(measuring, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000) : { ...copied, command: "copying the hidden files" };
+          } finally {
+            await measuring.close();
+          }
         }
       } finally {
         await backend.close();
