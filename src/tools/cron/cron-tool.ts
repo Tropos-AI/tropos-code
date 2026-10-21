@@ -43,6 +43,13 @@ export interface CronToolOptions {
   runNow?: (id: string) => Promise<RunRecord>;
 }
 
+const TEXTS_REASON = "This job may read or send your texts.";
+
+/** True when a job's rules name the Messages or SendIMessage tool, bare or with a pattern. */
+function touchesTexts(rules: string[] | undefined): boolean {
+  return (rules ?? []).some((r) => /^(Messages|SendIMessage)\s*(\(|$)/.test(r.trim()));
+}
+
 function describeSchedule(s: Schedule): string {
   if (s.kind === "cron") return `cron "${s.expr}"${s.tz ? ` (${s.tz})` : ""}`;
   if (s.kind === "every") return `every ${s.ms % 3_600_000 === 0 ? `${s.ms / 3_600_000}h` : s.ms % 60_000 === 0 ? `${s.ms / 60_000}m` : `${s.ms}ms`}`;
@@ -107,7 +114,9 @@ export function createCronTool(opts: CronToolOptions) {
       "(cron expression, fixed interval of at least a minute, or once) and delivers the result to a chat. The user is asked to approve every use.",
     schema,
     summarize: (input) => (input.action === "add" ? `add job ${input.name ?? ""}`.trim() : input.id ? `${input.action} ${input.id}` : input.action),
-    subject: (input) => ({ paths: [], target: `cron:${input.action}` }),
+    // A job that may read or send texts asks every time, even when Cron adds were always allowed: a text the agent
+    // read could otherwise plant a job that sends the owner's messages somewhere, with nobody asked.
+    subject: (input) => ({ paths: [], target: `cron:${input.action}`, ...(input.action === "add" && touchesTexts(input.allowCommands) ? { askReason: TEXTS_REASON } : {}) }),
     preview(input): PermissionPreview | undefined {
       try {
         if (input.action === "add") {
