@@ -89,15 +89,6 @@ describe("appletSource", () => {
     expect(source).not.toMatch(/^\s*(property|global)\b/m);
   });
 
-  test("copies are APFS clones made in a fresh private folder, with the byte copy as the fallback", () => {
-    const source = appletSource(ONEIL);
-    const body = source.slice(source.indexOf("on copyChecked"), source.indexOf("end cloneChecked"));
-    expect(body).toContain("/usr/bin/mktemp -d ./.copy-XXXXXX");
-    expect(body).toContain("/bin/cp -c -n -- ");
-    expect(body).toContain("/bin/cat -- ");
-    expect(body).toContain("/bin/mv -f -h ");
-  });
-
   test.skipIf(process.platform !== "darwin")("osacompile compiles it", () => {
     const dir = mkdtempSync(join(tmpdir(), "tropos-applet-"));
     try {
@@ -184,7 +175,7 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       expect(readFileSync(join(snap, "chat.db-wal"), "utf8")).toBe("wal");
       expect(readFileSync(join(snap, "Καλημέρα 👍.jpg"), "utf8")).toBe("pic");
       expect(readFileSync(join(snap, "contacts-1", "AddressBook-v22.abcddb"), "utf8")).toBe("ab");
-      // The private folders the copies were cloned into are gone.
+      // Nothing but the copies is left in the folder.
       expect(readdirSync(snap).sort()).toEqual(["chat.db", "chat.db-wal", "contacts-1", "Καλημέρα 👍.jpg"].sort());
       expect(readdirSync(join(snap, "contacts-1"))).toEqual(["AddressBook-v22.abcddb"]);
       expect(existsSync(join(dir, "elsewhere"))).toBe(false);
@@ -214,7 +205,7 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       symlinkSync(join(dir, "victim"), join(snap, "chat.db"));
       writeFileSync(join(dir, "victim2"), "victim2");
       symlinkSync(join(dir, "victim2"), join(runDir, "res-15.txt.tmp"));
-      // A dangling link would make cp create its target; the copy must replace it instead.
+      // A dangling link is replaced too, never used to create its target.
       symlinkSync(join(dir, "ghost"), join(snap, "chat.db-wal"));
 
       request(runDir, "11", ["snapshot", join(runDir, "snap-link")]);
@@ -321,22 +312,6 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
         /^refused: .*folder changed/,
       );
       expect(call("tell s to writeReply(item 2 of argv, \"17\", {\"ok\", \"0\"})", swapped)).toBe("done");
-      expect(readdirSync(elsewhere)).toEqual([]);
-
-      // The clone's private folder, swapped for a symlink after mktemp made it: cp never writes through it.
-      const clone = (folder: string, tmp: string) =>
-        call("tell s to cloneChecked(item 2 of argv, item 3 of argv, item 4 of argv, \"chat.db\")", join(messages, "chat.db"), folder, tmp);
-      mkdirSync(join(real, ".copy-good001"));
-      expect(clone(real, ".copy-good001")).toBe("done");
-      expect(readFileSync(join(real, "chat.db"), "utf8")).toBe("db");
-      rmSync(join(real, "chat.db"));
-      symlinkSync(elsewhere, join(real, ".copy-swap001"));
-      expect(clone(real, ".copy-swap001")).toMatch(/^refused: /);
-      expect(readdirSync(elsewhere)).toEqual([]);
-      expect(existsSync(join(real, "chat.db"))).toBe(false);
-      // The whole copy, on that same planted name, still ends up a real file through the byte copy.
-      expect(call("tell s to copyChecked(item 2 of argv, item 3 of argv, \"chat.db\")", join(messages, "chat.db"), real)).toBe("done");
-      expect(lstatSync(join(real, "chat.db")).isFile()).toBe(true);
       expect(readdirSync(elsewhere)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
