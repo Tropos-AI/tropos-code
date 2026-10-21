@@ -19,6 +19,7 @@ import { proactiveHandlers } from "./proactive";
 import { projectsHandlers } from "./projects";
 import { remoteHandlers } from "./remote";
 import { serviceHandlers } from "./service";
+import { harnessHandlers } from "./harness";
 import { skillsHandlers } from "./skills";
 import { statusHandlers } from "./status";
 import { updateHandlers } from "./update";
@@ -56,6 +57,7 @@ export function createAdmin(ctx: AdminContext, extra: AdminHandlers = {}): Admin
     ...messagesHandlers(ctx),
     ...memoryHandlers(ctx),
     ...skillsHandlers(ctx),
+    ...harnessHandlers(ctx),
     ...extra,
   };
   return {
