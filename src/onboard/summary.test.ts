@@ -26,7 +26,7 @@ describe("setupSummary", () => {
     await mkdir(app);
     await writeGateway({ telegram: { botToken: server.token }, projects: [{ id: "app", name: "app", path: app }] });
     const s = await setupSummary(testDeps(home, { telegramBaseUrl: server.baseUrl }));
-    expect(s.steps.map((x) => x.id)).toEqual(["provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service"]);
+    expect(s.steps.map((x) => x.id)).toEqual(["provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "messages", "service"]);
     expect(s.steps.find((x) => x.id === "projects")).toMatchObject({ status: "done", detail: "1 project" });
     expect(s.dashboardUrl).toBe("http://127.0.0.1:4317");
     expect(s.botUrl).toBe("https://t.me/tropos_bot");

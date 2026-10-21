@@ -5,9 +5,9 @@ import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { FilePairing } from "../gateway/pairing";
 import { BOOTSTRAP_TEXT, saveIdentity } from "../context/identity";
 import { readOnboardingFlags, updateOnboardingFlags } from "./flags";
-import { checkSandbox, computeOnboardState, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
+import { checkSandbox, computeOnboardState, defaultMessages, explainKeyError, finish, installService, listModels, markStarted, phoneEnabled, pickDefaultModel, redactKey, registeredProjectCount, reopen, saveKey, saveModel, saveTelegram, shortModelList, skipStep, telegramState, validateKey, verifyTelegram } from "./engine";
 import { STEP_WHY } from "./copy";
-import { GOOD_KEY, fakeDocker, fakeNet, fakeService, testDeps } from "./testing";
+import { GOOD_KEY, fakeDocker, fakeMessages, fakeNet, fakeService, testDeps } from "./testing";
 
 let root: string;
 let home: string;
@@ -21,16 +21,16 @@ afterEach(() => removeDir(root));
 const stepOf = (s: Awaited<ReturnType<typeof computeOnboardState>>, id: string) => s.steps.find((x) => x.id === id)!;
 
 describe("computeOnboardState", () => {
-  test("a bare machine lists the ten steps in order; only provider and model are required", async () => {
+  test("a bare machine lists the eleven steps in order; only provider and model are required", async () => {
     await mkdir(join(home, "workspace"), { recursive: true });
     await writeFile(join(home, "workspace", "BOOTSTRAP.md"), BOOTSTRAP_TEXT);
     const s = await computeOnboardState(testDeps(home), { health: false });
-    expect(s.steps.map((x) => x.id)).toEqual(["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"]);
+    expect(s.steps.map((x) => x.id)).toEqual(["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "messages", "service", "done"]);
     expect(s.steps.filter((x) => !x.optional).map((x) => x.id)).toEqual(["provider", "model"]);
     expect(["welcome", "identity", "projects", "autonomy", "telegram", "phone", "done"].map((id) => stepOf(s, id).status)).toEqual(Array(7).fill("todo"));
     expect(s.complete).toBe(false);
     expect(s.dismissed).toBe(false);
-    expect(Object.keys(STEP_WHY)).toHaveLength(10);
+    expect(Object.keys(STEP_WHY)).toHaveLength(11);
   });
 
   test("identity, projects, autonomy, telegram and phone are read from the machine", async () => {
@@ -53,6 +53,48 @@ describe("computeOnboardState", () => {
     expect(await telegramState(testDeps(home))).toEqual({ token: true, owner: { channel: "telegram", senderId: "7" } });
     expect(await phoneEnabled(home)).toBe(true);
     expect(await registeredProjectCount(home)).toBe(1);
+  });
+
+  test.skipIf(process.platform !== "darwin")("the real Texts operations tell a running gateway through the reload signal", async () => {
+    const reloads: string[] = [];
+    const ops = defaultMessages({ home, userHome: home, env: {}, execPath: "x", fetch, now: Date.now, reload: async () => void reloads.push("reload") });
+    // Turning texts off builds nothing, so this never reaches the helper.
+    const view = await ops.set(false);
+    expect(view).toEqual({ available: true, enabled: false });
+    expect(reloads).toEqual(["reload"]);
+    expect(JSON.parse(await readFile(join(home, "settings.json"), "utf8")).messages).toBe(false);
+  });
+
+  describe("the Texts step", () => {
+    const status = (fullDiskAccess: "yes" | "no" | "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation: "unknown" as const, signedIn: "unknown" as const });
+    const texts = async (messages: ReturnType<typeof fakeMessages>, settings?: object) => {
+      if (settings) await writeFile(join(home, "settings.json"), JSON.stringify(settings));
+      return stepOf(await computeOnboardState(testDeps(home, { messages }), { health: false }), "messages");
+    };
+
+    test("is skipped away from macOS, without asking Messages anything", async () => {
+      const messages = fakeMessages({ platform: "linux" });
+      const s = await texts(messages, { messages: true });
+      expect(s.status).toBe("skipped");
+      expect(s.detail).toBe("Only on macOS");
+      expect(messages.calls).toEqual([]);
+    });
+
+    test("is to do while texts are off", async () => {
+      const messages = fakeMessages({ platform: "darwin" });
+      const s = await texts(messages);
+      expect(s.status).toBe("todo");
+      expect(s.detail).toBe("Optional: let me read your texts and send the ones you approve.");
+      expect(messages.calls).toEqual([]);
+    });
+
+    test("is done once texts are on and Full Disk Access is allowed; to do while it is not", async () => {
+      const done = await texts(fakeMessages({ platform: "darwin", view: { available: true, enabled: true, status: status("yes") } }), { messages: true });
+      expect(done.status).toBe("done");
+      const waiting = await texts(fakeMessages({ platform: "darwin", view: { available: true, enabled: true, status: status("no") } }));
+      expect(waiting.status).toBe("todo");
+      expect(waiting.detail).toContain("Full Disk Access");
+    });
   });
 
   test("a bot without an owner, and a Docker chat backend, stay todo with what to do next", async () => {

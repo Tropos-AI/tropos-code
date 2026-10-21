@@ -27,6 +27,26 @@ describe("compileRules", () => {
   });
 });
 
+describe("decide — askReason", () => {
+  const send: PermissionRequest = {
+    toolName: "SendIMessage",
+    kind: "exec",
+    paths: [],
+    target: "+306912345678",
+    askReason: "5 texts to this person in 10 minutes",
+  };
+  test("askReason asks even with a matching allow rule", () => {
+    expect(decide(send, ctx({ allow: ["SendIMessage(+306912345678)"] }))).toEqual({
+      behavior: "ask",
+      reason: "5 texts to this person in 10 minutes",
+    });
+  });
+  test("a deny rule still wins over askReason", () => {
+    const d = decide(send, ctx({ allow: ["SendIMessage(+306912345678)"], deny: ["SendIMessage(+306912345678)"] }));
+    expect(d.behavior).toBe("deny");
+  });
+});
+
 describe("decide — defaults", () => {
   test("reads inside the project are allowed", () => {
     expect(decide(read("/work/app/a.ts"), ctx())).toEqual({ behavior: "allow" });

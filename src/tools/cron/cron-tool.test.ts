@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { makeTmpDir, removeDir } from "../../../test/helpers/tmp";
 import { makeToolContext } from "../../../test/helpers/tool-context";
 import { CronStore } from "../../gateway/cron/store";
+import { compileRules, decide } from "../../permissions/engine";
 import { toolKind } from "../types";
 import { createCronTool } from "./cron-tool";
 
@@ -19,6 +20,21 @@ test("is an exec tool, so it always asks", () => {
   const tool = createCronTool({ store });
   expect(toolKind(tool)).toBe("exec");
   expect(tool.subject({ action: "list" }, "/x")).toEqual({ paths: [], target: "cron:list" });
+});
+
+test("a job that may read or send texts always asks, even with Cron always allowed", () => {
+  const tool = createCronTool({ store });
+  const add = (allowCommands?: string[]) => tool.subject({ action: "add", name: "n", schedule: "every 30m", prompt: "p", ...(allowCommands ? { allowCommands } : {}) }, "/x");
+  for (const rules of [["Messages"], ["SendIMessage(+306912345678)"], ["Bash(npm test:*)", " SendIMessage"], ["Messages(*)"]]) {
+    expect(add(rules)).toEqual({ paths: [], target: "cron:add", askReason: "This job may read or send your texts." });
+  }
+  for (const rules of [undefined, [], ["Bash(npm test:*)"], ["MessagesFoo"], ["Read(Messages)"]]) {
+    expect(add(rules).askReason).toBeUndefined();
+  }
+  const { rules } = compileRules({ allow: ["Cron"], ask: [], deny: [] });
+  const ctx = { mode: "default" as const, cwd: "/x", home: "/h", allowedDirs: ["/x"], rules };
+  expect(decide({ toolName: "Cron", kind: "exec", ...add(["Messages"]) }, ctx).behavior).toBe("ask");
+  expect(decide({ toolName: "Cron", kind: "exec", ...add(["Bash(ls)"]) }, ctx).behavior).toBe("allow");
 });
 
 test("add with a human schedule stores an agent-made job delivering to the default chat", async () => {

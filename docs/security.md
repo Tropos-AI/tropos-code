@@ -10,6 +10,7 @@ Tropos is built for one owner on their own computer. It assumes that these can b
 
 - **Text from outside**: web pages, files in a cloned repository, tool output, MCP server responses, messages from
   people you approved. All of it is data, never instructions, and it can't grant itself permissions.
+- **Texts you read**: other people's messages are data too, and the Messages tools say so every time. See [Texts on your Mac](messages.md).
 - **A cloned repository**: its settings, instruction files and scripts arrive with the code.
 - **Other people on Telegram**: anyone can find a bot and write to it.
 - **Other websites in your browser**: they must not reach the dashboard on `127.0.0.1`.
@@ -25,8 +26,8 @@ Every session runs as one of three roles. Guests and scheduled runs never get ne
 | Role | Who | What it can do |
 |---|---|---|
 | **owner** | You: the terminal, the dashboard, and the owner's private Telegram chat | Everything your settings and the autonomy level allow; changes Tropos's setup (with approval); its sessions are learned from |
-| **guest** | Anyone else you approved on Telegram, in any chat; and jobs made in a guest's chat | Works in `~/.tropos/guest-workspace` and projects you shared; commands only in Docker; always at `ask`; can't change setup, see your notes, journal or past conversations, or pick models; never learned from |
-| **scheduled** | Scheduled jobs and the heartbeat | Runs unattended at the project's autonomy level; whatever would ask is denied unless the job lists it; doesn't see your notes or journal; never the owner's rights |
+| **guest** | Anyone else you approved on Telegram, in any chat; and jobs made in a guest's chat | Works in `~/.tropos/guest-workspace` and projects you shared; commands only in Docker; always at `ask`; can't change setup, see your notes, journal, past conversations or texts, or pick models; never learned from |
+| **scheduled** | Scheduled jobs and the heartbeat | Runs unattended at the project's autonomy level; whatever would ask is denied unless the job lists it; doesn't see your notes or journal; reads or sends texts only if the job lists them; never the owner's rights |
 
 The owner is set once (by the setup link, or in the dashboard) and is only ever the private chat of that one Telegram
 account; a group chat is never the owner, and the bot ignores groups.
@@ -140,6 +141,10 @@ Files inside a repository arrive with the code, so Tropos treats them as untrust
 - **Phone access** publishes the dashboard to your tailnet only, with `tailscale serve`, never Funnel; the dashboard
   still binds `127.0.0.1`, the tailnet name is accepted only while phone access is on, and every phone needs its own
   login. Turning it off logs out phone-only devices. See [Phone access](phone-access.md).
+
+## Texts (macOS)
+
+Off by default and switchable only from your own settings. Every text sent shows the recipient and the exact words; "always allow" is per recipient, autonomy levels never send on their own, and a burst guard asks again (and then refuses) after a run of sends. Guests, specialists and the heartbeat never get the tools; scheduled jobs only when they list them. Texts are kept out of the learning review and the search index. Another program running as you could still ask the helper for your texts, as with giving Full Disk Access to Terminal. Details: [Texts on your Mac](messages.md#what-this-does-not-protect).
 
 ## Telegram
 

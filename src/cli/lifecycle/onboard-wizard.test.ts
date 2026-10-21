@@ -57,7 +57,7 @@ describe("stepsToVisit", () => {
   });
 
   test("--reset visits everything but welcome, skipped steps included", () => {
-    expect(stepsToVisit(state([]), true)).toEqual(["provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"]);
+    expect(stepsToVisit(state([]), true)).toEqual(["provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "messages", "service", "done"]);
   });
 });
 

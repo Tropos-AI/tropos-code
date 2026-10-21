@@ -1,4 +1,4 @@
-// web/src/components/setup/remote-steps.tsx — the wizard's Telegram (live owner claim), Phone access and All set panels.
+// web/src/components/setup/remote-steps.tsx — the wizard's Telegram (live owner claim), Phone access, Texts and All set panels.
 // Telegram: the dashboard shows a deep link and its QR; tapping it on the phone proves who the owner is (the link carries a
 // secret), and the owner's name then appears here to confirm. The poll is one request at a time and stops when the panel closes.
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { QrCode } from "@/components/pages/settings/qr-code";
 import { useRpcResource } from "@/components/pages/use-rpc-resource";
 import { LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
 import { TelegramTokenForm } from "@/components/setup/channel-forms";
+import { MessagesPanel } from "@/components/pages/settings/messages-panel";
 import { HealthStep, SkipRow } from "@/components/setup/host-steps";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -292,6 +293,35 @@ export function PhoneStep({ onChanged, onSkip, onNext }: { onChanged: () => void
         </div>
       ) : null}
       {!issued ? <SkipRow onSkip={onSkip} label="Skip phone access" /> : null}
+    </div>
+  );
+}
+
+/** The Texts card with the wizard's Next and Skip under it; the card itself is the Settings one. */
+export function MessagesStep({ onChanged, onSkip, onNext }: { onChanged: () => void; onSkip: () => void; onNext: () => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <MessagesPanel
+        unavailable={
+          <div className="flex flex-col items-start gap-3">
+            <Notice tone="info">Texts are only available on macOS.</Notice>
+            <Button variant="primary" icon="arrow-right" onClick={onNext}>
+              Next
+            </Button>
+          </div>
+        }
+        footer={
+          <div className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+            <Button variant="primary" icon="arrow-right" onClick={() => (onChanged(), onNext())}>
+              Next
+            </Button>
+            <Button variant="ghost" size="sm" icon="skip-forward" onClick={onSkip}>
+              Skip texts
+            </Button>
+            <span className="text-[12px] text-ink-3">You can come back to this any time.</span>
+          </div>
+        }
+      />
     </div>
   );
 }

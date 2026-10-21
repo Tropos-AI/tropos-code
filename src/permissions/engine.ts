@@ -35,6 +35,8 @@ export interface PermissionRequest {
   destructive?: boolean;
   /** Where a command runs (the shell's working directory); the project when unset. */
   cwd?: string;
+  /** A reason to ask even when a rule or the autonomy level would allow (src/tools/types.ts PermissionSubject). */
+  askReason?: string;
 }
 
 export interface PermissionRules {
@@ -281,6 +283,8 @@ export function decide(req: PermissionRequest, ctx: PermissionContext): Decision
   // Ahead of every allow path (rules, accept-edits, autonomy): a broad `Edit(**)` never approves these silently.
   if (own) return { behavior: "ask", reason: `Tropos's own file: ${own}` };
   if (ctx.rules.ask.some((rule) => ruleHits(rule, req, ctx, "any", true, budget))) return { behavior: "ask" };
+  // The tool itself says this call needs the owner's eye (a burst of texts to one person), allow rules or not.
+  if (req.askReason) return { behavior: "ask", reason: req.askReason };
   // Removing an MCP server or a plugin, or replacing a file: no allow rule or autonomy level does that unasked, and no
   // "don't ask again" rule is offered for it.
   if (req.destructive && req.kind === "exec") return { behavior: "ask", reason: "This can't be undone." };

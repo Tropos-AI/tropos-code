@@ -26,7 +26,7 @@ const schema = z.object({
   prompt: z.string().optional().describe("For add: what the scheduled run should do. It runs alone, without this conversation, so say everything it needs."),
   project: z.string().optional().describe('For add: the project id the run works in; "default" when omitted.'),
   deliverTo: z.string().optional().describe('For add: where the result goes, a chat key like "telegram:123" or "none". Defaults to this chat when known.'),
-  allowCommands: z.array(z.string()).optional().describe('For add: rules like "Bash(npm test:*)" the run may use without asking. Leave out unless needed.'),
+  allowCommands: z.array(z.string()).optional().describe('For add: rules like "Bash(npm test:*)" the run may use without asking. Jobs may also list "Messages" (to read the user\'s texts) and "SendIMessage(<exact +E.164 number or email>)" (to send to that one recipient). Leave out unless needed.'),
 });
 
 type Input = z.infer<typeof schema>;
@@ -41,6 +41,13 @@ export interface CronToolOptions {
   origin?: string;
   /** Starts a job now without waiting for it (the daemon's scheduler); `run` is refused when absent. */
   runNow?: (id: string) => Promise<RunRecord>;
+}
+
+const TEXTS_REASON = "This job may read or send your texts.";
+
+/** True when a job's rules name the Messages or SendIMessage tool, bare or with a pattern. */
+function touchesTexts(rules: string[] | undefined): boolean {
+  return (rules ?? []).some((r) => /^(Messages|SendIMessage)\s*(\(|$)/.test(r.trim()));
 }
 
 function describeSchedule(s: Schedule): string {
@@ -107,7 +114,9 @@ export function createCronTool(opts: CronToolOptions) {
       "(cron expression, fixed interval of at least a minute, or once) and delivers the result to a chat. The user is asked to approve every use.",
     schema,
     summarize: (input) => (input.action === "add" ? `add job ${input.name ?? ""}`.trim() : input.id ? `${input.action} ${input.id}` : input.action),
-    subject: (input) => ({ paths: [], target: `cron:${input.action}` }),
+    // A job that may read or send texts asks every time, even when Cron adds were always allowed: a text the agent
+    // read could otherwise plant a job that sends the owner's messages somewhere, with nobody asked.
+    subject: (input) => ({ paths: [], target: `cron:${input.action}`, ...(input.action === "add" && touchesTexts(input.allowCommands) ? { askReason: TEXTS_REASON } : {}) }),
     preview(input): PermissionPreview | undefined {
       try {
         if (input.action === "add") {

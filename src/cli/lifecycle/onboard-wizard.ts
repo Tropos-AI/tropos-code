@@ -25,7 +25,7 @@ import { RISK_NOTICE, STEP_WHY, WELCOME_LINES } from "../../onboard/copy";
 import { CredentialsError } from "../../providers/credentials";
 import { FlowCancelled } from "../../ui/flow";
 import type { OnboardState, OnboardStepId } from "../../web/admin/api";
-import { doneStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
+import { doneStep, messagesStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
 import { autonomyStep, identityStep, projectsStep } from "./onboard-steps";
 import { MAX_KEY_TRIES, NEEDED, ask, askYesNo, choose, openUrl, wrapAll, wrapText, type StepHandler, type StepOutcome, type WizardIO } from "./onboard-ask";
 
@@ -177,7 +177,7 @@ export const modelStep: StepHandler = async (io) => {
   return "next";
 };
 
-export const TERMINAL_STEPS: Partial<Record<OnboardStepId, StepHandler>> = { provider: providerStep, model: modelStep, identity: identityStep, projects: projectsStep, autonomy: autonomyStep, telegram: telegramStep, phone: phoneStep, service: serviceStep, done: doneStep };
+export const TERMINAL_STEPS: Partial<Record<OnboardStepId, StepHandler>> = { provider: providerStep, model: modelStep, identity: identityStep, projects: projectsStep, autonomy: autonomyStep, telegram: telegramStep, phone: phoneStep, messages: messagesStep, service: serviceStep, done: doneStep };
 
 // ---------- the whole wizard ----------
 

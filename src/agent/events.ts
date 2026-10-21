@@ -30,6 +30,11 @@ export interface PermissionPrompt {
   input: unknown;
   reason?: string;
   suggestion?: string;
+  /**
+   * The target the permission check matched (a send's recipient, a WebFetch domain), from the tool's subject; set
+   * when the tool has one. Whoever answers for nobody (a scheduled run) matches its rules against this, never the input.
+   */
+  target?: string;
   /** The full change, from the tool, when the summary can't show it (see Tool.preview). */
   preview?: { header: string; text: string };
 }

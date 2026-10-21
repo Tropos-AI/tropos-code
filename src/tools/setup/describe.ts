@@ -254,6 +254,10 @@ export function describeSetupChange(input: SetupInput, state: SetupState): Permi
       if (!lines.length) lines.push("(nothing to change)");
       break;
     }
+    case "messages.set":
+      lines.push(arrow("texts (Messages)", state.settings.messages === true ? "on" : "off", input.enabled === undefined ? "?" : input.enabled ? "on" : "off"));
+      if (input.enabled) lines.push("Turning it on builds a small helper app; macOS then asks for Full Disk Access and Automation. It reads and sends only what you approve.");
+      break;
     case "autonomy.lower": {
       const to = input.level ?? "?";
       if (input.project) {

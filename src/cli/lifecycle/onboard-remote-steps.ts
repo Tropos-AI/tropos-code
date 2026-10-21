@@ -7,6 +7,7 @@ import { installService, saveTelegram, telegramState, verifyTelegram } from "../
 import { OnboardError } from "../../onboard/errors";
 import { enablePhoneAccess } from "../../onboard/phone";
 import { botUsername, setupSummary } from "../../onboard/summary";
+import type { MessagesView } from "../../web/admin/api";
 import { renderQr } from "../../ui/qr";
 import { MAX_KEY_TRIES, ask, askYesNo, choose, openUrl, wrapAll, type StepHandler, type WizardIO } from "./onboard-ask";
 
@@ -137,6 +138,74 @@ export const phoneStep: StepHandler = async (io) => {
     return "skip";
   }
 };
+
+// ---------- texts (macOS Messages) ----------
+
+const MESSAGES_POLL_MS = 2000;
+const MESSAGES_WAIT_MS = 120_000;
+
+export const messagesStep: StepHandler = async (io) => {
+  const { flow, deps, cli } = io;
+  if (deps.messages.platform !== "darwin") {
+    flow.info("Texts are only available on macOS.");
+    return "skip";
+  }
+  const want = await askYesNo(io, "Do you want me to read your texts on this Mac and send the ones you approve?", false);
+  if (want === "back") return "back";
+  if (want !== true) return "skip";
+
+  // The same operations the dashboard runs, so the setting is written in one place only.
+  let view: MessagesView;
+  try {
+    view = await deps.messages.set(true);
+  } catch (err) {
+    flow.error(wrapAll(err instanceof Error ? err.message : "Could not turn texts on."));
+    return "skip";
+  }
+
+  if (!view.status?.helper.installed) {
+    flow.error(wrapAll("I couldn't set up the Tropos Messages Helper, so texts are not ready. Run `tcode onboard` again, or check Settings > Channels."));
+    return "skip";
+  }
+
+  if (view.status.noHistory) {
+    flow.note(wrapAll("Messages has no history on this Mac yet. Open Messages and sign in with your Apple Account; I can only check Full Disk Access once it has."));
+  }
+  if (view.status.fullDiskAccess !== "yes") {
+    try {
+      await deps.messages.openSettings("fda");
+    } catch {
+      // the note below says where to go
+    }
+    flow.note(wrapAll("In System Settings > Privacy & Security > Full Disk Access, switch on “Tropos Messages Helper”. I'll notice when you do (waiting up to 2 minutes)."));
+    const app = view.status?.helper.path;
+    if (app) {
+      // It sits in a hidden folder, and macOS doesn't always list a new app there by itself.
+      flow.info(wrapAll(`Not in the list? Click + below it, press ⌘⇧G, paste the path below and choose Open, or drag the app into the list from Finder:`));
+      flow.info(app);
+    }
+    const sleep = cli.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (let waited = 0; waited < MESSAGES_WAIT_MS && view.status?.fullDiskAccess !== "yes"; waited += MESSAGES_POLL_MS) {
+      await sleep(MESSAGES_POLL_MS);
+      view = await deps.messages.get().catch(() => view);
+    }
+    if (view.status?.fullDiskAccess !== "yes") {
+      flow.info(wrapAll("Full Disk Access is not on yet. Texts stay unfinished until you allow “Tropos Messages Helper”; run `tcode onboard` again or open Settings > Channels."));
+      return "next";
+    }
+  }
+  flow.success(view.status?.chats !== undefined ? `Full Disk Access is on. I can see ${chatCount(view.status.chats)}.` : "Full Disk Access is on.");
+
+  // Asking Messages once shows macOS's one-time "control Messages" prompt.
+  flow.info("Checking that I may control Messages (macOS may ask you to allow it)…");
+  view = await deps.messages.probe().catch(() => view);
+  if (view.status?.automation !== "yes") flow.info(wrapAll("macOS has not allowed Tropos to control Messages yet. You can finish this any time in Settings > Channels."));
+  else if (view.status.signedIn === "no") flow.info(wrapAll("Messages isn't signed in on this Mac, so I can't send texts yet. Open Messages and sign in, then check again in Settings > Channels."));
+  else flow.success("Texts are ready. Try: who texted me today?");
+  return "next";
+};
+
+const chatCount = (n: number) => `${n} chat${n === 1 ? "" : "s"}`;
 
 // ---------- background service ----------
 

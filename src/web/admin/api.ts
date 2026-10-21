@@ -206,6 +206,50 @@ export interface SkillsAdmin {
   "skills.restore": { params: { id: string }; result: { name: string } };
 }
 
+// ---------- texts (Messages) ----------
+
+type MessagesAnswer = "yes" | "no" | "unknown";
+
+/** How far setup has got: the helper app, the two macOS permissions it needs, and whether Messages is signed in. */
+export interface MessagesStatus {
+  /** `path`: where the app is, set while it is installed (it lives in a hidden folder; Finder can show it). */
+  helper: { installed: boolean; version?: number; current: number; path?: string };
+  /** `unknown` also while there is no chat.db to check it with (`noHistory`). */
+  fullDiskAccess: MessagesAnswer;
+  /** What the last probe found (remembered across processes); `unknown` before the first one. */
+  automation: MessagesAnswer;
+  /** `no` when there is no Messages history yet or the last probe found no enabled account; `yes` when it found one. */
+  signedIn: MessagesAnswer;
+  /** Set when there is no chat.db at all: Messages was never used on this Mac. */
+  noHistory?: true;
+  /** The enabled services the last probe found, e.g. ["iMessage", "SMS"]. */
+  services?: string[];
+  /** When the last probe ran (Unix ms). */
+  probedAt?: number;
+  /** How many chats one snapshot shows; present when it was asked for and Full Disk Access is on. */
+  chats?: number;
+}
+
+export interface MessagesView {
+  /** True on macOS, the only place texts exist. */
+  available: boolean;
+  enabled: boolean;
+  /** Setup progress; present only while texts are on. */
+  status?: MessagesStatus;
+  /** Set when the change was saved but the running gateway could not be told: running chats pick it up after a restart. */
+  note?: string;
+}
+
+export interface MessagesAdmin {
+  "messages.get": { params: undefined; result: MessagesView };
+  "messages.set": { params: { enabled: boolean }; result: MessagesView };
+  "messages.openSettings": { params: { pane: "fda" | "automation" }; result: { ok: true } };
+  /** Shows the helper app selected in Finder, to drag into the Full Disk Access list when macOS doesn't list it. */
+  "messages.revealHelper": { params: undefined; result: { ok: true } };
+  /** Asks Messages now, which shows macOS's Automation prompt the first time. */
+  "messages.probe": { params: undefined; result: MessagesView };
+}
+
 export interface ProactiveAdmin {
   "proactive.get": { params: undefined; result: ProactiveView };
   "proactive.set": { params: ProactivePatch; result: ProactiveView };
@@ -390,7 +434,7 @@ export interface ExtensionsAdmin {
 
 // ---------- onboarding ----------
 
-export type OnboardStepId = "welcome" | "provider" | "model" | "identity" | "projects" | "autonomy" | "telegram" | "phone" | "service" | "done";
+export type OnboardStepId = "welcome" | "provider" | "model" | "identity" | "projects" | "autonomy" | "telegram" | "phone" | "messages" | "service" | "done";
 
 export interface OnboardStep {
   id: OnboardStepId;
@@ -601,6 +645,7 @@ export type AdminMap = StatusAdmin &
   RemoteAdmin &
   AgentsAdmin &
   ProactiveAdmin &
+  MessagesAdmin &
   MemoryAdmin &
   SkillsAdmin;
 
@@ -665,6 +710,11 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "mcp.setEnabled",
   "proactive.get",
   "proactive.set",
+  "messages.get",
+  "messages.set",
+  "messages.openSettings",
+  "messages.revealHelper",
+  "messages.probe",
   "memory.edit",
   "memory.delete",
   "skills.read",

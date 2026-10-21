@@ -289,6 +289,23 @@ describe("learning settings", () => {
     expect(warnings[1]).toContain("ignored learning");
   });
 
+  test("messages defaults to off", () => {
+    expect(DEFAULT_SETTINGS.messages).toBe(false);
+  });
+
+  test("a repo layer can't turn messages on", async () => {
+    await put(paths.project, { messages: true });
+    const { settings, warnings } = await loadSettings(paths);
+    expect(settings.messages).toBe(false);
+    expect(warnings[0]).toContain("ignored messages");
+  });
+
+  test("the user layer can", async () => {
+    await put(paths.user, { messages: true });
+    const { settings } = await loadSettings(paths);
+    expect(settings.messages).toBe(true);
+  });
+
   test("out-of-range values are reported", async () => {
     for (const learning of [{ interval: 1 }, { interval: 101 }, { interval: 2.5 }, { flushAt: 0.2 }, { flushAt: 0.96 }, { review: "yes" }, { askBeforeSaving: "no" }]) {
       await put(paths.user, { learning });

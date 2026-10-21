@@ -54,7 +54,7 @@ this").
 <tr>
 <td align="center"><h3>🧠 Learns as you talk</h3>It keeps notes about you and the work, a daily journal, and skills for procedures. Every save is shown and can be undone.</td>
 <td align="center"><h3>🔧 Configures itself</h3>Ask it to connect Telegram, add a project, an MCP server, a plugin or a skill, or switch models. Each change asks first and is recorded.</td>
-<td align="center"><h3>🖼️ Images and files</h3>Paste, drop or attach images and text files in the dashboard, or send photos in Telegram. Vision models see them.</td>
+<td align="center"><h3>🖼️ Images, files and texts</h3>Paste, drop or attach images and text files; vision models see them. On a Mac it can also read and send your texts, asking before each one (off by default).</td>
 </tr>
 <tr>
 <td align="center"><h3>🛡️ Autonomy with an OS sandbox</h3>Ask, Balanced or Autonomous. A chat's commands run inside <code>sandbox-exec</code> (macOS) or <code>bwrap</code> (Linux), or Docker.</td>

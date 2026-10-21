@@ -181,6 +181,16 @@ describe("search", () => {
     expect(index.search("zebra", { source: "all", projectDirs: here(), limit: 5 })).toEqual([]);
   });
 
+  test("tool results are never indexed", async () => {
+    await session(CWD, 1, [
+      msg("assistant", [{ type: "tool_use", id: "m1", name: "Messages", input: { action: "read", chat: "iMessage;-;+306912345678" } }]),
+      msg("user", [{ type: "tool_result", tool_use_id: "m1", content: [{ type: "text", text: "Maria: the quokka code is 4711" }] }]),
+    ]);
+    await index.refresh({ home, cwd: CWD });
+    expect(index.search("quokka", { source: "all", projectDirs: here(), limit: 5 })).toEqual([]);
+    expect(index.search("4711", { source: "all", projectDirs: here(), limit: 5 })).toEqual([]);
+  });
+
   test("daily notes are indexed per entry and filtered by source", async () => {
     await note(CWD, "2026-10-13", "- 09:00 Decided: keep the scan as a fallback\n  because sqlite may be missing\n- 10:00 unrelated\n");
     await session(CWD, 1, [msg("user", "fallback in a session")]);

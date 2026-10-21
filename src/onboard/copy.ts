@@ -49,6 +49,7 @@ export const STEP_WHY: Record<OnboardStepId, string> = {
   autonomy: "Choose how much chats may do without asking you first.",
   telegram: "Talk to Tropos from your phone through your own Telegram bot.",
   phone: "Open this dashboard from your phone, privately, through Tailscale.",
+  messages: "Let Tropos read your texts on this Mac and send the ones you approve. Nothing is sent without showing you the text first.",
   service: "Keep Tropos running in the background, so chats and schedules work when this terminal is closed.",
   done: "A quick health check, then a summary of what is ready.",
 };

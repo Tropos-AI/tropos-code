@@ -1,6 +1,7 @@
 // src/cli/extensions.ts
 import { realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { runSubagent } from "../agent/subagent";
 import { isSpecialist, loadAllAgents, specialistRoster } from "../agents/specialists";
 import { delegateModel, runSpecialist, SpecialistSlots, type SpecialistDeps } from "../agents/delegate";
@@ -16,6 +17,7 @@ import { Formatters } from "../format/formatters";
 import { HookRunner, type HookRunnerConfig } from "../hooks/runner";
 import { LspManager } from "../lsp/manager";
 import { McpManager } from "../mcp/manager";
+import { createMessagesRuntime, type MessagesRuntime } from "../messages/runtime";
 import { bootstrapContext, bootstrapPending, createIdentityTool, identityContext, loadBootstrap, loadIdentity } from "../context/identity";
 import { Ledger } from "../learning/ledger";
 import { SkillTracker } from "../learning/skill-tracker";
@@ -49,6 +51,8 @@ export interface Extensions {
   /** Settings hooks plus enabled plugins' hooks. */
   hookConfig: HookRunnerConfig;
   mcp: McpManager | null;
+  /** The Messages and SendIMessage tools with their helper; only on macOS with the user's `messages` setting on. */
+  messages: MessagesRuntime | null;
   notes: NotesStore | null;
   /** Append-only project notes per day (null when memory is off). */
   daily: DailyNotes | null;
@@ -79,6 +83,10 @@ export interface LoadExtensionsOptions {
   env: NodeJS.ProcessEnv;
   /** Tests skip connecting to MCP servers and opening the snapshot store. */
   connect?: boolean;
+  /** The user's home folder, whose Messages and address book the Messages tools read; the OS's when unset. */
+  userHome?: string;
+  /** Tests stand in for another OS; the Messages tools exist only on darwin. */
+  platform?: NodeJS.Platform;
 }
 
 function hasHooks(hooks: HooksSetting): boolean {
@@ -167,6 +175,8 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     reload,
     hookConfig,
     mcp,
+    // Nothing runs until a tool is used: the helper is built (or rebuilt) then, or when setup turns texts on.
+    messages: (opts.platform ?? process.platform) === "darwin" && settings.messages ? createMessagesRuntime({ home, userHome: opts.userHome ?? homedir() }) : null,
     notes: settings.memory ? new NotesStore(home, { ledger }) : null,
     daily,
     ledger,
@@ -197,8 +207,8 @@ export interface SubagentHolder {
 }
 
 /**
- * The session's tools, in a fixed order: base tools, WebFetch, Skill,
- * Agent, Memory and DailyNote (when memory is on), SessionSearch, SkillManage, AgentManage, Identity, then MCP tools.
+ * The session's tools, in a fixed order: base tools, WebFetch, Skill, Agent, Memory and DailyNote (when memory is on),
+ * SessionSearch, SkillManage, AgentManage, Identity, Messages and SendIMessage (on macOS with texts on), then MCP tools.
  */
 export function sessionTools(
   base: AnyTool[],
@@ -257,6 +267,7 @@ export function sessionTools(
         ext.ledger.record({ actor: e.actor, kind: "identity", path: e.path, action: "write", summary: e.summary, before: e.before, after: e.after }).then(() => {}),
     }),
   );
+  if (ext.messages) tools.push(...ext.messages.tools());
   if (ext.mcp) tools.push(...ext.mcp.tools());
   return tools;
 }

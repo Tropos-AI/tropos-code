@@ -138,6 +138,29 @@ describe("sessionTools", () => {
     expect(names(await load({ memory: false }))).toEqual(["WebFetch", "Skill", "Agent", "SessionSearch", "SkillManage", "AgentManage", "Identity"]);
   });
 
+  test("messages tools join only on darwin with the setting on", async () => {
+    const holder = {};
+    const loadOn = (platform: NodeJS.Platform, messages: boolean) =>
+      loadExtensions({ cwd, home, userHome: join(dir, "user"), platform, settings: { ...DEFAULT_SETTINGS, messages }, env: {}, connect: false });
+    const names = (ext: Extensions) => sessionTools([], ext, { home, cwd, holder, sessionId: () => "s" }).map((t) => t.name);
+    const on = await loadOn("darwin", true);
+    try {
+      expect(on.messages).not.toBeNull();
+      const tools = names(on);
+      expect(tools.slice(tools.indexOf("Identity"))).toEqual(["Identity", "Messages", "SendIMessage"]);
+      const withMcp = { ...on, mcp: { tools: () => [{ name: "mcp__gh__list" }] } } as unknown as Extensions;
+      expect(names(withMcp).slice(-4)).toEqual(["Identity", "Messages", "SendIMessage", "mcp__gh__list"]);
+    } finally {
+      on.messages?.dispose();
+    }
+    for (const [platform, messages] of [["darwin", false], ["linux", true], ["win32", true]] as const) {
+      const ext = await loadOn(platform, messages);
+      expect(ext.messages).toBeNull();
+      expect(names(ext)).not.toContain("Messages");
+      expect(names(ext)).not.toContain("SendIMessage");
+    }
+  });
+
   test("Memory, SkillManage, DailyNote and Identity record their writes in the ledger with the actor", async () => {
     const ext = await load();
     const tools = sessionTools([], ext, { home, cwd, holder: {}, sessionId: () => "s" });

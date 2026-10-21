@@ -43,7 +43,9 @@ Times without a zone are in this computer's time zone, or the one given with `--
   confined like a chat.
 - A run has nobody to ask, so whatever would still ask is denied, unless the job lists a rule for it:
   `--allow "Bash(npm test:*)"` (repeatable; shell command rules only). A job made in a guest's chat gets no such
-  rules: its prompts are the guest's words.
+  rules: its prompts are the guest's words. On a Mac, a job made by asking the agent may also list `Messages` (to read
+  your texts) or `SendIMessage(+306912345678)` (to text that one exact recipient); see
+  [Texts on your Mac](messages.md#who-can-use-it).
 - A run may take up to 15 minutes. At most two jobs run at the same time.
 - The result is delivered to the job's chat as `<name>: <result>` (or `<name>: failed (<reason>)`), or nowhere when
   `deliver` is `none`. The first 500 characters are kept with the run's record.

@@ -1,5 +1,8 @@
 // src/gateway/cron/runner.ts — how the daemon runs a scheduled job: a fresh session in the job's project, nobody to ask.
 import type { AgentEvent, PermissionPrompt } from "../../agent/events";
+import { sendLedger, type SendLedger } from "../../messages/burst";
+import { MESSAGES_TOOL } from "../../messages/messages-tool";
+import { SEND_TOOL } from "../../messages/send-tool";
 import { compileRules, decide } from "../../permissions/engine";
 import type { ChatSession } from "../types";
 import { assistantText } from "../telegram/render";
@@ -22,12 +25,35 @@ export interface JobRunnerDeps {
  * A scheduled run has nobody to approve anything. Its session carries its project's autonomy (at `balanced`, read-only
  * commands and pinned tests run unasked); whatever still asks is denied here unless the job lists it (`allowCommands`,
  * e.g. "Bash(npm test:*)"), and then only for a command inside the project. A guest's job never gets this.
+ *
+ * Texts are opt-in per job (a scheduled session always asks for them, src/gateway/policy.ts): `Messages` reads only for
+ * a job that lists a `Messages` rule, and `SendIMessage` sends only to a recipient the job names exactly, as in
+ * `SendIMessage(+306912345678)`; a bare or wildcard rule names nobody, since a job that reads texts could be talked
+ * into texting anyone. The recipient is the prompt's `target`, the one the tool worked out and the permission check
+ * used, never re-read from the input. A send the burst guard would ask about again is denied, nobody being here to answer.
  */
-export function allowedByJob(prompt: PermissionPrompt, job: CronJob, cwd: string, home: string): boolean {
-  if (!job.allowCommands?.length || prompt.toolName !== "Bash") return false;
+export function allowedByJob(
+  prompt: PermissionPrompt,
+  job: CronJob,
+  cwd: string,
+  home: string,
+  opts: { ledger?: Pick<SendLedger, "check">; now?: number } = {},
+): boolean {
+  if (!job.allowCommands?.length) return false;
+  const { rules } = compileRules({ allow: job.allowCommands, ask: [], deny: [] });
+  if (prompt.toolName === MESSAGES_TOOL) return rules.allow.some((rule) => rule.tool === MESSAGES_TOOL);
+  if (prompt.toolName === SEND_TOOL) {
+    const target = prompt.target;
+    if (target === undefined) return false;
+    const named = rules.allow.filter((rule) => rule.tool === SEND_TOOL && rule.pattern !== undefined && !rule.pattern.includes("*"));
+    const permission = { mode: "default" as const, rules: { allow: named, ask: [], deny: [] }, cwd, home, allowedDirs: [cwd], confine: true };
+    if (decide({ toolName: SEND_TOOL, kind: "exec", paths: [], target }, permission).behavior !== "allow") return false;
+    const burst = (opts.ledger ?? sendLedger).check(target, opts.now ?? Date.now());
+    return burst.ask === undefined && burst.refuse === undefined;
+  }
+  if (prompt.toolName !== "Bash") return false;
   const command = (prompt.input as { command?: unknown } | null)?.command;
   if (typeof command !== "string") return false;
-  const { rules } = compileRules({ allow: job.allowCommands, ask: [], deny: [] });
   return decide({ toolName: "Bash", kind: "exec", command, paths: [] }, { mode: "default", rules, cwd, home, allowedDirs: [cwd], confine: true }).behavior === "allow";
 }
 

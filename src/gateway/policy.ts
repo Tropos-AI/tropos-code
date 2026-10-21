@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import type { Mode } from "../config/constants";
 import { isInside, worktreesDir } from "../paths";
 import { STORE_TOOLS } from "../learning/stores";
+import { MESSAGES_TOOLS } from "../messages/runtime";
 import { compileRules, type AutonomyPolicy } from "../permissions/engine";
 import type { AppContext } from "../cli/runtime";
 import type { ExecBackend } from "../exec/backend";
@@ -24,9 +25,16 @@ const WITHHELD_TOOLS = new Set(["WebFetch"]);
 
 /**
  * SessionSearch reads the owner's other transcripts, which are nobody else's business. The store tools save under the
- * Tropos home, which confinement denies to everyone but the owner: elsewhere they could never succeed.
+ * Tropos home, which confinement denies to everyone but the owner: elsewhere they could never succeed. The Messages
+ * tools read and send the owner's texts: a guest never gets them; a scheduled run keeps them, always asked (below), so
+ * only a job that names them in its `allowCommands` uses them (src/gateway/cron/runner.ts).
  */
-const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["SessionSearch", ...STORE_TOOLS]);
+const OWNER_ONLY_TOOLS: ReadonlySet<string> = new Set(["SessionSearch", ...STORE_TOOLS, ...MESSAGES_TOOLS]);
+
+/** A tool the role may hold: the owner every one, a scheduled run the Messages tools too, a guest none of these. */
+function roleHolds(role: SessionRole, tool: string): boolean {
+  return role === "owner" || !OWNER_ONLY_TOOLS.has(tool) || (role === "scheduled" && MESSAGES_TOOLS.has(tool));
+}
 
 /** Which role a chat key runs as: scheduled runs, the owner's own private chat, or a guest (groups and guests' jobs included). */
 export async function chatRole(chatKey: string, pairing: Pick<Pairing, "isOwner">): Promise<SessionRole> {
@@ -52,14 +60,17 @@ const ALWAYS_ASK = ["mcp__*", "TroposSetup"];
  */
 export function channelContext(base: AppContext, exec: ExecBackend, opts: { role: SessionRole; autonomy?: () => AutonomyPolicy }): AppContext {
   const { role } = opts;
-  const forced = compileRules({ allow: [], ask: ALWAYS_ASK, deny: [] }).rules;
+  // Nobody is at a scheduled run to have asked for a text to be read or sent: those always ask, and only the job's own
+  // allowCommands can answer (src/gateway/cron/runner.ts allowedByJob); the heartbeat has no Messages tools at all.
+  const ask = role === "scheduled" ? [...ALWAYS_ASK, ...MESSAGES_TOOLS] : ALWAYS_ASK;
+  const forced = compileRules({ allow: [], ask, deny: [] }).rules;
   return {
     ...base,
     origin: "channel",
     role,
     exec,
     autonomy: opts.autonomy,
-    tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name) && (role === "owner" || !OWNER_ONLY_TOOLS.has(t.name))),
+    tools: base.tools.filter((t) => !WITHHELD_TOOLS.has(t.name) && roleHolds(role, t.name)),
     // Formatters and language servers run on the host and load config from the project, which a sandboxed command can
     // write without the write guard noticing. The owner's notes and journal are private: a guest's chat or a scheduled
     // run never sees them in its context.
@@ -117,15 +128,16 @@ export function workspaceProblem(workspace: string, troposHome: string, userHome
 }
 
 /**
- * The heartbeat's session: read tools only (it can look, never run a command or write a file), a scheduled run with
- * no learning, and none of the owner's suggestion or test-watching extras.
+ * The heartbeat's session: read tools only (it can look, never run a command or write a file), but never the owner's
+ * texts though Messages is a read tool; a scheduled run with no learning, and none of the owner's suggestion or
+ * test-watching extras.
  */
 export function heartbeatContext(base: AppContext): AppContext {
   const { contextBlocks: _blocks, testWatch: _watch, ...rest } = base;
   return {
     ...rest,
     role: "scheduled",
-    tools: base.tools.filter((t) => toolKind(t) === "read"),
+    tools: base.tools.filter((t) => toolKind(t) === "read" && !MESSAGES_TOOLS.has(t.name)),
     settings: { ...base.settings, learning: { ...base.settings.learning, review: false, curator: false } },
   };
 }

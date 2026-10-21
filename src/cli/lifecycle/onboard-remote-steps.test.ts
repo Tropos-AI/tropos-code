@@ -6,10 +6,10 @@ import { OwnerClaimStore } from "../../gateway/owner-claim";
 import { FilePairing } from "../../gateway/pairing";
 import { updateOnboardingFlags } from "../../onboard/flags";
 import { TAILSCALE_DOWNLOAD_URL } from "../../onboard/copy";
-import { fakeService, fakeTailscale } from "../../onboard/testing";
+import { fakeMessages, fakeService, fakeTailscale } from "../../onboard/testing";
 import { renderQr } from "../../ui/qr";
 import { cleanupWizardIO, wizardIO, type TestWizardIO } from "./onboard-test-kit";
-import { doneStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
+import { doneStep, messagesStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
 
 let server: FakeTelegramServer;
 beforeEach(() => {
@@ -223,5 +223,105 @@ describe("doneStep", () => {
     expect(sleeps.length).toBeLessThanOrEqual(10);
     expect(io.opened).toEqual([]);
     expect(io.out()).toContain("Open the dashboard any time with `tcode dashboard`.");
+  });
+});
+
+describe("messagesStep", () => {
+  const darwin = () => fakeMessages({ platform: "darwin", view: { available: true, enabled: false } });
+  const APP = "/Users/u/.local/share/tropos/helpers/Tropos Messages Helper.app";
+  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1, path: APP }, fullDiskAccess, automation, signedIn: "unknown" as const });
+
+  test("no leaves the setting off and touches nothing", async () => {
+    const messages = darwin();
+    const io = await wizardIO(["n"], { messages });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(io.questions).toEqual(["Do you want me to read your texts on this Mac and send the ones you approve? [y/N/s/b]"]);
+    expect(messages.calls).toEqual([]);
+    expect(messages.view.enabled).toBe(false);
+  });
+
+  test("yes turns texts on, opens the Full Disk Access pane, waits for it, then probes", async () => {
+    const messages = darwin();
+    // Full Disk Access turns on after two checks.
+    let gets = 0;
+    const get = messages.get;
+    messages.get = async () => {
+      await get();
+      if (++gets === 2) messages.view = { available: true, enabled: true, status: { ...status("yes"), chats: 37 } };
+      return messages.view;
+    };
+    const probe = messages.probe;
+    messages.probe = async () => {
+      await probe();
+      messages.view = { available: true, enabled: true, status: { ...status("yes", "yes"), signedIn: "yes" } };
+      return messages.view;
+    };
+    const sleeps: number[] = [];
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async (ms) => void sleeps.push(ms) });
+    expect(await messagesStep(io)).toBe("next");
+    expect(messages.calls[0]).toBe("set:true");
+    expect(messages.calls[1]).toBe("open:fda");
+    expect(messages.calls.at(-1)).toBe("probe");
+    expect(sleeps).toEqual([2000, 2000]);
+    expect(flat(io.out())).toContain("Tropos Messages Helper");
+    // Where the helper is, for when macOS doesn't list it.
+    expect(flat(io.out())).toContain("press ⌘⇧G");
+    expect(io.out()).toContain(APP);
+    expect(io.out()).toContain("Full Disk Access is on. I can see 37 chats.");
+    expect(io.out()).toContain("Texts are ready.");
+  });
+
+  test("Messages with no history, or not signed in, is said plainly", async () => {
+    const messages = darwin();
+    messages.set = async () => {
+      messages.calls.push("set:true");
+      messages.view = { available: true, enabled: true, status: { ...status("no"), signedIn: "no", noHistory: true } };
+      return messages.view;
+    };
+    let gets = 0;
+    messages.get = async () => {
+      if (++gets === 1) messages.view = { available: true, enabled: true, status: status("yes") };
+      return messages.view;
+    };
+    messages.probe = async () => {
+      messages.view = { available: true, enabled: true, status: { ...status("yes", "yes"), signedIn: "no", services: [] } };
+      return messages.view;
+    };
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async () => {} });
+    expect(await messagesStep(io)).toBe("next");
+    expect(flat(io.out())).toContain("Messages has no history on this Mac yet.");
+    expect(flat(io.out())).toContain("Messages isn't signed in on this Mac");
+    expect(io.out()).not.toContain("Texts are ready.");
+  });
+
+  test("off macOS it asks nothing and skips, even with --reset", async () => {
+    const messages = fakeMessages({ platform: "linux" });
+    const io = await wizardIO([], { messages }, { reset: true });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(io.questions).toEqual([]);
+    expect(messages.calls).toEqual([]);
+  });
+
+  test("a helper that could not be set up is reported and the Full Disk Access pane is not opened", async () => {
+    const messages = darwin();
+    messages.set = async () => {
+      messages.calls.push("set:true");
+      messages.view = { available: true, enabled: true, status: { ...status("no"), helper: { installed: false, current: 1 } } };
+      return messages.view;
+    };
+    const io = await wizardIO(["y"], { messages });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(messages.calls).toEqual(["set:true"]);
+    expect(flat(io.out())).toContain("couldn't set up the Tropos Messages Helper");
+  });
+
+  test("gives up after two minutes without Full Disk Access and does not probe", async () => {
+    const messages = darwin();
+    const sleeps: number[] = [];
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async (ms) => void sleeps.push(ms) });
+    expect(await messagesStep(io)).toBe("next");
+    expect(sleeps.length).toBe(60);
+    expect(messages.calls).not.toContain("probe");
+    expect(flat(io.out())).toContain("Full Disk Access is not on yet.");
   });
 });

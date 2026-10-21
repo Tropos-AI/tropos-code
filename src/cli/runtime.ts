@@ -837,6 +837,7 @@ export async function createRuntime(
       await sessionEnd(hooks, "exit");
       if (init.ownsExtensions === false) return;
       ctx.ext.searchIndex?.close();
+      ctx.ext.messages?.dispose();
       await Promise.all([ctx.ext.mcp?.close(), ctx.ext.lsp?.close()]);
     },
   };
