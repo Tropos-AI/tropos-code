@@ -91,10 +91,9 @@ describe("appletSource", () => {
 
   test("copies are APFS clones made in a fresh private folder, with the byte copy as the fallback", () => {
     const source = appletSource(ONEIL);
-    const copy = source.split("\n").find((l) => l.includes("on copyChecked"))!;
-    const body = source.slice(source.indexOf(copy), source.indexOf("end copyChecked"));
+    const body = source.slice(source.indexOf("on copyChecked"), source.indexOf("end cloneChecked"));
     expect(body).toContain("/usr/bin/mktemp -d ./.copy-XXXXXX");
-    expect(body).toContain("/bin/cp -c -- ");
+    expect(body).toContain("/bin/cp -c -n -- ");
     expect(body).toContain("/bin/cat -- ");
     expect(body).toContain("/bin/mv -f -h ");
   });
@@ -322,6 +321,22 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
         /^refused: .*folder changed/,
       );
       expect(call("tell s to writeReply(item 2 of argv, \"17\", {\"ok\", \"0\"})", swapped)).toBe("done");
+      expect(readdirSync(elsewhere)).toEqual([]);
+
+      // The clone's private folder, swapped for a symlink after mktemp made it: cp never writes through it.
+      const clone = (folder: string, tmp: string) =>
+        call("tell s to cloneChecked(item 2 of argv, item 3 of argv, item 4 of argv, \"chat.db\")", join(messages, "chat.db"), folder, tmp);
+      mkdirSync(join(real, ".copy-good001"));
+      expect(clone(real, ".copy-good001")).toBe("done");
+      expect(readFileSync(join(real, "chat.db"), "utf8")).toBe("db");
+      rmSync(join(real, "chat.db"));
+      symlinkSync(elsewhere, join(real, ".copy-swap001"));
+      expect(clone(real, ".copy-swap001")).toMatch(/^refused: /);
+      expect(readdirSync(elsewhere)).toEqual([]);
+      expect(existsSync(join(real, "chat.db"))).toBe(false);
+      // The whole copy, on that same planted name, still ends up a real file through the byte copy.
+      expect(call("tell s to copyChecked(item 2 of argv, item 3 of argv, \"chat.db\")", join(messages, "chat.db"), real)).toBe("done");
+      expect(lstatSync(join(real, "chat.db")).isFile()).toBe(true);
       expect(readdirSync(elsewhere)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

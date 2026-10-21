@@ -43,7 +43,8 @@ export function helperTokenPath(runDir: string): string {
  * one shell step that changes into the checked folder's physical path and confirms it with `pwd -P` before
  * touching anything, so swapping a folder for a symlink after the check can't redirect it; files are
  * created with the shell's noclobber (`set -C`), which never writes through a link planted at the name, or
- * cloned (`cp -c`) inside a fresh folder `mktemp -d` makes, then renamed into place with `mv -h`.
+ * cloned (`cp -c`) inside a fresh folder `mktemp -d` makes, whose physical path is confirmed the same way
+ * before the clone is written, then renamed into place with `mv -h`.
  *
  * The script has no `property` or `global`: an applet saves those back into its bundle when it quits, which
  * would break the signature and with it the grants.
@@ -439,14 +440,42 @@ on pinTo(physFolder)
 	return "cd -P -- " & quoted form of physFolder & " || exit 1; [ \\"$(/bin/pwd -P)\\" = " & quoted form of physFolder & " ] || { echo 'the folder changed before the copy' >&2; exit 1; }; set -C; "
 end pinTo
 
--- Copies src (never a symlink) to fileName inside the checked folder physFolder, in one shell step. The copy is an
--- APFS clone (cp -c, which costs no space and almost no time) made inside a fresh private folder that mktemp creates
--- under a random name, since cp follows a link planted at its target; it must come out a regular file, else the step
--- falls back to the byte copy with noclobber. mv -h then renames it into place, replacing a link at the name instead
--- of following it.
+-- Copies src (never a symlink) to fileName inside the checked folder physFolder. The copy is an APFS clone (cp -c,
+-- which costs no space and almost no time) when cloneChecked manages one; otherwise it is the byte copy, in one
+-- shell step pinned to the folder, created with noclobber.
 on copyChecked(src, physFolder, fileName)
-	do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; d=$(/usr/bin/mktemp -d ./.copy-XXXXXX) || exit 1; if ! { /bin/cp -c -- " & quoted form of src & " \\"$d/f\\" 2>/dev/null && [ -f \\"$d/f\\" ] && [ ! -L \\"$d/f\\" ]; }; then /bin/rm -rf \\"$d\\"; d=$(/usr/bin/mktemp -d ./.copy-XXXXXX) || exit 1; /bin/cat -- " & quoted form of src & " > \\"$d/f\\" || { /bin/rm -rf \\"$d\\"; exit 1; }; fi; /bin/mv -f -h \\"$d/f\\" ./" & quoted form of fileName & "; rc=$?; /bin/rm -rf \\"$d\\"; exit $rc"
+	set cloned to false
+	set tmpName to ""
+	try
+		set tmpName to do shell script pinTo(physFolder) & "/usr/bin/basename \\"$(/usr/bin/mktemp -d ./.copy-XXXXXX)\\""
+		considering case
+			set fine to (tmpName starts with ".copy-") and (length of tmpName is 12) and (tmpName does not contain "/")
+		end considering
+		if fine then
+			cloneChecked(src, physFolder, tmpName, fileName)
+			set cloned to true
+		end if
+	end try
+	if tmpName starts with ".copy-" and tmpName does not contain "/" then
+		try
+			do shell script pinTo(physFolder) & "/bin/rm -rf ./" & quoted form of tmpName
+		end try
+	end if
+	if not cloned then
+		do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; /bin/rm -f ./" & quoted form of fileName & " && /bin/cat -- " & quoted form of src & " > ./" & quoted form of fileName
+	end if
 end copyChecked
+
+-- Clones src into the private folder tmpName (which mktemp just made in physFolder), then renames the clone to
+-- fileName in physFolder; raises an error, having written nothing outside physFolder, when anything is off. cp
+-- follows a link planted at its target, so it only ever writes into the temporary folder, and only after the step
+-- has changed into it and confirmed its physical path is the one derived from the checked folder (so a folder
+-- swapped for a symlink is refused). The clone must come out a regular file; the folder is checked again just
+-- before mv -h renames the clone into place, replacing a link at the name instead of following it.
+on cloneChecked(src, physFolder, tmpName, fileName)
+	set expected to physFolder & "/" & tmpName
+	do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; ( cd -P -- ./" & quoted form of tmpName & " && [ \\"$(/bin/pwd -P)\\" = " & quoted form of expected & " ] && /bin/cp -c -n -- " & quoted form of src & " ./f 2>/dev/null && [ -f ./f ] && [ ! -L ./f ] ) || { echo 'the clone could not be made safely' >&2; exit 1; }; [ ! -L ./" & quoted form of tmpName & " ] && ( cd -P -- ./" & quoted form of tmpName & " && [ \\"$(/bin/pwd -P)\\" = " & quoted form of expected & " ] ) || { echo 'the folder changed before the copy' >&2; exit 1; }; /bin/mv -f -h ./" & quoted form of tmpName & "/f ./" & quoted form of fileName
+end cloneChecked
 
 on copyIfExists(src, physFolder, fileName)
 	if not isFile(src) then return
