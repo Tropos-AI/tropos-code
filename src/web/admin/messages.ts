@@ -1,7 +1,8 @@
 // src/web/admin/messages.ts — `messages.*`: texts (the Messages and SendIMessage tools) on or off, and the two macOS
 // permissions the helper needs. The switch is the `messages` key of the user's settings.json; macOS only.
 import { ConfigStoreError, configFile, readConfigRaw, setAt, updateConfigFile } from "../../config/store";
-import type { Exec } from "../../messages/helper/install";
+import { existsSync } from "node:fs";
+import { helperAppPath, type Exec } from "../../messages/helper/install";
 import { resolveLayout } from "../../install/layout";
 import { createMessagesRuntime, type MessagesRuntime } from "../../messages/runtime";
 import type { MessagesView } from "./api";
@@ -12,8 +13,10 @@ export interface MessagesDeps {
   platform?: NodeJS.Platform;
   /** One runtime per call; the handler disposes it when the call ends. */
   runtime?: () => MessagesRuntime;
-  /** Runs `open` for the System Settings panes. */
+  /** Runs `open` for the System Settings panes and Finder. */
   exec?: Exec;
+  /** Where the helper app is; defaults to the install's. */
+  appPath?: string;
 }
 
 const PANES = {
@@ -83,6 +86,17 @@ export function messagesHandlers(ctx: AdminContext, deps: MessagesDeps = {}): Ad
       const exec = deps.exec ?? (await defaultExec());
       const r = await exec("/usr/bin/open", [url], 10_000);
       if (r.code !== 0) throw new AdminError("Could not open System Settings.");
+      return { ok: true };
+    },
+
+    /** Selects the helper in Finder: it lives in a hidden folder, and macOS doesn't always list it in Full Disk Access. */
+    async "messages.revealHelper"() {
+      darwin();
+      const app = deps.appPath ?? helperAppPath(resolveLayout(ctx.env, ctx.userHome));
+      if (!existsSync(app)) throw new AdminError("The Messages helper isn't set up yet: turn texts on first.");
+      const exec = deps.exec ?? (await defaultExec());
+      const r = await exec("/usr/bin/open", ["-R", app], 10_000);
+      if (r.code !== 0) throw new AdminError("Could not show the helper in Finder.");
       return { ok: true };
     },
 

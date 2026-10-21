@@ -178,6 +178,12 @@ export const messagesStep: StepHandler = async (io) => {
       // the note below says where to go
     }
     flow.note(wrapAll("In System Settings > Privacy & Security > Full Disk Access, switch on “Tropos Messages Helper”. I'll notice when you do (waiting up to 2 minutes)."));
+    const app = view.status?.helper.path;
+    if (app) {
+      // It sits in a hidden folder, and macOS doesn't always list a new app there by itself.
+      flow.info(wrapAll(`Not in the list? Click + below it, press ⌘⇧G, paste the path below and choose Open, or drag the app into the list from Finder:`));
+      flow.info(app);
+    }
     const sleep = cli.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     for (let waited = 0; waited < MESSAGES_WAIT_MS && view.status?.fullDiskAccess !== "yes"; waited += MESSAGES_POLL_MS) {
       await sleep(MESSAGES_POLL_MS);

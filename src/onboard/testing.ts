@@ -127,7 +127,7 @@ export function fakeMessages(opts: { platform?: NodeJS.Platform; view?: Messages
     },
     async set(enabled) {
       m.calls.push(`set:${enabled}`);
-      m.view = enabled ? { available: true, enabled, status: m.view.status ?? { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "no", automation: "unknown", signedIn: "unknown" } } : { available: true, enabled };
+      m.view = enabled ? { available: true, enabled, status: m.view.status ?? { helper: { installed: true, version: 1, current: 1, path: "/Users/u/.local/share/tropos/helpers/Tropos Messages Helper.app" }, fullDiskAccess: "no", automation: "unknown", signedIn: "unknown" } } : { available: true, enabled };
       return m.view;
     },
     async openSettings(pane) {

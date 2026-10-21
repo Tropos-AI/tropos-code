@@ -160,7 +160,7 @@ export function createMessagesRuntime(o: {
     tools: () => tools,
     async status(opts = {}) {
       const version = await installedHelperVersion(appPath);
-      const helper = { installed: version !== undefined, ...(version !== undefined ? { version } : {}), current: HELPER_VERSION };
+      const helper = { installed: version !== undefined, ...(version !== undefined ? { version, path: appPath } : {}), current: HELPER_VERSION };
       let probe = await readProbe(probePath);
       const remembered = (): Pick<MessagesStatus, "automation" | "signedIn" | "services" | "probedAt"> => ({
         automation: probe?.automation ?? "unknown",

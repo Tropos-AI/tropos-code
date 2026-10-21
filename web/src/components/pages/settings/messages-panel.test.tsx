@@ -49,6 +49,21 @@ describe("MessagesPanel", () => {
     await waitFor(() => expect(socket.adminOf("messages.openSettings").at(-1)?.params).toEqual({ pane: "fda" }));
   });
 
+  test("Show helper in Finder sits next to Open Full Disk Access and reveals the helper", async () => {
+    const { socket } = await mountAdminPage(MessagesPanel, { "messages.get": () => ON_NO_FDA, "messages.revealHelper": () => ({ ok: true }) });
+    fireEvent.click(await screen.findByRole("button", { name: "Show helper in Finder" }));
+    await waitFor(() => expect(socket.adminOf("messages.revealHelper").length).toBe(1));
+    cleanup();
+    // Nothing to show before the helper exists, nor once Full Disk Access is on.
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ({ ...ON_NO_FDA, status: { ...ON_NO_FDA.status!, helper: { installed: false, current: 1 } } }) });
+    await screen.findByRole("button", { name: "Open Full Disk Access" });
+    expect(screen.queryByRole("button", { name: "Show helper in Finder" })).toBeNull();
+    cleanup();
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ON_DONE });
+    await screen.findByRole("switch");
+    expect(screen.queryByRole("button", { name: "Show helper in Finder" })).toBeNull();
+  });
+
   test("Test Messages access runs the probe and shows its result", async () => {
     let probed = false;
     const { socket } = await mountAdminPage(MessagesPanel, {

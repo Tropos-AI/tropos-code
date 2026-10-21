@@ -212,7 +212,8 @@ type MessagesAnswer = "yes" | "no" | "unknown";
 
 /** How far setup has got: the helper app, the two macOS permissions it needs, and whether Messages is signed in. */
 export interface MessagesStatus {
-  helper: { installed: boolean; version?: number; current: number };
+  /** `path`: where the app is, set while it is installed (it lives in a hidden folder; Finder can show it). */
+  helper: { installed: boolean; version?: number; current: number; path?: string };
   /** `unknown` also while there is no chat.db to check it with (`noHistory`). */
   fullDiskAccess: MessagesAnswer;
   /** What the last probe found (remembered across processes); `unknown` before the first one. */
@@ -243,6 +244,8 @@ export interface MessagesAdmin {
   "messages.get": { params: undefined; result: MessagesView };
   "messages.set": { params: { enabled: boolean }; result: MessagesView };
   "messages.openSettings": { params: { pane: "fda" | "automation" }; result: { ok: true } };
+  /** Shows the helper app selected in Finder, to drag into the Full Disk Access list when macOS doesn't list it. */
+  "messages.revealHelper": { params: undefined; result: { ok: true } };
   /** Asks Messages now, which shows macOS's Automation prompt the first time. */
   "messages.probe": { params: undefined; result: MessagesView };
 }
@@ -710,6 +713,7 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "messages.get",
   "messages.set",
   "messages.openSettings",
+  "messages.revealHelper",
   "messages.probe",
   "memory.edit",
   "memory.delete",

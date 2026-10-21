@@ -228,7 +228,8 @@ describe("doneStep", () => {
 
 describe("messagesStep", () => {
   const darwin = () => fakeMessages({ platform: "darwin", view: { available: true, enabled: false } });
-  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation, signedIn: "unknown" as const });
+  const APP = "/Users/u/.local/share/tropos/helpers/Tropos Messages Helper.app";
+  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1, path: APP }, fullDiskAccess, automation, signedIn: "unknown" as const });
 
   test("no leaves the setting off and touches nothing", async () => {
     const messages = darwin();
@@ -263,6 +264,9 @@ describe("messagesStep", () => {
     expect(messages.calls.at(-1)).toBe("probe");
     expect(sleeps).toEqual([2000, 2000]);
     expect(flat(io.out())).toContain("Tropos Messages Helper");
+    // Where the helper is, for when macOS doesn't list it.
+    expect(flat(io.out())).toContain("press ⌘⇧G");
+    expect(io.out()).toContain(APP);
     expect(io.out()).toContain("Full Disk Access is on. I can see 37 chats.");
     expect(io.out()).toContain("Texts are ready.");
   });

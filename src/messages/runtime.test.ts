@@ -111,7 +111,7 @@ describe("createMessagesRuntime", () => {
     const r = make();
     await r.enable();
     expect(calls).toContain("osacompile");
-    expect(await r.status()).toEqual({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "yes", automation: "unknown", signedIn: "unknown" });
+    expect(await r.status()).toEqual({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION, path: helperAppPath(layout) }, fullDiskAccess: "yes", automation: "unknown", signedIn: "unknown" });
     answers.status = "ok\n0\nfda=no";
     expect((await r.status()).fullDiskAccess).toBe("no");
     answers.status = "error\ntimeout\nno answer";
@@ -183,7 +183,7 @@ describe("createMessagesRuntime", () => {
     const out = await messagesTool(r).run({ action: "chats" }, makeToolContext());
     expect(out.isError).toBeFalsy();
     expect(calls[0]).toBe("osacompile");
-    expect((await r.status()).helper).toEqual({ installed: true, version: HELPER_VERSION, current: HELPER_VERSION });
+    expect((await r.status()).helper).toEqual({ installed: true, version: HELPER_VERSION, current: HELPER_VERSION, path: helperAppPath(layout) });
   });
 
   test("a helper that can't be built gives a plain error and never asks for data", async () => {

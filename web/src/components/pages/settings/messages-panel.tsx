@@ -36,6 +36,7 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
   const admin = useAdmin();
   const toggle = useAction();
   const open = useAction();
+  const reveal = useAction();
   const probe = useAction();
   const [view, setView] = useState(initial);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -108,6 +109,12 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
                     Open Full Disk Access
                   </Button>
                 ) : null}
+                {/* The helper lives in a hidden folder and macOS doesn't always list it: Finder shows it, to drag into the list. */}
+                {mark.id === "fda" && !fda.done && status?.helper.installed ? (
+                  <Button size="sm" variant="ghost" icon="folder" disabled={reveal.pending} onClick={() => void reveal.run(() => admin("messages.revealHelper"))}>
+                    Show helper in Finder
+                  </Button>
+                ) : null}
                 {mark.id === "automation" && askAgain ? (
                   <Button size="sm" disabled={probe.pending} onClick={() => void probe.run(() => admin("messages.probe")).then((out) => out && setView(out))}>
                     {probe.pending ? "Asking Messages…" : "Test Messages access"}
@@ -131,6 +138,7 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
 
         {toggle.error ? <Notice tone="error">{toggle.error}</Notice> : null}
         {open.error ? <Notice tone="error">{open.error}</Notice> : null}
+        {reveal.error ? <Notice tone="error">{reveal.error}</Notice> : null}
         {probe.error ? <Notice tone="error">{probe.error}</Notice> : null}
         {pollError ? <Notice tone="error">Couldn't check the setup: {pollError}</Notice> : null}
         {footer}

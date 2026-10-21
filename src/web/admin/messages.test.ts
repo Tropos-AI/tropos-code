@@ -1,6 +1,6 @@
 // src/web/admin/messages.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { HELPER_VERSION } from "../../messages/helper/applet";
 import type { MessagesView } from "./api";
@@ -87,4 +87,14 @@ test("a reload that fails is said in the answer; the setting is still saved", as
   const out = (await admin().handle("messages.set", { enabled: true })) as MessagesView;
   expect(out.note).toContain("restart the service");
   expect((await settings()).messages).toBe(true);
+});
+
+test("revealHelper selects the helper app in Finder, and says so when there is none yet", async () => {
+  const app = join(kit.home, "helpers", "Tropos Messages Helper.app");
+  expect(await failure(admin({ appPath: app }), "messages.revealHelper", undefined)).toBe("The Messages helper isn't set up yet: turn texts on first.");
+  expect(opened).toEqual([]);
+  await mkdir(app, { recursive: true });
+  expect(await admin({ appPath: app }).handle("messages.revealHelper", undefined)).toEqual({ ok: true });
+  expect(opened).toEqual([`/usr/bin/open -R ${app}`]);
+  expect(await failure(admin({ appPath: app, platform: "linux" }), "messages.revealHelper", undefined)).toBe("Texts are only available on macOS.");
 });

@@ -28,7 +28,8 @@ Messages Helper**, on your Mac the first time you turn texts on. macOS gives per
 1. **Create the helper.** Turning texts on does this. Nothing to do.
 2. **Full Disk Access.** Open System Settings → Privacy & Security → Full Disk Access and switch on **Tropos Messages
    Helper**. The dashboard and setup have a button that opens the pane, and move on by themselves once it is on. This
-   lets the helper read your Messages history.
+   lets the helper read your Messages history. If the helper isn't listed, see
+   [Troubleshooting](#troubleshooting).
 3. **Control Messages.** macOS asks "Tropos Messages Helper wants to control Messages" the first time a text is sent.
    To see the question now rather than in the middle of a task, use **Test Messages access** on the Texts card.
    Choose Allow.
@@ -145,5 +146,12 @@ The agent shows these messages as they are. Run `tcode doctor` first; it shows t
 The errors that say "Don't retry until the user says it's fixed" stop the agent from trying again by itself. Once you
 have fixed the step, tell it.
 
-If the helper does not appear in the Full Disk Access list, turn texts off and on again in the dashboard so Tropos
-creates it, then add it with the **+** button there if macOS still doesn't list it.
+If the helper does not appear in the Full Disk Access list, add it yourself. It lives in a hidden folder:
+
+```
+~/.local/share/tropos/helpers/Tropos Messages Helper.app
+```
+
+Click **+** under the list, press ⌘⇧G, paste that path and choose Open. Or use **Show helper in Finder** on the Texts
+card and drag the app into the list. `tcode onboard` prints the path too. If the app isn't there at all, turn texts
+off and on again so Tropos creates it.
