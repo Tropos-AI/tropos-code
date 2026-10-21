@@ -281,7 +281,7 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
 
   await layoutAtStart(home, VERSION, err);
-  const harness = await loadHarness({ home, cwd, ...(opts.harnessDir ? { dir: resolveToolPath(opts.harnessDir, cwd) } : {}) });
+  const harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons, ...(opts.harnessDir ? { dir: resolveToolPath(opts.harnessDir, cwd) } : {}) });
   const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
   for (const warning of [...ext.warnings, ...harnessWarnings(harness)]) err(`tcode: ${sanitizeForTerminal(warning)}\n`);

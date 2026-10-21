@@ -137,7 +137,7 @@ export function scriptsSection(scripts: string[]): string {
  * The harness a session in `cwd` runs with. Never throws: a layer that breaks a rule is skipped whole, so a broken
  * overlay leaves the agent on the layers below it. With `dir`, that folder is the only overlay (a harness under test).
  */
-export async function loadHarness(opts: { home: string; cwd: string; base?: HarnessTree; dir?: string }): Promise<Harness> {
+export async function loadHarness(opts: { home: string; cwd: string; base?: HarnessTree; dir?: string; lessons?: boolean }): Promise<Harness> {
   const base = opts.base ?? BASE_TREE;
   let tree = base;
   /** Which layer folder each file comes from; base files have none. */
@@ -173,7 +173,7 @@ export async function loadHarness(opts: { home: string; cwd: string; base?: Harn
     system: [assembleSystem(tree), scriptsSection(scripts)].filter(Boolean).join("\n\n"),
     layers,
     // Then the library's lessons for this kind of project; never in a probe, whose harness must be only what is tested.
-    skillDirs: [...orderByLayers(foldersOf("skill", "skills"), overlays), ...(opts.dir === undefined && existsSync(lessons) ? [lessons] : [])],
+    skillDirs: [...orderByLayers(foldersOf("skill", "skills"), overlays), ...(opts.dir === undefined && opts.lessons !== false && existsSync(lessons) ? [lessons] : [])],
     agentDirs: orderByLayers(foldersOf("agent", "agents"), overlays),
     scripts,
     ...(hooksDir ? { hooksFile: join(hooksDir, "hooks.json") } : {}),

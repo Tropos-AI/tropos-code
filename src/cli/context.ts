@@ -70,7 +70,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   for (const rule of invalid) warnings.push(`ignoring invalid permission rule "${rule}"`);
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const router = new ProviderRouter({ home, env, settings: settings.providers });
-  let harness = await loadHarness({ home, cwd });
+  let harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons });
   warnings.push(...harnessWarnings(harness));
   const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
   warnings.push(...ext.warnings);
@@ -96,7 +96,7 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   };
   const newSessionContext = async (): Promise<SessionContext> => {
     // First, so a harness adopted while the gateway runs reaches the next session with its skills; never throws.
-    harness = await loadHarness({ home, cwd });
+    harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons });
     await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));
     const holder: SubagentHolder = {};
     let current = "";

@@ -54,6 +54,7 @@ test("sessions in a project of the domain load the lessons skill; probes don't",
   await addEntry(home, entry("20261021-100000-aaaa"), { harness: new Map(), lessons: [lesson("A")] });
   expect((await loadHarness({ home, cwd: project })).skillDirs).toEqual([lessonsSkillDir(home, "ts-bun")]);
   expect((await loadHarness({ home, cwd: project, dir: join(home, "candidate") })).skillDirs).toEqual([]);
+  expect((await loadHarness({ home, cwd: project, lessons: false })).skillDirs).toEqual([]);
   expect((await loadHarness({ home, cwd: join(home, "other") })).skillDirs).toEqual([]);
   expect(existsSync(lessonsSkillDir(home, "general"))).toBe(false);
 });
