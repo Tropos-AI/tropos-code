@@ -131,10 +131,14 @@ export function formatHits(hits: SearchHit[]): string {
   );
 }
 
-/** Per-chat counts since a time. */
+/** How much of the newest text an activity line quotes. */
+const ACTIVITY_TEXT_CHARS = 80;
+
+/** Per-chat counts since a time, with who wrote last and the start of what they wrote. */
 export function formatActivity(rows: ActivityRow[]): string {
+  const lastOf = (m: Message) => `; last ${formatTime(m.at)} ${m.fromMe ? "me" : who(m.sender)}: ${safe(m.text, ACTIVITY_TEXT_CHARS)}`;
   const entries = rows.map((r) => ({
-    text: `${safe(r.chat.name)} id=${safe(r.chat.id)}: ${r.received} received, ${r.sent} sent${r.last ? `; last ${formatTime(r.last.at)}` : ""}`,
+    text: `${safe(r.chat.name)} id=${safe(r.chat.id)}: ${r.received} received, ${r.sent} sent${r.last ? lastOf(r.last) : ""}`,
     ...(r.last ? { at: r.last.at } : {}),
   }));
   return wrap(`kind="activity" count="${rows.length}"`, entries, "newest-first", NARROW);

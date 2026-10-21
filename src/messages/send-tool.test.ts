@@ -318,7 +318,7 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
   test("not recorded: the helper said ok but no row appeared", async () => {
     onSend = () => ok;
     const out = await send(makeTool(), { to: MARIA, text: "hello" });
-    expect(text(out)).toBe("Messages didn't record the text, so it probably didn't go.");
+    expect(text(out)).toBe("Messages hasn't recorded the text yet, so it may not have gone.");
     expect(out.summary).toBe("not recorded");
     expect(out.isError).toBe(true);
   });
@@ -335,7 +335,7 @@ describe("SendIMessage — what chat.db shows afterwards", () => {
     onSend = () => ({ ok: false, code: "-1708", message: "Messages got an error: No account is signed in." });
     const out = await send(makeTool(), { to: MARIA, text: "hello" });
     expect(sends()).toHaveLength(1);
-    expect(text(out)).toStartWith("Messages didn't record the text, so it probably didn't go.");
+    expect(text(out)).toStartWith("Messages hasn't recorded the text yet, so it may not have gone.");
     expect(text(out)).toContain("No account is signed in.");
     expect(out.summary).toBe("not recorded");
     expect(out.isError).toBe(true);

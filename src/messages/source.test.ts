@@ -198,6 +198,22 @@ describe("MessagesSource", () => {
     s.dispose();
   });
 
+  test("canonicalHandle refuses to guess between two stored numbers a bare number matches", async () => {
+    buildChatDb(join(fixtures, "chat.db"), {
+      chats: [
+        { guid: "iMessage;-;+306912345678", handles: ["+306912345678"] },
+        { guid: "iMessage;-;+356912345678", handles: ["+356912345678"] },
+      ],
+      messages: [],
+    });
+    const s = source(fakeClient({ contacts: "none" }), { t: 1 });
+    await s.with(() => 0);
+    expect(s.canonicalHandle("6912345678")).toBeUndefined();
+    expect(s.canonicalHandle("+30 691 234 5678")).toBe("+306912345678");
+    expect(s.canonicalHandle("00356912345678")).toBe("+356912345678");
+    s.dispose();
+  });
+
   test("a snapshot still in use survives being replaced until its reader finishes", async () => {
     const clock = { t: 1 };
     const s = source(fakeClient(), clock);

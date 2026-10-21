@@ -176,7 +176,7 @@ export function createSendTool(o: {
       return { content: `Sent to ${who}; Messages shows it as not delivered yet.${failed}${timeoutNote}`, summary: "not delivered yet" };
     }
     const why = timedOut ? timeoutNote : helperError ? ` ${helperError}` : "";
-    return { content: `Messages didn't record the text, so it probably didn't go.${why}`, isError: true, summary: "not recorded" };
+    return { content: `Messages hasn't recorded the text yet, so it may not have gone.${why}`, isError: true, summary: "not recorded" };
   }
 
   return defineTool({

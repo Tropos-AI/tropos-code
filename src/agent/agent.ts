@@ -523,7 +523,7 @@ export class Agent {
     }
     let input = parsed.data;
     const kind = toolKind(tool);
-    const summary = tool.summarize(input);
+    let summary = tool.summarize(input);
     emit({ type: "tool_start", id: block.id, name: tool.name, summary, input });
 
     let hookPermission: HookResult["permission"];
@@ -546,6 +546,8 @@ export class Agent {
           return this.finish(block, tool.name, { content: "A PreToolUse hook rewrote the input into something invalid; not run.", isError: true }, "error");
         }
         input = reparsed.data;
+        // The prompt must describe the call that will run, not the one the model asked for.
+        summary = tool.summarize(input);
       }
       // Hooks run side by side on the original input, so an allow can't be tied to the rewritten one:
       // a rewritten call goes through the normal permission check.

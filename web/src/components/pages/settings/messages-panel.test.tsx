@@ -9,7 +9,7 @@ import { withDom } from "@/test-setup";
 
 withDom();
 const { screen, cleanup, fireEvent, waitFor, act } = await import("@testing-library/react");
-const { MessagesPanel, MESSAGES_POLL_MS } = await import("@/components/pages/settings/messages-panel");
+const { MessagesPanel, MESSAGES_POLL_MS, MESSAGES_POLL_LIMIT } = await import("@/components/pages/settings/messages-panel");
 const { MessagesStep } = await import("@/components/setup/remote-steps");
 
 const ready = { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "yes", automation: "yes", signedIn: "yes" } as const;
@@ -106,6 +106,41 @@ describe("MessagesPanel", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Open Full Disk Access" })).toBeNull());
     await tick(MESSAGES_POLL_MS * 5);
     expect(socket.adminOf("messages.get").length).toBe(3);
+  });
+
+  test("a newer helper than this release counts as ready", async () => {
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ({ ...ON_DONE, status: { ...ready, helper: { installed: true, version: 2, current: 1 } } }) });
+    await screen.findByText("The Tropos Messages Helper is ready");
+    expect(screen.getAllByText("done")).toHaveLength(3);
+  });
+
+  test("stops polling after 5 minutes, and Check again starts it once more", async () => {
+    jest.useFakeTimers();
+    const { socket } = await mountAdminPage(MessagesPanel, { "messages.get": () => ON_NO_FDA });
+    await screen.findByRole("button", { name: "Open Full Disk Access" });
+    for (let i = 0; i < MESSAGES_POLL_LIMIT + 1; i++) await tick(MESSAGES_POLL_MS);
+    const asked = socket.adminOf("messages.get").length;
+    expect(asked).toBe(1 + MESSAGES_POLL_LIMIT);
+    await tick(MESSAGES_POLL_MS * 5);
+    expect(socket.adminOf("messages.get").length).toBe(asked);
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    await tick(MESSAGES_POLL_MS);
+    await waitFor(() => expect(socket.adminOf("messages.get").length).toBe(asked + 1));
+  });
+
+  test("does not poll while the page is hidden", async () => {
+    jest.useFakeTimers();
+    const hidden = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    try {
+      const { socket } = await mountAdminPage(MessagesPanel, { "messages.get": () => ON_NO_FDA });
+      await screen.findByRole("button", { name: "Open Full Disk Access" });
+      await tick(MESSAGES_POLL_MS * 5);
+      expect(socket.adminOf("messages.get").length).toBe(1);
+    } finally {
+      delete (document as { hidden?: boolean }).hidden;
+      if (hidden) Object.defineProperty(Document.prototype, "hidden", hidden);
+    }
   });
 
   test("does not poll while only the Messages-control step is to do", async () => {

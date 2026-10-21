@@ -50,7 +50,7 @@ The agent has a `Messages` tool for reading and a `SendIMessage` tool for sendin
 
 | You ask | It does |
 |---|---|
-| "Who texted me today?" | Lists the chats with new messages and who wrote last |
+| "Who texted me today?" | Lists the chats with new messages, who wrote last and the start of what they wrote |
 | "What did Nikos say about the invoice?" | Searches your texts, then reads around the match |
 | "Show me the last 20 messages with the plumber" | Reads one conversation |
 | "Find Maria's number" | Looks her up in your Contacts |
@@ -59,7 +59,10 @@ The agent has a `Messages` tool for reading and a `SendIMessage` tool for sendin
 
 Names come from the chat itself and from your Contacts. If Contacts can't be read, it still works with numbers.
 Long results are cut off with a hint to ask for the next page. It reads through a read-only copy of the Messages
-database, so Messages itself is never changed.
+database, so Messages itself is never changed. Copies sit outside what Full Disk Access protects, so none is kept
+longer than needed: a copy of the database is deleted 30 seconds after it was made (or when the read using it ends, if later), and a copied attachment as
+soon as it has been looked at. Attachments that the database already says aren't images are described without
+copying them.
 
 ## Sending
 
@@ -71,7 +74,11 @@ Every text asks first, in the terminal, the dashboard or Telegram. The prompt sh
   matches the same rule, and email addresses match whatever their case.
 - **Autonomy levels never send on their own.** Ask, Balanced and Autonomous all still ask. Only your click or a rule
   for that recipient lets a text through.
+- **Bypass mode, and a bare `SendIMessage` or `SendIMessage(*)` allow rule, send without asking** in your own
+  sessions, to anyone. Only the burst guard's hard limit still applies. Prefer one rule per person.
 - **Plan mode blocks sending.**
+- **Telegram shows at most 1500 characters of a text in its prompt.** A longer text can't be approved there, since
+  you couldn't see all of it; it is denied, and you approve it in the terminal or the dashboard instead.
 
 The text is passed to Messages as it is, so quotes, line breaks, emoji and Greek arrive unchanged. It goes by iMessage,
 or by SMS when that person's chat with you is an SMS chat or iMessage can't reach them.
@@ -82,14 +89,15 @@ After sending, Tropos checks the Messages database and the agent tells you which
 
 - **Sent to Maria: delivered.**
 - **Sent to Maria; Messages shows it as not delivered yet.** Messages has it but hasn't confirmed delivery.
-- **Messages didn't record the text, so it probably didn't go.** Check Messages yourself before trying again.
+- **Messages hasn't recorded the text yet, so it may not have gone.** Check Messages yourself before trying again.
 - If Tropos stopped waiting for Messages, it says so and does not send the text again.
 
 ### The burst guard
 
 A rule can't turn into a flood. Even with "always allow", Tropos asks you again after 5 texts to one person in 10
-minutes, or 20 texts in an hour. It refuses outright at 10 to one person in 10 minutes, or 40 in an hour, and says
-how long to wait.
+minutes, or 20 texts in an hour. It refuses outright at 10 to one person in 10 minutes, or 40 in an hour, and tells
+the agent to wait a while. The counts are kept by each running Tropos process (the terminal and the gateway count
+separately) and start again when it restarts.
 
 ## Who can use it
 
@@ -119,7 +127,8 @@ again is denied. See [Scheduling and the heartbeat](scheduling-and-heartbeat.md)
 
 ## What this does not protect
 
-- **Other programs running as you.** The helper listens for requests in a private folder under `~/.tropos`, and any
+- **Other programs running as you.** The helper listens for requests in a private folder,
+  `~/.local/share/tropos/helpers/run/messages-helper` (beside the helper app), and any
   program that runs as your user could ask it for your texts or ask it to send one. This is the same exposure as giving
   Full Disk Access to your Terminal. A per-install key stops programs that guess blindly; it does not stop one written
   to target Tropos.

@@ -173,8 +173,9 @@ describe("PreToolUse", () => {
     });
     await ok.agent.run("go", signal());
     expect(lastUserText(ok.model, 1)).toContain("wrote /work/b");
-    // The allow came with a rewrite, so the rewritten call still asked.
+    // The allow came with a rewrite, so the rewritten call still asked, about the rewritten input.
     expect(ok.prompts.map((p) => p.toolName)).toEqual(["Writer"]);
+    expect(ok.prompts[0]).toMatchObject({ summary: "/work/b", input: { path: "/work/b" } });
     const bad = make([callWriter("/work/a"), () => reply([textBlock("done")])], { hooks: fakeHooks({ PreToolUse: () => ({ updatedInput: { nope: 1 } }) }) });
     await bad.agent.run("go", signal());
     expect(lastUserText(bad.model, 1)).toContain("rewrote the input into something invalid");

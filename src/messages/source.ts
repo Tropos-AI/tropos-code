@@ -139,10 +139,17 @@ export class MessagesSource {
     return this.lastBook;
   }
 
-  /** The stored spelling of a handle known to the last snapshot or address book that is the same person as `raw`. */
+  /**
+   * The stored spelling of a handle known to the last snapshot or address book that is the same person as `raw`;
+   * undefined when none is, or when a bare number matches more than one (two countries' numbers ending alike), so
+   * the caller never picks one of two people on a guess.
+   */
   canonicalHandle(raw: string): string | undefined {
-    const known = [...this.lastHandles, ...(this.lastBook?.handles() ?? [])];
-    return known.map(normalizeHandle).find((h) => sameHandle(h, raw));
+    const known = [...new Set([...this.lastHandles, ...(this.lastBook?.handles() ?? [])].map(normalizeHandle))];
+    const own = normalizeHandle(raw);
+    if (known.includes(own)) return own;
+    const matches = known.filter((h) => sameHandle(h, raw));
+    return matches.length === 1 ? matches[0] : undefined;
   }
 
   /** Has the helper copy an attachment out of ~/Library/Messages/Attachments into the run folder. */

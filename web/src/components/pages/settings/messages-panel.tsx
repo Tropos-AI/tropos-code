@@ -1,7 +1,8 @@
 // web/src/components/pages/settings/messages-panel.tsx — Settings › Channels: the Texts card. A switch lets Tropos read the
 // owner's texts on this Mac and send the ones they approve; once on, three steps (the helper app, Full Disk Access, control of
-// Messages) are shown with done/to do marks. While one is still to do the card asks messages.get again every 2 s, and it stops
-// when all are done or the card closes. Hidden where texts are unavailable (anything but macOS).
+// Messages) are shown with done/to do marks. While one is still to do the card asks messages.get again every 2 s (not while the
+// page is hidden), and it stops when all are done, the card closes, or after 5 minutes (a button starts it again). Hidden where
+// texts are unavailable (anything but macOS).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { MessagesView } from "@core/web/admin/api";
@@ -15,6 +16,8 @@ import { errorMessage, useAdmin } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export const MESSAGES_POLL_MS = 2000;
+/** Polls that make 5 minutes; after them the card stops asking until "Check again". */
+export const MESSAGES_POLL_LIMIT = (5 * 60_000) / MESSAGES_POLL_MS;
 
 interface Mark {
   id: "helper" | "fda" | "automation";
@@ -26,7 +29,7 @@ interface Mark {
 function marksOf(view: MessagesView): Mark[] {
   const s = view.status;
   return [
-    { id: "helper", label: "The Tropos Messages Helper is ready", done: !!s && s.helper.installed && s.helper.version === s.helper.current },
+    { id: "helper", label: "The Tropos Messages Helper is ready", done: !!s && s.helper.installed && (s.helper.version ?? 0) >= s.helper.current },
     { id: "fda", label: "Full Disk Access is allowed", done: s?.fullDiskAccess === "yes" },
     { id: "automation", label: "Tropos may control Messages", done: s?.automation === "yes" },
   ];
@@ -40,6 +43,9 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
   const probe = useAction();
   const [view, setView] = useState(initial);
   const [pollError, setPollError] = useState<string | null>(null);
+  // Bumped by "Check again" to start a new 5-minute round; `gaveUp` is set when a round ends unfinished.
+  const [round, setRound] = useState(0);
+  const [gaveUp, setGaveUp] = useState(false);
   useEffect(() => setView(initial), [initial]);
 
   const marks = marksOf(view);
@@ -49,8 +55,15 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
   useEffect(() => {
     if (!waiting) return;
     let live = true;
+    let polls = 0;
+    setGaveUp(false);
     const timer = setInterval(() => {
-      if (busy.current) return;
+      if (busy.current || document.hidden) return;
+      if (++polls > MESSAGES_POLL_LIMIT) {
+        clearInterval(timer);
+        setGaveUp(true);
+        return;
+      }
       busy.current = true;
       admin("messages.get")
         .then((next) => {
@@ -69,7 +82,7 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
       live = false;
       clearInterval(timer);
     };
-  }, [admin, waiting]);
+  }, [admin, waiting, round]);
 
   if (!view.available) return <>{unavailable}</>;
 
@@ -141,6 +154,14 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
         {reveal.error ? <Notice tone="error">{reveal.error}</Notice> : null}
         {probe.error ? <Notice tone="error">{probe.error}</Notice> : null}
         {pollError ? <Notice tone="error">Couldn't check the setup: {pollError}</Notice> : null}
+        {waiting && gaveUp ? (
+          <div className="flex flex-wrap items-center gap-3 text-[13px] text-ink-3">
+            <span>Stopped checking after 5 minutes.</span>
+            <Button size="sm" variant="ghost" onClick={() => setRound((n) => n + 1)}>
+              Check again
+            </Button>
+          </div>
+        ) : null}
         {footer}
       </div>
     </SectionCard>

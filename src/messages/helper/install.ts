@@ -1,6 +1,6 @@
 // src/messages/helper/install.ts — builds, re-identifies and signs the helper app, only when its version rises
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveLayout, type Layout } from "../../install/layout";
 import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appletSource } from "./applet";
@@ -11,6 +11,21 @@ export type Exec = (cmd: string, args: string[], timeoutMs?: number) => Promise<
 const MARKER = "tropos-helper-version";
 const USAGE = "Tropos uses Messages to send the texts you approve.";
 const TOOL_TIMEOUT_MS = 60_000;
+/** A build folder older than this was left by a build that crashed (a build takes seconds). */
+const STALE_BUILD_MS = 10 * 60_000;
+
+/** Removes `.build-*` folders in `helpers` that a crashed build left behind; another process's live build is younger. */
+async function sweepBuilds(helpers: string, now: number): Promise<void> {
+  const names = await readdir(helpers).catch(() => [] as string[]);
+  await Promise.all(
+    names
+      .filter((n) => n.startsWith(".build-"))
+      .map(async (n) => {
+        const st = await lstat(join(helpers, n)).catch(() => undefined);
+        if (st?.isDirectory() && now - st.mtimeMs > STALE_BUILD_MS) await rm(join(helpers, n), { recursive: true, force: true }).catch(() => {});
+      }),
+  );
+}
 
 /** Where the helper app lives: `<data>/helpers/Tropos Messages Helper.app`. */
 export function helperAppPath(layout: Layout = resolveLayout()): string {
@@ -66,6 +81,7 @@ export async function ensureHelper(o: {
 
   const helpers = join(layout.data, "helpers");
   await mkdir(helpers, { recursive: true, mode: 0o700 });
+  await sweepBuilds(helpers, Date.now());
   // Built next to its final place, so the last step is a rename on the same volume.
   const work = await mkdtemp(join(helpers, ".build-"));
   try {

@@ -1,6 +1,6 @@
 // src/messages/helper/install.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveLayout, type Layout } from "../../install/layout";
@@ -46,6 +46,18 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 const ensure = () => ensureHelper({ userHome: join(root, "user"), exec: fakeExec, layout });
 
 describe("ensureHelper", () => {
+  test("a build sweeps away build folders a crashed build left more than 10 minutes ago", async () => {
+    const helpers = join(layout.data, "helpers");
+    mkdirSync(join(helpers, ".build-old", "x.app"), { recursive: true });
+    mkdirSync(join(helpers, ".build-recent"), { recursive: true });
+    const old = (Date.now() - 11 * 60_000) / 1000;
+    utimesSync(join(helpers, ".build-old"), old, old);
+    writeFileSync(join(helpers, ".build-file"), "not a folder");
+    utimesSync(join(helpers, ".build-file"), old, old);
+    await ensure();
+    expect(readdirSync(helpers).sort()).toEqual([".build-file", ".build-recent", `${HELPER_NAME}.app`]);
+  });
+
   test("the app lives in the data folder's helpers", () => {
     expect(helperAppPath(layout)).toBe(join(layout.data, "helpers", `${HELPER_NAME}.app`));
     expect(helperRunDir(layout)).toBe(join(layout.data, "helpers", "run", "messages-helper"));
