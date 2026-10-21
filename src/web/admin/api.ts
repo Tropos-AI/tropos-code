@@ -419,7 +419,7 @@ export interface ExtensionsAdmin {
 
 // ---------- onboarding ----------
 
-export type OnboardStepId = "welcome" | "provider" | "model" | "identity" | "projects" | "autonomy" | "telegram" | "phone" | "service" | "done";
+export type OnboardStepId = "welcome" | "provider" | "model" | "identity" | "projects" | "autonomy" | "telegram" | "phone" | "messages" | "service" | "done";
 
 export interface OnboardStep {
   id: OnboardStepId;

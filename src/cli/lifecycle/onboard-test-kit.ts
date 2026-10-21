@@ -2,7 +2,7 @@
 // Not imported by production code. Every answer is one line; "" takes the question's default, like Enter.
 import { mkdir } from "node:fs/promises";
 import { createFlow, flowStyle, type Flow } from "../../ui/flow";
-import { fakeNet, fakeService, testDeps } from "../../onboard/testing";
+import { fakeMessages, fakeNet, fakeService, testDeps } from "../../onboard/testing";
 import { makeFixture, type Fixture } from "./lifecycle-fixture";
 import type { OnboardCliDeps } from "./onboard";
 import type { WizardIO, WizardOptions } from "./onboard-wizard";
@@ -75,6 +75,7 @@ export function engineFakes(over: NonNullable<OnboardCliDeps["engine"]> = {}): N
     doctor: { checks: [] },
     confinement: async () => "sandbox-exec",
     which: () => null,
+    messages: fakeMessages(),
     ...over,
   };
 }

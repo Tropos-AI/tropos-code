@@ -1,6 +1,7 @@
 // src/onboard/testing.ts — fakes for the onboarding tests: a provider/Telegram network, a service manager, a Docker runner.
 import { fakeRunner } from "../doctor/testing";
 import type { Runner } from "../doctor/types";
+import type { MessagesView } from "../web/admin/api";
 import type { ServiceManager, ServiceSpec, ServiceStatus } from "../service/types";
 import { makeOnboardDeps, type OnboardDeps, type OnboardDepsInput } from "./engine";
 
@@ -103,6 +104,43 @@ export function fakeTailscale(opts: { installed?: boolean; running?: boolean; dn
   return { exec, served };
 }
 
+export interface FakeMessages {
+  platform: NodeJS.Platform;
+  get(): Promise<MessagesView>;
+  set(enabled: boolean): Promise<MessagesView>;
+  openSettings(pane: "fda" | "automation"): Promise<void>;
+  probe(): Promise<MessagesView>;
+  /** Every call, in order: "get", "set:true", "open:fda", "probe". */
+  calls: string[];
+  view: MessagesView;
+}
+
+/** Texts without Messages, the helper or ~/Library: a view tests change, and a log of what was asked. Linux unless told otherwise. */
+export function fakeMessages(opts: { platform?: NodeJS.Platform; view?: MessagesView } = {}): FakeMessages {
+  const m: FakeMessages = {
+    platform: opts.platform ?? "linux",
+    view: opts.view ?? { available: (opts.platform ?? "linux") === "darwin", enabled: false },
+    calls: [],
+    async get() {
+      m.calls.push("get");
+      return m.view;
+    },
+    async set(enabled) {
+      m.calls.push(`set:${enabled}`);
+      m.view = enabled ? { available: true, enabled, status: m.view.status ?? { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "no", automation: "unknown" } } : { available: true, enabled };
+      return m.view;
+    },
+    async openSettings(pane) {
+      m.calls.push(`open:${pane}`);
+    },
+    async probe() {
+      m.calls.push("probe");
+      return m.view;
+    },
+  };
+  return m;
+}
+
 export function testDeps(home: string, over: Partial<OnboardDepsInput> = {}): OnboardDeps {
   // A fake Telegram server (telegramBaseUrl) is a real local HTTP server, so calls to it go through the real fetch.
   const net = fakeNet().fetch;
@@ -123,6 +161,7 @@ export function testDeps(home: string, over: Partial<OnboardDepsInput> = {}): On
     alive: () => false,
     confinement: async () => "sandbox-exec",
     which: () => null,
+    messages: fakeMessages(),
     login: { oneTimeUrl: async () => "http://localhost:4317/#login=ONE-TIME-KEY", code: async () => "123456" },
     ...over,
     runner: { ...fakeRunner({ exec }), ...over.runner },

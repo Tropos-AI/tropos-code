@@ -18,7 +18,7 @@ import { listChatModels, type ChatEndpoint } from "../providers/chat-model";
 import { parseModelId, type ProviderInfo } from "../providers/registry";
 import { allProviders } from "../providers/router";
 import { programArguments, serviceEnv, serviceManager, type ServiceManager } from "../service";
-import type { OnboardState, OnboardStep, OnboardStepId } from "../web/admin/api";
+import type { MessagesView, OnboardState, OnboardStep, OnboardStepId } from "../web/admin/api";
 import type { Confinement } from "../exec/backend";
 import { confinementAvailable } from "../exec/confined";
 import { dashboardLoginLink, dashboardPort } from "../web/links";
@@ -67,6 +67,14 @@ export interface OnboardDeps {
   which(cmd: string): string | null;
   /** Tailscale as seen from this computer (it runs through `runner`, so tests fake the runner). */
   tailscale: { status(): Promise<TailscaleStatus> };
+  /** Texts on this Mac: the OS, and the same operations the dashboard's `messages.*` calls run (the setting write is never duplicated). */
+  messages: {
+    platform: NodeJS.Platform;
+    get(): Promise<MessagesView>;
+    set(enabled: boolean): Promise<MessagesView>;
+    openSettings(pane: "fda" | "automation"): Promise<void>;
+    probe(): Promise<MessagesView>;
+  };
   /** What the owner uses to log in to the dashboard: a one-time link for this computer, a code for a phone. */
   login: { oneTimeUrl(): Promise<string>; code(): Promise<string> };
 }
@@ -98,10 +106,26 @@ export function makeOnboardDeps(input: OnboardDepsInput): OnboardDeps {
     confinement: input.confinement ?? confinementAvailable,
     which: input.which ?? ((cmd) => Bun.which(cmd)),
     tailscale: input.tailscale ?? { status: () => tailscaleStatus(runner) },
+    messages: input.messages ?? defaultMessages({ home: input.home, userHome, env, execPath: input.execPath ?? process.execPath, fetch: input.fetch ?? runner.fetch, now: input.now ?? Date.now }),
     login: input.login ?? {
       oneTimeUrl: async () => dashboardLoginLink(input.home, dashboardPort(await loadGatewayConfig(input.home))),
       code: () => loginCodesFor(input.home).issueCode(),
     },
+  };
+}
+
+/** The real Texts operations: the dashboard's own `messages.*` handlers, loaded on first use. */
+function defaultMessages(c: { home: string; userHome: string; env: NodeJS.ProcessEnv; execPath: string; fetch: typeof fetch; now(): number }): OnboardDeps["messages"] {
+  const handlers = async () => {
+    const { messagesHandlers } = await import("../web/admin/messages");
+    return messagesHandlers({ home: c.home, userHome: c.userHome, env: c.env, version: "", execPath: c.execPath, cwd: c.userHome, now: c.now, fetch: c.fetch });
+  };
+  return {
+    platform: process.platform,
+    get: async () => (await handlers())["messages.get"]!(undefined),
+    set: async (enabled) => (await handlers())["messages.set"]!({ enabled }),
+    openSettings: async (pane) => void (await (await handlers())["messages.openSettings"]!({ pane })),
+    probe: async () => (await handlers())["messages.probe"]!(undefined),
   };
 }
 
@@ -246,10 +270,11 @@ export const STEP_TITLES: Record<OnboardStepId, string> = {
   autonomy: "Autonomy",
   telegram: "Telegram",
   phone: "Phone access",
+  messages: "Texts",
   service: "Run in the background",
   done: "All set",
 };
-export const STEP_ORDER = ["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "service", "done"] as const satisfies readonly OnboardStepId[];
+export const STEP_ORDER = ["welcome", "provider", "model", "identity", "projects", "autonomy", "telegram", "phone", "messages", "service", "done"] as const satisfies readonly OnboardStepId[];
 export const REQUIRED_STEPS: readonly OnboardStepId[] = ["provider", "model"];
 
 const step = (id: OnboardStepId, status: OnboardStep["status"], detail?: string): OnboardStep => ({
@@ -275,6 +300,16 @@ async function autonomyStep(deps: OnboardDeps): Promise<OnboardStep> {
   if (chat.backend === "docker") return step("autonomy", "todo", "Chats use Docker today. Running them on this computer is faster and keeps the sandbox.");
   if (!chat.explicit) return step("autonomy", "todo", `Default: ${label}.`);
   return step("autonomy", "done", chat.allowUnconfined && chat.confinement === null ? `${label} on this computer, unconfined` : label);
+}
+
+/** Texts: macOS only; on once the owner turned it on, done when the helper may read the message store (Full Disk Access). */
+async function messagesStep(deps: OnboardDeps): Promise<OnboardStep> {
+  if (deps.messages.platform !== "darwin") return step("messages", "skipped", "Only on macOS");
+  const off = () => step("messages", "todo", "Optional: let me read your texts and send the ones you approve.");
+  if ((await readSettings(deps.home)).messages !== true) return off();
+  const view = await deps.messages.get().catch(() => null);
+  if (view?.status?.fullDiskAccess === "yes") return step("messages", "done", "Reading texts; sending asks you first");
+  return step("messages", "todo", "On. Allow Full Disk Access to the Tropos Messages Helper to finish.");
 }
 
 /** `health: false` skips the doctor run (the "done" step then reads `todo`), for the places that only need the checklist. */
@@ -323,6 +358,8 @@ export async function computeOnboardState(deps: OnboardDeps, opts: { health?: bo
   );
 
   steps.push((await phoneEnabled(deps.home)) ? step("phone", "done", "Open from your phone through Tailscale") : step("phone", "todo", "Optional: open the dashboard from your phone."));
+
+  steps.push(await messagesStep(deps));
 
   const svc = await deps.service.status().catch(() => null);
   steps.push(

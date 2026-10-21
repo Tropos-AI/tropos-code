@@ -6,10 +6,10 @@ import { OwnerClaimStore } from "../../gateway/owner-claim";
 import { FilePairing } from "../../gateway/pairing";
 import { updateOnboardingFlags } from "../../onboard/flags";
 import { TAILSCALE_DOWNLOAD_URL } from "../../onboard/copy";
-import { fakeService, fakeTailscale } from "../../onboard/testing";
+import { fakeMessages, fakeService, fakeTailscale } from "../../onboard/testing";
 import { renderQr } from "../../ui/qr";
 import { cleanupWizardIO, wizardIO, type TestWizardIO } from "./onboard-test-kit";
-import { doneStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
+import { doneStep, messagesStep, phoneStep, serviceStep, telegramStep } from "./onboard-remote-steps";
 
 let server: FakeTelegramServer;
 beforeEach(() => {
@@ -223,5 +223,56 @@ describe("doneStep", () => {
     expect(sleeps.length).toBeLessThanOrEqual(10);
     expect(io.opened).toEqual([]);
     expect(io.out()).toContain("Open the dashboard any time with `tcode dashboard`.");
+  });
+});
+
+describe("messagesStep", () => {
+  const darwin = () => fakeMessages({ platform: "darwin", view: { available: true, enabled: false } });
+  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation });
+
+  test("no leaves the setting off and touches nothing", async () => {
+    const messages = darwin();
+    const io = await wizardIO(["n"], { messages });
+    expect(await messagesStep(io)).toBe("skip");
+    expect(io.questions).toEqual(["Do you want me to read your texts on this Mac and send the ones you approve? [y/N/s/b]"]);
+    expect(messages.calls).toEqual([]);
+    expect(messages.view.enabled).toBe(false);
+  });
+
+  test("yes turns texts on, opens the Full Disk Access pane, waits for it, then probes", async () => {
+    const messages = darwin();
+    // Full Disk Access turns on after two checks.
+    let gets = 0;
+    const get = messages.get;
+    messages.get = async () => {
+      await get();
+      if (++gets === 2) messages.view = { available: true, enabled: true, status: status("yes") };
+      return messages.view;
+    };
+    const probe = messages.probe;
+    messages.probe = async () => {
+      await probe();
+      messages.view = { available: true, enabled: true, status: status("yes", "yes") };
+      return messages.view;
+    };
+    const sleeps: number[] = [];
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async (ms) => void sleeps.push(ms) });
+    expect(await messagesStep(io)).toBe("next");
+    expect(messages.calls[0]).toBe("set:true");
+    expect(messages.calls[1]).toBe("open:fda");
+    expect(messages.calls.at(-1)).toBe("probe");
+    expect(sleeps).toEqual([2000, 2000]);
+    expect(flat(io.out())).toContain("Tropos Messages Helper");
+    expect(io.out()).toContain("Texts are ready.");
+  });
+
+  test("gives up after two minutes without Full Disk Access and does not probe", async () => {
+    const messages = darwin();
+    const sleeps: number[] = [];
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async (ms) => void sleeps.push(ms) });
+    expect(await messagesStep(io)).toBe("next");
+    expect(sleeps.length).toBe(60);
+    expect(messages.calls).not.toContain("probe");
+    expect(flat(io.out())).toContain("Full Disk Access is not on yet.");
   });
 });

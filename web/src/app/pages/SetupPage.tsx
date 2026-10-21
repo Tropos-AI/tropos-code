@@ -15,7 +15,7 @@ import { LiveRegion, Notice, useAction } from "@/components/setup/admin-ui";
 import { AutonomyStep, IdentityStep, ProjectsStep, WelcomeStep } from "@/components/setup/guided-steps";
 import { ServiceStep } from "@/components/setup/host-steps";
 import { ModelStep, ProviderStep } from "@/components/setup/provider-steps";
-import { DoneStep, PhoneStep, TelegramOwnerStep } from "@/components/setup/remote-steps";
+import { DoneStep, MessagesStep, PhoneStep, TelegramOwnerStep } from "@/components/setup/remote-steps";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Icon, type IconName } from "@/components/ui/icon";
@@ -66,6 +66,8 @@ function StepBody({ step, steps, changed, advance, skip }: StepBodyProps) {
       return <TelegramOwnerStep done={step.status === "done"} onChanged={advance} onSkip={() => skip("telegram")} />;
     case "phone":
       return <PhoneStep onChanged={changed} onNext={advance} onSkip={() => skip("phone")} />;
+    case "messages":
+      return <MessagesStep onChanged={changed} onNext={advance} onSkip={() => skip("messages")} />;
     case "service":
       return <ServiceStep onChanged={changed} />;
     case "done":

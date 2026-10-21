@@ -18,6 +18,7 @@ import { ChatBackend } from "@/components/pages/settings/chat-backend";
 import { ModelPanel, type ModelPrefs } from "@/components/pages/settings/model-panel";
 import { PhonePanel } from "@/components/pages/settings/phone-panel";
 import { ProvidersPanel } from "@/components/pages/settings/providers-panel";
+import { MessagesPanel } from "@/components/pages/settings/messages-panel";
 import { SuggestionsPanel } from "@/components/pages/settings/suggestions-panel";
 import { RunSetupAgain } from "@/components/pages/settings/run-setup-again";
 import { PanelStack } from "@/components/pages/panel-head";
@@ -68,7 +69,12 @@ export function SettingsPage() {
             case "suggestions":
               return <SuggestionsPanel />;
             case "channels":
-              return <ChannelsPanel />;
+              return (
+                <PanelStack>
+                  <ChannelsPanel />
+                  <MessagesPanel />
+                </PanelStack>
+              );
             case "service":
               return (
                 <PanelStack>
