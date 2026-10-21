@@ -1,11 +1,11 @@
 // src/harness/probe.test.ts
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTmpDir, removeDir } from "../../test/helpers/tmp";
 import { confinementAvailable } from "../exec/confined";
-import { LocalProbeRunner, type LabTask } from "./probe";
+import { copyInto, LocalProbeRunner, type LabTask } from "./probe";
 
 let dir: string;
 let repo: string;
@@ -95,4 +95,23 @@ test("the measurement runs last, with the hidden files copied in, and is kept ap
   expect(r.measured).toMatchObject({ ok: true, tail: "hidden" });
   // The diff was taken before the hidden file arrived.
   expect(readFileSync(join(probeDir, "patch.diff"), "utf8")).not.toContain("secret");
+});
+
+test("copyInto never follows a link the agent planted", async () => {
+  const ws = join(dir, "ws");
+  const outside = join(dir, "outside");
+  await mkdir(join(ws, "src"), { recursive: true });
+  await mkdir(outside, { recursive: true });
+  await writeFile(join(outside, "victim.txt"), "owner's file");
+  await writeFile(join(dir, "hidden.txt"), "hidden test");
+  // The file itself is a link to the owner's file, and a folder on the way is a link outside.
+  await symlink(join(outside, "victim.txt"), join(ws, "src", "a.test.ts"));
+  await symlink(outside, join(ws, "lib"));
+  await copyInto(ws, join(dir, "hidden.txt"), "src/a.test.ts");
+  await copyInto(ws, join(dir, "hidden.txt"), "lib/b.test.ts");
+  expect(readFileSync(join(outside, "victim.txt"), "utf8")).toBe("owner's file");
+  expect(existsSync(join(outside, "b.test.ts"))).toBe(false);
+  expect(readFileSync(join(ws, "src", "a.test.ts"), "utf8")).toBe("hidden test");
+  expect(readFileSync(join(ws, "lib", "b.test.ts"), "utf8")).toBe("hidden test");
+  await expect(copyInto(ws, join(dir, "hidden.txt"), "../x")).rejects.toThrow("not a path inside");
 });

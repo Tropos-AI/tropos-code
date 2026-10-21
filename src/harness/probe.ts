@@ -2,10 +2,12 @@
 // `tcode -p` in a fresh copy of the project, with a Tropos home of its own (none of the owner's memory, skills or
 // sessions), Bash confined to the copy (`--confine`), and the harness under test as its only overlay (`--harness-dir`).
 // The trajectory, the diff and the project's own checks are what the editors and the composer read.
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { confinedBackend, confinementAvailable } from "../exec/confined";
+import { isInside } from "../paths";
 import type { DiffAudit } from "./audit";
 import type { Domain } from "./domain";
 import { behaviourSignals, parseTrajectory, type BehaviourSignals } from "./signals";
@@ -95,6 +97,30 @@ function finalText(stdout: string): string {
   return text.length > RESULT_TEXT_CHARS ? `${text.slice(0, RESULT_TEXT_CHARS)}…` : text;
 }
 
+/**
+ * Copies `source` to `rel` inside `root` without following anything the agent left there: a link in place of a folder
+ * or of the file itself is removed first, and the file is created new. The copy runs on the host, so a planted link
+ * must never point it at the owner's files.
+ */
+export async function copyInto(root: string, source: string, rel: string): Promise<void> {
+  const parts = rel.split("/").filter((p) => p && p !== ".");
+  if (parts.length === 0 || parts.includes("..")) throw new Error(`${rel} is not a path inside the project`);
+  let dir = root;
+  for (const part of parts.slice(0, -1)) {
+    dir = join(dir, part);
+    const info = await lstat(dir).catch(() => null);
+    if (info && !info.isDirectory()) await rm(dir, { force: true });
+    if (!info || !info.isDirectory()) await mkdir(dir);
+  }
+  const realRoot = await realpath(root);
+  if (!isInside(await realpath(dir), realRoot)) throw new Error(`${rel} leads outside the project`);
+  const target = join(dir, parts.at(-1)!);
+  const existing = await lstat(target).catch(() => null);
+  if (existing?.isDirectory()) await rm(target, { recursive: true, force: true });
+  else if (existing) await rm(target, { force: true });
+  await copyFile(source, target, constants.COPYFILE_EXCL);
+}
+
 /** Probes on this machine: the copy, the agent's commands and the checks all stay inside the sandbox. */
 export class LocalProbeRunner implements ProbeRunner {
   constructor(private readonly opts: LocalProbeOptions) {}
@@ -142,10 +168,7 @@ export class LocalProbeRunner implements ProbeRunner {
           result.checks.push(await runBackendCommand(backend, check, ws, {}, this.opts.checkTimeoutMs ?? 600_000));
         }
         if (input.measure && !signal.aborted) {
-          for (const file of input.measure.files) {
-            await mkdir(dirname(join(ws, file)), { recursive: true });
-            await copyFile(join(input.measure.from, file), join(ws, file));
-          }
+          for (const file of input.measure.files) await copyInto(ws, join(input.measure.from, file), file);
           result.measured = await runBackendCommand(backend, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000);
         }
       } finally {

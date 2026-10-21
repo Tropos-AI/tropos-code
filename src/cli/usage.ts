@@ -39,7 +39,7 @@ Advanced:
                                    start over without reinstalling
   tcode security audit             check the setup for risky settings
   tcode migrate openclaw|hermes    bring over identity, memory and skills from those tools
-  tcode harness [status|diff|show] the prompt and files your sessions run with, and what was adopted
+  tcode harness status|lab|adopt   what your sessions run with besides the model, and the lab that tests changes to it
   tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- status)
 
 Options:
