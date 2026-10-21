@@ -99,6 +99,8 @@ export async function runTrial(task: Task, agent: AgentAdapter, opts: TrialOptio
     isError: null,
     stop: null,
     turns: null,
+    toolCalls: null,
+    toolErrors: null,
     costUsd: null,
     inputTokens: null,
     outputTokens: null,

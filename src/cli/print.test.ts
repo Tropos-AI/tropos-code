@@ -71,6 +71,18 @@ describe("print mode", () => {
     });
   });
 
+  test("json counts finished tool calls and failures, not denials", () => {
+    const out: string[] = [];
+    const renderer = new PrintRenderer("json", (s) => out.push(s), () => {}, "sess-1");
+    const end = (status: "done" | "error" | "denied") => renderer.emit({ type: "tool_end", id: "t", name: "Shell", output: { content: "x" }, status });
+    end("done");
+    end("error");
+    end("denied");
+    end("error");
+    renderer.finish("end_turn");
+    expect(JSON.parse(out.join(""))).toMatchObject({ num_tool_calls: 4, num_tool_errors: 2 });
+  });
+
   test("json reports cost_usd as null when a model has no known price", async () => {
     const known = await print([() => reply([textBlock("Done")])], "json");
     expect(JSON.parse(known.out).cost_usd).toBeCloseTo((100 * 4 + 20 * 20) / 1_000_000, 9);

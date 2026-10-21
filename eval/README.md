@@ -37,8 +37,13 @@ bun scripts/eval.ts tb --agents tropos --model openrouter/moonshotai/kimi-k3 --l
 
 `run` writes `results/<run-id>.jsonl` (one line per trial) and `results/<run-id>.md`. The run id
 holds the date and the commit Tropos was built from, plus `-dirty` if `src/` had uncommitted
-changes. The scoreboard reports pass rate, total cost and cost per solved task, median time and
-turns, and diffs that edited tests or added `.skip`/`.only`.
+changes. The scoreboard has one row per agent and model, and reports pass rate, total cost and
+cost per solved task, median time and turns, the share of tool calls that failed (Tropos only),
+and diffs that edited tests or added `.skip`/`.only`.
+
+With `--attempts 3` it also shows the noise: `attempt sd` is how far the pass rate moves between
+attempts, in percentage points, and `mixed tasks` counts tasks some attempts solved and others
+didn't. A change worth less than the attempt sd isn't one you can see yet.
 
 ### Adding a task
 

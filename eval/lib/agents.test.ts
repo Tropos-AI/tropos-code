@@ -19,12 +19,12 @@ test("lastResultLine skips noise and non-result JSON", () => {
 });
 
 test("tropos result", () => {
-  const line = JSON.stringify({ type: "result", is_error: true, stop: "max_tokens", num_turns: 7, usage: { input_tokens: 10, output_tokens: 5 }, cost_usd: null });
-  expect(tropos.parse(line)).toEqual({ isError: true, stop: "max_tokens", turns: 7, costUsd: null, inputTokens: 10, outputTokens: 5 });
+  const line = JSON.stringify({ type: "result", is_error: true, stop: "max_tokens", num_turns: 7, num_tool_calls: 12, num_tool_errors: 2, usage: { input_tokens: 10, output_tokens: 5 }, cost_usd: null });
+  expect(tropos.parse(line)).toEqual({ isError: true, stop: "max_tokens", turns: 7, toolCalls: 12, toolErrors: 2, costUsd: null, inputTokens: 10, outputTokens: 5 });
   expect(tropos.parse("crashed").turns).toBeNull();
 });
 
 test("claude result", () => {
   const line = JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 3, total_cost_usd: 0.42, usage: { input_tokens: 1, output_tokens: 2 } });
-  expect(claude.parse(line)).toEqual({ isError: false, stop: "success", turns: 3, costUsd: 0.42, inputTokens: 1, outputTokens: 2 });
+  expect(claude.parse(line)).toEqual({ isError: false, stop: "success", turns: 3, toolCalls: null, toolErrors: null, costUsd: 0.42, inputTokens: 1, outputTokens: 2 });
 });
