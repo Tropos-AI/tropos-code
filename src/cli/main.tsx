@@ -318,7 +318,9 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     const readable = harness.layers.flatMap((layer) => (layer.applied && layer.dir && layer.files.length > 0 ? [layer.dir] : []));
     // TROPOS_CONFINE_DENY names more folders to hide (the owner's Tropos home, from a probe); it can only add denials.
     const denied = (env.TROPOS_CONFINE_DENY ?? "").split(delimiter).filter((p) => isAbsolute(p));
-    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable, denied });
+    // And TROPOS_CONFINE_OTHER_PROJECTS the owner's projects, whose .env files are hidden as in a chat.
+    const otherProjects = (env.TROPOS_CONFINE_OTHER_PROJECTS ?? "").split(delimiter).filter((p) => isAbsolute(p));
+    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable, denied, otherProjects });
     ctx.confined = true;
   }
   // The owner's terminal can schedule too; results go to the owner's chat. A confined session (a harness probe) gets

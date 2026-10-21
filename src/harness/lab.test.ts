@@ -113,3 +113,13 @@ test("sequential k=2 builds the second step on the first", async () => {
 test("overlayOf keeps only what differs from the built-in harness", () => {
   expect([...overlayOf(new Map([...BASE_TREE, ["guardrails.md", "g"]])).keys()]).toEqual(["guardrails.md"]);
 });
+
+test("a stopped lab starts no new probe and makes no candidate", async () => {
+  const controller = new AbortController();
+  const runner = new FakeRunner();
+  const stopping: ProbeRunner = { run: async (input) => (controller.abort(), runner.run(input)) };
+  const run = await runLab(task, options(stopping, [answer({ files: { "guardrails.md": "Run the tests." } }), nothing, answer({ files: { "guardrails.md": "Run the tests." } })], { signal: controller.signal }));
+  expect(run.probes.map((p) => p.label)).toEqual(["ref"]);
+  expect(run.verdict).toEqual({ outcome: "invalid", reasons: ["the lab was stopped before it finished"] });
+  expect(run.candidate).toBeUndefined();
+});

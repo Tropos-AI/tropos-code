@@ -6,7 +6,9 @@ import { join } from "node:path";
 import type { Model } from "../api/model";
 import type { Effort } from "../config/constants";
 import { gitRoot } from "../context/memory";
+import { loadGatewayConfig } from "../gateway/config";
 import { hostGit } from "../gateway/worktrees";
+import { guestWorkspaceDir, workspaceDir } from "../paths";
 import type { Ledger } from "../learning/ledger";
 import { readCredentials, resolveApiKey } from "../providers/credentials";
 import { parseModelId } from "../providers/registry";
@@ -141,6 +143,12 @@ export interface LabSetup {
   timeoutMs?: number;
 }
 
+/** The owner's projects (registered ones and the built-in workspaces): a probe may not read their .env files. */
+export async function ownerProjectPaths(home: string): Promise<string[]> {
+  const config = await loadGatewayConfig(home).catch(() => null);
+  return [...(config?.projects.map((p) => p.path) ?? []), workspaceDir(home), guestWorkspaceDir(home)];
+}
+
 export async function labTools(s: LabSetup): Promise<{ runner: ProbeRunner; llm: LlmConfig }> {
   const key = await probeKey(s.home, s.models.model, s.env);
   if (!key) {
@@ -156,6 +164,7 @@ export async function labTools(s: LabSetup): Promise<{ runner: ProbeRunner; llm:
     key,
     ...(s.providers ? { providers: s.providers } : {}),
     ownerHome: s.home,
+    otherProjects: await ownerProjectPaths(s.home),
   });
   return { runner, llm: { model: s.router, id: s.models.editorModel ?? s.models.model, effort: s.models.effort } };
 }

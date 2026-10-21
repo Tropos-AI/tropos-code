@@ -14,7 +14,7 @@ import { EFFORTS, type Effort } from "../src/config/constants";
 import { detectDomain } from "../src/harness/domain";
 import { checksPassed } from "../src/harness/gate";
 import { LocalProbeRunner, type LabTask, type ProbeResult } from "../src/harness/probe";
-import { labOnTask, probeKey } from "../src/harness/service";
+import { labOnTask, ownerProjectPaths, probeKey } from "../src/harness/service";
 import { globalHarnessDir } from "../src/harness/tree";
 import { Ledger } from "../src/learning/ledger";
 import { troposHome } from "../src/paths";
@@ -57,8 +57,9 @@ async function tools(values: { model?: string; "editor-model"?: string; effort?:
   const env = { ...process.env, ...settings.env };
   const key = await probeKey(home, model, env);
   if (!key) throw new Error(`no API key for ${model}: set its variable or connect it with /providers`);
+  const otherProjects = await ownerProjectPaths(home);
   const runner = (keepWorkspace = false) =>
-    new LocalProbeRunner({ command: [process.execPath, join(ROOT, "src", "index.ts")], model, effort, maxTurns: 80, timeoutMs: 30 * 60_000, key, providers: settings.providers as Record<string, unknown>, ownerHome: home, keepWorkspace });
+    new LocalProbeRunner({ otherProjects, command: [process.execPath, join(ROOT, "src", "index.ts")], model, effort, maxTurns: 80, timeoutMs: 30 * 60_000, key, providers: settings.providers as Record<string, unknown>, ownerHome: home, keepWorkspace });
   const llm = { model: new ProviderRouter({ home, env, settings: settings.providers }), id: values["editor-model"] ?? model, effort };
   return { model, runner, llm };
 }

@@ -88,7 +88,7 @@ export async function runHostCommand(command: string, cwd: string, timeoutMs: nu
 }
 
 /** Runs one command through an exec backend (the sandbox), collecting its output, killed at `timeoutMs`. */
-export async function runBackendCommand(backend: ExecBackend, command: string, cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<CommandResult> {
+export async function runBackendCommand(backend: ExecBackend, command: string, cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal): Promise<CommandResult> {
   const started = performance.now();
   const child = backend.spawn({ shell: "/bin/sh", script: command, cwd, env });
   let output = "";
@@ -99,11 +99,15 @@ export async function runBackendCommand(backend: ExecBackend, command: string, c
     timedOut = true;
     backend.signal(child, "SIGKILL");
   }, timeoutMs);
+  const stop = () => backend.signal(child, "SIGKILL");
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
   const exit = await new Promise<number | null>((resolve) => {
     child.on("close", (code) => resolve(code));
     child.on("error", () => resolve(null));
   });
   clearTimeout(timer);
+  signal?.removeEventListener("abort", stop);
   return { command, ok: exit === 0 && !timedOut, exit, timedOut, tail: tail(output), seconds: Math.round((performance.now() - started) / 1000) };
 }
 

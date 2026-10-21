@@ -4,12 +4,12 @@
 // The trajectory, the diff and the project's own checks are what the editors and the composer read.
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { confinedBackend, confinementAvailable } from "../exec/confined";
 import type { DiffAudit } from "./audit";
 import type { Domain } from "./domain";
 import { behaviourSignals, parseTrajectory, type BehaviourSignals } from "./signals";
-import { createWorkspace, runBackendCommand, runHostCommand, workspaceDiff, type CommandResult } from "./workspace";
+import { createWorkspace, runBackendCommand, workspaceDiff, type CommandResult } from "./workspace";
 
 export interface LabTask {
   id: string;
@@ -83,6 +83,8 @@ export interface LocalProbeOptions {
   keepWorkspace?: boolean;
   /** The owner's Tropos home: hidden from the probe's commands and checks, whatever folder it is. */
   ownerHome: string;
+  /** The owner's other projects, whose .env files the probe's commands may not read (as in a chat). */
+  otherProjects?: string[];
 }
 
 const RESULT_TEXT_CHARS = 4_000;
@@ -140,29 +142,43 @@ export class LocalProbeRunner implements ProbeRunner {
         await writeFile(join(home, "settings.json"), `${JSON.stringify({ providers: this.opts.providers }, null, 2)}\n`);
       }
       await createWorkspace(task.repo, task.revision, ws);
+      // Every command of the probe runs in this sandbox: it hides the owner's Tropos home, the original checkout (where
+      // a later fix, or an eval's hidden tests, may lie) and the .env files of the owner's other projects.
+      const sandbox = (readable: string[] = []) =>
+        confinedBackend({ project: ws, home, userHome, env: process.env, denied: [this.opts.ownerHome, task.repo], otherProjects: this.opts.otherProjects ?? [], readable });
       if (task.setup) {
-        const setup = await runHostCommand(task.setup, ws, this.opts.setupTimeoutMs ?? 600_000);
-        if (!setup.ok) throw new Error(`setup "${task.setup}" failed (${setup.exit}${setup.timedOut ? ", timed out" : ""}): ${setup.tail}`);
+        // Install scripts are the project's code: confined like everything else (the network stays open for them).
+        const backend = sandbox();
+        try {
+          const setup = await runBackendCommand(backend, task.setup, ws, {}, this.opts.setupTimeoutMs ?? 600_000, signal);
+          if (!setup.ok) throw new Error(`setup "${task.setup}" failed (${setup.exit}${setup.timedOut ? ", timed out" : ""}): ${setup.tail}`);
+        } finally {
+          await backend.close();
+        }
       }
+      signal.throwIfAborted();
       const stdout = await this.agent(input, ws, home, userHome, signal);
+      // A run cut short proves nothing: it is the probe's error, not a result.
+      signal.throwIfAborted();
       await writeFile(join(dir, "trajectory.jsonl"), stdout);
       result.signals = behaviourSignals(parseTrajectory(stdout));
       result.finalText = finalText(stdout);
       const diff = await workspaceDiff(ws);
       result.audit = diff.audit;
       await writeFile(join(dir, "patch.diff"), diff.patch);
-      const backend = confinedBackend({ project: ws, home, userHome, env: process.env, denied: [this.opts.ownerHome] });
+      const backend = sandbox();
       try {
         for (const check of task.checks) {
-          if (signal.aborted) break;
-          result.checks.push(await runBackendCommand(backend, check, ws, {}, this.opts.checkTimeoutMs ?? 600_000));
+          signal.throwIfAborted();
+          result.checks.push(await runBackendCommand(backend, check, ws, {}, this.opts.checkTimeoutMs ?? 600_000, signal));
         }
-        if (input.measure && !signal.aborted) {
+        if (input.measure) {
+          signal.throwIfAborted();
           // A sandbox of its own that may also read the hidden files; the copy happens inside it.
-          const measuring = confinedBackend({ project: ws, home, userHome, env: process.env, denied: [this.opts.ownerHome], readable: [input.measure.from] });
+          const measuring = sandbox([input.measure.from]);
           try {
-            const copied = await runBackendCommand(measuring, copyScript(input.measure.from, input.measure.files), ws, {}, 60_000);
-            result.measured = copied.ok ? await runBackendCommand(measuring, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000) : { ...copied, command: "copying the hidden files" };
+            const copied = await runBackendCommand(measuring, copyScript(input.measure.from, input.measure.files), ws, {}, 60_000, signal);
+            result.measured = copied.ok ? await runBackendCommand(measuring, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000, signal) : { ...copied, command: "copying the hidden files" };
           } finally {
             await measuring.close();
           }
@@ -171,7 +187,7 @@ export class LocalProbeRunner implements ProbeRunner {
         await backend.close();
       }
     } catch (err) {
-      result.error = (err as Error).message;
+      result.error = signal.aborted ? "stopped before it finished" : (err as Error).message;
     } finally {
       result.seconds = Math.round((performance.now() - started) / 1000);
       await writeFile(join(dir, "probe.json"), `${JSON.stringify(result, null, 2)}\n`).catch(() => {});
@@ -210,7 +226,8 @@ export class LocalProbeRunner implements ProbeRunner {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       HOME: userHome,
       TROPOS_HOME: home,
-      TROPOS_CONFINE_DENY: o.ownerHome,
+      TROPOS_CONFINE_DENY: [o.ownerHome, input.task.repo].join(delimiter),
+      TROPOS_CONFINE_OTHER_PROJECTS: (o.otherProjects ?? []).join(delimiter),
       TMPDIR: process.env.TMPDIR ?? "/tmp",
       LANG: process.env.LANG ?? "en_US.UTF-8",
     };
@@ -219,6 +236,7 @@ export class LocalProbeRunner implements ProbeRunner {
     const kill = () => child.kill("SIGKILL");
     const timer = setTimeout(kill, o.timeoutMs);
     signal.addEventListener("abort", kill, { once: true });
+    if (signal.aborted) kill();
     try {
       const [stdout] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       return stdout;

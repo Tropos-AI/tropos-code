@@ -135,6 +135,8 @@ export async function runLab(task: LabTask, opts: LabOptions): Promise<LabRun> {
   };
 
   const probeTree = async (tree: HarnessTree, label: string): Promise<Ran> => {
+    // A stopped lab starts nothing new.
+    opts.signal.throwIfAborted();
     const dir = join(root, label);
     const harnessDir = join(dir, "harness");
     const harnessFiles = await writeOverlay(harnessDir, tree);
@@ -208,6 +210,7 @@ export async function runLab(task: LabTask, opts: LabOptions): Promise<LabRun> {
     const selection = await select(opts.llm, task, options, opts.signal);
     spend(selection.costUsd);
     const chosen = improved.find((f) => f.probe.id === selection.id) ?? improved[0]!;
+    opts.signal.throwIfAborted();
     run.selected = { id: chosen.probe.id, reason: selection.reason };
     run.verdict = compareProbes(reference.probe, chosen.probe);
     const changes = Object.fromEntries(diffTrees(opts.base, chosen.tree).map((d) => [d.path, d.change === "removed" ? null : chosen.tree.get(d.path)!]));
@@ -229,6 +232,10 @@ export async function runLab(task: LabTask, opts: LabOptions): Promise<LabRun> {
     };
     await saveCandidate(opts.home, candidate);
     run.candidate = id;
+    return run;
+  } catch (err) {
+    if (!opts.signal.aborted) throw err;
+    run.verdict = { outcome: "invalid", reasons: ["the lab was stopped before it finished"] };
     return run;
   } finally {
     run.finishedAt = now().toISOString();

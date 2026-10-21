@@ -114,3 +114,20 @@ test("the hidden files are copied in the sandbox, so a link the agent planted ca
   expect(r.measured).toMatchObject({ ok: true, tail: "hidden test" });
   expect(() => copyScript("/h", ["../x"])).toThrow("not a path inside");
 });
+
+test("setup runs in the sandbox, which hides the original checkout; an abort stops the probe as an error", async () => {
+  if (!(await confinementAvailable())) return;
+  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: null, ownerHome: join(dir, "owner") });
+  const probeDir = join(dir, "lab", "s");
+  await mkdir(probeDir, { recursive: true });
+  const peek = await runner.run({ task: task({ setup: `cat ${join(repo, "src", "a.ts")}` }), harnessDir: dir, dir: probeDir, id: "r1-s", label: "s", harnessFiles: [] }, new AbortController().signal);
+  expect(peek.error).toContain("setup");
+  // Its own copy is readable, though.
+  const own = await runner.run({ task: task({ setup: "cat src/a.ts" }), harnessDir: dir, dir: probeDir, id: "r1-o", label: "o", harnessFiles: [] }, new AbortController().signal);
+  expect(own.error).toBeNull();
+  const stopped = new AbortController();
+  stopped.abort();
+  const aborted = await runner.run({ task: task(), harnessDir: dir, dir: probeDir, id: "r1-a", label: "a", harnessFiles: [] }, stopped.signal);
+  expect(aborted.error).toBe("stopped before it finished");
+  expect(aborted.checks).toEqual([]);
+});
