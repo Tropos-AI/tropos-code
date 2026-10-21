@@ -1,6 +1,6 @@
 // src/messages/messages-tool.test.ts — the Messages tool against a testkit chat.db behind a fake helper client
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ToolContext, ToolOutput } from "../tools/types";
@@ -168,10 +168,79 @@ describe("Messages tool", () => {
     const pic = found.find((a) => a.name === "pic.png");
     const out = await run({ action: "attachment", id: pic?.id });
     expect(out.isError).toBeUndefined();
-    const block = (out.content as Array<{ type: string; source?: { media_type: string; data: string } }>)[0];
+    const block = (out.content as Array<{ type: string; source?: { media_type: string; data: string } }>)[1];
     expect(block.type).toBe("image");
     expect(block.source?.media_type).toBe("image/jpeg");
     expect(Buffer.from(block.source?.data ?? "", "base64")[0]).toBe(0xff);
+  });
+
+  test("an image result opens with the preamble before the image", async () => {
+    if (process.platform !== "darwin") return;
+    setup({ count: 1 });
+    source = makeSource();
+    const found = await source.with((db) => db.read(CHAT, { limit: 5 }).flatMap((m) => m.attachments));
+    const out = await run({ action: "attachment", id: found.find((a) => a.name === "pic.png")?.id });
+    const blocks = out.content as Array<{ type: string; text?: string }>;
+    expect(blocks[0]?.type).toBe("text");
+    expect(blocks[0]?.text?.startsWith(MESSAGES_PREAMBLE)).toBe(true);
+    expect(blocks[1]?.type).toBe("image");
+  });
+
+  test("the non-image reply is wrapped in the preamble", async () => {
+    setup({ count: 1 });
+    source = makeSource();
+    const found = await source.with((db) => db.read(CHAT, { limit: 5 }).flatMap((m) => m.attachments));
+    const out = await run({ action: "attachment", id: found.find((a) => a.name === "note.txt")?.id });
+    expect(text(out).startsWith(MESSAGES_PREAMBLE)).toBe(true);
+    expect(text(out)).toContain("</messages>");
+  });
+
+  test("an attachment over 100 MB is refused before copying, and a copy found too big is deleted", async () => {
+    setup({ count: 1 });
+    const big = join(root, "home", "Library", "Messages", "Attachments", "ab", "evil\nname.bin");
+    const fd = openSync(big, "w");
+    ftruncateSync(fd, 101 * 1024 * 1024);
+    closeSync(fd);
+    const msgs = [
+      { guid: "b1", chat: CHAT, handle: "+306912345678", text: "known", at: T0, attachments: [{ filename: big, mime: "application/octet-stream", name: "evil\nname.bin", bytes: 101 * 1024 * 1024 }] },
+      { guid: "b2", chat: CHAT, handle: "+306912345678", text: "unknown", at: T0 + 1, attachments: [{ filename: big, mime: "application/octet-stream", name: "evil\nname.bin" }] },
+    ];
+    buildChatDb(join(root, "fixtures", "chat.db"), { chats: [{ guid: CHAT, handles: ["+306912345678"] }], messages: msgs as never });
+    source = makeSource();
+    const ids = await source.with((db) => db.read(CHAT, { limit: 5 }).flatMap((m) => m.attachments.map((a) => a.id)));
+    expect(ids).toHaveLength(2);
+    const before = readdirSync(join(root, "run")).filter((n) => n.startsWith("snap-att-")).length;
+    for (const id of ids) {
+      const out = await run({ action: "attachment", id });
+      expect(out.isError).toBe(true);
+      expect(text(out)).toContain("100 MB");
+      expect(text(out)).not.toContain("evil");
+    }
+    const left = readdirSync(join(root, "run")).filter((n) => n.startsWith("snap-att-"));
+    expect(left.length).toBe(before);
+  });
+
+  test("limits are clamped for chats, search, activity and contacts", async () => {
+    const seen: Record<string, number> = {};
+    const fakeSource = {
+      async with(fn: (db: unknown, c: unknown) => unknown) {
+        const db = {
+          chats: (o: { limit: number }) => ((seen.chats = o.limit), []),
+          search: (_q: string, o: { limit: number }) => ((seen.search = o.limit), []),
+          activity: (_s: number, limit: number) => ((seen.activity = limit), []),
+        };
+        return fn(db, { find: (_q: string, limit: number) => ((seen.contacts = limit), []) });
+      },
+      lastContacts: () => undefined,
+    };
+    const tool = createMessagesTool(fakeSource as never);
+    for (const input of [{ action: "chats" }, { action: "search", query: "a" }, { action: "activity" }, { action: "contacts", query: "a" }]) {
+      await tool.run({ ...input, limit: 99999 } as never, ctx);
+    }
+    expect(seen).toEqual({ chats: 500, search: 100, activity: 200, contacts: 50 });
+    seen.chats = 0;
+    await tool.run({ action: "chats" } as never, ctx);
+    expect(seen.chats).toBe(50);
   });
 
   test("summarize and subject", () => {

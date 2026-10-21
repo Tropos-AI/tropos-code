@@ -1,10 +1,11 @@
 // src/messages/messages-tool.ts — the owner-only, read-only Messages tool: chats, messages, search, activity, contacts and attachments
-import { readFile, rm, stat } from "node:fs/promises";
+import { open, readFile, rm, stat } from "node:fs/promises";
+import { dirname } from "node:path";
 import { z } from "zod";
 import { sniffImage } from "../attachments/attachments";
 import { errorText } from "../error-text";
 import { defineTool, type AnyTool, type ToolOutput } from "../tools/types";
-import { formatActivity, formatChats, formatContacts, formatHits, formatMessages, MESSAGES_PREAMBLE } from "./format";
+import { formatActivity, formatAttachment, formatBytes, formatChats, formatContacts, formatHits, formatMessages, MESSAGES_PREAMBLE } from "./format";
 import { MessagesError, type MessagesSource } from "./source";
 
 export { MESSAGES_PREAMBLE };
@@ -59,46 +60,64 @@ function parseTime(field: string, value: string | undefined): number | undefined
 
 const isError = (v: unknown): v is ToolOutput => typeof v === "object" && v !== null && "content" in v;
 
-function formatBytes(n: number): string {
-  return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** Downscales an image with the system `sips` to at most 1600 px as jpeg; resolves to the jpeg's path or undefined. */
+/** Downscales an image with the system `sips` to at most 1600 px as jpeg; resolves to the jpeg's path or undefined (no partial file is left). */
 async function downscale(copy: string): Promise<string | undefined> {
   const out = `${copy}.jpg`;
-  const proc = Bun.spawn(["sips", "-Z", "1600", "-s", "format", "jpeg", copy, "--out", out], { stdout: "ignore", stderr: "ignore" });
-  const timer = setTimeout(() => proc.kill(), SIPS_TIMEOUT_MS);
+  let ok = false;
+  const timer: { id?: ReturnType<typeof setTimeout> } = {};
   try {
-    return (await proc.exited) === 0 ? out : undefined;
+    const proc = Bun.spawn(["sips", "-Z", "1600", "-s", "format", "jpeg", copy, "--out", out], { stdout: "ignore", stderr: "ignore" });
+    timer.id = setTimeout(() => proc.kill(), SIPS_TIMEOUT_MS);
+    ok = (await proc.exited) === 0;
   } catch {
-    return undefined;
+    ok = false;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timer.id);
+    if (!ok) await rm(out, { force: true });
+  }
+  return ok ? out : undefined;
+}
+
+/** The first bytes of a file, without reading the rest. */
+async function head(path: string): Promise<Uint8Array> {
+  const handle = await open(path, "r");
+  try {
+    const buf = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(buf, 0, 16, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
   }
 }
+
+const tooBig = (bytes: number) => fail(`That attachment is ${formatBytes(bytes)}; files over 100 MB are not opened.`);
 
 async function attachment(source: MessagesSource, id: number): Promise<ToolOutput> {
   const known = await source.with((db) => db.attachment(id));
   if (!known) return fail(`No attachment ${id}.`);
-  if (known.bytes !== undefined && known.bytes > MAX_ATTACHMENT_BYTES) return fail(`Attachment ${id} (${known.name}) is ${formatBytes(known.bytes)}; files over 100 MB are not opened.`);
+  if (known.bytes !== undefined && known.bytes > MAX_ATTACHMENT_BYTES) return tooBig(known.bytes);
   const copy = await source.attachmentCopy(id);
   const size = (await stat(copy.path)).size;
-  if (size > MAX_ATTACHMENT_BYTES) return fail(`Attachment ${id} (${copy.name}) is ${formatBytes(size)}; files over 100 MB are not opened.`);
-  const head = Buffer.from(await readFile(copy.path).then((b) => b.subarray(0, 16)));
-  const isHeic = /^image\/hei[cf]/i.test(copy.mime ?? "");
-  const type = copy.mime ?? "unknown type";
-  if (!sniffImage(head) && !isHeic) {
-    return { content: `${MESSAGES_PREAMBLE}\nAttachment ${id}: ${copy.name}, ${type}, ${formatBytes(size)}. Not an image, so its contents are not shown.`, summary: "file" };
+  if (size > MAX_ATTACHMENT_BYTES) {
+    await rm(dirname(copy.path), { recursive: true, force: true });
+    return tooBig(size);
   }
+  const type = copy.mime ?? "unknown type";
+  const isImage = sniffImage(await head(copy.path)) !== null || /^image\/hei[cf]/i.test(copy.mime ?? "");
+  if (!isImage) return { content: formatAttachment(id, copy.name, type, size, false), summary: "file" };
   const jpg = await downscale(copy.path);
+  if (!jpg) return fail(`Attachment ${id} is an image, but it could not be resized to show.`);
   try {
-    if (jpg) {
-      const data = (await readFile(jpg)).toString("base64");
-      return { content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data } }], summary: `image, ${formatBytes(size)}` };
-    }
-    return fail(`Attachment ${id} (${copy.name}) is an image, but it could not be resized to show.`);
+    const data = (await readFile(jpg)).toString("base64");
+    return {
+      content: [
+        { type: "text", text: formatAttachment(id, copy.name, type, size, true) },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data } },
+      ],
+      summary: `image, ${formatBytes(size)}`,
+    };
   } finally {
-    if (jpg) await rm(jpg, { force: true });
+    await rm(jpg, { force: true });
   }
 }
 
@@ -118,7 +137,7 @@ async function dispatch(source: MessagesSource, input: Input): Promise<ToolOutpu
       const chat = input.chat ?? "";
       const msgs = await source.with((db) => {
         const found = db.read(chat, { ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), limit: page("read") });
-        if (found.length === 0 && !db.chats({ limit: 500 }).some((c) => c.id === chat)) throw new MessagesError("no-such-chat");
+        if (found.length === 0 && !db.chats({ limit: Number.MAX_SAFE_INTEGER }).some((c) => c.id === chat)) throw new MessagesError("no-such-chat");
         return found;
       });
       return { content: formatMessages(chat, msgs), summary: `${msgs.length} messages` };
@@ -134,8 +153,8 @@ async function dispatch(source: MessagesSource, input: Input): Promise<ToolOutpu
     }
     case "contacts": {
       const found = await source.with((_db, contacts) => contacts.find(input.query ?? "", page("contacts")));
-      const note = source.lastContacts()?.available === false ? "\n(The address book can't be read, so no names are available.)" : "";
-      return { content: formatContacts(found) + note, summary: `${found.length} contacts` };
+      const note = source.lastContacts()?.available === false ? "(The address book can't be read, so no names are available.)" : "";
+      return { content: formatContacts(found, note), summary: `${found.length} contacts` };
     }
     case "attachment":
       return attachment(source, input.id ?? 0);
@@ -156,9 +175,9 @@ export function createMessagesTool(source: MessagesSource): AnyTool {
       "Names may be missing when the address book can't be read.",
     schema,
     summarize: (input) => {
-      const arg = input.action === "read" ? input.chat : input.action === "attachment" ? String(input.id) : input.query;
       if (input.action === "search" || input.action === "contacts") return `${input.action} "${input.query ?? ""}"`;
-      return arg ? `${input.action} ${arg}` : input.action;
+      const arg = input.action === "read" ? input.chat : input.action === "attachment" ? input.id : undefined;
+      return arg !== undefined ? `${input.action} ${arg}` : input.action;
     },
     subject: () => ({ paths: [] }),
     async run(raw) {
