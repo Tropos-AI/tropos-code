@@ -98,3 +98,39 @@ test("Messages signed in: ok with its services, a warning when not, info before 
   expect(byId(none, "messages.signedin")).toMatchObject({ level: "warn", message: "Messages has no history on this Mac yet" });
   expect(byId(none, "messages.fda")!.detail).toContain("once Messages has been used");
 });
+
+test("an unchecked Automation is fixable, and the fix asks Messages", async () => {
+  fx = await makeFixture();
+  await on();
+  const asked: unknown[] = [];
+  const rt = (): MessagesRuntime => ({
+    tools: () => [],
+    status: async (o) => {
+      asked.push(o);
+      return o?.probe ? status({ services: ["iMessage"] }) : status({ automation: "unknown", signedIn: "unknown" });
+    },
+    enable: async () => {},
+    dispose: () => {},
+  });
+  const r = await runOne(fx, messagesCheckWith(rt), { platform: "darwin", fix: true });
+  expect(byId(r, "messages.automation")).toMatchObject({ fixable: true, fixed: true });
+  expect(byId(r, "messages.automation")!.fixMessage).toContain("allowed; signed in (iMessage)");
+  expect(byId(r, "messages.automation")!.safe).toBeUndefined();
+  expect(asked).toContainEqual({ probe: true });
+});
+
+test("a refused Automation is reported, not marked fixed", async () => {
+  fx = await makeFixture();
+  await on();
+  const rt = (): MessagesRuntime => ({ tools: () => [], status: async (o) => status({ automation: o?.probe ? "no" : "unknown" }), enable: async () => {}, dispose: () => {} });
+  const r = await runOne(fx, messagesCheckWith(rt), { platform: "darwin", fix: true });
+  expect(byId(r, "messages.automation")!.fixed).toBeFalsy();
+  expect(byId(r, "messages.automation")!.fixMessage).toContain("Privacy & Security → Automation");
+});
+
+test("Automation isn't offered as a fix while the helper is missing", async () => {
+  fx = await makeFixture();
+  await on();
+  const r = await runOne(fx, messagesCheckWith(fakeRuntime(status({ automation: "unknown", helper: { installed: false, current: HELPER_VERSION } }))), { platform: "darwin" });
+  expect(byId(r, "messages.automation")!.fixable).toBeUndefined();
+});

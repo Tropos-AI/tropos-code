@@ -193,7 +193,7 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
           : st?.fullDiskAccess !== "yes"
             ? `allow Full Disk Access for the Tropos Messages Helper in System Settings → Privacy & Security; ${where} walks through it`
             : st.automation !== "yes"
-              ? `allow Automation (the Messages prompt) for the helper; ${where} checks it`
+              ? `allow Automation of Messages for the helper: the doctor fix for messages.automation makes macOS ask now (or the check on ${where})`
               : st.signedIn === "no"
                 ? "Messages isn't signed in on this Mac: open Messages and sign in to iMessage"
                 : "";

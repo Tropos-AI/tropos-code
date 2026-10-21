@@ -31,8 +31,8 @@ Messages Helper**, on your Mac the first time you turn texts on. macOS gives per
    lets the helper read your Messages history. If the helper isn't listed, see
    [Troubleshooting](#troubleshooting).
 3. **Control Messages.** macOS asks "Tropos Messages Helper wants to control Messages" the first time a text is sent.
-   To see the question now rather than in the middle of a task, use **Test Messages access** on the Texts card.
-   Choose Allow.
+   To see the question now rather than in the middle of a task, use **Test Messages access** on the Texts card, or
+   ask Tropos in a session to check Messages access (the "Texts (Messages)" doctor fix). Choose Allow.
 
 Messages must be signed in to iMessage on this Mac. You don't need to keep it open. **Test Messages access** also
 checks that Messages is signed in, and Tropos remembers the answer, so the dashboard and `tcode doctor` show it

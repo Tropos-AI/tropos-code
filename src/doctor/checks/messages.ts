@@ -8,6 +8,22 @@ import { errorText, finding } from "../util";
 
 /** The runtime the check asks; tests replace it so nothing reaches the real helper or Messages. */
 export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime = (env) => createMessagesRuntime({ home: env.home, userHome: env.userHome, exec: env.runner.exec, layout: resolveLayout(env.env, env.userHome) })): Check {
+  /** Asks Messages now: macOS shows its Automation prompt the first time, and the answer is remembered for every Tropos process. */
+  async function check(env: DoctorEnv): Promise<{ ok: boolean; message: string }> {
+    const rt = runtimeOf(env);
+    try {
+      const st = await rt.status({ probe: true });
+      if (st.automation === "no") return { ok: false, message: "macOS refused Automation of Messages. Allow it for Tropos Messages Helper in System Settings → Privacy & Security → Automation." };
+      if (st.automation !== "yes") return { ok: false, message: "Messages didn't answer. If macOS is showing a prompt about controlling Messages, choose Allow, then check again." };
+      if (st.signedIn === "no") return { ok: true, message: "Automation of Messages is allowed, but Messages isn't signed in: open Messages and sign in to iMessage." };
+      return { ok: true, message: `Automation of Messages is allowed${st.services?.length ? `; signed in (${st.services.join(", ")})` : ""}.` };
+    } catch (err) {
+      return { ok: false, message: errorText(err) };
+    } finally {
+      rt.dispose();
+    }
+  }
+
   return {
     id: "messages",
     area: "messages",
@@ -20,6 +36,8 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
       try {
         const st = await rt.status();
         const out = [];
+        // The check asks Messages through the helper, so it needs one that is installed and current.
+        const askable = st.helper.installed && (st.helper.version ?? 0) >= st.helper.current;
         if (!st.helper.installed) {
           out.push(finding("messages.helper", "warn", "The Messages helper is not installed", { fixable: true, safe: true }));
         } else if ((st.helper.version ?? 0) < st.helper.current) {
@@ -42,14 +60,14 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
             }),
           );
         } else if (st.signedIn === "unknown") {
-          out.push(finding("messages.signedin", "info", "Whether Messages is signed in has not been checked yet", { detail: "Run the check in Settings → Channels." }));
+          out.push(finding("messages.signedin", "info", "Whether Messages is signed in has not been checked yet", { detail: "Run the check in Settings → Channels.", ...(askable ? { fixable: true } : {}) }));
         } else {
           out.push(finding("messages.signedin", "ok", `Messages is signed in${st.services?.length ? ` (${st.services.join(", ")})` : ""}`));
         }
         if (st.automation === "no") {
           out.push(finding("messages.automation", "warn", "Automation of Messages is not allowed for the helper", { detail: "System Settings → Privacy & Security → Automation." }));
         } else if (st.automation === "unknown") {
-          out.push(finding("messages.automation", "info", "Automation of Messages has not been checked yet", { detail: "Run the check in Settings → Channels; macOS asks once." }));
+          out.push(finding("messages.automation", "info", "Automation of Messages has not been checked yet", { detail: "Run the check in Settings → Channels; macOS asks once.", ...(askable ? { fixable: true } : {}) }));
         } else {
           out.push(finding("messages.automation", "ok", "Automation of Messages is allowed"));
         }
@@ -61,6 +79,7 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
       }
     },
     async fix(f, env) {
+      if (f.id === "messages.automation" || f.id === "messages.signedin") return check(env);
       if (f.id !== "messages.helper") return { ok: false, message: "nothing to fix here" };
       try {
         const r = await ensureHelper({ userHome: env.userHome, exec: env.runner.exec, layout: resolveLayout(env.env, env.userHome) });
