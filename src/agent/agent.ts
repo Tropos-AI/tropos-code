@@ -19,6 +19,8 @@ type ToolUse = Anthropic.Beta.BetaToolUseBlock;
 type ToolResult = Anthropic.Beta.BetaToolResultBlockParam;
 
 export const INTERRUPTED = "[interrupted by user]";
+/** For an exec tool stopped while it ran (a command, a text being sent): it may have acted before the stop. */
+export const EXEC_INTERRUPTED = `Stopped while it was running, so the action may already have happened. Check before repeating it.\n${INTERRUPTED}`;
 const MAX_JSON_RETRIES = 2;
 /** A Stop hook may send the model back to work this many times per user turn, so a broken hook can't loop forever. */
 const MAX_STOP_CONTINUES = 3;
@@ -91,10 +93,13 @@ export interface AgentOptions {
   endTurn?(reason: TurnEndReason, messages: readonly MessageParam[]): void;
 }
 
-/** Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left behind). */
-function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal): Promise<ToolOutput> {
+/**
+ * Settles with the tool's output, or with an interrupted result as soon as the signal aborts (a stuck tool is left
+ * behind). `content` is that result's text.
+ */
+function raceAbort(run: Promise<ToolOutput>, signal: AbortSignal, content: string = INTERRUPTED): Promise<ToolOutput> {
   return new Promise<ToolOutput>((resolve, reject) => {
-    const interrupted = () => resolve({ content: INTERRUPTED, isError: true });
+    const interrupted = () => resolve({ content, isError: true });
     if (signal.aborted) {
       // The tool already started; its later failure must not become an unhandled rejection.
       run.catch(() => {});
@@ -609,6 +614,8 @@ export class Agent {
       output = await raceAbort(
         tool.run(input, { ...this.opts.toolContext, signal, approvedPaths: subject.paths, isDenied, toolUseId: block.id, progress }),
         signal,
+        // It has started: an exec tool (a command, a text being sent) may already have acted.
+        kind === "exec" ? EXEC_INTERRUPTED : INTERRUPTED,
       );
     } catch (err) {
       output = { content: `${tool.name} failed: ${errorText(err)}`, isError: true };

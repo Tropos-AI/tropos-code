@@ -8,7 +8,7 @@ import type { Mode } from "../config/constants";
 import { PLAN_MODE_REASON, compileRules } from "../permissions/engine";
 import { MalformedToolCallError } from "../providers/chat";
 import { defineTool, type AnyTool } from "../tools/types";
-import { Agent, type AgentOptions } from "./agent";
+import { Agent, EXEC_INTERRUPTED, type AgentOptions } from "./agent";
 import type { AgentEvent, PermissionAnswer, PermissionPrompt } from "./events";
 
 const echo = defineTool({
@@ -355,7 +355,8 @@ describe("Agent", () => {
     assertToolPairs(h.agent.messages);
     const results = h.agent.messages.at(-1)!.content as Array<{ tool_use_id: string; content: string }>;
     expect(results.map((r) => r.tool_use_id)).toEqual(["a", "s", "t"]);
-    expect(results[1]!.content).toBe("[interrupted by user]");
+    // Sleep (exec) was running when esc came, so it may have done its work; Sleep t never started.
+    expect(results[1]!.content).toBe(EXEC_INTERRUPTED);
     expect(results[2]!.content).toBe("[interrupted by user]");
   });
 
@@ -765,7 +766,22 @@ describe("Agent failure paths keep history valid", () => {
     expect(await run(h, "go", controller.signal)).toBe("aborted");
     expect(Date.now() - started).toBeLessThan(300);
     assertToolPairs(h.agent.messages);
-    expect((h.agent.messages.at(-1)!.content as Array<{ content: string }>)[0]!.content).toBe("[interrupted by user]");
+    expect((h.agent.messages.at(-1)!.content as Array<{ content: string }>)[0]!.content).toBe(EXEC_INTERRUPTED);
+  });
+
+  test("an exec tool cut short while running says it may already have acted; a read tool just says interrupted", async () => {
+    const stuckAs = (name: string, kind: "exec" | "read") =>
+      defineTool({ name, kind, description: "x", schema: z.object({}), summarize: () => name, subject: () => ({ paths: [] }), run: () => new Promise<never>(() => {}) });
+    for (const [kind, expected] of [["exec", EXEC_INTERRUPTED], ["read", "[interrupted by user]"]] as const) {
+      const controller = new AbortController();
+      const h = harness([() => reply([toolUseBlock("k", "Stuck", {})], "tool_use")], { mode: "bypass", tools: [stuckAs("Stuck", kind)] as AnyTool[] });
+      setTimeout(() => controller.abort(), 30);
+      expect(await run(h, "go", controller.signal)).toBe("aborted");
+      expect((h.agent.messages.at(-1)!.content as Array<{ content: string }>)[0]!.content).toBe(expected);
+    }
+    expect(EXEC_INTERRUPTED).toContain("may already have happened");
+    // The last line stays the marker the terminal shows as "Interrupted".
+    expect(EXEC_INTERRUPTED.split("\n").at(-1)).toBe("[interrupted by user]");
   });
   test("a tool that rejects after an abort during onAllowAlways causes no unhandled rejection", async () => {
     const late = defineTool({
