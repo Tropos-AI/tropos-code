@@ -46,6 +46,18 @@ With `--attempts 3` it also shows the noise: `attempt sd` is how far the pass ra
 attempts, in percentage points, and `mixed tasks` counts tasks some attempts solved and others
 didn't. A change worth less than the attempt sd isn't one you can see yet.
 
+### The harness lab on these tasks
+
+```bash
+bun scripts/harness-lab.ts train --model claude-haiku-5-5            # dev tasks: lab + adopt, in eval/harness-home
+bun scripts/harness-lab.ts measure --model claude-haiku-5-5 --attempts 3   # holdout: built-in vs trained harness
+```
+
+`train` runs the harness lab on each dev task in a home of its own (`eval/harness-home`, never `~/.tropos`) and adopts
+there what did better. The lab sees only the visible checks (the type checker and the base versions of the test
+files); the hidden tests are run only by `measure`, which runs each holdout task with the built-in harness and with the
+trained one and judges both with them. Holdout tasks never reach the lab's library.
+
 ### Adding a task
 
 ```bash

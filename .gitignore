@@ -18,3 +18,5 @@ playwright-report/
 # Local tool state and eval output
 .serena/
 eval/results/
+# The harness lab's own home for the eval (scripts/harness-lab.ts): trained harness, runs, library
+eval/harness-home/

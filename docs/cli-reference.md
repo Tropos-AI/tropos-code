@@ -29,6 +29,8 @@ tcode [options] [prompt]
 | `--permission-mode <mode>` | `default`, `acceptEdits` or `plan` |
 | `--dangerously-skip-permissions` | Approve every action without asking |
 | `--add-dir <dir>` | Let tools work in another directory (repeatable) |
+| `--confine` | Run commands in the sandbox and deny tool paths outside the project (your own hooks and MCP servers still run as configured) |
+| `--harness-dir <dir>` | Run with this harness folder in place of the adopted layers; its hooks never load (the harness lab's runs use it) |
 | `-v`, `--version` | Print the version |
 | `-h`, `--help` | Show the help |
 
@@ -212,7 +214,7 @@ tcode cron <command>
 | Command | Does |
 |---|---|
 | `list [--json]` | Show the scheduled jobs |
-| `add --name <n> --schedule "<when>" --prompt "<text>" [--project <id>] [--deliver <chat\|none>] [--tz <zone>] [--allow "<rule>"]...` | Add a job. `<when>` is `"every 30m"`, `"every day at 09:00"`, `"in 20m"`, `"at 2030-01-31T10:00"` or a cron expression. `--project` defaults to `default`, `--deliver` to `none` |
+| `add --name <n> --schedule "<when>" --prompt "<text>" [--project <id>] [--deliver <chat\|none>] [--tz <zone>] [--allow "<rule>"]... [--harness-recursion <k>]` | Add a job. `<when>` is `"every 30m"`, `"every day at 09:00"`, `"in 20m"`, `"at 2030-01-31T10:00"` or a cron expression. `--project` defaults to `default`, `--deliver` to `none`. `--harness-recursion` (1-5) runs the job through the harness lab: four or more runs in sandboxed copies, the best one committed on a new branch for you to merge |
 | `rm <id>` | Delete a job |
 | `enable <id>`, `disable <id>` | Turn a job on or off |
 | `run <id>` | Make a job due now; the gateway runs it at its next tick |
@@ -320,19 +322,46 @@ never imported; the model choice is only suggested; re-running skips what is unc
 ## tcode harness
 
 ```
-tcode harness [status|diff|show [<file>]] [--json]
+tcode harness [status|diff [<candidate>]|show [<file>]] [--json]
+tcode harness lab [<task prompt>] [options]
+tcode harness candidates | adopt <candidate> [--yes] | revert [<candidate>] | discard <candidate>
+tcode harness runs | library [<domain>]
 ```
 
 The harness is what the agent runs with besides the model: its system prompt (`system.md`, plus `guardrails.md` and
-`tool-guidance.md` when they exist) and, later, skills, scripts, agents and hooks. It is built in layers: the one in
-Tropos, then `~/.tropos/harness/active/` for every project, then `~/.tropos/harness/projects/<key>/active/` for one
-project. A layer holds only the files it changes; the rest comes from the layer below. The always-on files share a
-limit of 24,000 characters, and a layer that breaks it, or empties `system.md`, is skipped whole and named in the
-session's warnings. Links and files the harness doesn't know are ignored.
+`tool-guidance.md` when they exist), skills, scripts, subagents and hooks. It is built in layers: the one in Tropos,
+then `~/.tropos/harness/active/` for every project, then `~/.tropos/harness/projects/<key>/active/` for one project. A
+layer holds only the files it changes; the rest comes from the layer below. The always-on files share a limit of 24,000
+characters, and a layer that breaks it, or empties `system.md`, is skipped whole and named in the session's warnings.
+Links and files the harness doesn't know are ignored. Sessions read the harness when they start.
 
-`status` shows which layers apply in the current folder and their files, `diff` prints what the adopted layers change
-against the built-in harness, and `show` prints one file or the whole system prompt. Nothing writes these folders
-yet; a session reads them once, when it starts.
+`status` shows which layers apply in the current folder, `diff` what the adopted layers change against the built-in
+harness (or, with a candidate id, what adopting it would change), and `show` one file or the whole system prompt.
+
+`lab` tests changes to the harness on a real task (the method of Harness², arXiv 2610.14224). It runs the task with the
+harness you have now, lets two editors each propose a change (one for how the agent works, one for knowledge of this
+kind of project), runs both, composes the next harness from what the runs showed, and runs that. The composition is kept
+as a candidate only if it did better on the project's own checks, or on how the agent worked (checked its work, fewer
+tool errors, fewer steps) without doing worse elsewhere. A run that edited or skipped existing tests is never better.
+Every run happens in a fresh copy of the project's last commit, with a Tropos home of its own and its commands in the
+sandbox; your checkout is never touched. Each task runs four times or more, so a lab costs that many sessions.
+
+| Option | Does |
+|---|---|
+| `<task prompt>` | The task, on the git repository around the current folder |
+| `--replay <session>`, `--replay-recent <n>` | Use the request that opened a past session here (the last `n`, default 3) |
+| `--task-file <json>` | `{ "prompt", "repo"?, "revision"?, "setup"?, "checks"? }` |
+| `--k <n>`, `--mode parallel\|sequential` | More compositions, with a selector picking one, or chained steps (default 1, parallel) |
+| `--scope global\|project` | Which adopted layer the candidate is for (default global) |
+| `--model <id>`, `--editor-model <id>`, `--effort <level>` | The model the runs use, and the editors' (default the same) |
+| `--check <cmd>`..., `--setup <cmd>`, `--revision <rev>` | The project's checks and dependency install (found from the stack when left out), and the commit to start from |
+| `--max-turns <n>`, `--timeout <minutes>` | Limits for each run (default 60 turns, 30 minutes) |
+| `--adopt` | Adopt the candidate at once when it improved and adds no scripts |
+
+After each lab, lessons the runs support are kept in the library for that kind of project (`ts-bun`, `ts-node`,
+`python`, `rust`, `go`); later labs read them, and sessions in such projects load them as a skill. `candidates` lists
+what waits, `adopt` writes a candidate into its layer through the learning ledger (scripts need `--yes`), and `revert`
+takes it back, as does `/learned undo`.
 
 ## tcode reset
 

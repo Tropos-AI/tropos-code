@@ -79,3 +79,20 @@ test("a failed setup is the probe's error, not the agent's", async () => {
   expect(r.error).toContain('setup "exit 3" failed (3)');
   expect(r.checks).toEqual([]);
 });
+
+test("the measurement runs last, with the hidden files copied in, and is kept apart", async () => {
+  if (!(await confinementAvailable())) return;
+  const runner = new LocalProbeRunner({ command: ["/bin/sh", await fakeAgent()], model: "m", effort: "high", maxTurns: 30, timeoutMs: 60_000, key: null, ownerHome: join(dir, "owner") });
+  const hidden = join(dir, "hidden");
+  await mkdir(join(hidden, "src"), { recursive: true });
+  await writeFile(join(hidden, "src", "secret.test.txt"), "hidden");
+  const probeDir = join(dir, "lab", "m");
+  await mkdir(probeDir, { recursive: true });
+  const r = await runner.run(
+    { task: task({ checks: [] }), harnessDir: dir, dir: probeDir, id: "r1-m", label: "m", harnessFiles: [], measure: { from: hidden, files: ["src/secret.test.txt"], command: "test -f done.txt && cat src/secret.test.txt" } },
+    new AbortController().signal,
+  );
+  expect(r.measured).toMatchObject({ ok: true, tail: "hidden" });
+  // The diff was taken before the hidden file arrived.
+  expect(readFileSync(join(probeDir, "patch.diff"), "utf8")).not.toContain("secret");
+});

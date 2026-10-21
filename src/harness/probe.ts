@@ -2,9 +2,9 @@
 // `tcode -p` in a fresh copy of the project, with a Tropos home of its own (none of the owner's memory, skills or
 // sessions), Bash confined to the copy (`--confine`), and the harness under test as its only overlay (`--harness-dir`).
 // The trajectory, the diff and the project's own checks are what the editors and the composer read.
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { confinedBackend, confinementAvailable } from "../exec/confined";
 import type { DiffAudit } from "./audit";
 import type { Domain } from "./domain";
@@ -42,6 +42,8 @@ export interface ProbeResult {
   seconds: number;
   /** Set when the probe itself failed (setup, the agent didn't start); such a probe proves nothing. */
   error: string | null;
+  /** The ground truth (ProbeInput.measure), when there was one: for measuring only, never shown to the lab's roles. */
+  measured?: CommandResult;
 }
 
 export interface ProbeInput {
@@ -53,6 +55,11 @@ export interface ProbeInput {
   id: string;
   label: string;
   harnessFiles: string[];
+  /**
+   * Run after everything else: copy `files` from `from` into the copy of the project, then `command`, confined. The
+   * eval's hidden tests: the result is kept as `measured` and never reaches the editors, composer or selector.
+   */
+  measure?: { from: string; files: string[]; command: string };
 }
 
 export interface ProbeRunner {
@@ -133,6 +140,13 @@ export class LocalProbeRunner implements ProbeRunner {
         for (const check of task.checks) {
           if (signal.aborted) break;
           result.checks.push(await runBackendCommand(backend, check, ws, {}, this.opts.checkTimeoutMs ?? 600_000));
+        }
+        if (input.measure && !signal.aborted) {
+          for (const file of input.measure.files) {
+            await mkdir(dirname(join(ws, file)), { recursive: true });
+            await copyFile(join(input.measure.from, file), join(ws, file));
+          }
+          result.measured = await runBackendCommand(backend, input.measure.command, ws, {}, this.opts.checkTimeoutMs ?? 600_000);
         }
       } finally {
         await backend.close();
