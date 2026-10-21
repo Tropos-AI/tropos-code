@@ -52,8 +52,11 @@ export const DEFAULT_SUBAGENT_TURNS = 50;
 export const MAX_SUBAGENT_TURNS = 200;
 export const AGENT_TOOL_NAME = "Agent";
 
-/** Tools only the chief holds: no subagent or specialist delegates, schedules or changes Tropos's setup. */
-export const HUB_ONLY_TOOLS: ReadonlySet<string> = new Set([AGENT_TOOL_NAME, "AgentManage", "Cron", "TroposSetup", "SwitchProject", "Suggestion"]);
+/**
+ * Tools only the chief holds: no subagent or specialist delegates, schedules, changes Tropos's setup, or reads
+ * and sends the owner's texts (src/messages/runtime.ts MESSAGES_TOOLS); the chief passes on what a task needs.
+ */
+export const HUB_ONLY_TOOLS: ReadonlySet<string> = new Set([AGENT_TOOL_NAME, "AgentManage", "Cron", "TroposSetup", "SwitchProject", "Suggestion", "Messages", "SendIMessage"]);
 
 /** What one subagent run came to, handed to `observe` once on every exit path. */
 export interface SubagentRun {

@@ -855,6 +855,24 @@ describe("Agent failure paths keep history valid", () => {
   });
 });
 
+test("the subject's target reaches the permission prompt; a tool without one gives none", async () => {
+  const texter = defineTool({
+    name: "Text",
+    kind: "exec",
+    description: "text",
+    schema: z.object({ to: z.string() }),
+    summarize: (i) => `text ${i.to}`,
+    subject: () => ({ paths: [], target: "+306912345678" }),
+    run: async () => ({ content: "sent" }),
+  }) as AnyTool;
+  const h = harness([() => reply([toolUseBlock("t1", "Text", { to: "6912345678" })], "tool_use"), () => reply([textBlock("ok")])], { tools: [texter] });
+  await run(h);
+  expect(h.prompts[0]!.target).toBe("+306912345678");
+  const plain = harness([() => reply([toolUseBlock("s", "Sleep", { ms: 1 })], "tool_use"), () => reply([textBlock("ok")])]);
+  await run(plain);
+  expect(plain.prompts[0]).not.toHaveProperty("target");
+});
+
 test("a tool's preview reaches the permission prompt; a preview that throws is left out", async () => {
   const writer = (preview: AnyTool["preview"]) =>
     defineTool({

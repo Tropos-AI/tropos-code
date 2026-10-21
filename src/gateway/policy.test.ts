@@ -69,6 +69,24 @@ describe("channelContext", () => {
     expect(names("scheduled")).toEqual(["Read"]);
   });
 
+  test("texts: the owner's chat gets both Messages tools, a guest neither, a scheduled run both but always asked", () => {
+    const withTexts = { ...base(), tools: [{ name: "Read", kind: "read" }, { name: "Messages", kind: "read" }, { name: "SendIMessage", kind: "exec" }] } as unknown as AppContext;
+    const names = (role: "owner" | "guest" | "scheduled") => channelContext(withTexts, exec, { role }).tools.map((t) => t.name);
+    expect(names("owner")).toEqual(["Read", "Messages", "SendIMessage"]);
+    expect(names("guest")).toEqual(["Read"]);
+    expect(names("scheduled")).toEqual(["Read", "Messages", "SendIMessage"]);
+
+    // Even at autonomous with the owner's allow rules: the job's own allowCommands decide (src/gateway/cron/runner.ts).
+    const scheduled = channelContext(withTexts, exec, { role: "scheduled", autonomy: () => ({ level: "autonomous", testCommands: [] }) });
+    const permission = { ...permissionContext(scheduled, "default"), home: "/h" };
+    const allowed = { ...permission, rules: { ...permission.rules, allow: compileRules({ allow: ["Messages", "SendIMessage(+306912345678)"], ask: [], deny: [] }).rules.allow } };
+    expect(decide({ toolName: "Messages", kind: "read", paths: [] }, allowed).behavior).toBe("ask");
+    expect(decide({ toolName: "SendIMessage", kind: "exec", paths: [], target: "+306912345678" }, allowed).behavior).toBe("ask");
+    // The owner's own chat has no such forced ask for reading.
+    const owner = channelContext(withTexts, exec, { role: "owner", autonomy: () => ({ level: "autonomous", testCommands: [] }) });
+    expect(decide({ toolName: "Messages", kind: "read", paths: [] }, { ...permissionContext(owner, "default"), home: "/h" }).behavior).toBe("allow");
+  });
+
   test("formatters and language servers, which run on the host, are off", () => {
     const b = base();
     const ctx = channelContext(b, exec, { role: "guest" });
@@ -194,6 +212,11 @@ describe("heartbeat", () => {
     expect(ctx.contextBlocks).toBeUndefined();
     expect(ctx.testWatch).toBeUndefined();
     expect(ctx.settings.learning).toMatchObject({ review: false, curator: false });
+  });
+
+  test("the heartbeat never gets the Messages tools, though Messages is a read tool", () => {
+    const ctx = heartbeatContext({ ...base(), tools: [tool("Read", "read"), tool("Messages", "read"), tool("SendIMessage", "exec")] });
+    expect(ctx.tools.map((t) => t.name)).toEqual(["Read"]);
   });
 
   test("the heartbeat key is a scheduled role, whoever the owner is", async () => {

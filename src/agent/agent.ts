@@ -565,7 +565,16 @@ export class Agent {
     if (hookPermission === "ask" && decision.behavior === "allow") decision = { behavior: "ask", reason: "a PreToolUse hook asked for confirmation" };
     if (decision.behavior === "ask") {
       const answer = await this.ask(
-        { toolName: tool.name, kind, summary, input, reason: decision.reason, suggestion: decision.suggestion, ...previewOf(tool, input) },
+        {
+          toolName: tool.name,
+          kind,
+          summary,
+          input,
+          reason: decision.reason,
+          suggestion: decision.suggestion,
+          ...(subject.target !== undefined ? { target: subject.target } : {}),
+          ...previewOf(tool, input),
+        },
         signal,
       );
       if (signal.aborted) return this.finish(block, tool.name, { content: INTERRUPTED, isError: true }, "error");

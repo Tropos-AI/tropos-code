@@ -430,6 +430,21 @@ describe("LearningLoop", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("the review never sees what the Messages tools returned", async () => {
+    const { loop, calls, done } = harness();
+    const withTexts: MessageParam[] = [
+      ...history,
+      { role: "assistant", content: [{ type: "tool_use", id: "m1", name: "Messages", input: { action: "read", chat: "c" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "m1", content: "Maria: the door code is 4711" }] },
+    ];
+    for (let i = 0; i < 3; i++) loop.afterTurn("end_turn", withTexts);
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(calls[0]!.history)).not.toContain("4711");
+    expect(JSON.stringify(calls[0]!.history)).toContain("[Messages result withheld from the learning review]");
+    done();
+    await loop.whenIdle();
+  });
+
   test("a skill review after `interval` tool calls; both due means combined", async () => {
     const { loop, calls, done } = harness();
     for (let i = 0; i < 3; i++) loop.onToolEnd("Read", "done");

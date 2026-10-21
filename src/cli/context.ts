@@ -101,7 +101,15 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
       },
     };
   };
-  return { ctx, newSessionContext, warnings, close: async () => void (await Promise.all([ext.mcp?.close(), ext.lsp?.close()])) };
+  return {
+    ctx,
+    newSessionContext,
+    warnings,
+    close: async () => {
+      ext.messages?.dispose();
+      await Promise.all([ext.mcp?.close(), ext.lsp?.close()]);
+    },
+  };
 }
 
 export { SettingsError };

@@ -18,6 +18,7 @@ import type { PermissionContext } from "../permissions/engine";
 import type { MessageParam } from "../session/store";
 import type { AnyTool, ToolContext } from "../tools/types";
 import type { LearningCounters } from "./counters";
+import { redactPrivateResults } from "./redact";
 import {
   COMBINED_REVIEW_PROMPT,
   FINAL_PROMPT,
@@ -284,7 +285,8 @@ export class LearningLoop {
     const run = async () => {
       try {
         // Inside the async body, so even a synchronous throw from runReview lands in the catch below.
-        const result = await this.deps.runReview(kind, REVIEW_PROMPTS[kind], history, controller.signal);
+        // Other people's texts never reach the review, so they can't end up in notes, skills or the journal.
+        const result = await this.deps.runReview(kind, REVIEW_PROMPTS[kind], redactPrivateResults(history), controller.signal);
         if (controller.signal.aborted) record.aborted = true;
         record.changes = result.changes.length;
         // The final review consumes the counters only once it has really finished: until then, an exit

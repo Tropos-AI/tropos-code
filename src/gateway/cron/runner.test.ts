@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { PermissionAnswer, PermissionPrompt, TurnEndReason } from "../../agent/events";
 import { assistantEvent } from "../../../test/helpers/telegram-fakes";
 import type { ChatSession, ChatSink } from "../types";
+import { SendLedger } from "../../messages/burst";
 import { allowedByJob, createJobRunner, untrustedJob } from "./runner";
 import type { CronJob } from "./types";
 
@@ -35,6 +36,51 @@ describe("allowedByJob", () => {
     expect(allowedByJob(bash("ls"), job(), "/w", "/h")).toBe(false);
     expect(allowedByJob({ toolName: "Edit", kind: "edit", summary: "x", input: { file_path: "/w/a" } }, job(rules), "/w", "/h")).toBe(false);
     expect(allowedByJob({ toolName: "Bash", kind: "exec", summary: "x", input: null }, job(rules), "/w", "/h")).toBe(false);
+  });
+});
+
+const messages: PermissionPrompt = { toolName: "Messages", kind: "read", summary: "chats", input: { action: "chats" } };
+/** A send prompt as the agent builds it: the target comes from the tool's subject, never from the input. */
+const send = (target: string, input: unknown = { to: target, text: "Good morning" }): PermissionPrompt => ({ toolName: "SendIMessage", kind: "exec", summary: `Text ${target}`, input, target });
+
+describe("allowedByJob and texts", () => {
+  const NOW = 1_800_000_000_000;
+  test("Messages runs only for a job that names it", () => {
+    expect(allowedByJob(messages, job({ allowCommands: ["Messages"] }), "/w", "/h")).toBe(true);
+    expect(allowedByJob(messages, job({ allowCommands: ["Bash(npm test:*)"] }), "/w", "/h")).toBe(false);
+    expect(allowedByJob(messages, job(), "/w", "/h")).toBe(false);
+  });
+
+  test("SendIMessage(<target>) allows that recipient only, matched on the prompt's target", () => {
+    const listed = job({ allowCommands: ["SendIMessage(+306912345678)"] });
+    const ledger = new SendLedger();
+    expect(allowedByJob(send("+306912345678"), listed, "/w", "/h", { ledger, now: NOW })).toBe(true);
+    expect(allowedByJob(send("+306900000000"), listed, "/w", "/h", { ledger, now: NOW })).toBe(false);
+    expect(allowedByJob(send("chat:iMessage;+;chat1"), listed, "/w", "/h", { ledger, now: NOW })).toBe(false);
+    // The input is never re-read: an input naming the allowed number doesn't stand in for the target.
+    expect(allowedByJob(send("+306900000000", { to: "+306912345678", text: "x" }), listed, "/w", "/h", { ledger, now: NOW })).toBe(false);
+    expect(allowedByJob({ ...send("+306912345678"), target: undefined }, listed, "/w", "/h", { ledger, now: NOW })).toBe(false);
+    // Messages isn't implied by a send rule, nor a send by a Messages rule.
+    expect(allowedByJob(messages, listed, "/w", "/h")).toBe(false);
+    expect(allowedByJob(send("+306912345678"), job({ allowCommands: ["Messages"] }), "/w", "/h", { ledger, now: NOW })).toBe(false);
+  });
+
+  test("a bare or wildcard SendIMessage rule names no recipient, so it allows none", () => {
+    const ledger = new SendLedger();
+    for (const rule of ["SendIMessage", "SendIMessage(*)", "SendIMessage(+30*)"]) {
+      expect(allowedByJob(send("+306912345678"), job({ allowCommands: [rule] }), "/w", "/h", { ledger, now: NOW })).toBe(false);
+    }
+  });
+
+  test("past the burst guard's limit a send is denied, though the job lists the recipient", () => {
+    const listed = job({ allowCommands: ["SendIMessage(+306912345678)"] });
+    const ledger = new SendLedger();
+    for (let i = 0; i < 5; i++) ledger.record("+306912345678", NOW - 60_000);
+    // Five in ten minutes: the tool would ask again, and nobody is here to answer.
+    expect(ledger.check("+306912345678", NOW).ask).toBeDefined();
+    expect(allowedByJob(send("+306912345678"), listed, "/w", "/h", { ledger, now: NOW })).toBe(false);
+    // Once the window has passed, the job may send again.
+    expect(allowedByJob(send("+306912345678"), listed, "/w", "/h", { ledger, now: NOW + 11 * 60_000 })).toBe(true);
   });
 });
 
@@ -172,6 +218,28 @@ describe("untrusted jobs", () => {
     await run(job({ origin: "telegram:2" }), new AbortController().signal);
     await run(job({ origin: "telegram:1" }), new AbortController().signal);
     expect(opened).toEqual([{ untrusted: true }, { untrusted: false }]);
+  });
+
+  test("a guest's job never reads or sends texts, whatever it lists", async () => {
+    const session = new FakeSession();
+    session.script = async (_p, s) => {
+      s.emit((k) => k.ask(1, messages));
+      s.emit((k) => k.ask(2, send("+306912345678")));
+      return "end_turn";
+    };
+    const run = createJobRunner({ home: "/h", openSession: async () => session, projectPath: async () => "/w", ownerChat: async () => "telegram:1" });
+    const allowCommands = ["Messages", "SendIMessage(+306912345678)"];
+    await run(job({ origin: "telegram:2", allowCommands }), new AbortController().signal);
+    expect(session.answers.map((a) => [a.id, a.answer.kind])).toEqual([
+      [1, "deny"],
+      [2, "deny"],
+    ]);
+    session.answers = [];
+    await run(job({ origin: "telegram:1", allowCommands }), new AbortController().signal);
+    expect(session.answers.map((a) => [a.id, a.answer.kind])).toEqual([
+      [1, "allow"],
+      [2, "allow"],
+    ]);
   });
 
   test("an untrusted job's allowCommands are ignored: whatever still asks is denied", async () => {

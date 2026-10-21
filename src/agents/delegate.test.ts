@@ -85,6 +85,11 @@ test("the blocked set is the hub-only tools plus Identity and SessionSearch", ()
   expect([...SPECIALIST_BLOCKED_TOOLS].sort()).toEqual([...HUB_ONLY_TOOLS, "Identity", "SessionSearch"].sort());
 });
 
+test("no specialist or subagent reads or sends texts", () => {
+  expect(SPECIALIST_BLOCKED_TOOLS).toEqual(expect.arrayContaining(["Messages", "SendIMessage"]));
+  expect(HUB_ONLY_TOOLS.has("Messages") && HUB_ONLY_TOOLS.has("SendIMessage")).toBe(true);
+});
+
 test("a Skill tool is added when the chief had none and the specialist has skills", async () => {
   const bare = { ...deps, tools: deps.tools.filter((t) => t.name !== "Skill") };
   expect((await specialistKit(spec, bare, "/repo")).tools.map((t) => t.name)).toContain("Skill");
