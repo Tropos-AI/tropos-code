@@ -31,7 +31,12 @@ async function git(args: string[], cwd: string, env: Record<string, string> = {}
  */
 export async function createWorkspace(repo: string, revision: string, dest: string): Promise<void> {
   await mkdir(dest, { recursive: true });
-  const archive = Bun.spawn(["git", "-C", repo, "archive", "--format=tar", revision], { stdout: "pipe", stderr: "pipe" });
+  // The owner's repository: nothing its config names (hooks, fsmonitor, system config) may run.
+  const archive = Bun.spawn(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", repo, "archive", "--format=tar", revision], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
+  });
   const untar = Bun.spawn(["tar", "-x", "-C", dest], { stdin: archive.stdout, stderr: "pipe" });
   const [archiveCode, untarCode] = await Promise.all([archive.exited, untar.exited]);
   if (archiveCode !== 0) throw new Error(`git archive ${revision} failed: ${(await new Response(archive.stderr).text()).trim()}`);

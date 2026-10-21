@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Model } from "../api/model";
 import type { Effort } from "../config/constants";
 import { gitRoot } from "../context/memory";
+import { hostGit } from "../gateway/worktrees";
 import type { Ledger } from "../learning/ledger";
 import { readCredentials, resolveApiKey } from "../providers/credentials";
 import { parseModelId } from "../providers/registry";
@@ -24,10 +25,9 @@ import { globalHarnessDir, loadHarness, overlay, readLayer, validateTree, type H
 import { defaultChecks, defaultSetup } from "./workspace";
 
 async function git(args: string[], cwd: string): Promise<string> {
-  const child = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  if (code !== 0) throw new Error(`git ${args.join(" ")}: ${err.trim()}`);
-  return out.trim();
+  const r = await hostGit(args, cwd);
+  if (r.code !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.trim()}`);
+  return r.stdout.trim();
 }
 
 const title = (prompt: string) => {

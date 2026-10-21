@@ -27,6 +27,7 @@ const schema = z.object({
   project: z.string().optional().describe('For add: the project id the run works in; "default" when omitted.'),
   deliverTo: z.string().optional().describe('For add: where the result goes, a chat key like "telegram:123" or "none". Defaults to this chat when known.'),
   allowCommands: z.array(z.string()).optional().describe('For add: rules like "Bash(npm test:*)" the run may use without asking. Jobs may also list "Messages" (to read the user\'s texts) and "SendIMessage(<exact +E.164 number or email>)" (to send to that one recipient). Leave out unless needed.'),
+  harnessRecursion: z.number().int().min(1).max(5).optional().describe("For add, only when the user asks for it: run the job through the harness lab with this many compositions; it runs the task four or more times in sandboxed copies and hands the best attempt over as a git branch."),
 });
 
 type Input = z.infer<typeof schema>;
@@ -159,6 +160,7 @@ export function createCronTool(opts: CronToolOptions) {
               createdBy: "agent",
               ...(opts.origin ? { origin: opts.origin } : {}),
               ...(input.allowCommands?.length ? { allowCommands: input.allowCommands } : {}),
+              ...(input.harnessRecursion ? { harnessRecursion: input.harnessRecursion } : {}),
             });
             const next = job.nextRunAt ? ` First run ${new Date(job.nextRunAt).toISOString()}.` : "";
             return { content: `Added job ${job.id} (${job.name}): ${describeSchedule(schedule)}, delivering to ${job.deliver}.${next}`, summary: `added ${job.name}` };

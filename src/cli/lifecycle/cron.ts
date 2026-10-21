@@ -9,6 +9,7 @@ import type { LifecycleContext, LifecycleRun } from "./types";
 const USAGE = `Usage: tcode cron <command>
   list [--json]                       Show the scheduled jobs
   add --name <n> --schedule "<when>" --prompt "<text>" [--project <id>] [--deliver <chat|none>] [--tz <zone>] [--allow "<rule>"]...
+      [--harness-recursion <k>]       run it through the harness lab (k = 1-5 compositions); the best attempt becomes a branch
                                       <when> is "every 30m", "every day at 09:00", "in 20m", "at 2026-10-20T10:00" or a cron expression
   rm <id>                             Delete a job
   enable <id> | disable <id>          Turn a job on or off
@@ -111,6 +112,9 @@ function add(store: CronStore, p: Parsed, ctx: LifecycleContext): number {
   const tz = flag(p, "tz");
   const schedule = parseHumanSchedule(when, { now: ctx.now(), ...(tz ? { tz } : {}) });
   const allow = p.flags.get("allow");
+  const recursion = flag(p, "harness-recursion");
+  const k = recursion === undefined ? undefined : Number(recursion);
+  if (k !== undefined && (!Number.isInteger(k) || k < 1 || k > 5)) throw new UsageError("--harness-recursion must be a whole number from 1 to 5");
   const job = store.add({
     name,
     schedule,
@@ -119,8 +123,9 @@ function add(store: CronStore, p: Parsed, ctx: LifecycleContext): number {
     deliver: flag(p, "deliver") ?? "none",
     createdBy: "user",
     ...(allow?.length ? { allowCommands: allow } : {}),
+    ...(k !== undefined ? { harnessRecursion: k } : {}),
   });
-  ctx.out(`Added ${job.id} (${job.name}): ${describe(schedule)}; next run ${iso(job.nextRunAt)}.\n`);
+  ctx.out(`Added ${job.id} (${job.name}): ${describe(schedule)}; next run ${iso(job.nextRunAt)}.${k ? ` It runs through the harness lab (k=${k}): four or more runs, the best one handed over as a branch.` : ""}\n`);
   return 0;
 }
 

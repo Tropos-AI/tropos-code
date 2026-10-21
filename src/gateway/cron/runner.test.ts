@@ -220,6 +220,24 @@ describe("untrusted jobs", () => {
     expect(opened).toEqual([{ untrusted: true }, { untrusted: false }]);
   });
 
+  test("an owner's job with harness recursion goes to the lab; a guest's runs as a plain job", async () => {
+    const opened: Array<{ untrusted?: boolean }> = [];
+    const recursive: string[] = [];
+    const run = createJobRunner({
+      home: "/h",
+      openSession: async (_p, opts) => (opened.push(opts ?? {}), new FakeSession()),
+      projectPath: async () => "/w",
+      ownerChat: async () => "telegram:1",
+      recursive: async (j, cwd) => (recursive.push(`${j.id}@${cwd}`), { text: "branch tropos/x" }),
+    });
+    expect(await run(job({ origin: "telegram:1", harnessRecursion: 2 }), new AbortController().signal)).toEqual({ text: "branch tropos/x" });
+    expect(recursive).toEqual(["j1@/w"]);
+    expect(opened).toEqual([]);
+    await run(job({ origin: "telegram:2", harnessRecursion: 2 }), new AbortController().signal);
+    expect(recursive).toHaveLength(1);
+    expect(opened).toEqual([{ untrusted: true }]);
+  });
+
   test("a guest's job never reads or sends texts, whatever it lists", async () => {
     const session = new FakeSession();
     session.script = async (_p, s) => {
