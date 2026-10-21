@@ -31,6 +31,8 @@ export interface LabOptions {
   mode: "parallel" | "sequential";
   /** Library material for the editors (lessons and earlier harnesses of this domain). */
   library: string;
+  /** Files of the layers below the scope's (the base, and for a project the global layer): never removed. */
+  fixed?: ReadonlySet<string>;
   /** Untested changes a session's review suggested: run and composed like a third proposal. */
   suggestions?: { id: string; changes: Changes; rationale: string }[];
   signal: AbortSignal;
@@ -152,7 +154,7 @@ export async function runLab(task: LabTask, opts: LabOptions): Promise<LabRun> {
 
   /** One Propose–Probe–Compose step on top of `from`; the composed run, or `from` itself when nothing changed. */
   const step = async (from: Ran, i: number): Promise<Ran> => {
-    const input = { task, tree: from.tree, reference: from.probe, referenceTrajectory: from.trajectory, library: opts.library };
+    const input = { task, tree: from.tree, reference: from.probe, referenceTrajectory: from.trajectory, library: opts.library, fixed: opts.fixed ?? new Set(BASE_TREE.keys()) };
     const [inv, dom] = await Promise.all((["invariant", "domain"] as const).map((role) => propose(opts.llm, role, input, opts.signal)));
     const proposals: { label: string; proposal: Proposal; role: EditorRole | "suggestion" }[] = [
       { label: `inv-${i}`, proposal: inv!, role: "invariant" },

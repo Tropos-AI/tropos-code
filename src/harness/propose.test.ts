@@ -33,7 +33,7 @@ test("removals, the threat scan, the budget and malformed answers", () => {
   });
   expect(r.changes).toEqual(new Map([["guardrails.md", null]]));
   expect(r.rejected).toEqual([
-    "system.md: can't be removed",
+    "system.md: comes from a layer below this one; it can be replaced, not removed",
     'tool-guidance.md: refused by the threat scan (prompt injection ("ignore previous instructions"))',
     "skills/x/SKILL.md: content is not text",
   ]);
@@ -76,4 +76,11 @@ test("propose returns the checked changes, or the editor's error", async () => {
   const bad = await propose({ model: new FakeModel([() => reply([textBlock("I refuse")])]), id: "m", effort: "high" }, "domain", { task, tree, reference, referenceTrajectory: "", library: "" }, new AbortController().signal);
   expect(bad.error).toContain("no JSON object");
   expect(bad.changes.size).toBe(0);
+});
+
+test("a file from a layer below can be replaced but not removed", () => {
+  const r = checkChanges("composer", tree, { "guardrails.md": null, "tool-guidance.md": null }, new Set(["system.md", "guardrails.md"]));
+  expect(r.changes).toEqual(new Map([["tool-guidance.md", null]]));
+  expect(r.rejected).toEqual(["guardrails.md: comes from a layer below this one; it can be replaced, not removed"]);
+  expect(checkChanges("composer", tree, { "guardrails.md": "new" }, new Set(["guardrails.md"])).changes.get("guardrails.md")).toBe("new");
 });

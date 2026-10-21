@@ -27,6 +27,8 @@ export interface ComposeInput {
   reference: ProbeResult;
   referenceTrajectory: string;
   candidates: { proposal: Proposal; probe: ProbeResult | null; trajectory: string }[];
+  /** As in ProposeInput: files the layer below holds, which can't be removed. */
+  fixed?: ReadonlySet<string>;
 }
 
 export function composerPrompt(input: ComposeInput): string {
@@ -67,7 +69,7 @@ export async function compose(llm: LlmConfig, input: ComposeInput, signal: Abort
     const reply = await complete(llm, COMPOSER, composerPrompt(input), signal);
     costUsd = reply.costUsd;
     const json = extractJson(reply.text);
-    const checked = checkChanges("composer", input.tree, json.files);
+    const checked = checkChanges("composer", input.tree, json.files, input.fixed);
     return { decisions: decisions(json.decisions), rationale: typeof json.rationale === "string" ? json.rationale : "", changes: checked.changes, rejected: checked.rejected, costUsd };
   } catch (err) {
     return { decisions: [], rationale: "", changes: new Map(), rejected: [], costUsd, error: (err as Error).message };

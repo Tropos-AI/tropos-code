@@ -85,3 +85,10 @@ test("scripts need the owner; files off the surface are never adopted; discard",
   expect(await discardCandidate(home, "20261023-000000-0000")).toMatchObject({ ok: true, candidate: { status: "discarded" } });
   expect((await discardCandidate(home, "20261023-000000-0000")).ok).toBe(false);
 });
+
+test("a candidate that would push its layer over the budget is refused", async () => {
+  await saveCandidate(home, candidate({ changes: { "tool-guidance.md": "x".repeat(30_000) } }));
+  const r = await adoptCandidate(home, "20261021-120000-abcd", { ledger: new Ledger(home), actor: "user" });
+  expect(r.ok).toBe(false);
+  expect(!r.ok && r.reason).toContain("would break its layer");
+});

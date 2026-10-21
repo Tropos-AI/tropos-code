@@ -1,6 +1,7 @@
 // src/harness/service.ts — running the harness lab for real: tasks from a prompt, from past sessions (replay) or from a
 // file; the executor and editor models; the probe runner; then lab, reflection and, when allowed, adoption. Shared by
 // `tcode harness lab`, the gateway's weekly lab and scheduled jobs with harness recursion.
+import { realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model } from "../api/model";
@@ -187,6 +188,8 @@ export async function labOnTask(
   o: { home: string; runner: ProbeRunner; llm: LlmConfig; model: string; scope: "global" | "project"; k: number; mode: "parallel" | "sequential"; autoAdopt: boolean; ledger: Ledger; signal: AbortSignal; log?: (line: string) => void },
 ): Promise<LabTaskResult> {
   const base = await adoptedTree(o.home, task.repo, o.scope);
+  // What the layer below the scope holds can be replaced in it, never removed from it.
+  const fixed = new Set((o.scope === "project" ? await adoptedTree(o.home, task.repo, "global") : BASE_TREE).keys());
   const suggestions = (await listCandidates(o.home)).filter((c) => c.source === "review" && c.status === "pending" && c.domain === task.domain && c.scope === o.scope);
   const run = await runLab(task, {
     home: o.home,
@@ -195,15 +198,19 @@ export async function labOnTask(
     model: o.model,
     base,
     scope: o.scope,
-    ...(o.scope === "project" ? { project: task.repo } : {}),
+    // Canonical, as sessions key their project layer (projectHarnessDir of the resolved folder).
+    ...(o.scope === "project" ? { project: realpathSync(task.repo) } : {}),
     k: o.k,
     mode: o.mode,
     library: await libraryMaterial(o.home, task.domain),
+    fixed,
     suggestions: suggestions.map((s) => ({ id: s.id, rationale: s.rationale, changes: new Map(Object.entries(s.changes)) as Changes })),
     signal: o.signal,
     ...(o.log ? { log: o.log } : {}),
   });
-  for (const s of suggestions) await saveCandidate(o.home, { ...s, status: "discarded", rationale: `${s.rationale} (tested in lab run ${run.id})` });
+  // Only a run whose reference ran has tested them; otherwise they wait for the next one.
+  const tested = run.probes.length > 1 && !run.probes[0]!.error && !o.signal.aborted;
+  if (tested) for (const s of suggestions) await saveCandidate(o.home, { ...s, status: "discarded", rationale: `${s.rationale} (tested in lab run ${run.id})` });
   const candidate = run.candidate ? await readCandidate(o.home, run.candidate) : null;
   const finalTree = candidate ? applyChanges(base, new Map(Object.entries(candidate.changes))) : undefined;
   const reflection = await reflect(o.llm, run, { home: o.home, ...(finalTree ? { finalTree } : {}), signal: o.signal });
@@ -212,6 +219,8 @@ export async function labOnTask(
     if (candidateRunsCode(candidate)) result.pending = "it adds scripts, which only the owner adopts";
     // A session's review wrote those rules from a conversation that may quote anything: the owner decides.
     else if (suggestions.length > 0) result.pending = "it was composed with a session review's suggestion, which only the owner adopts";
+    // One run each way: fewer steps or tool errors alone may be chance. The checks or checking its work are not.
+    else if (!run.verdict.reasons.some((r) => /^(checks passed|checked its work|finished)/.test(r))) result.pending = "it did better only on steps or tool errors, in one run each; worth a look before it is kept";
     else {
       const adopted = await adoptCandidate(o.home, candidate.id, { ledger: o.ledger, actor: "review" });
       if (adopted.ok) result.adopted = adopted.candidate;

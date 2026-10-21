@@ -5,6 +5,7 @@ import { scanText } from "../learning/threats";
 import { saveCandidate, newId, type Candidate } from "./candidates";
 import { detectDomain } from "./domain";
 import { adoptedTree } from "./service";
+import { validateTree } from "./tree";
 
 export const HARNESS_SUGGESTION_RULES =
   "Harness suggestions: if the conversation above shows a mistake in how you work — how you used tools, checked your work, planned or delegated — " +
@@ -50,8 +51,11 @@ export async function saveSuggestion(home: string, cwd: string, session: { id: s
   // The candidate is for every project, so it builds on the adopted global layer only, never on this project's.
   const current = (await adoptedTree(home, cwd, "global")).get("guardrails.md") ?? "";
   const guardrails = `${current.trimEnd()}${current.trim() ? "\n" : ""}${rules.map((r) => `- ${r}`).join("\n")}\n`;
-  // The whole file it would write, not only the new lines: that is what a session would read.
+  // The whole file it would write, not only the new lines: that is what a session would read. And it must fit, or
+  // adopting it would make sessions skip the whole global layer.
   if (!scanText(guardrails).ok) return null;
+  const global = await adoptedTree(home, cwd, "global");
+  if (validateTree(new Map([...global, ["guardrails.md", guardrails]])).length > 0) return null;
   const candidate: Candidate = {
     id: newId(now),
     createdAt: now.toISOString(),

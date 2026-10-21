@@ -30,7 +30,7 @@ export interface CheckedChanges {
 }
 
 /** The files an editor may write, checked one by one; a budget overrun drops every always-on change. */
-export function checkChanges(role: EditorRole | "composer", current: HarnessTree, raw: unknown): CheckedChanges {
+export function checkChanges(role: EditorRole | "composer", current: HarnessTree, raw: unknown, fixed: ReadonlySet<string> = new Set()): CheckedChanges {
   const changes: Changes = new Map();
   const rejected: string[] = [];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { changes, rejected: raw === undefined ? [] : ['"files" is not an object'] };
@@ -45,7 +45,8 @@ export function checkChanges(role: EditorRole | "composer", current: HarnessTree
       continue;
     }
     if (value === null) {
-      if (path === "system.md") rejected.push("system.md: can't be removed");
+      // A layer only adds and replaces: a file from a layer below it would come back the moment it was adopted.
+      if (path === "system.md" || fixed.has(path)) rejected.push(`${path}: comes from a layer below this one; it can be replaced, not removed`);
       else changes.set(path, null);
       continue;
     }
@@ -131,6 +132,8 @@ export interface ProposeInput {
   referenceTrajectory: string;
   /** Lessons and earlier harnesses from the library for this domain; empty when there are none. */
   library: string;
+  /** Files of the layers below the one being changed: they can be replaced, never removed. */
+  fixed?: ReadonlySet<string>;
 }
 
 export function editorPrompt(input: ProposeInput): string {
@@ -153,7 +156,7 @@ export async function propose(llm: LlmConfig, role: EditorRole, input: ProposeIn
     const reply = await complete(llm, system, editorPrompt(input), signal);
     costUsd = reply.costUsd;
     const json = extractJson(reply.text);
-    const checked = checkChanges(role, input.tree, json.files);
+    const checked = checkChanges(role, input.tree, json.files, input.fixed);
     return {
       role,
       observations: strings(json.observations),

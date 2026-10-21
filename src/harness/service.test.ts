@@ -117,3 +117,29 @@ test("labOnTask: lab, reflection, review suggestions marked as tested and never 
   expect(r.reflection.stored).toBe(true); // the harness did better: an entry even without lessons
   expect((await readCandidate(home, "20261020-000000-0000"))?.status).toBe("discarded");
 });
+
+/** Same checks either way; only fewer turns when the harness says "Be brief." */
+class TurnsRunner implements ProbeRunner {
+  async run(input: ProbeInput): Promise<ProbeResult> {
+    const brief = input.harnessFiles.some((f) => /Be brief/.test(readFileSync(join(input.harnessDir, f), "utf8")));
+    await writeFile(join(input.dir, "trajectory.jsonl"), "");
+    return {
+      id: input.id, label: input.label, harness: input.harnessFiles, finalText: "", seconds: 1, error: null,
+      checks: [{ command: "bun test", ok: true, exit: 0, timedOut: false, tail: "", seconds: 1 }],
+      audit: { files: 1, insertions: 1, deletions: 0, testFilesTouched: [], testFilesEdited: [], focusMarkers: [] },
+      signals: { turns: brief ? 5 : 20, toolCalls: 5, toolErrors: 0, filesWritten: 1, verifiedAfterLastEdit: true, rereadWritten: 0, endReason: "end_turn", costUsd: 0 },
+    };
+  }
+}
+
+test("an improvement only in steps, from one run each, waits for the owner", async () => {
+  const brief = () => reply([textBlock(JSON.stringify({ files: { "guardrails.md": "Be brief." } }))]);
+  const model = new FakeModel([brief, () => reply([textBlock('{"files": {}}')]), brief, () => reply([textBlock('{"lessons": []}')])]);
+  const r = await labOnTask(await taskFromPrompt(repo, "Tidy the README"), {
+    home, runner: new TurnsRunner(), llm: { model, id: "m", effort: "high" }, model: "m", scope: "global", k: 1, mode: "parallel",
+    autoAdopt: true, ledger: new Ledger(home), signal: new AbortController().signal,
+  });
+  expect(r.run.verdict).toEqual({ outcome: "better", reasons: ["turns 20 → 5"] });
+  expect(r.adopted).toBeUndefined();
+  expect(r.pending).toContain("only on steps or tool errors");
+});

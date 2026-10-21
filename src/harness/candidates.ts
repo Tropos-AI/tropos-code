@@ -10,7 +10,8 @@ import { readSmallFileSync } from "../paths";
 import type { Actor } from "../tools/types";
 import type { Verdict } from "./gate";
 import { MAX_FILE_BYTES, runsCode, surfaceKind } from "./surface";
-import { globalHarnessDir, harnessRoot, projectHarnessDir } from "./tree";
+import { BASE_TREE } from "./base";
+import { globalHarnessDir, harnessRoot, overlay, projectHarnessDir, readLayer, validateTree } from "./tree";
 
 export type CandidateStatus = "pending" | "adopted" | "discarded" | "reverted";
 
@@ -112,6 +113,15 @@ export async function adoptCandidate(home: string, id: string, opts: { ledger: L
   if (offSurface.length) return { ok: false, reason: `Candidate ${id} changes files outside the harness: ${offSurface.join(", ")}` };
   if (candidateRunsCode(c) && !opts.allowCode) return { ok: false, reason: `Candidate ${id} adds or changes scripts; only the owner can adopt it.` };
   const dir = layerDir(home, c);
+  // The layer as it would be, over what lies below it, must still load: otherwise sessions would skip it whole.
+  const below = c.scope === "project" ? overlay(BASE_TREE, (await readLayer(globalHarnessDir(home))).tree) : BASE_TREE;
+  const next = new Map((await readLayer(dir)).tree);
+  for (const [path, value] of Object.entries(c.changes)) {
+    if (value === null) next.delete(path);
+    else next.set(path, value);
+  }
+  const broken = validateTree(overlay(below, next));
+  if (broken.length > 0) return { ok: false, reason: `Candidate ${id} would break its layer: ${broken.join("; ")}.` };
   const ledgerIds: string[] = [];
   for (const [path, after] of Object.entries(c.changes)) {
     const target = join(dir, path);
