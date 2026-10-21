@@ -1,8 +1,8 @@
 // src/messages/source.ts — read-only chat.db snapshots fetched through the helper, cached briefly, with plain-words errors
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { UserFacingError } from "../gateway/errors";
 import { Contacts } from "./contacts";
 import { MessagesDb } from "./db";
@@ -38,13 +38,26 @@ export class MessagesError extends UserFacingError {
 
 /** Turns a helper error reply into the matching MessagesError. */
 export function errorFromReply(reply: Extract<HelperReply, { ok: false }>): MessagesError {
-  if (reply.code === "eperm") return new MessagesError("no-full-disk-access");
+  if (reply.code === "eperm" || reply.code === "fda=no" || reply.message.trim() === "fda=no") return new MessagesError("no-full-disk-access");
   if (reply.code === "-1743") return new MessagesError("no-automation");
   if (reply.code === "timeout") return new MessagesError("timeout");
   return new MessagesError("helper", reply.message);
 }
 
 const BOOK_FILE = "AddressBook-v22.abcddb";
+
+/** True when `path` (already resolved) lies strictly inside `dir`. */
+function inside(dir: string, path: string): boolean {
+  return path.startsWith(resolve(dir) + sep);
+}
+
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 interface Snapshot {
   dir: string;
@@ -68,6 +81,10 @@ export class MessagesSource {
   private readonly cacheMs: number;
   private current: Snapshot | undefined;
   private pending: Promise<Snapshot> | undefined;
+  /** Position in call order at which `pending` started; `fresh` joins only a snapshot that started after it was called. */
+  private pendingSeq = 0;
+  private seq = 0;
+  private disposed = false;
   private lastBook: Contacts | undefined;
   private lastHandles: string[] = [];
   private readonly extraDirs = new Set<string>();
@@ -82,6 +99,8 @@ export class MessagesSource {
 
   /** Runs `fn` on a snapshot no older than the cache time. */
   async with<T>(fn: (db: MessagesDb, contacts: Contacts) => T | Promise<T>): Promise<T> {
+    this.assertOpen();
+    this.seq++;
     const live = this.current;
     const snap = live && !live.retired && this.now() - live.takenAt < this.cacheMs ? live : await this.take();
     return this.use(snap, fn);
@@ -89,6 +108,10 @@ export class MessagesSource {
 
   /** Runs `fn` on a snapshot taken right now (send verification must see the newest rows). */
   async fresh<T>(fn: (db: MessagesDb) => T): Promise<T> {
+    this.assertOpen();
+    const mine = ++this.seq;
+    // A snapshot already under way began before this call, so it may predate the caller's send; wait it out.
+    while (this.pending && this.pendingSeq < mine) await this.pending.catch(() => undefined);
     return this.use(await this.take(), (db) => fn(db));
   }
 
@@ -106,6 +129,7 @@ export class MessagesSource {
   /** Has the helper copy an attachment out of ~/Library/Messages/Attachments into the run folder. */
   async attachmentCopy(id: number): Promise<{ path: string; mime?: string; name: string }> {
     const found = await this.with((db) => db.attachment(id));
+    this.assertOpen();
     if (!found) throw new MessagesError("helper", `no attachment ${id}`);
     const allowed = join(resolve(this.userHome), "Library", "Messages", "Attachments") + sep;
     const src = resolve(found.path);
@@ -113,14 +137,27 @@ export class MessagesSource {
     const dir = join(this.runDir, `snap-att-${randomBytes(6).toString("hex")}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.extraDirs.add(dir);
-    const dest = join(dir, basename(src));
-    const reply = await this.client.request("attachment", [src, dest]);
-    if (!reply.ok) {
+    const discard = () => {
       rmSync(dir, { recursive: true, force: true });
       this.extraDirs.delete(dir);
+    };
+    let reply: HelperReply;
+    try {
+      reply = await this.client.request("attachment", [src, dir]);
+    } catch (err) {
+      discard();
+      throw err;
+    }
+    if (!reply.ok) {
+      discard();
       throw errorFromReply(reply);
     }
-    return { path: dest, ...(found.mime ? { mime: found.mime } : {}), name: found.name };
+    const copied = reply.lines[0] ? resolve(reply.lines[0]) : "";
+    if (this.disposed || !inside(dir, copied) || !existsSync(copied)) {
+      discard();
+      throw new MessagesError("helper", this.disposed ? "Messages was shut down" : "the helper returned an unexpected attachment path");
+    }
+    return { path: copied, ...(found.mime ? { mime: found.mime } : {}), name: found.name };
   }
 
   /** Closes the snapshot and deletes every folder this source made. */
@@ -128,8 +165,14 @@ export class MessagesSource {
     if (this.current) this.retire(this.current);
     this.current = undefined;
     this.lastBook = undefined;
+    this.lastHandles = [];
+    this.disposed = true;
     for (const dir of this.extraDirs) rmSync(dir, { recursive: true, force: true });
     this.extraDirs.clear();
+  }
+
+  private assertOpen(): void {
+    if (this.disposed) throw new MessagesError("helper", "Messages was shut down");
   }
 
   private async use<T>(snap: Snapshot, fn: (db: MessagesDb, contacts: Contacts) => T | Promise<T>): Promise<T> {
@@ -160,30 +203,42 @@ export class MessagesSource {
 
   /** One snapshot at a time; callers arriving meanwhile get the same one. */
   private take(): Promise<Snapshot> {
-    this.pending ??= this.snapshot().finally(() => {
-      this.pending = undefined;
-    });
+    if (!this.pending) {
+      this.pendingSeq = ++this.seq;
+      this.pending = this.snapshot().finally(() => {
+        this.pending = undefined;
+      });
+    }
     return this.pending;
   }
 
   private async snapshot(): Promise<Snapshot> {
     const dir = join(this.runDir, `snap-${randomBytes(6).toString("hex")}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
+    let db: Database | undefined;
     try {
       const reply = await this.client.request("snapshot", [dir]);
       if (!reply.ok) throw errorFromReply(reply);
       const chatDb = join(dir, "chat.db");
       if (!existsSync(chatDb)) throw new MessagesError("helper", "the snapshot has no chat.db");
       const contacts = await this.copyContacts(dir);
-      const db = new Database(chatDb, { readonly: true });
+      if (this.disposed) throw new MessagesError("helper", "Messages was shut down");
+      db = new Database(chatDb, { readonly: true });
       const snap: Snapshot = { dir, db, messages: new MessagesDb(db, (h) => contacts.nameOf(h), this.userHome), contacts, takenAt: this.now(), users: 0, retired: false };
+      const handles = snap.messages.handles();
+      if (this.disposed) throw new MessagesError("helper", "Messages was shut down");
       const previous = this.current;
       this.current = snap;
       this.lastBook = contacts;
-      this.lastHandles = snap.messages.handles();
+      this.lastHandles = handles;
       if (previous) this.retire(previous);
       return snap;
     } catch (err) {
+      try {
+        db?.close();
+      } catch {
+        // Already closed.
+      }
       rmSync(dir, { recursive: true, force: true });
       throw err;
     }
@@ -194,7 +249,14 @@ export class MessagesSource {
     try {
       const reply = await this.client.request("contacts", [dir]);
       if (!reply.ok) return Contacts.none();
-      return Contacts.open(reply.lines.filter((l) => l.trim()).map((l) => join(l.trim(), BOOK_FILE)));
+      // The helper lists files relative to the folder; anything resolving outside it is ignored.
+      const files = reply.lines
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => resolve(dir, l))
+        .filter((p) => inside(dir, p))
+        .map((p) => (isFolder(p) ? join(p, BOOK_FILE) : p));
+      return Contacts.open(files);
     } catch {
       return Contacts.none();
     }
