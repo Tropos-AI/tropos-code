@@ -1,11 +1,11 @@
 // src/messages/helper/applet.test.ts
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appleScriptString, appletSource } from "./applet";
+import { dirname, join } from "node:path";
+import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appleScriptString, appletSource, helperTokenPath } from "./applet";
 
-const ONEIL = { runDir: "/Users/John O'Neil/.tropos/run/messages-helper", userHome: '/Users/John O"Neil' };
+const ONEIL = { runDir: "/Users/John O'Neil/.local/share/tropos/helpers/run/messages-helper", userHome: '/Users/John O"Neil' };
 
 /** The script with every string literal removed, so what is left is only code. */
 function withoutLiterals(source: string): string {
@@ -32,7 +32,8 @@ describe("appletSource", () => {
   test("paths are escaped", () => {
     const source = appletSource(ONEIL);
     expect(source).toContain('"/Users/John O\\"Neil"');
-    expect(source).toContain(`"/Users/John O'Neil/.tropos/run/messages-helper"`);
+    expect(source).toContain(`"/Users/John O'Neil/.local/share/tropos/helpers/run/messages-helper"`);
+    expect(source).toContain(`"/Users/John O'Neil/.local/share/tropos/helpers/run/token"`);
     // Every quote inside the home path is escaped, so no literal ends early.
     expect(source).not.toMatch(/[^\\]"Neil/);
     // With literals removed, no path text is left behind as code.
@@ -42,10 +43,16 @@ describe("appletSource", () => {
   test("no request text is ever part of the script", () => {
     const source = appletSource(ONEIL);
     expect(source).not.toMatch(/\$\{|\{\{|%s|__[A-Z]+__/);
-    // The script depends only on the two folders: other folders change only those literals.
+    // The script depends only on the two folders: other folders change only the path literals.
     const other = appletSource({ runDir: "/r", userHome: "/h" });
     const strip = (s: string, o: typeof ONEIL) =>
-      s.split(appleScriptString(o.runDir)).join("RUN").split(appleScriptString(o.userHome)).join("HOME");
+      s
+        .split(appleScriptString(o.runDir))
+        .join("RUN")
+        .split(appleScriptString(helperTokenPath(o.runDir)))
+        .join("TOKEN")
+        .split(appleScriptString(o.userHome))
+        .join("HOME");
     expect(strip(source, ONEIL)).toBe(strip(other, { runDir: "/r", userHome: "/h" }));
     // Anything joined into a shell command goes through `quoted form of`.
     for (const line of withoutLiterals(source).split("\n")) {
@@ -70,6 +77,10 @@ describe("appletSource", () => {
     expect(source).toContain("send theBody to chat id theChat");
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
+    // A pending permission prompt can't hold the queue for AppleScript's default two minutes.
+    expect(source.match(/with timeout of 30 seconds/g)?.length).toBe(1);
+    expect(source.match(/with timeout of 170 seconds/g)?.length).toBe(2);
+    expect(source.match(/tell application "Messages"/g)?.length).toBe(4);
     // Properties and globals are saved back into an applet and would break its signature.
     expect(source).not.toMatch(/^\s*(property|global)\b/m);
   });
@@ -77,7 +88,8 @@ describe("appletSource", () => {
   test.skipIf(process.platform !== "darwin")("osacompile compiles it", () => {
     const dir = mkdtempSync(join(tmpdir(), "tropos-applet-"));
     try {
-      for (const [i, o] of [ONEIL, { runDir: "/Users/Γιώργος/.tropos/run/messages-helper", userHome: "/Users/Γιώργος" }].entries()) {
+      const greek = { runDir: "/Users/Γιώργος/.local/share/tropos/helpers/run/messages-helper", userHome: "/Users/Γιώργος" };
+      for (const [i, o] of [ONEIL, greek].entries()) {
         const src = join(dir, `x${i}.applescript`);
         writeFileSync(src, appletSource(o));
         const r = Bun.spawnSync(["/usr/bin/osacompile", "-o", join(dir, `x${i}.app`), src]);
@@ -88,49 +100,140 @@ describe("appletSource", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
 
-  // Runs the compiled script with osascript (not the helper app) against a made-up home in a temp folder.
-  // Only actions that stay inside that folder are exercised: never probe, send or open-settings.
-  test.skipIf(process.platform !== "darwin")("the compiled script answers requests against a fake home", () => {
+// These run the compiled script with osascript (never the helper app) against a made-up home in a temp
+// folder. Only actions that stay inside that folder are exercised: never probe, send or open-settings.
+describe.skipIf(process.platform !== "darwin")("the compiled script, against a fake home", () => {
+  const TOKEN = "ab".repeat(32);
+
+  /** Lays out a home like a real one, with the install's token; `runDir` is the folder the script watches. */
+  function fakeHome(dir: string) {
+    const home = join(dir, "John O'Neil");
+    const run = join(home, ".local", "share", "tropos", "helpers", "run");
+    const runDir = join(run, "messages-helper");
+    const messages = join(home, "Library", "Messages");
+    const attachments = join(messages, "Attachments", "ab");
+    const book = join(home, "Library", "Application Support", "AddressBook", "Sources", "X");
+    for (const d of [runDir, attachments, book]) mkdirSync(d, { recursive: true, mode: 0o700 });
+    writeFileSync(join(run, "token"), TOKEN, { mode: 0o600 });
+    writeFileSync(join(messages, "chat.db"), "db");
+    writeFileSync(join(messages, "chat.db-wal"), "wal");
+    writeFileSync(join(attachments, "Καλημέρα 👍.jpg"), "pic");
+    writeFileSync(join(book, "AddressBook-v22.abcddb"), "ab");
+    return { home, runDir, messages, attachments };
+  }
+
+  /** The caller's side: snapshot folders are created before the request. */
+  const snapFolder = (runDir: string, name: string) => {
+    const p = join(runDir, name);
+    mkdirSync(p, { mode: 0o700 });
+    return p;
+  };
+
+  function request(runDir: string, id: string, lines: string[], token = TOKEN) {
+    writeFileSync(join(runDir, `req-${id}.txt`), [token, ...lines].join("\n"));
+  }
+
+  function runApplet(dir: string, o: { runDir: string; userHome: string }) {
+    const src = join(dir, "x.applescript");
+    writeFileSync(src, appletSource(o));
+    expect(Bun.spawnSync(["/usr/bin/osacompile", "-o", join(dir, "x.scpt"), src]).exitCode).toBe(0);
+    const r = Bun.spawnSync(["/usr/bin/osascript", join(dir, "x.scpt")]);
+    expect({ code: r.exitCode, stderr: r.stderr.toString() }).toEqual({ code: 0, stderr: "" });
+  }
+
+  const reply = (runDir: string, id: string) => readFileSync(join(runDir, `res-${id}.txt`), "utf8");
+
+  test("it answers requests carrying the token", () => {
     const dir = mkdtempSync(join(tmpdir(), "tropos-applet-run-"));
     try {
-      const home = join(dir, "John O'Neil");
-      const runDir = join(home, ".tropos", "run", "messages-helper");
-      const attachments = join(home, "Library", "Messages", "Attachments", "ab");
-      const book = join(home, "Library", "Application Support", "AddressBook", "Sources", "X");
-      for (const d of [runDir, attachments, book]) mkdirSync(d, { recursive: true, mode: 0o700 });
-      writeFileSync(join(home, "Library", "Messages", "chat.db"), "db");
-      writeFileSync(join(home, "Library", "Messages", "chat.db-wal"), "wal");
-      writeFileSync(join(attachments, "Καλημέρα 👍.jpg"), "pic");
-      writeFileSync(join(book, "AddressBook-v22.abcddb"), "ab");
-      const requests: Record<string, string[]> = {
-        "01": ["status"],
-        "02": ["snapshot", `${runDir}/snap-a`],
-        "03": ["contacts", `${runDir}/snap-a/c`],
-        "04": ["attachment", join(attachments, "Καλημέρα 👍.jpg"), `${runDir}/snap-a`],
-        "05": ["attachment", join(home, "Library", "Messages", "Attachments", "..", "chat.db"), `${runDir}/snap-a`],
-        "06": ["snapshot", `${runDir}/snap-a/../../x`],
-        "07": ["snapshot", join(dir, "elsewhere")],
-        "08": ["frobnicate"],
-      };
-      for (const [id, lines] of Object.entries(requests)) writeFileSync(join(runDir, `req-${id}.txt`), lines.join("\n"));
-      const src = join(dir, "x.applescript");
-      writeFileSync(src, appletSource({ runDir, userHome: home }));
-      expect(Bun.spawnSync(["/usr/bin/osacompile", "-o", join(dir, "x.scpt"), src]).exitCode).toBe(0);
-      const r = Bun.spawnSync(["/usr/bin/osascript", join(dir, "x.scpt")]);
-      expect({ code: r.exitCode, stderr: r.stderr.toString() }).toEqual({ code: 0, stderr: "" });
-      const reply = (id: string) => readFileSync(join(runDir, `res-${id}.txt`), "utf8");
-      expect(reply("01")).toBe("ok\n0\nfda=yes");
-      expect(reply("02")).toBe("ok\n0\nchat.db");
-      expect(reply("03")).toBe("ok\n0\ncontacts-1/AddressBook-v22.abcddb");
-      expect(reply("04")).toBe(`ok\n0\n${runDir}/snap-a/Καλημέρα 👍.jpg`);
-      for (const id of ["05", "06", "07", "08"]) expect(reply(id)).toStartWith("error\nbad-request\n");
-      expect(readFileSync(join(runDir, "snap-a", "chat.db-wal"), "utf8")).toBe("wal");
-      expect(readFileSync(join(runDir, "snap-a", "Καλημέρα 👍.jpg"), "utf8")).toBe("pic");
-      expect(existsSync(join(runDir, "snap-a", "c", "contacts-1", "AddressBook-v22.abcddb"))).toBe(true);
+      const { home, runDir, attachments } = fakeHome(dir);
+      const snap = snapFolder(runDir, "snap-a");
+      request(runDir, "01", ["status"]);
+      request(runDir, "02", ["snapshot", snap]);
+      request(runDir, "03", ["contacts", snap]);
+      request(runDir, "04", ["attachment", join(attachments, "Καλημέρα 👍.jpg"), snap]);
+      request(runDir, "05", ["attachment", join(home, "Library", "Messages", "Attachments", "..", "chat.db"), snap]);
+      request(runDir, "06", ["snapshot", `${snap}/../../x`]);
+      request(runDir, "07", ["snapshot", join(dir, "elsewhere")]);
+      request(runDir, "08", ["frobnicate"]);
+      request(runDir, "09", ["snapshot", join(runDir, "snap-missing")]);
+      request(runDir, "10", ["status"], "cd".repeat(32));
+      runApplet(dir, { runDir, userHome: home });
+      expect(reply(runDir, "01")).toBe("ok\n0\nfda=yes");
+      expect(reply(runDir, "02")).toBe("ok\n0\nchat.db");
+      expect(reply(runDir, "03")).toBe("ok\n0\ncontacts-1/AddressBook-v22.abcddb");
+      expect(reply(runDir, "04")).toBe(`ok\n0\n${snap}/Καλημέρα 👍.jpg`);
+      for (const id of ["05", "06", "07", "08", "09"]) expect(reply(runDir, id)).toStartWith("error\nbad-request\n");
+      expect(reply(runDir, "10")).toStartWith("error\nunauthorized\n");
+      expect(readFileSync(join(snap, "chat.db"), "utf8")).toBe("db");
+      expect(readFileSync(join(snap, "chat.db-wal"), "utf8")).toBe("wal");
+      expect(readFileSync(join(snap, "Καλημέρα 👍.jpg"), "utf8")).toBe("pic");
+      expect(readFileSync(join(snap, "contacts-1", "AddressBook-v22.abcddb"), "utf8")).toBe("ab");
       expect(existsSync(join(dir, "elsewhere"))).toBe(false);
+      expect(existsSync(join(runDir, "snap-missing"))).toBe(false);
       // Every request was consumed and every reply was renamed into place.
       expect(readdirSync(runDir).filter((n) => !n.startsWith("res-") || n.endsWith(".tmp"))).toEqual(["snap-a"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("symlinks never lead it outside its folders", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tropos-applet-links-"));
+    try {
+      const { home, runDir, attachments, messages } = fakeHome(dir);
+      const elsewhere = join(dir, "elsewhere");
+      mkdirSync(elsewhere);
+      symlinkSync(elsewhere, join(runDir, "snap-link"));
+      writeFileSync(join(home, "secret.txt"), "secret");
+      symlinkSync(join(home, "secret.txt"), join(attachments, "link.jpg"));
+      const outside = join(dir, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "file.jpg"), "outside");
+      symlinkSync(outside, join(messages, "Attachments", "out"));
+      const snap = snapFolder(runDir, "snap-b");
+      writeFileSync(join(dir, "victim"), "victim");
+      symlinkSync(join(dir, "victim"), join(snap, "chat.db"));
+      writeFileSync(join(dir, "victim2"), "victim2");
+      symlinkSync(join(dir, "victim2"), join(runDir, "res-15.txt.tmp"));
+
+      request(runDir, "11", ["snapshot", join(runDir, "snap-link")]);
+      request(runDir, "12", ["attachment", join(attachments, "link.jpg"), snap]);
+      request(runDir, "13", ["attachment", join(messages, "Attachments", "out", "file.jpg"), snap]);
+      request(runDir, "14", ["snapshot", snap]);
+      request(runDir, "15", ["status"]);
+      runApplet(dir, { runDir, userHome: home });
+
+      expect(reply(runDir, "11")).toStartWith("error\nbad-request\n");
+      expect(readdirSync(elsewhere)).toEqual([]);
+      expect(reply(runDir, "12")).toStartWith("error\nbad-request\n");
+      expect(reply(runDir, "13")).toStartWith("error\nbad-request\n");
+      expect(existsSync(join(snap, "secret.txt"))).toBe(false);
+      expect(existsSync(join(snap, "file.jpg"))).toBe(false);
+      // A planted symlink at a copy's name is replaced, never written through.
+      expect(reply(runDir, "14")).toBe("ok\n0\nchat.db");
+      expect(lstatSync(join(snap, "chat.db")).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(snap, "chat.db"), "utf8")).toBe("db");
+      expect(readFileSync(join(dir, "victim"), "utf8")).toBe("victim");
+      // So is one at the reply's temporary name.
+      expect(reply(runDir, "15")).toBe("ok\n0\nfda=yes");
+      expect(readFileSync(join(dir, "victim2"), "utf8")).toBe("victim2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a run folder that is a symlink is not served", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tropos-applet-runlink-"));
+    try {
+      const { home, runDir } = fakeHome(dir);
+      const linked = join(dirname(runDir), "linked");
+      symlinkSync(runDir, linked);
+      request(runDir, "01", ["status"]);
+      runApplet(dir, { runDir: linked, userHome: home });
+      expect(readdirSync(runDir)).toEqual(["req-01.txt"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

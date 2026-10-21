@@ -1,11 +1,12 @@
 // src/messages/helper/client.ts — talks to the Tropos Messages Helper through request/response files
 import { randomBytes } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { helperTokenPath } from "./applet";
 import type { Exec } from "./install";
 
 /**
- * A helper answer. Error codes: from the helper `bad-request`, `eperm` (macOS refused the file, i.e. no
+ * A helper answer. Error codes: from the helper `bad-request`, `unauthorized` (wrong token), `eperm` (macOS refused the file, i.e. no
  * Full Disk Access) or an AppleScript error number such as `-1743` (no Automation permission); from the
  * client `timeout`, `launch` (the app couldn't be started) and `bad-reply`.
  */
@@ -20,10 +21,15 @@ const SNAPSHOT_MAX_AGE_MS = 60_000;
 /** Older than any request's deadline, so a live request of another Tropos process is never swept. */
 const STALE_FILE_MS = SEND_TIMEOUT_MS + 20_000;
 const ACTION = /^[a-z][a-z-]*$/;
+/** Anything AppleScript's `paragraphs of` would split a request line at. */
+const LINE_BREAK = /[\r\n\u2028\u2029]/;
+const TOKEN = /^[0-9a-f]{64}$/;
 
 /**
- * One connection to the helper app. Each request is a `req-<id>.txt` (action, then one argument per line)
- * plus, for sends, the text in `req-<id>.body`, which is written first and byte-for-byte. The client then
+ * One connection to the helper app. Each request is a `req-<id>.txt` (the install's token, the action, then
+ * one argument per line) plus, for sends, the text in `req-<id>.body`, which is written first and
+ * byte-for-byte. The token (`<runDir>/../token`, 32 random bytes as hex, mode 0600) is created on first use;
+ * the helper ignores requests without it. The client then
  * runs `open -g` on the app and polls every 100 ms for `res-<id>.txt`. Requests run one at a time. On a
  * timeout the request files are deleted, so a helper launched later can't act on a request nobody waits for.
  */
@@ -53,7 +59,7 @@ export class HelperClient {
 
   private async exchange(action: string, args: string[], opts: { body?: string; timeoutMs?: number }): Promise<HelperReply> {
     if (!ACTION.test(action)) return { ok: false, code: "bad-request", message: `not a helper action: ${JSON.stringify(action)}` };
-    if (args.some((a) => /[\r\n]/.test(a))) return { ok: false, code: "bad-request", message: "a helper argument can't contain a line break" };
+    if (args.some((a) => LINE_BREAK.test(a))) return { ok: false, code: "bad-request", message: "a helper argument can't contain a line break" };
     const timeoutMs = opts.timeoutMs ?? (action.startsWith("send-") ? SEND_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
 
     await mkdir(this.runDir, { recursive: true, mode: 0o700 });
@@ -62,6 +68,7 @@ export class HelperClient {
       this.swept = true;
       await this.sweep();
     }
+    const token = await this.token();
 
     const id = `${String(Math.max(0, Math.floor(this.now()))).padStart(13, "0")}-${randomBytes(6).toString("hex")}`;
     const reqPath = join(this.runDir, `req-${id}.txt`);
@@ -72,12 +79,12 @@ export class HelperClient {
     if (opts.body !== undefined) await writeFile(bodyPath, opts.body, { encoding: "utf8", mode: 0o600 });
     // Written aside and renamed, so the helper never reads half a request.
     const pending = join(this.runDir, `req-${id}.pending`);
-    await writeFile(pending, [action, ...args].join("\n"), { encoding: "utf8", mode: 0o600 });
+    await writeFile(pending, [token, action, ...args].join("\n"), { encoding: "utf8", mode: 0o600 });
     await rename(pending, reqPath);
 
     const start = this.now();
     let launched = start;
-    const launch = await this.launch();
+    const launch = await this.launch(timeoutMs);
     if (launch) {
       await withdraw();
       return { ok: false, code: "launch", message: launch };
@@ -101,20 +108,48 @@ export class HelperClient {
       }
       if (waiting && t - launched >= RELAUNCH_MS) {
         launched = t;
-        await this.launch();
+        await this.launch(start + timeoutMs - t);
       }
       await this.sleep(POLL_MS);
     }
   }
 
-  /** Starts the helper in the background; returns why it couldn't, or undefined. */
-  private async launch(): Promise<string | undefined> {
+  /** Starts the helper in the background, waiting no longer than the request may; returns why it couldn't, or undefined. */
+  private async launch(remainingMs: number): Promise<string | undefined> {
     try {
-      const r = await this.exec("/usr/bin/open", ["-g", this.appPath], 15_000);
+      const r = await this.exec("/usr/bin/open", ["-g", this.appPath], Math.max(1, Math.min(15_000, remainingMs)));
       if (r.code === 0) return undefined;
       return (r.stderr || r.stdout).trim() || `open exited with ${r.code ?? "no code"}`;
     } catch (err) {
       return (err as Error).message;
+    }
+  }
+
+  /**
+   * The install's request token, created when missing. Anything at its place that isn't a regular file
+   * holding a token (a symlink, a damaged file) is replaced; when two processes create it at once, the first wins.
+   */
+  private async token(): Promise<string> {
+    const path = helperTokenPath(this.runDir);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const st = await lstat(path).catch(() => undefined);
+    if (st?.isFile()) {
+      const text = (await readFile(path, "utf8")).trim();
+      if (TOKEN.test(text)) {
+        if ((st.mode & 0o777) !== 0o600) await chmod(path, 0o600);
+        return text;
+      }
+    }
+    if (st) await rm(path, { force: true });
+    try {
+      const fresh = randomBytes(32).toString("hex");
+      await writeFile(path, fresh, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      return fresh;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const text = (await readFile(path, "utf8")).trim();
+      if (!TOKEN.test(text)) throw new Error(`the helper token at ${path} is unreadable`);
+      return text;
     }
   }
 

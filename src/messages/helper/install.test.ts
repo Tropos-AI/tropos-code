@@ -4,18 +4,21 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveLayout, type Layout } from "../../install/layout";
-import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION } from "./applet";
+import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appleScriptString } from "./applet";
 import { ensureHelper, helperAppPath, helperRunDir, type Exec } from "./install";
 
 let root: string;
 let layout: Layout;
 let calls: { cmd: string; args: string[] }[];
+/** The script osacompile was given, read when it ran. */
+let compiled: string | undefined;
 
 /** Pretends to be osacompile/plutil/codesign: osacompile lays out a bare bundle, the rest only get recorded. */
 const fakeExec: Exec = async (cmd, args) => {
   calls.push({ cmd, args });
   if (cmd.endsWith("osacompile")) {
     const out = args[args.indexOf("-o") + 1]!;
+    compiled = readFileSync(args.at(-1)!, "utf8");
     mkdirSync(join(out, "Contents", "Resources"), { recursive: true });
     writeFileSync(join(out, "Contents", "Info.plist"), "<plist/>");
     writeFileSync(join(out, "Contents", "Resources", "Scripts-main.scpt"), "compiled");
@@ -36,15 +39,16 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "tropos-helper-install-"));
   layout = resolveLayout({}, join(root, "user"));
   calls = [];
+  compiled = undefined;
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const ensure = () => ensureHelper({ home: join(root, "user", ".tropos"), userHome: join(root, "user"), exec: fakeExec, layout });
+const ensure = () => ensureHelper({ userHome: join(root, "user"), exec: fakeExec, layout });
 
 describe("ensureHelper", () => {
   test("the app lives in the data folder's helpers", () => {
     expect(helperAppPath(layout)).toBe(join(layout.data, "helpers", `${HELPER_NAME}.app`));
-    expect(helperRunDir("/h/.tropos")).toBe("/h/.tropos/run/messages-helper");
+    expect(helperRunDir(layout)).toBe(join(layout.data, "helpers", "run", "messages-helper"));
   });
 
   test("a fresh install compiles, re-identifies, marks and signs the applet", async () => {
@@ -64,6 +68,9 @@ describe("ensureHelper", () => {
     // The compiled script is the generated one, pointed at this user's folders.
     const src = calls[0]!.args.at(-1)!;
     expect(src.endsWith(".applescript")).toBe(true);
+    expect(compiled).toContain(appleScriptString(helperRunDir(layout)));
+    expect(compiled).toContain(appleScriptString(join(layout.data, "helpers", "run", "token")));
+    expect(compiled).toContain(appleScriptString(join(root, "user")));
     // Nothing is left behind next to the app.
     expect(readdirSync(join(layout.data, "helpers"))).toEqual([`${HELPER_NAME}.app`]);
   });
@@ -74,7 +81,7 @@ describe("ensureHelper", () => {
       if (cmd.endsWith("codesign")) markedAtSign = existsSync(join(args.at(-1)!, "Contents", "Resources", "tropos-helper-version"));
       return fakeExec(cmd, args);
     };
-    await ensureHelper({ home: join(root, "user", ".tropos"), userHome: join(root, "user"), exec, layout });
+    await ensureHelper({ userHome: join(root, "user"), exec, layout });
     expect(markedAtSign).toBe(true);
   });
 
@@ -113,9 +120,21 @@ describe("ensureHelper", () => {
       if (cmd.endsWith("codesign")) installed(String(HELPER_VERSION));
       return fakeExec(cmd, args);
     };
-    const r = await ensureHelper({ home: join(root, "user", ".tropos"), userHome: join(root, "user"), exec, layout });
+    const r = await ensureHelper({ userHome: join(root, "user"), exec, layout });
     expect(r).toEqual({ path: helperAppPath(layout), installed: "new" });
     expect(readdirSync(join(layout.data, "helpers"))).toEqual([`${HELPER_NAME}.app`]);
+  });
+
+  test("an older helper another process is replacing right now doesn't stop the upgrade", async () => {
+    installed("0");
+    const exec: Exec = async (cmd, args) => {
+      // While this build signs, another Tropos process moves the old helper aside.
+      if (cmd.endsWith("codesign")) rmSync(helperAppPath(layout), { recursive: true });
+      return fakeExec(cmd, args);
+    };
+    const r = await ensureHelper({ userHome: join(root, "user"), exec, layout });
+    expect(r).toEqual({ path: helperAppPath(layout), installed: "upgraded" });
+    expect(readFileSync(marker(), "utf8").trim()).toBe(String(HELPER_VERSION));
   });
 
   test("a failed build says why and keeps the old helper", async () => {
@@ -124,7 +143,7 @@ describe("ensureHelper", () => {
       if (cmd.endsWith("codesign")) return { code: 1, stdout: "", stderr: "codesign: no identity" };
       return fakeExec(cmd, args);
     };
-    await expect(ensureHelper({ home: join(root, "user", ".tropos"), userHome: join(root, "user"), exec, layout })).rejects.toThrow(
+    await expect(ensureHelper({ userHome: join(root, "user"), exec, layout })).rejects.toThrow(
       /codesign.*no identity/,
     );
     expect(readFileSync(marker(), "utf8")).toBe("0");

@@ -17,9 +17,13 @@ export function helperAppPath(layout: Layout = resolveLayout()): string {
   return join(layout.data, "helpers", `${HELPER_NAME}.app`);
 }
 
-/** The folder the helper and Tropos exchange requests through, under Tropos's home (normally ~/.tropos). */
-export function helperRunDir(home: string): string {
-  return join(home, "run", "messages-helper");
+/**
+ * The folder the helper and Tropos exchange requests through: `<data>/helpers/run/messages-helper`, beside the
+ * app, so every Tropos process of this install (whatever its Tropos home) talks to the helper it built. The
+ * request token lives next to it, in `<data>/helpers/run/token`.
+ */
+export function helperRunDir(layout: Layout = resolveLayout()): string {
+  return join(layout.data, "helpers", "run", "messages-helper");
 }
 
 /** The installed helper's version, or undefined when it's missing or its marker is unreadable. */
@@ -50,7 +54,6 @@ async function run(exec: Exec, cmd: string, args: string[]): Promise<void> {
  * removed once the new one is in place, or put back when that fails.
  */
 export async function ensureHelper(o: {
-  home: string;
   userHome: string;
   exec: Exec;
   layout?: Layout;
@@ -68,7 +71,7 @@ export async function ensureHelper(o: {
   try {
     const source = join(work, "helper.applescript");
     const built = join(work, `${HELPER_NAME}.app`);
-    await writeFile(source, appletSource({ runDir: helperRunDir(o.home), userHome: o.userHome }), { mode: 0o600 });
+    await writeFile(source, appletSource({ runDir: helperRunDir(layout), userHome: o.userHome }), { mode: 0o600 });
     await run(o.exec, "/usr/bin/osacompile", ["-o", built, source]);
     const plist = join(built, "Contents", "Info.plist");
     await run(o.exec, "/usr/bin/plutil", ["-replace", "CFBundleIdentifier", "-string", HELPER_BUNDLE_ID, plist]);
@@ -81,11 +84,20 @@ export async function ensureHelper(o: {
     await run(o.exec, "/usr/bin/codesign", ["--force", "--sign", "-", "--identifier", HELPER_BUNDLE_ID, built]);
 
     const aside = join(work, "previous.app");
-    if (existed) await rename(appPath, aside);
+    let movedAside = false;
     try {
+      if (existed) {
+        // Gone already when another Tropos process is replacing it at this very moment; then just install.
+        await rename(appPath, aside).then(
+          () => (movedAside = true),
+          (err: NodeJS.ErrnoException) => {
+            if (err.code !== "ENOENT") throw err;
+          },
+        );
+      }
       await rename(built, appPath);
     } catch (err) {
-      if (existed) await rename(aside, appPath).catch(() => {});
+      if (movedAside) await rename(aside, appPath).catch(() => {});
       // Another Tropos process may have just put a current helper in place; that one is as good as ours.
       const now = await installedHelperVersion(appPath);
       if (now !== undefined && now >= HELPER_VERSION) return { path: appPath, installed: existed ? "upgraded" : "new" };

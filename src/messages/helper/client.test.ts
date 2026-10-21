@@ -1,8 +1,8 @@
 // src/messages/helper/client.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { HelperClient } from "./client";
 import type { Exec } from "./install";
 
@@ -18,24 +18,29 @@ const sleep = async (ms: number) => {
   await new Promise((r) => setTimeout(r, 1));
 };
 
-type Request = { id: string; lines: string[]; body?: Buffer };
+type Request = { id: string; token: string; lines: string[]; body?: Buffer };
 
 /**
  * A fake helper behind `open -g`: like the applet, it takes every waiting request (deleting its files)
- * and answers each with whatever `answer` returns; `null` leaves it unanswered.
+ * and answers each with whatever `answer` returns; `null` leaves it unanswered. A `deaf` helper never even
+ * looks at its requests.
  */
-function fakeHelper(answer: (req: Request) => string | null, opts: { delayMs?: number } = {}) {
+function fakeHelper(answer: (req: Request) => string | null, opts: { delayMs?: number; deaf?: boolean } = {}) {
   const seen: Request[] = [];
   const opens: string[][] = [];
-  const exec: Exec = async (cmd, args) => {
+  const openTimeouts: (number | undefined)[] = [];
+  const exec: Exec = async (cmd, args, timeoutMs) => {
     opens.push([cmd, ...args]);
+    openTimeouts.push(timeoutMs);
+    if (opts.deaf) return { code: 0, stdout: "", stderr: "" };
     const take = () => {
       for (const name of readdirSync(runDir).sort()) {
         const m = /^req-(.+)\.txt$/.exec(name);
         if (!m) continue;
         const id = m[1]!;
         const bodyPath = join(runDir, `req-${id}.body`);
-        const req: Request = { id, lines: readFileSync(join(runDir, name), "utf8").split("\n") };
+        const [token, ...lines] = readFileSync(join(runDir, name), "utf8").split("\n");
+        const req: Request = { id, token: token!, lines };
         if (existsSync(bodyPath)) req.body = readFileSync(bodyPath);
         rmSync(join(runDir, name));
         rmSync(bodyPath, { force: true });
@@ -51,12 +56,12 @@ function fakeHelper(answer: (req: Request) => string | null, opts: { delayMs?: n
     else take();
     return { code: 0, stdout: "", stderr: "" };
   };
-  return { exec, seen, opens };
+  return { exec, seen, opens, openTimeouts };
 }
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "tropos-helper-client-"));
-  runDir = join(root, ".tropos", "run", "messages-helper");
+  runDir = join(root, "user", ".local", "share", "tropos", "helpers", "run", "messages-helper");
   clock = 1_800_000_000_000;
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -83,6 +88,36 @@ describe("HelperClient", () => {
     expect(h.seen[0]!.lines).toEqual(["attachment", "/a b/c'd.jpg", `${runDir}/snap-1`]);
     expect(h.seen[0]!.body).toBeUndefined();
     expect(h.opens[0]).toEqual(["/usr/bin/open", "-g", APP]);
+  });
+
+  test("every request starts with the install's token, created 0600 on first use", async () => {
+    const h = fakeHelper(() => "ok\n0");
+    await client(h.exec).request("status", []);
+    const tokenPath = join(dirname(runDir), "token");
+    const token = readFileSync(tokenPath, "utf8");
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    expect(h.seen[0]!.token).toBe(token);
+    expect(h.seen[0]!.lines).toEqual(["status"]);
+    // Another client of the same install reuses it.
+    await client(h.exec).request("status", []);
+    expect(h.seen[1]!.token).toBe(token);
+  });
+
+  test("a token that is a symlink or damaged is replaced", async () => {
+    const tokenPath = join(dirname(runDir), "token");
+    mkdirSync(dirname(tokenPath), { recursive: true });
+    const decoy = join(root, "decoy");
+    writeFileSync(decoy, "a".repeat(64));
+    symlinkSync(decoy, tokenPath);
+    const h = fakeHelper(() => "ok\n0");
+    await client(h.exec).request("status", []);
+    expect(lstatSync(tokenPath).isSymbolicLink()).toBe(false);
+    expect(h.seen[0]!.token).not.toBe("a".repeat(64));
+    expect(readFileSync(decoy, "utf8")).toBe("a".repeat(64));
+    writeFileSync(tokenPath, "garbage");
+    await client(h.exec).request("status", []);
+    expect(h.seen[1]!.token).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("body arrives literally", async () => {
@@ -118,17 +153,18 @@ describe("HelperClient", () => {
   });
 
   test("times out without hanging", async () => {
-    const h = fakeHelper(() => null, { delayMs: 1_000_000 });
+    const h = fakeHelper(() => null, { deaf: true });
     const start = clock;
     const r = await client(h.exec).request("probe", [], { timeoutMs: 1_000 });
     expect(r).toMatchObject({ ok: false, code: "timeout" });
+    if (!r.ok) expect(r.message).toMatch(/never picked/);
     expect(clock - start).toBeGreaterThanOrEqual(1_000);
     expect(clock - start).toBeLessThan(1_300);
     expect(readdirSync(runDir).filter((n) => n.startsWith("req-"))).toEqual([]);
   });
 
   test("a send's body is removed on timeout too", async () => {
-    const h = fakeHelper(() => null, { delayMs: 1_000_000 });
+    const h = fakeHelper(() => null, { deaf: true });
     const r = await client(h.exec).request("send-chat", ["iMessage;+;chat1"], { body: "hi", timeoutMs: 500 });
     expect(r).toMatchObject({ ok: false, code: "timeout" });
     expect(readdirSync(runDir)).toEqual([]);
@@ -142,9 +178,12 @@ describe("HelperClient", () => {
   });
 
   test("a request nobody picks up is launched again", async () => {
-    const h = fakeHelper(() => null, { delayMs: 1_000_000 });
+    const h = fakeHelper(() => null, { deaf: true });
     await client(h.exec).request("status", [], { timeoutMs: 5_000 });
     expect(h.opens.length).toBeGreaterThan(1);
+    // Launching never waits longer than the request may.
+    expect(h.openTimeouts[0]).toBe(5_000);
+    for (const t of h.openTimeouts) expect(t).toBeLessThanOrEqual(5_000);
   });
 
   test("a helper that can't be launched is an error, and its request is withdrawn", async () => {
@@ -196,6 +235,9 @@ describe("HelperClient", () => {
     const c = client(h.exec);
     expect(await c.request("send-handle", ["+30\nopen-settings", "iMessage"], { body: "x" })).toMatchObject({ ok: false, code: "bad-request" });
     expect(await c.request("status\nprobe", [])).toMatchObject({ ok: false, code: "bad-request" });
+    for (const sep of ["\r", "\u2028", "\u2029"]) {
+      expect(await c.request("send-chat", [`chat1${sep}open-settings`], { body: "x" })).toMatchObject({ ok: false, code: "bad-request" });
+    }
     expect(h.opens).toEqual([]);
   });
 

@@ -1,4 +1,5 @@
 // src/messages/helper/applet.ts — the AppleScript of the Tropos Messages Helper app, generated per user
+import { dirname, join } from "node:path";
 
 /** Raise this only when the script must change: a rebuilt helper loses its Full Disk Access and Automation grants. */
 export const HELPER_VERSION = 1;
@@ -10,23 +11,35 @@ export function appleScriptString(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+/** The per-install request token sits next to the run folder: `<runDir>/../token`. */
+export function helperTokenPath(runDir: string): string {
+  return join(dirname(runDir), "token");
+}
+
 /**
- * The helper's script. The only things written into it are the two folders, as escaped literals; every
- * request (action, arguments, message text) is read from files at run time into variables, so nothing a
- * request carries can ever become script text, and shell commands only ever see it through `quoted form of`.
+ * The helper's script. The only things written into it are three paths (the run folder, the token file and
+ * the user's home), as escaped literals; every request (token, action, arguments, message text) is read from
+ * files at run time into variables, so nothing a request carries can ever become script text, and shell
+ * commands only ever see it through `quoted form of`.
  *
- * Protocol, in `runDir`: `req-<id>.txt` holds the action on line 1 and one argument per following line; a
- * `send-*` request's text is `req-<id>.body`. The helper deletes both as soon as it has read them (so a send
- * is never repeated), does the work, then writes `res-<id>.txt.tmp` and renames it to `res-<id>.txt`: line 1
- * `ok` or `error`, line 2 a code (`0` when ok; `bad-request`, `eperm` or an AppleScript error number such as
- * `-1743` otherwise), then the result's lines or the error message.
+ * Protocol, in `runDir`: `req-<id>.txt` holds the install's token on line 1 (compared with the token file,
+ * which is read at run time and never through a symlink), the action on line 2 and one argument per
+ * following line; a `send-*` request's text is `req-<id>.body`. The helper deletes both as soon as it has
+ * read them (so a send is never repeated), does the work, then writes `res-<id>.txt.tmp` and renames it to
+ * `res-<id>.txt`: line 1 `ok` or `error`, line 2 a code (`0` when ok; `bad-request`, `unauthorized`, `eperm`
+ * or an AppleScript error number such as `-1743` otherwise), then the result's lines or the error message.
  *
  * Actions: `status` → `fda=yes|no`; `probe` → `accounts=<n>` (asks Messages, which raises the Automation
  * prompt); `snapshot <dest>` copies chat.db with its -wal/-shm into `dest`; `contacts <dest>` copies each
- * `AddressBook-v22.abcddb` (with -wal/-shm) to `dest/contacts-<n>/` and lists them; `attachment <src> <dest>`
- * copies one file from Messages' Attachments folder into `dest` and replies with the copy's path;
- * `send-handle <handle> <iMessage|SMS>` and `send-chat <guid>` send the body; `open-settings fda|automation`
- * opens that Privacy pane. Every `dest` must lie under `runDir/snap-…`.
+ * `AddressBook-v22.abcddb` (with -wal/-shm) to `dest/contacts-<n>/` and lists those paths relative to `dest`;
+ * `attachment <src> <dest>` copies one file from Messages' Attachments folder into `dest` and replies with
+ * the copy's path; `send-handle <handle> <iMessage|SMS>` and `send-chat <guid>` send the body;
+ * `open-settings fda|automation` opens that Privacy pane.
+ *
+ * Paths are checked physically, not just by spelling: the run folder must be a real directory (not a
+ * symlink) or the helper does nothing; every `dest` must be an existing real directory named `snap-…`
+ * directly inside it (the caller creates it); an attachment must be a real file (not a symlink) whose
+ * physical folder lies inside the physical Attachments folder. Copies use `cp -P` onto exact file names.
  *
  * The script has no `property` or `global`: an applet saves those back into its bundle when it quits, which
  * would break the signature and with it the grants.
@@ -46,6 +59,10 @@ on helperRunDir()
 	return ${appleScriptString(o.runDir)}
 end helperRunDir
 
+on helperTokenPath()
+	return ${appleScriptString(helperTokenPath(o.runDir))}
+end helperTokenPath
+
 on helperUserHome()
 	return ${appleScriptString(o.userHome)}
 end helperUserHome
@@ -56,11 +73,12 @@ end chatDbPath
 
 -- Handles every waiting request, including ones that arrive while it works; each one at most once.
 on processQueue()
+	set runDir to helperRunDir()
+	if isLink(runDir) or not isDir(runDir) then return
 	set handled to {}
 	repeat 1000 times
 		set fresh to false
 		try
-			set runDir to helperRunDir()
 			set entryNames to paragraphs of (do shell script "/bin/ls " & quoted form of runDir)
 		on error
 			return
@@ -90,14 +108,19 @@ on handleRequest(reqId)
 	set resPath to runDir & "/res-" & reqId & ".txt"
 	set reqLines to {}
 	set theBody to missing value
-	try
-		set reqLines to paragraphs of (read (POSIX file reqPath) as «class utf8»)
-	end try
-	if (count of reqLines) > 0 then
+	set authorized to false
+	if not isLink(reqPath) then
+		try
+			set reqLines to paragraphs of (read (POSIX file reqPath) as «class utf8»)
+		end try
+	end if
+	if (count of reqLines) > 1 then
+		set expected to readToken()
 		considering case
-			set isSend to (item 1 of reqLines) starts with "send-"
+			set authorized to (expected is not "") and ((item 1 of reqLines) is expected)
+			set isSend to (item 2 of reqLines) starts with "send-"
 		end considering
-		if isSend then
+		if authorized and isSend and not isLink(bodyPath) then
 			try
 				set theBody to read (POSIX file bodyPath) as «class utf8»
 			end try
@@ -105,17 +128,32 @@ on handleRequest(reqId)
 	end if
 	removeFile(reqPath)
 	removeFile(bodyPath)
-	if (count of reqLines) is 0 then
+	if (count of reqLines) < 2 then
 		set outcome to badRequest("the request was empty or unreadable")
+	else if not authorized then
+		set outcome to {"error", "unauthorized", "the request did not carry this install's token"}
 	else
 		try
-			set outcome to runAction(item 1 of reqLines, rest of reqLines, theBody)
+			set outcome to runAction(item 2 of reqLines, rest of (rest of reqLines), theBody)
 		on error errMsg number errNum
 			set outcome to {"error", errNum as text, errMsg}
 		end try
 	end if
 	writeReply(resPath, outcome)
 end handleRequest
+
+-- The install's token, read fresh each time; empty when it is missing, unreadable or a symlink.
+on readToken()
+	set tokenPath to helperTokenPath()
+	if isLink(tokenPath) then return ""
+	try
+		set tokenText to read (POSIX file tokenPath) as «class utf8»
+	on error
+		return ""
+	end try
+	if (count of paragraphs of tokenText) is 0 then return ""
+	return paragraph 1 of tokenText
+end readToken
 
 on runAction(act, reqArgs, theBody)
 	considering case
@@ -143,7 +181,9 @@ end doStatus
 
 on doProbe()
 	try
-		tell application "Messages" to set n to count of accounts
+		with timeout of 30 seconds
+			tell application "Messages" to set n to count of accounts
+		end timeout
 		return {"ok", "0", "accounts=" & n}
 	on error errMsg number errNum
 		return {"error", errNum as text, errMsg}
@@ -153,13 +193,12 @@ end doProbe
 on doSnapshot(reqArgs)
 	if (count of reqArgs) is not 1 then return badRequest("snapshot takes one folder")
 	set dest to item 1 of reqArgs
-	if not isSnapFolder(dest) then return badRequest("the snapshot folder must be in the helper's run folder")
+	if not isSnapFolder(dest) then return badRequest("the snapshot folder must be an existing snap- folder in the helper's run folder")
 	set chatDb to chatDbPath()
 	try
-		makeFolder(dest)
-		copyInto(chatDb, dest)
-		copyIfExists(chatDb & "-wal", dest)
-		copyIfExists(chatDb & "-shm", dest)
+		copyTo(chatDb, dest & "/chat.db")
+		copyIfExists(chatDb & "-wal", dest & "/chat.db-wal")
+		copyIfExists(chatDb & "-shm", dest & "/chat.db-shm")
 	on error errMsg number errNum
 		return shellFailure(errMsg, errNum)
 	end try
@@ -169,16 +208,11 @@ end doSnapshot
 on doContacts(reqArgs)
 	if (count of reqArgs) is not 1 then return badRequest("contacts takes one folder")
 	set dest to item 1 of reqArgs
-	if not isSnapFolder(dest) then return badRequest("the contacts folder must be in the helper's run folder")
+	if not isSnapFolder(dest) then return badRequest("the contacts folder must be an existing snap- folder in the helper's run folder")
 	set abDir to helperUserHome() & "/Library/Application Support/AddressBook"
 	set outcome to {"ok", "0"}
+	if not isDir(abDir) then return outcome
 	try
-		do shell script "/bin/test -d " & quoted form of abDir
-	on error
-		return outcome
-	end try
-	try
-		makeFolder(dest)
 		set found to paragraphs of (do shell script "/usr/bin/find " & quoted form of abDir & " -name AddressBook-v22.abcddb -type f")
 		set n to 0
 		repeat with foundRef in found
@@ -187,10 +221,10 @@ on doContacts(reqArgs)
 				set n to n + 1
 				set subName to "contacts-" & n
 				set sub to dest & "/" & subName
-				makeFolder(sub)
-				copyInto(dbPath, sub)
-				copyIfExists(dbPath & "-wal", sub)
-				copyIfExists(dbPath & "-shm", sub)
+				do shell script "/bin/mkdir -m 700 " & quoted form of sub
+				copyTo(dbPath, sub & "/AddressBook-v22.abcddb")
+				copyIfExists(dbPath & "-wal", sub & "/AddressBook-v22.abcddb-wal")
+				copyIfExists(dbPath & "-shm", sub & "/AddressBook-v22.abcddb-shm")
 				set end of outcome to subName & "/AddressBook-v22.abcddb"
 			end if
 		end repeat
@@ -204,18 +238,16 @@ on doAttachment(reqArgs)
 	if (count of reqArgs) is not 2 then return badRequest("attachment takes a file and a folder")
 	set src to item 1 of reqArgs
 	set dest to item 2 of reqArgs
-	if not isUnder(src, helperUserHome() & "/Library/Messages/Attachments/") then return badRequest("only files in Messages' Attachments folder can be copied")
-	if not isSnapFolder(dest) then return badRequest("the attachment folder must be in the helper's run folder")
-	set AppleScript's text item delimiters to "/"
-	set fileName to last text item of src
-	set AppleScript's text item delimiters to ""
+	if not isAttachment(src) then return badRequest("only files in Messages' Attachments folder can be copied")
+	if not isSnapFolder(dest) then return badRequest("the attachment folder must be an existing snap- folder in the helper's run folder")
+	set fileName to lastComponent(src)
+	set copied to dest & "/" & fileName
 	try
-		makeFolder(dest)
-		copyInto(src, dest)
+		copyTo(src, copied)
 	on error errMsg number errNum
 		return shellFailure(errMsg, errNum)
 	end try
-	return {"ok", "0", dest & "/" & fileName}
+	return {"ok", "0", copied}
 end doAttachment
 
 on doSendHandle(reqArgs, theBody)
@@ -229,15 +261,17 @@ on doSendHandle(reqArgs, theBody)
 	end considering
 	if not (useIMessage or useSMS) then return badRequest("the service must be iMessage or SMS")
 	try
-		if useIMessage then
-			tell application "Messages"
-				send theBody to participant theHandle of (1st account whose service type = iMessage)
-			end tell
-		else
-			tell application "Messages"
-				send theBody to participant theHandle of (1st account whose service type = SMS)
-			end tell
-		end if
+		with timeout of 170 seconds
+			if useIMessage then
+				tell application "Messages"
+					send theBody to participant theHandle of (1st account whose service type = iMessage)
+				end tell
+			else
+				tell application "Messages"
+					send theBody to participant theHandle of (1st account whose service type = SMS)
+				end tell
+			end if
+		end timeout
 	on error errMsg number errNum
 		return {"error", errNum as text, errMsg}
 	end try
@@ -249,9 +283,11 @@ on doSendChat(reqArgs, theBody)
 	if theBody is missing value then return badRequest("there was no text to send")
 	set theChat to item 1 of reqArgs
 	try
-		tell application "Messages"
-			send theBody to chat id theChat
-		end tell
+		with timeout of 170 seconds
+			tell application "Messages"
+				send theBody to chat id theChat
+			end tell
+		end timeout
 	on error errMsg number errNum
 		return {"error", errNum as text, errMsg}
 	end try
@@ -274,7 +310,7 @@ on doOpenSettings(reqArgs)
 	return badRequest("open-settings takes fda or automation")
 end doOpenSettings
 
--- True when p lies inside the folder prefix (which ends with "/" or a name start) with no way back out.
+-- True when the spelling of p starts with prefix, goes further, and has no way back out.
 on isUnder(p, prefix)
 	considering case
 		if not (p starts with prefix) then return false
@@ -285,26 +321,103 @@ on isUnder(p, prefix)
 	return true
 end isUnder
 
+-- An existing real directory named snap-... directly inside the physical run folder.
 on isSnapFolder(p)
-	return isUnder(p, helperRunDir() & "/snap-")
+	set runDir to helperRunDir()
+	if not isUnder(p, runDir & "/snap-") then return false
+	set nm to lastComponent(p)
+	considering case
+		if not (nm starts with "snap-") then return false
+	end considering
+	if isLink(p) or not isDir(p) then return false
+	try
+		set physDest to physicalDir(p)
+		set physRun to physicalDir(runDir)
+	on error
+		return false
+	end try
+	considering case
+		return physDest is (physRun & "/" & nm)
+	end considering
 end isSnapFolder
 
-on makeFolder(p)
-	do shell script "/bin/mkdir -p -m 700 " & quoted form of p
-end makeFolder
-
-on copyInto(src, destDir)
-	set destSlash to destDir & "/"
-	do shell script "/bin/cp -p " & quoted form of src & " " & quoted form of destSlash
-end copyInto
-
-on copyIfExists(src, destDir)
+-- A real file (not a symlink) whose physical folder lies inside the physical Attachments folder.
+on isAttachment(p)
+	set attDir to helperUserHome() & "/Library/Messages/Attachments"
+	if not isUnder(p, attDir & "/") then return false
+	set nm to lastComponent(p)
+	if nm is "" or nm is "." or nm is ".." then return false
+	if isLink(p) or not isFile(p) then return false
 	try
-		do shell script "/bin/test -e " & quoted form of src
+		set physParent to physicalDir(parentOf(p))
+		set physAtt to physicalDir(attDir)
 	on error
-		return
+		return false
 	end try
-	copyInto(src, destDir)
+	considering case
+		return (physParent is physAtt) or (physParent starts with (physAtt & "/"))
+	end considering
+end isAttachment
+
+on physicalDir(p)
+	return do shell script "cd -P -- " & quoted form of p & " && /bin/pwd -P"
+end physicalDir
+
+on isLink(p)
+	try
+		do shell script "/bin/test -L " & quoted form of p
+		return true
+	on error
+		return false
+	end try
+end isLink
+
+on isDir(p)
+	try
+		do shell script "/bin/test -d " & quoted form of p
+		return true
+	on error
+		return false
+	end try
+end isDir
+
+on isFile(p)
+	try
+		do shell script "/bin/test -f " & quoted form of p
+		return true
+	on error
+		return false
+	end try
+end isFile
+
+on lastComponent(p)
+	set AppleScript's text item delimiters to "/"
+	set nm to last text item of p
+	set AppleScript's text item delimiters to ""
+	return nm
+end lastComponent
+
+on parentOf(p)
+	set AppleScript's text item delimiters to "/"
+	set parts to text items of p
+	if (count of parts) < 2 then
+		set AppleScript's text item delimiters to ""
+		return "/"
+	end if
+	set parentText to (items 1 thru -2 of parts) as text
+	set AppleScript's text item delimiters to ""
+	return parentText
+end parentOf
+
+-- Copies one file onto an exact name: whatever was at that name (a planted symlink included) is removed first.
+on copyTo(src, destFile)
+	do shell script "/bin/rm -f " & quoted form of destFile
+	do shell script "/bin/cp -P -p " & quoted form of src & " " & quoted form of destFile
+end copyTo
+
+on copyIfExists(src, destFile)
+	if not isFile(src) then return
+	copyTo(src, destFile)
 end copyIfExists
 
 on removeFile(p)
@@ -325,6 +438,12 @@ end shellFailure
 -- Writes the reply next to its final name, then renames it, so the client never reads half a reply.
 on writeReply(resPath, outcome)
 	set tmpPath to resPath & ".tmp"
+	try
+		do shell script "/bin/rm -f " & quoted form of tmpPath
+	on error
+		return
+	end try
+	if isLink(tmpPath) then return
 	set AppleScript's text item delimiters to linefeed
 	set outText to outcome as text
 	set AppleScript's text item delimiters to ""
