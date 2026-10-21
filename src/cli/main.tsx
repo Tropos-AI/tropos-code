@@ -45,6 +45,7 @@ import {
 import { closeRuntime } from "./shutdown";
 import { USAGE } from "./usage";
 import { runGatewayCommand } from "../gateway/commands";
+import { confinedBackend, confinementAvailable } from "../exec/confined";
 import { harnessWarnings, loadHarness } from "../harness/tree";
 import { createLifecycleContext } from "./lifecycle/context";
 import { loadLifecycle } from "./lifecycle";
@@ -280,9 +281,9 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
 
   await layoutAtStart(home, VERSION, err);
-  const ext = await loadExtensions({ cwd, home, settings, env });
+  const harness = await loadHarness({ home, cwd, ...(opts.harnessDir ? { dir: resolveToolPath(opts.harnessDir, cwd) } : {}) });
+  const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
-  const harness = await loadHarness({ home, cwd });
   for (const warning of [...ext.warnings, ...harnessWarnings(harness)]) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
   const subagents: SubagentHolder = {};
   // The current session, for SessionSearch to skip; set once the session is open below.
@@ -307,6 +308,15 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     secrets: new SecretVault(),
     system: harness.system,
   };
+  if (opts.confine) {
+    // Confined or not at all: a probe run on the host would let a harness under test touch the machine.
+    if (!(await confinementAvailable())) {
+      err("tcode: --confine needs sandbox-exec (macOS) or bwrap (Linux), and neither works here.\n");
+      return 1;
+    }
+    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env });
+    ctx.confined = true;
+  }
   // The owner's terminal can schedule too; results go to the owner's chat.
   ctx.tools = [...ctx.tools, await ownerCronTool(home)];
   // And change Tropos's setup, through the dashboard's own handlers; a running gateway is told to reload by signal.

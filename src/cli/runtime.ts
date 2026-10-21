@@ -87,6 +87,8 @@ export interface AppContext {
   testWatch?: { observe(e: AgentEvent): void };
   /** The system prompt from the project's harness tree (src/harness/tree.ts); the built-in one when unset. */
   system?: string;
+  /** `--confine`: tool paths outside allowedDirs are denied, as in a messaging chat (Bash is confined through `exec`). */
+  confined?: boolean;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -128,7 +130,7 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     // `~` in a rule is the user's home; everything of Tropos's own (stores, own files) comes from ctx.home below.
     home: homedir(),
     allowedDirs: ctx.allowedDirs,
-    confine: ctx.origin === "channel",
+    confine: ctx.origin === "channel" || ctx.confined === true,
     role: ctx.role,
     autonomy: ctx.autonomy?.(),
     ownFiles: ownFileGuards(ctx.home),
@@ -486,6 +488,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         sections: [
           { title: "Yours (~/.tropos/workspace/skills)", items: bySource("user") },
           { title: "Learned on its own (~/.tropos/workspace/skills-learned)", items: bySource("learned") },
+          { title: "From the harness (~/.tropos/harness)", items: bySource("harness") },
           { title: "This project", items: bySource("project") },
           { title: "Plugins", items: bySource("plugin") },
         ].filter((section) => section.items.length > 0),

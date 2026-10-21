@@ -70,10 +70,10 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   for (const rule of invalid) warnings.push(`ignoring invalid permission rule "${rule}"`);
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const router = new ProviderRouter({ home, env, settings: settings.providers });
-  const ext = await loadExtensions({ cwd, home, settings, env });
-  warnings.push(...ext.warnings);
-  const harness = await loadHarness({ home, cwd });
+  let harness = await loadHarness({ home, cwd });
   warnings.push(...harnessWarnings(harness));
+  const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
+  warnings.push(...ext.warnings);
   const rgPath = Bun.which("rg");
   const ctx: AppContext = {
     cwd,
@@ -95,13 +95,13 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     system: harness.system,
   };
   const newSessionContext = async (): Promise<SessionContext> => {
+    // First, so a harness adopted while the gateway runs reaches the next session with its skills; never throws.
+    harness = await loadHarness({ home, cwd });
     await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));
-    // Re-read too, so a harness adopted while the gateway runs reaches the next session; never throws.
-    const sessionHarness = await loadHarness({ home, cwd });
     const holder: SubagentHolder = {};
     let current = "";
     return {
-      ctx: { ...ctx, system: sessionHarness.system, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
+      ctx: { ...ctx, system: harness.system, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
       setSessionId: (id) => {
         current = id;
       },

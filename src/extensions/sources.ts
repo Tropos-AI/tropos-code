@@ -10,9 +10,10 @@ export type ExtensionKind = "commands" | "skills" | "agents";
 /**
  * Where an extension came from. Project files arrive with the code and grant nothing. "learned" skills were
  * written by the background learning review without asking (workspace/skills-learned): the agent's own
- * notes, not the user's instructions.
+ * notes, not the user's instructions. "harness" skills and agents come from the harness tree (src/harness): adopted
+ * after the harness lab tested them, or the harness under test in a probe.
  */
-export type ExtensionSource = "user" | "learned" | "project" | "plugin";
+export type ExtensionSource = "user" | "learned" | "harness" | "project" | "plugin";
 
 /** The folder's name, inside the workspace (and at the home root before the layout change), where the learning review keeps the skills it writes. */
 export const LEARNED_SKILLS_DIR = "skills-learned";
@@ -58,13 +59,20 @@ export function projectChain(cwd: string): string[] {
  * the project (nearest directory first), then plugins. Loaders keep the first of each name, so a
  * cloned repo can't replace a command or skill the user wrote.
  */
-export function extensionDirs(kind: ExtensionKind, opts: { cwd: string; home: string; plugins?: PluginRoot[] }): ExtensionDir[] {
+export function extensionDirs(
+  kind: ExtensionKind,
+  opts: { cwd: string; home: string; plugins?: PluginRoot[]; harness?: { skillDirs: string[]; agentDirs: string[] } },
+): ExtensionDir[] {
   const dirs: ExtensionDir[] = [];
   if (kind === "skills") {
     // LEGACY_LAYOUT: resolveLayoutPath keeps loading ~/.tropos/skills until the migration moves it.
     dirs.push({ dir: resolveLayoutPath(opts.home, "skills"), source: "user" });
     dirs.push({ dir: resolveLayoutPath(opts.home, "skills-learned"), source: "learned" });
-  } else dirs.push({ dir: kind === "agents" ? agentsDir(opts.home) : join(opts.home, kind), source: "user" });
+    for (const dir of opts.harness?.skillDirs ?? []) dirs.push({ dir, source: "harness" });
+  } else {
+    dirs.push({ dir: kind === "agents" ? agentsDir(opts.home) : join(opts.home, kind), source: "user" });
+    if (kind === "agents") for (const dir of opts.harness?.agentDirs ?? []) dirs.push({ dir, source: "harness" });
+  }
   const chain = projectChain(opts.cwd);
   const root = chain.at(-1)!;
   for (const base of chain) {

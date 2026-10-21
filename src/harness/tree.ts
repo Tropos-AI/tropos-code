@@ -8,12 +8,13 @@ import { join, relative, sep } from "node:path";
 import { errorText } from "../error-text";
 import { projectKey, readSmallFileSync } from "../paths";
 import { BASE_TREE } from "./base";
-import { ALWAYS_ON, ALWAYS_ON_CHARS, MAX_FILE_BYTES, MAX_FILES, surfaceKind } from "./surface";
+import { ALWAYS_ON, ALWAYS_ON_CHARS, MAX_FILE_BYTES, MAX_FILES, surfaceKind, type SurfaceKind } from "./surface";
 
 /** Relative path ("/"-separated) → file text. */
 export type HarnessTree = ReadonlyMap<string, string>;
 
-export type LayerName = "base" | "global" | "project";
+/** "candidate" stands in for both adopted layers when a probe runs a harness under test (`--harness-dir`). */
+export type LayerName = "base" | "global" | "project" | "candidate";
 
 export interface HarnessLayer {
   name: LayerName;
@@ -29,9 +30,17 @@ export interface HarnessLayer {
 
 export interface Harness {
   tree: HarnessTree;
-  /** The always-on files joined: the session's system prompt. */
+  /** The always-on files joined, plus the list of scripts when there are any: the session's system prompt. */
   system: string;
   layers: HarnessLayer[];
+  /** `skills/` folders of the applied layers, the one that wins first. */
+  skillDirs: string[];
+  /** `agents/` folders of the applied layers, the one that wins first. */
+  agentDirs: string[];
+  /** Absolute paths of the scripts in effect. */
+  scripts: string[];
+  /** The hooks.json in effect, from an adopted layer only: a harness under test never runs hooks. */
+  hooksFile?: string;
 }
 
 export function globalHarnessDir(home: string): string {
@@ -106,27 +115,61 @@ export async function readLayer(dir: string): Promise<{ tree: HarnessTree; probl
   return { tree, problems };
 }
 
+/** The note that tells the agent which scripts its harness ships; absent without scripts, so the prompt is unchanged. */
+export function scriptsSection(scripts: string[]): string {
+  if (scripts.length === 0) return "";
+  return ["# Scripts", "Helpers that come with your harness; run them with Bash when they fit the task:", ...scripts.map((s) => `- ${s}`)].join("\n");
+}
+
 /**
  * The harness a session in `cwd` runs with. Never throws: a layer that breaks a rule is skipped whole, so a broken
- * overlay leaves the agent on the layers below it.
+ * overlay leaves the agent on the layers below it. With `dir`, that folder is the only overlay (a harness under test).
  */
-export async function loadHarness(opts: { home: string; cwd: string; base?: HarnessTree }): Promise<Harness> {
+export async function loadHarness(opts: { home: string; cwd: string; base?: HarnessTree; dir?: string }): Promise<Harness> {
   const base = opts.base ?? BASE_TREE;
   let tree = base;
+  /** Which layer folder each file comes from; base files have none. */
+  let origin = new Map<string, string>();
   const layers: HarnessLayer[] = [{ name: "base", files: [...base.keys()].sort(), applied: true, problems: [] }];
-  const overlays: [LayerName, string][] = [
-    ["global", globalHarnessDir(opts.home)],
-    ["project", projectHarnessDir(opts.home, opts.cwd)],
-  ];
+  const overlays: [LayerName, string][] =
+    opts.dir !== undefined
+      ? [["candidate", opts.dir]]
+      : [
+          ["global", globalHarnessDir(opts.home)],
+          ["project", projectHarnessDir(opts.home, opts.cwd)],
+        ];
   for (const [name, dir] of overlays) {
     const read = await readLayer(dir);
     const next = overlay(tree, read.tree);
     const broken = read.tree.size > 0 ? validateTree(next) : [];
     const applied = broken.length === 0;
-    if (applied) tree = next;
+    if (applied) {
+      tree = next;
+      origin = new Map([...origin, ...[...read.tree.keys()].map((path): [string, string] => [path, dir])]);
+    }
     layers.push({ name, dir, files: [...read.tree.keys()], applied, problems: [...read.problems, ...broken.map((p) => `${p}; layer skipped`)] });
   }
-  return { tree, system: assembleSystem(tree), layers };
+  const filesOf = (kind: SurfaceKind) => [...tree.keys()].filter((path) => surfaceKind(path) === kind && origin.has(path)).sort();
+  // Skills and agents load by folder; the winning layer's folder comes first, and loaders keep the first of each name.
+  const foldersOf = (kind: SurfaceKind, folder: string) =>
+    [...new Set(filesOf(kind).map((path) => origin.get(path)!))].map((dir) => join(dir, folder));
+  const scripts = filesOf("script").map((path) => join(origin.get(path)!, path));
+  const hooksDir = opts.dir === undefined ? origin.get("hooks.json") : undefined;
+  return {
+    tree,
+    system: [assembleSystem(tree), scriptsSection(scripts)].filter(Boolean).join("\n\n"),
+    layers,
+    skillDirs: orderByLayers(foldersOf("skill", "skills"), overlays),
+    agentDirs: orderByLayers(foldersOf("agent", "agents"), overlays),
+    scripts,
+    ...(hooksDir ? { hooksFile: join(hooksDir, "hooks.json") } : {}),
+  };
+}
+
+/** Folders under the overlays, the later (winning) overlay first. */
+function orderByLayers(folders: string[], overlays: [LayerName, string][]): string[] {
+  const rank = (folder: string) => overlays.findIndex(([, dir]) => folder.startsWith(dir));
+  return [...folders].sort((a, b) => rank(b) - rank(a));
 }
 
 /** One line per problem, for the warnings a session prints at start. */

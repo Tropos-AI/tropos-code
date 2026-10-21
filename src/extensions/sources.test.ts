@@ -58,3 +58,15 @@ test("project files must really live inside the project", async () => {
   expect(await staysInProject(projectDir, join(project, "missing.md"))).toBe(false);
   expect(await staysInProject({ dir: "/h", source: "user" }, join(dir, "secret"))).toBe(true);
 });
+
+test("harness skill folders come after the learned ones, harness agent folders after the user's", () => {
+  const harness = { skillDirs: ["/h/harness/projects/k/active/skills", "/h/harness/active/skills"], agentDirs: ["/h/harness/active/agents"] };
+  const skills = extensionDirs("skills", { cwd: dir, home: "/h", harness });
+  expect(skills.slice(0, 4).map((d) => d.source)).toEqual(["user", "learned", "harness", "harness"]);
+  expect(skills[2]!.dir).toBe("/h/harness/projects/k/active/skills");
+  expect(extensionDirs("agents", { cwd: dir, home: "/h", harness }).slice(0, 2)).toEqual([
+    { dir: "/h/agents", source: "user" },
+    { dir: "/h/harness/active/agents", source: "harness" },
+  ]);
+  expect(extensionDirs("commands", { cwd: dir, home: "/h", harness }).some((d) => d.source === "harness")).toBe(false);
+});

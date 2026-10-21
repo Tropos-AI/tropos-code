@@ -56,6 +56,8 @@ Options:
       --dangerously-skip-permissions
                                    approve every action without asking
       --add-dir <dir>              let tools work in another directory (repeatable)
+      --confine                    run commands in the sandbox and keep tools inside the project
+      --harness-dir <dir>          run with this harness folder instead of the adopted one
   -v, --version                    print the version
   -h, --help                       show this help
 

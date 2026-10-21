@@ -91,6 +91,37 @@ describe("loadHarness", () => {
   });
 });
 
+describe("harness extensions", () => {
+  test("skills, agents and scripts come from the layer that holds them, the winning layer first", async () => {
+    const global = globalHarnessDir(home);
+    const project = projectHarnessDir(home, cwd);
+    await put(global, "skills/a/SKILL.md", "a");
+    await put(global, "agents/checker.md", "c");
+    await put(global, "scripts/check.sh", "#!/bin/sh");
+    await put(global, "hooks.json", "{}");
+    await put(project, "skills/b/SKILL.md", "b");
+    const h = await loadHarness({ home, cwd });
+    expect(h.skillDirs).toEqual([join(project, "skills"), join(global, "skills")]);
+    expect(h.agentDirs).toEqual([join(global, "agents")]);
+    expect(h.scripts).toEqual([join(global, "scripts/check.sh")]);
+    expect(h.hooksFile).toBe(join(global, "hooks.json"));
+    expect(h.system).toBe(`${SYSTEM_PROMPT}\n\n# Scripts\nHelpers that come with your harness; run them with Bash when they fit the task:\n- ${join(global, "scripts/check.sh")}`);
+  });
+
+  test("a candidate folder replaces both adopted layers and never brings hooks", async () => {
+    await put(globalHarnessDir(home), "guardrails.md", "Adopted.");
+    const candidate = join(home, "lab", "c1");
+    await put(candidate, "guardrails.md", "Under test.");
+    await put(candidate, "hooks.json", "{}");
+    await put(candidate, "skills/x/SKILL.md", "x");
+    const h = await loadHarness({ home, cwd, dir: candidate });
+    expect(h.system).toBe(`${SYSTEM_PROMPT}\n\nUnder test.`);
+    expect(h.layers.map((l) => l.name)).toEqual(["base", "candidate"]);
+    expect(h.skillDirs).toEqual([join(candidate, "skills")]);
+    expect(h.hooksFile).toBeUndefined();
+  });
+});
+
 describe("readLayer", () => {
   test("a missing folder is an empty layer", async () => {
     expect(await readLayer(join(home, "none"))).toEqual({ tree: new Map(), problems: [] });
