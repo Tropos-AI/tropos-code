@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { HelperReply } from "./helper/client";
-import { MessagesError, MessagesSource } from "./source";
+import { errorFromReply, MessagesError, MessagesSource } from "./source";
 import { buildAddressBook, buildChatDb } from "./testkit";
 
 let root: string;
@@ -270,6 +270,12 @@ describe("MessagesSource", () => {
     expect(snaps()).toHaveLength(0);
     await expect(s.with(() => 0)).rejects.toBeInstanceOf(MessagesError);
     await expect(s.fresh(() => 0)).rejects.toBeInstanceOf(MessagesError);
+  });
+
+  test("the helper's no-history and no-account codes map to their plain errors", () => {
+    expect(errorFromReply({ ok: false, code: "no-history", message: "Messages has no history on this Mac yet" }).code).toBe("no-history");
+    expect(new MessagesError("no-history").message).toStartWith("Messages has no history on this Mac yet.");
+    expect(errorFromReply({ ok: false, code: "no-account", message: "x" }).code).toBe("not-signed-in");
   });
 
   test("fda=no as a helper code also maps to no-full-disk-access", async () => {

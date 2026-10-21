@@ -228,7 +228,7 @@ describe("doneStep", () => {
 
 describe("messagesStep", () => {
   const darwin = () => fakeMessages({ platform: "darwin", view: { available: true, enabled: false } });
-  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation });
+  const status = (fullDiskAccess: "yes" | "no", automation: "yes" | "unknown" = "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation, signedIn: "unknown" as const });
 
   test("no leaves the setting off and touches nothing", async () => {
     const messages = darwin();
@@ -246,13 +246,13 @@ describe("messagesStep", () => {
     const get = messages.get;
     messages.get = async () => {
       await get();
-      if (++gets === 2) messages.view = { available: true, enabled: true, status: status("yes") };
+      if (++gets === 2) messages.view = { available: true, enabled: true, status: { ...status("yes"), chats: 37 } };
       return messages.view;
     };
     const probe = messages.probe;
     messages.probe = async () => {
       await probe();
-      messages.view = { available: true, enabled: true, status: status("yes", "yes") };
+      messages.view = { available: true, enabled: true, status: { ...status("yes", "yes"), signedIn: "yes" } };
       return messages.view;
     };
     const sleeps: number[] = [];
@@ -263,7 +263,31 @@ describe("messagesStep", () => {
     expect(messages.calls.at(-1)).toBe("probe");
     expect(sleeps).toEqual([2000, 2000]);
     expect(flat(io.out())).toContain("Tropos Messages Helper");
+    expect(io.out()).toContain("Full Disk Access is on. I can see 37 chats.");
     expect(io.out()).toContain("Texts are ready.");
+  });
+
+  test("Messages with no history, or not signed in, is said plainly", async () => {
+    const messages = darwin();
+    messages.set = async () => {
+      messages.calls.push("set:true");
+      messages.view = { available: true, enabled: true, status: { ...status("no"), signedIn: "no", noHistory: true } };
+      return messages.view;
+    };
+    let gets = 0;
+    messages.get = async () => {
+      if (++gets === 1) messages.view = { available: true, enabled: true, status: status("yes") };
+      return messages.view;
+    };
+    messages.probe = async () => {
+      messages.view = { available: true, enabled: true, status: { ...status("yes", "yes"), signedIn: "no", services: [] } };
+      return messages.view;
+    };
+    const io = await wizardIO(["y"], { messages }, {}, { sleep: async () => {} });
+    expect(await messagesStep(io)).toBe("next");
+    expect(flat(io.out())).toContain("Messages has no history on this Mac yet.");
+    expect(flat(io.out())).toContain("Messages isn't signed in on this Mac");
+    expect(io.out()).not.toContain("Texts are ready.");
   });
 
   test("off macOS it asks nothing and skips, even with --reset", async () => {

@@ -42,7 +42,8 @@ export function messagesHandlers(ctx: AdminContext, deps: MessagesDeps = {}): Ad
     if (!on) return { available: true, enabled: false };
     const rt = runtime();
     try {
-      return { available: true, enabled: true, status: await rt.status({ probe }) };
+      // The live check ("I can see 37 chats") counts from one snapshot once Full Disk Access is on.
+      return { available: true, enabled: true, status: await rt.status({ probe, chats: true }) };
     } finally {
       rt.dispose();
     }

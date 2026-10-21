@@ -12,7 +12,7 @@ const { screen, cleanup, fireEvent, waitFor, act } = await import("@testing-libr
 const { MessagesPanel, MESSAGES_POLL_MS } = await import("@/components/pages/settings/messages-panel");
 const { MessagesStep } = await import("@/components/setup/remote-steps");
 
-const ready = { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "yes", automation: "yes" } as const;
+const ready = { helper: { installed: true, version: 1, current: 1 }, fullDiskAccess: "yes", automation: "yes", signedIn: "yes" } as const;
 const OFF: MessagesView = { available: true, enabled: false };
 const ON_NO_FDA: MessagesView = { available: true, enabled: true, status: { ...ready, fullDiskAccess: "no", automation: "unknown" } };
 const ON_DONE: MessagesView = { available: true, enabled: true, status: ready };
@@ -61,6 +61,20 @@ describe("MessagesPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Test Messages access" }));
     await waitFor(() => expect(socket.adminOf("messages.probe").length).toBe(1));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Test Messages access" })).toBeNull());
+  });
+
+  test("says how many chats it can see once Full Disk Access is on", async () => {
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ({ ...ON_DONE, status: { ...ready, chats: 37 } }) });
+    expect(await screen.findByText(/I can see 37 chats\./)).toBeTruthy();
+  });
+
+  test("no Messages history, or not signed in, is said plainly, and the test can be run again", async () => {
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ({ available: true, enabled: true, status: { ...ready, fullDiskAccess: "unknown", signedIn: "no", noHistory: true } }) });
+    expect(await screen.findByText(/Messages has no history on this Mac yet\./)).toBeTruthy();
+    cleanup();
+    await mountAdminPage(MessagesPanel, { "messages.get": () => ({ available: true, enabled: true, status: { ...ready, signedIn: "no", services: [] } }) });
+    expect(await screen.findByText(/Messages isn't signed in on this Mac/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Test Messages access" })).toBeTruthy();
   });
 
   test("polls every 2 s while a step is to do and stops once all are done", async () => {

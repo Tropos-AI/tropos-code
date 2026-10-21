@@ -153,6 +153,8 @@ export function createSendTool(o: {
       reply = await request(r, text, "SMS");
     }
     if (!reply.ok && reply.code === "-1743") return fail(new MessagesError("no-automation").message);
+    // No account to send with: nothing went out, and SMS is no way round it.
+    if (!reply.ok && reply.code === "no-account") return fail(new MessagesError("not-signed-in").message);
 
     // A timeout may still have sent the text: never send again, let chat.db say what happened.
     const timedOut = !reply.ok && reply.code === "timeout";

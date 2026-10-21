@@ -29,11 +29,14 @@ export function helperTokenPath(runDir: string): string {
  * `res-<id>.txt`: line 1 `ok` or `error`, line 2 a code (`0` when ok; `bad-request`, `unauthorized`, `eperm`
  * or an AppleScript error number such as `-1743` otherwise), then the result's lines or the error message.
  *
- * Actions: `status` → `fda=yes|no`; `probe` → `accounts=<n>` (asks Messages, which raises the Automation
- * prompt); `snapshot <dest>` copies chat.db with its -wal/-shm into `dest`; `contacts <dest>` copies each
+ * Actions: `status` → `fda=yes|no|missing` (`missing`: there is no chat.db, so Messages was never used on this
+ * Mac); `probe` → `services=<enabled services, comma-separated>`, empty when no account is enabled (asks
+ * Messages, which raises the Automation prompt); `snapshot <dest>` copies chat.db with its -wal/-shm into `dest`
+ * (error `no-history` when there is no chat.db); `contacts <dest>` copies each
  * `AddressBook-v22.abcddb` (with -wal/-shm) to `dest/contacts-<n>/` and lists those paths relative to `dest`;
  * `attachment <src> <dest>` copies one file from Messages' Attachments folder into `dest` and replies with
- * the copy's path; `send-handle <handle> <iMessage|SMS>` and `send-chat <guid>` send the body;
+ * the copy's path; `send-handle <handle> <iMessage|SMS>` and `send-chat <guid>` send the body (error
+ * `no-account` when Messages has no enabled account for the service, or none at all for a chat);
  * `open-settings fda|automation` opens that Privacy pane.
  *
  * Paths are checked physically, not just by spelling: the run folder must be a real directory (not a
@@ -176,24 +179,49 @@ on runAction(act, reqArgs, theBody)
 end runAction
 
 on doStatus()
+	return {"ok", "0", "fda=" & chatDbState()}
+end doStatus
+
+-- yes when chat.db can be read; missing when it doesn't exist (Messages was never used on this Mac); else no.
+on chatDbState()
 	set chatDb to chatDbPath()
 	try
 		do shell script "/usr/bin/head -c 1 " & quoted form of chatDb & " > /dev/null"
-		return {"ok", "0", "fda=yes"}
-	on error
-		return {"ok", "0", "fda=no"}
+		return "yes"
+	on error errMsg
+		if errMsg contains "No such file or directory" then return "missing"
+		return "no"
 	end try
-end doStatus
+end chatDbState
 
+-- The enabled accounts' services Tropos sends with, each once, e.g. "iMessage,SMS"; empty when Messages isn't signed in.
 on doProbe()
 	try
 		with timeout of 30 seconds
-			tell application "Messages" to set n to count of accounts
+			tell application "Messages"
+				set found to {}
+				repeat with acct in (every account whose enabled is true)
+					set kind to service type of acct
+					if kind is iMessage then
+						set end of found to "iMessage"
+					else if kind is SMS then
+						set end of found to "SMS"
+					end if
+				end repeat
+			end tell
 		end timeout
-		return {"ok", "0", "accounts=" & n}
 	on error errMsg number errNum
 		return {"error", errNum as text, errMsg}
 	end try
+	set names to {}
+	repeat with nameRef in found
+		set nm to contents of nameRef
+		if names does not contain nm then set end of names to nm
+	end repeat
+	set AppleScript's text item delimiters to ","
+	set joined to names as text
+	set AppleScript's text item delimiters to ""
+	return {"ok", "0", "services=" & joined}
 end doProbe
 
 on doSnapshot(reqArgs)
@@ -201,6 +229,7 @@ on doSnapshot(reqArgs)
 	set dest to item 1 of reqArgs
 	set physDest to snapFolder(dest)
 	if physDest is "" then return badRequest("the snapshot folder must be an existing snap- folder in the helper's run folder")
+	if chatDbState() is "missing" then return {"error", "no-history", "Messages has no history on this Mac yet"}
 	set chatDb to chatDbPath()
 	try
 		copyChecked(chatDb, physDest, "chat.db")
@@ -274,11 +303,15 @@ on doSendHandle(reqArgs, theBody)
 		with timeout of 170 seconds
 			if useIMessage then
 				tell application "Messages"
-					send theBody to participant theHandle of (1st account whose service type = iMessage)
+					set accts to every account whose service type = iMessage and enabled is true
+					if (count of accts) is 0 then return {"error", "no-account", "Messages has no enabled iMessage account on this Mac"}
+					send theBody to participant theHandle of (item 1 of accts)
 				end tell
 			else
 				tell application "Messages"
-					send theBody to participant theHandle of (1st account whose service type = SMS)
+					set accts to every account whose service type = SMS and enabled is true
+					if (count of accts) is 0 then return {"error", "no-account", "Messages has no enabled SMS account on this Mac"}
+					send theBody to participant theHandle of (item 1 of accts)
 				end tell
 			end if
 		end timeout
@@ -295,6 +328,7 @@ on doSendChat(reqArgs, theBody)
 	try
 		with timeout of 170 seconds
 			tell application "Messages"
+				if (count of (every account whose enabled is true)) is 0 then return {"error", "no-account", "Messages has no enabled account on this Mac"}
 				send theBody to chat id theChat
 			end tell
 		end timeout

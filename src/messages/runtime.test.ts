@@ -1,6 +1,6 @@
 // src/messages/runtime.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeToolContext } from "../../test/helpers/tool-context";
@@ -9,7 +9,7 @@ import { toolKind } from "../tools/types";
 import { HELPER_VERSION } from "./helper/applet";
 import { helperAppPath, helperRunDir, type Exec } from "./helper/install";
 import { MESSAGES_PREAMBLE } from "./messages-tool";
-import { createMessagesRuntime, MESSAGES_TOOLS, type MessagesRuntime } from "./runtime";
+import { createMessagesRuntime, MESSAGES_TOOLS, probeRecordPath, type MessagesRuntime } from "./runtime";
 import { buildChatDb } from "./testkit";
 
 let root: string;
@@ -54,7 +54,7 @@ beforeEach(() => {
   calls = [];
   answers = {
     status: "ok\n0\nfda=yes",
-    probe: "ok\n0\naccounts=1",
+    probe: "ok\n0\nservices=iMessage,SMS",
     contacts: "ok\n0",
     snapshot: ([dest]) => {
       buildChatDb(join(dest!, "chat.db"), {
@@ -93,7 +93,7 @@ describe("createMessagesRuntime", () => {
 
   test("status without a helper: not installed, permissions unknown, and nothing is built or launched", async () => {
     const r = make();
-    expect(await r.status()).toEqual({ helper: { installed: false, current: HELPER_VERSION }, fullDiskAccess: "unknown", automation: "unknown" });
+    expect(await r.status()).toEqual({ helper: { installed: false, current: HELPER_VERSION }, fullDiskAccess: "unknown", automation: "unknown", signedIn: "unknown" });
     expect(calls).toEqual([]);
     expect(existsSync(helperAppPath(layout))).toBe(false);
   });
@@ -102,7 +102,7 @@ describe("createMessagesRuntime", () => {
     const r = make();
     await r.enable();
     expect(calls).toContain("osacompile");
-    expect(await r.status()).toEqual({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "yes", automation: "unknown" });
+    expect(await r.status()).toEqual({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "yes", automation: "unknown", signedIn: "unknown" });
     answers.status = "ok\n0\nfda=no";
     expect((await r.status()).fullDiskAccess).toBe("no");
     answers.status = "error\ntimeout\nno answer";
@@ -111,13 +111,48 @@ describe("createMessagesRuntime", () => {
     expect(calls).not.toContain("request:probe");
   });
 
-  test("status with probe asks Messages, and remembers the answer", async () => {
+  test("status with probe asks Messages, and remembers the answer, also for the next process", async () => {
     const r = make();
     await r.enable();
-    expect((await r.status({ probe: true })).automation).toBe("yes");
+    const probed = await r.status({ probe: true });
+    expect(probed).toMatchObject({ automation: "yes", signedIn: "yes", services: ["iMessage", "SMS"], probedAt: expect.any(Number) });
     expect((await r.status()).automation).toBe("yes");
+    // Saved beside the token, private to the user, and read by a runtime that never probed.
+    const saved = probeRecordPath(helperRunDir(layout));
+    expect(statSync(saved).mode & 0o777).toBe(0o600);
+    const other = createMessagesRuntime({ home: join(root, "tropos"), userHome: join(root, "user"), exec, layout });
+    expect(await other.status()).toMatchObject({ automation: "yes", signedIn: "yes", services: ["iMessage", "SMS"] });
+    other.dispose();
     answers.probe = "error\n-1743\nNot authorized to send Apple events to Messages.";
+    expect(await r.status({ probe: true })).toMatchObject({ automation: "no", services: ["iMessage", "SMS"] });
+    // A probe that times out keeps the last real answer.
+    answers.probe = "error\ntimeout\nno answer";
     expect((await r.status({ probe: true })).automation).toBe("no");
+  });
+
+  test("Messages not signed in: the probe finds no enabled account", async () => {
+    const r = make();
+    await r.enable();
+    answers.probe = "ok\n0\nservices=";
+    expect(await r.status({ probe: true })).toMatchObject({ automation: "yes", signedIn: "no", services: [] });
+  });
+
+  test("no chat.db at all: no history yet, so not signed in, and Full Disk Access can't be told", async () => {
+    const r = make();
+    await r.enable();
+    answers.status = "ok\n0\nfda=missing";
+    expect(await r.status({ probe: true })).toMatchObject({ fullDiskAccess: "unknown", signedIn: "no", noHistory: true });
+  });
+
+  test("status can count the chats one snapshot shows, when Full Disk Access is on", async () => {
+    const r = make();
+    await r.enable();
+    expect((await r.status()).chats).toBeUndefined();
+    expect((await r.status({ chats: true })).chats).toBe(1);
+    answers.status = "ok\n0\nfda=no";
+    calls = [];
+    expect((await r.status({ chats: true })).chats).toBeUndefined();
+    expect(calls).not.toContain("request:snapshot");
   });
 
   test("the first tool use builds the helper before asking it for anything", async () => {

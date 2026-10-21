@@ -56,7 +56,7 @@ describe("computeOnboardState", () => {
   });
 
   describe("the Texts step", () => {
-    const status = (fullDiskAccess: "yes" | "no" | "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation: "unknown" as const });
+    const status = (fullDiskAccess: "yes" | "no" | "unknown") => ({ helper: { installed: true, version: 1, current: 1 }, fullDiskAccess, automation: "unknown" as const, signedIn: "unknown" as const });
     const texts = async (messages: ReturnType<typeof fakeMessages>, settings?: object) => {
       if (settings) await writeFile(join(home, "settings.json"), JSON.stringify(settings));
       return stepOf(await computeOnboardState(testDeps(home, { messages }), { health: false }), "messages");

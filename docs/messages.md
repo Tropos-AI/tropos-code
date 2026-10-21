@@ -33,7 +33,9 @@ Messages Helper**, on your Mac the first time you turn texts on. macOS gives per
    To see the question now rather than in the middle of a task, use **Test Messages access** on the Texts card.
    Choose Allow.
 
-Messages must be signed in to iMessage on this Mac. You don't need to keep it open.
+Messages must be signed in to iMessage on this Mac. You don't need to keep it open. **Test Messages access** also
+checks that Messages is signed in, and Tropos remembers the answer, so the dashboard and `tcode doctor` show it
+later too.
 
 The helper keeps its permissions across Tropos updates. On the rare release that ships a new helper version, Tropos
 rebuilds it and you switch Full Disk Access on again. If you delete the helper or move it to the Trash, Tropos
@@ -134,7 +136,8 @@ The agent shows these messages as they are. Run `tcode doctor` first; it shows t
 | Messages access is switched off. Ask the user to turn it on in Tropos settings. | Texts are off. [Turn them on](#turn-it-on). |
 | Tropos doesn't have Full Disk Access yet, so it can't read Messages. To grant it: open System Settings, go to Privacy & Security, then Full Disk Access, and switch on "Tropos Messages Helper". | The helper isn't switched on there. After a new helper version, switch it on again. Then ask again. |
 | macOS hasn't allowed Tropos to control Messages. To allow it: open System Settings, go to Privacy & Security, then Automation, and switch on Messages under "Tropos Messages Helper". | You chose Don't Allow at the macOS question. Switch it on in Automation, or use **Test Messages access** on the Texts card to be asked again. |
-| Messages isn't signed in to iMessage on this Mac. Ask the user to open Messages and sign in. | Open Messages and sign in with your Apple Account. |
+| Messages isn't signed in to iMessage on this Mac. Ask the user to open Messages and sign in. | Open Messages and sign in with your Apple Account. **Test Messages access** on the Texts card checks it again. |
+| Messages has no history on this Mac yet. Ask the user to open Messages and sign in. | Messages was never used on this Mac, so there is nothing to read. Open Messages and sign in. |
 | The Messages helper didn't answer in time. Messages may be busy or not running; try once more shortly. | Open Messages once and try again. A send that times out is not repeated automatically. |
 | No such chat; use Messages action chats to find it. | The chat id or number isn't in your Messages history. Ask the agent to look the person up. |
 | The Messages helper failed: … | The helper reported a problem; the detail follows the colon. Run `tcode doctor`, which can rebuild the helper if it is missing or out of date. |

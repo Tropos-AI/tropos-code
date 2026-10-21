@@ -8,7 +8,7 @@ import { toolKind, type AnyTool, type ToolContext, type ToolOutput } from "../to
 import { SendLedger } from "./burst";
 import type { HelperReply } from "./helper/client";
 import { createSendTool, SEND_TOOL } from "./send-tool";
-import { MessagesSource } from "./source";
+import { MessagesError, MessagesSource } from "./source";
 import { buildAddressBook, buildChatDb, type ChatDbFixture, type FixtureMessage } from "./testkit";
 
 const MARIA = "+306912345678";
@@ -462,6 +462,14 @@ describe("SendIMessage — burst guard", () => {
     expect(out.isError).toBe(true);
     expect(text(out)).toStartWith("Tropos can't tell whether the text went.");
     expect(text(out).match(/answer/g)).toHaveLength(1);
+  });
+
+  test("no enabled account: says Messages isn't signed in, and never retries over SMS", async () => {
+    onSend = () => ({ ok: false, code: "no-account", message: "Messages has no enabled iMessage account on this Mac" });
+    const out = await send(makeTool(), { to: MARIA, text: "hello" });
+    expect(out.isError).toBe(true);
+    expect(text(out)).toBe(new MessagesError("not-signed-in").message);
+    expect(sends()).toHaveLength(1);
   });
 
   test("a failed send still counts", async () => {

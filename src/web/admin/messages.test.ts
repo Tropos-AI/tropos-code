@@ -16,7 +16,7 @@ beforeEach(async () => {
   kit = await makeKit();
   log = [];
   opened = [];
-  status = { helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "no", automation: "unknown" };
+  status = { helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "no", automation: "unknown", signedIn: "unknown" };
 });
 afterEach(() => kit.close());
 

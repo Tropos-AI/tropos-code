@@ -188,12 +188,18 @@ export function createSetupTool(deps: SetupToolDeps): AnyTool {
     const next =
       st && !st.helper.installed
         ? `the Messages helper isn't installed yet; open ${where} to set it up`
-        : st?.fullDiskAccess !== "yes"
-          ? `allow Full Disk Access for the Tropos Messages Helper in System Settings → Privacy & Security; ${where} walks through it`
-          : st.automation !== "yes"
-            ? `allow Automation (the Messages prompt) for the helper; ${where} checks it`
-            : "";
-    return next ? `Texts are on. Next: ${next}.` : "Texts are on and set up.";
+        : st?.noHistory
+          ? `Messages has no history on this Mac yet: open Messages and sign in, then allow Full Disk Access for the Tropos Messages Helper; ${where} walks through it`
+          : st?.fullDiskAccess !== "yes"
+            ? `allow Full Disk Access for the Tropos Messages Helper in System Settings → Privacy & Security; ${where} walks through it`
+            : st.automation !== "yes"
+              ? `allow Automation (the Messages prompt) for the helper; ${where} checks it`
+              : st.signedIn === "no"
+                ? "Messages isn't signed in on this Mac: open Messages and sign in to iMessage"
+                : "";
+    // The live check: what one snapshot shows, once Full Disk Access is on.
+    const seen = st?.chats !== undefined ? ` I can see ${st.chats} chat${st.chats === 1 ? "" : "s"}.` : "";
+    return next ? `Texts are on.${seen} Next: ${next}.` : `Texts are on and set up.${seen}`;
   }
 
   async function perform(input: SetupInput, ctx: ToolContext, taken: string[]): Promise<string> {

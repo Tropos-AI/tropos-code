@@ -210,11 +210,23 @@ export interface SkillsAdmin {
 
 type MessagesAnswer = "yes" | "no" | "unknown";
 
-/** How far setup has got: the helper app, and the two macOS permissions it needs. */
+/** How far setup has got: the helper app, the two macOS permissions it needs, and whether Messages is signed in. */
 export interface MessagesStatus {
   helper: { installed: boolean; version?: number; current: number };
+  /** `unknown` also while there is no chat.db to check it with (`noHistory`). */
   fullDiskAccess: MessagesAnswer;
+  /** What the last probe found (remembered across processes); `unknown` before the first one. */
   automation: MessagesAnswer;
+  /** `no` when there is no Messages history yet or the last probe found no enabled account; `yes` when it found one. */
+  signedIn: MessagesAnswer;
+  /** Set when there is no chat.db at all: Messages was never used on this Mac. */
+  noHistory?: true;
+  /** The enabled services the last probe found, e.g. ["iMessage", "SMS"]. */
+  services?: string[];
+  /** When the last probe ran (Unix ms). */
+  probedAt?: number;
+  /** How many chats one snapshot shows; present when it was asked for and Full Disk Access is on. */
+  chats?: number;
 }
 
 export interface MessagesView {

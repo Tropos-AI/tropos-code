@@ -1,4 +1,4 @@
-// src/doctor/checks/messages.ts — texts (Messages): the helper app and the two macOS permissions it needs. macOS only, and silent while texts are off.
+// src/doctor/checks/messages.ts — texts (Messages): the helper app, the two macOS permissions it needs, and whether Messages is signed in. macOS only, and silent while texts are off.
 import { configFile, readConfigRaw } from "../../config/store";
 import { resolveLayout } from "../../install/layout";
 import { ensureHelper } from "../../messages/helper/install";
@@ -30,9 +30,21 @@ export function messagesCheckWith(runtimeOf: (env: DoctorEnv) => MessagesRuntime
         if (st.fullDiskAccess === "no") {
           out.push(finding("messages.fda", "error", "Full Disk Access is not allowed for the Tropos Messages Helper", { detail: "System Settings → Privacy & Security → Full Disk Access." }));
         } else if (st.fullDiskAccess === "unknown") {
-          out.push(finding("messages.fda", "info", "Full Disk Access could not be checked", { detail: "It is checked once the helper is installed and answering." }));
+          const detail = st.noHistory ? "It can be checked once Messages has been used on this Mac." : "It is checked once the helper is installed and answering.";
+          out.push(finding("messages.fda", "info", "Full Disk Access could not be checked", { detail }));
         } else {
           out.push(finding("messages.fda", "ok", "Full Disk Access is allowed"));
+        }
+        if (st.signedIn === "no") {
+          out.push(
+            finding("messages.signedin", "warn", st.noHistory ? "Messages has no history on this Mac yet" : "Messages is not signed in", {
+              detail: st.noHistory ? "Open Messages and sign in with your Apple Account." : "Open Messages and sign in to iMessage, then run the check in Settings → Channels.",
+            }),
+          );
+        } else if (st.signedIn === "unknown") {
+          out.push(finding("messages.signedin", "info", "Whether Messages is signed in has not been checked yet", { detail: "Run the check in Settings → Channels." }));
+        } else {
+          out.push(finding("messages.signedin", "ok", `Messages is signed in${st.services?.length ? ` (${st.services.join(", ")})` : ""}`));
         }
         if (st.automation === "no") {
           out.push(finding("messages.automation", "warn", "Automation of Messages is not allowed for the helper", { detail: "System Settings → Privacy & Security → Automation." }));

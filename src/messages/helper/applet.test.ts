@@ -1,6 +1,6 @@
 // src/messages/helper/applet.test.ts
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appleScriptString, appletSource, helperTokenPath } from "./applet";
@@ -77,8 +77,14 @@ describe("appletSource", () => {
     for (const action of ["status", "probe", "snapshot", "contacts", "attachment", "send-handle", "send-chat", "open-settings"]) {
       expect(source).toContain(`"${action}"`);
     }
-    expect(source).toContain("send theBody to participant theHandle of (1st account whose service type = iMessage)");
+    expect(source).toContain("set accts to every account whose service type = iMessage and enabled is true");
+    expect(source).toContain("send theBody to participant theHandle of (item 1 of accts)");
     expect(source).toContain("send theBody to chat id theChat");
+    // Signed in or not: the probe lists the enabled services, and a send without an account says so.
+    expect(source).toContain('"services=" & joined');
+    expect(source).toContain("every account whose enabled is true");
+    expect(source.match(/"no-account"/g)?.length).toBe(3);
+    expect(source).toContain('"no-history"');
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles");
     expect(source).toContain("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
     // A pending permission prompt can't hold the queue for AppleScript's default two minutes.
@@ -233,6 +239,28 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       // So is one at the reply's temporary name.
       expect(reply(runDir, "15")).toBe("ok\n0\nfda=yes");
       expect(readFileSync(join(dir, "victim2"), "utf8")).toBe("victim2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("status tells a Mac where Messages was never used from one without Full Disk Access", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tropos-applet-fda-"));
+    try {
+      const { home, runDir, messages } = fakeHome(dir);
+      const snap = snapFolder(runDir, "snap-c");
+      chmodSync(join(messages, "chat.db"), 0o000);
+      request(runDir, "01", ["status"]);
+      runApplet(dir, { runDir, userHome: home });
+      expect(reply(runDir, "01")).toBe("ok\n0\nfda=no");
+      rmSync(join(messages, "chat.db"));
+      rmSync(join(messages, "chat.db-wal"));
+      request(runDir, "02", ["status"]);
+      request(runDir, "03", ["snapshot", snap]);
+      runApplet(dir, { runDir, userHome: home });
+      expect(reply(runDir, "02")).toBe("ok\n0\nfda=missing");
+      expect(reply(runDir, "03")).toStartWith("error\nno-history\n");
+      expect(readdirSync(snap)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

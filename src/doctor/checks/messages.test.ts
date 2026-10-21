@@ -11,7 +11,7 @@ import { messagesCheckWith } from "./messages";
 let fx: Fixture;
 afterEach(() => fx?.close());
 
-const status = (over: Partial<MessagesStatus> = {}): MessagesStatus => ({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "yes", automation: "yes", ...over });
+const status = (over: Partial<MessagesStatus> = {}): MessagesStatus => ({ helper: { installed: true, version: HELPER_VERSION, current: HELPER_VERSION }, fullDiskAccess: "yes", automation: "yes", signedIn: "yes", ...over });
 const fakeRuntime = (s: MessagesStatus): (() => MessagesRuntime) => () => ({ tools: () => [], status: async () => s, enable: async () => {}, dispose: () => {} });
 const on = async () => fx.write("settings.json", JSON.stringify({ messages: true }));
 
@@ -85,4 +85,16 @@ test("Full Disk Access that could not be checked is only info", async () => {
   await on();
   const r = await runOne(fx, messagesCheckWith(fakeRuntime(status({ fullDiskAccess: "unknown" }))), { platform: "darwin" });
   expect(byId(r, "messages.fda")!.level).toBe("info");
+});
+
+test("Messages signed in: ok with its services, a warning when not, info before the first check", async () => {
+  fx = await makeFixture();
+  await on();
+  const of = async (over: Partial<MessagesStatus>) => byId(await runOne(fx, messagesCheckWith(fakeRuntime(status(over))), { platform: "darwin" }), "messages.signedin")!;
+  expect(await of({ services: ["iMessage", "SMS"] })).toMatchObject({ level: "ok", message: "Messages is signed in (iMessage, SMS)" });
+  expect(await of({ signedIn: "no", services: [] })).toMatchObject({ level: "warn", message: "Messages is not signed in" });
+  expect(await of({ signedIn: "unknown" })).toMatchObject({ level: "info" });
+  const none = await runOne(fx, messagesCheckWith(fakeRuntime(status({ signedIn: "no", noHistory: true, fullDiskAccess: "unknown" }))), { platform: "darwin" });
+  expect(byId(none, "messages.signedin")).toMatchObject({ level: "warn", message: "Messages has no history on this Mac yet" });
+  expect(byId(none, "messages.fda")!.detail).toContain("once Messages has been used");
 });

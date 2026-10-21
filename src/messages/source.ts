@@ -9,7 +9,7 @@ import { MessagesDb } from "./db";
 import { normalizeHandle, sameHandle } from "./handles";
 import type { HelperClient, HelperReply } from "./helper/client";
 
-export type MessagesErrorCode = "off" | "no-full-disk-access" | "no-automation" | "not-signed-in" | "helper" | "timeout" | "no-such-chat";
+export type MessagesErrorCode = "off" | "no-full-disk-access" | "no-automation" | "not-signed-in" | "no-history" | "helper" | "timeout" | "no-such-chat";
 
 const DONT_RETRY = "Don't retry until the user says it's fixed.";
 
@@ -22,6 +22,7 @@ const TEXTS: Record<Exclude<MessagesErrorCode, "helper">, string> = {
     "macOS hasn't allowed Tropos to control Messages. To allow it: open System Settings, go to Privacy & Security, then Automation, and switch on Messages under \"Tropos Messages Helper\". " +
     DONT_RETRY,
   "not-signed-in": `Messages isn't signed in to iMessage on this Mac. Ask the user to open Messages and sign in. ${DONT_RETRY}`,
+  "no-history": `Messages has no history on this Mac yet. Ask the user to open Messages and sign in. ${DONT_RETRY}`,
   timeout: "The Messages helper didn't answer in time. Messages may be busy or not running; try once more shortly.",
   "no-such-chat": "No such chat; use Messages action chats to find it.",
 };
@@ -40,6 +41,8 @@ export class MessagesError extends UserFacingError {
 export function errorFromReply(reply: Extract<HelperReply, { ok: false }>): MessagesError {
   if (reply.code === "eperm" || reply.code === "fda=no" || reply.message.trim() === "fda=no") return new MessagesError("no-full-disk-access");
   if (reply.code === "-1743") return new MessagesError("no-automation");
+  if (reply.code === "no-account") return new MessagesError("not-signed-in");
+  if (reply.code === "no-history") return new MessagesError("no-history");
   if (reply.code === "timeout") return new MessagesError("timeout");
   return new MessagesError("helper", reply.message);
 }

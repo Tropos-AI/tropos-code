@@ -7,8 +7,9 @@ import type { Exec } from "./install";
 
 /**
  * A helper answer. Error codes: from the helper `bad-request`, `unauthorized` (wrong token), `eperm` (macOS refused the file, i.e. no
- * Full Disk Access) or an AppleScript error number such as `-1743` (no Automation permission); from the
- * client `timeout`, `launch` (the app couldn't be started) and `bad-reply`.
+ * Full Disk Access), `no-history` (there is no chat.db), `no-account` (Messages has no enabled account to send with)
+ * or an AppleScript error number such as `-1743` (no Automation permission); from the client `timeout`, `launch`
+ * (the app couldn't be started) and `bad-reply`.
  */
 export type HelperReply = { ok: true; lines: string[] } | { ok: false; code: string; message: string };
 

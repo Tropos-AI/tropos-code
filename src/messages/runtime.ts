@@ -1,4 +1,7 @@
 // src/messages/runtime.ts — one session host's Messages tools, their helper and source, and the setup status the doctor and dashboard show
+import { randomBytes } from "node:crypto";
+import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { MessagesStatus } from "../web/admin/api";
 import { errorText } from "../error-text";
 import { resolveLayout, type Layout } from "../install/layout";
@@ -21,11 +24,12 @@ export interface MessagesRuntime {
   /** `[Messages, SendIMessage]`, the same objects on every call. */
   tools(): AnyTool[];
   /**
-   * The helper's state and its Full Disk Access, asked of the helper only when it is installed. Automation is
-   * whatever the last probe found (`unknown` before one); `probe: true` asks Messages now, which shows the
-   * Automation prompt the first time.
+   * The helper's state and its Full Disk Access, asked of the helper only when it is installed. Automation and the
+   * signed-in services are whatever the last probe found, in this or any earlier process (`unknown` before one);
+   * `probe: true` asks Messages now, which shows the Automation prompt the first time. `chats: true` also counts
+   * the chats one snapshot shows, when Full Disk Access is on.
    */
-  status(o?: { probe?: boolean }): Promise<MessagesStatus>;
+  status(o?: { probe?: boolean; chats?: boolean }): Promise<MessagesStatus>;
   /** Builds the helper app when it is missing or older than this release. */
   enable(): Promise<void>;
   /** Closes the snapshot and deletes the folders this runtime made; the tools refuse afterwards. */
@@ -34,6 +38,48 @@ export interface MessagesRuntime {
 
 /** The automation probe may wait on the macOS prompt; the helper itself gives Messages 30 s. */
 const PROBE_TIMEOUT_MS = 60_000;
+
+/** The last probe's answer, kept beside the helper's token so every Tropos process of this install sees it. */
+interface ProbeRecord {
+  automation: "yes" | "no";
+  services?: string[];
+  at: number;
+}
+
+export function probeRecordPath(runDir: string): string {
+  return join(dirname(runDir), "probe.json");
+}
+
+/** The saved probe answer, or undefined when there is none or it isn't a regular file holding one. */
+async function readProbe(path: string): Promise<ProbeRecord | undefined> {
+  try {
+    if (!(await lstat(path)).isFile()) return undefined;
+    const raw = JSON.parse(await readFile(path, "utf8")) as Partial<ProbeRecord>;
+    if ((raw.automation !== "yes" && raw.automation !== "no") || typeof raw.at !== "number") return undefined;
+    const services = Array.isArray(raw.services) ? raw.services.filter((x): x is string => typeof x === "string") : undefined;
+    return { automation: raw.automation, at: raw.at, ...(services ? { services } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Saves the probe answer (mode 0600), written aside and renamed so a reader never sees half of it. */
+async function saveProbe(path: string, record: ProbeRecord): Promise<void> {
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(record), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await rename(tmp, path);
+  } catch {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
+/** `services=iMessage,SMS` from a probe reply, as a list; undefined when the reply has no such line. */
+function servicesOf(lines: string[]): string[] | undefined {
+  const line = lines.find((l) => l.startsWith("services="));
+  if (line === undefined) return undefined;
+  return line.slice("services=".length).split(",").map((x) => x.trim()).filter(Boolean);
+}
 
 /** Runs a program the way the doctor does, loaded on first use; a spawn failure's text stands in for stderr. */
 const defaultExec: Exec = async (cmd, args, timeoutMs) => {
@@ -48,7 +94,7 @@ const defaultExec: Exec = async (cmd, args, timeoutMs) => {
  * moved to the Trash after setup is rebuilt on its next use rather than failing. The helper's files live beside
  * the app (`helperRunDir`), shared by every Tropos home of this install, so `home` places nothing.
  */
-export function createMessagesRuntime(o: { home: string; userHome: string; exec?: Exec; layout?: Layout }): MessagesRuntime {
+export function createMessagesRuntime(o: { home: string; userHome: string; exec?: Exec; layout?: Layout; now?: () => number }): MessagesRuntime {
   const exec = o.exec ?? defaultExec;
   const layout = o.layout ?? resolveLayout(process.env, o.userHome);
   const appPath = helperAppPath(layout);
@@ -56,7 +102,8 @@ export function createMessagesRuntime(o: { home: string; userHome: string; exec?
   const client = new HelperClient({ runDir, appPath, exec });
   const source = new MessagesSource({ client, runDir, userHome: o.userHome });
   let disposed = false;
-  let automation: Answer = "unknown";
+  const now = o.now ?? Date.now;
+  const probePath = probeRecordPath(runDir);
 
   /** One build at a time: calls arriving while one runs share it. */
   let building: Promise<unknown> | undefined;
@@ -86,19 +133,43 @@ export function createMessagesRuntime(o: { home: string; userHome: string; exec?
     async status(opts = {}) {
       const version = await installedHelperVersion(appPath);
       const helper = { installed: version !== undefined, ...(version !== undefined ? { version } : {}), current: HELPER_VERSION };
+      let probe = await readProbe(probePath);
+      const remembered = (): Pick<MessagesStatus, "automation" | "signedIn" | "services" | "probedAt"> => ({
+        automation: probe?.automation ?? "unknown",
+        signedIn: probe?.services === undefined ? "unknown" : probe.services.length > 0 ? "yes" : "no",
+        ...(probe?.services !== undefined ? { services: probe.services } : {}),
+        ...(probe ? { probedAt: probe.at } : {}),
+      });
       // Asking a missing helper would only time out; asking after dispose would recreate the run folder.
-      if (version === undefined || disposed) return { helper, fullDiskAccess: "unknown", automation };
-      const fullDiskAccess: Answer = await client.request("status", []).then(
-        (r) => (!r.ok ? "unknown" : r.lines.includes("fda=yes") ? "yes" : r.lines.includes("fda=no") ? "no" : "unknown"),
-        () => "unknown",
+      if (version === undefined || disposed) return { helper, fullDiskAccess: "unknown", ...remembered() };
+      const fda = await client.request("status", []).then(
+        (r) => (r.ok ? r.lines.find((l) => l.startsWith("fda="))?.slice(4) : undefined),
+        () => undefined,
       );
+      const fullDiskAccess: Answer = fda === "yes" ? "yes" : fda === "no" ? "no" : "unknown";
       if (opts.probe) {
-        automation = await client.request("probe", [], { timeoutMs: PROBE_TIMEOUT_MS }).then(
-          (r) => (r.ok ? "yes" : r.code === "-1743" ? "no" : "unknown"),
-          () => "unknown" as const,
-        );
+        const r = await client.request("probe", [], { timeoutMs: PROBE_TIMEOUT_MS }).catch(() => undefined);
+        // Only real answers are kept: a timeout or a helper error leaves the last one in place.
+        const fresh: ProbeRecord | undefined = !r
+          ? undefined
+          : r.ok
+            ? { automation: "yes", at: now(), ...(servicesOf(r.lines) ? { services: servicesOf(r.lines) } : {}) }
+            : r.code === "-1743"
+              ? { automation: "no", at: now(), ...(probe?.services ? { services: probe.services } : {}) }
+              : undefined;
+        if (fresh) {
+          probe = fresh;
+          await saveProbe(probePath, fresh);
+        }
       }
-      return { helper, fullDiskAccess, automation };
+      const out: MessagesStatus = { helper, fullDiskAccess, ...remembered() };
+      // No chat.db at all: Messages was never used here, whatever the probe says.
+      if (fda === "missing") return { ...out, signedIn: "no", noHistory: true };
+      if (opts.chats && fullDiskAccess === "yes") {
+        const chats = await source.with((db) => db.chats({ limit: Number.MAX_SAFE_INTEGER }).length).catch(() => undefined);
+        if (chats !== undefined) out.chats = chats;
+      }
+      return out;
     },
     async enable() {
       await ensure();

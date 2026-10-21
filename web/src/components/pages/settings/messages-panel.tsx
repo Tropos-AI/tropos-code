@@ -78,6 +78,10 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
   };
   const fda = marks.find((m) => m.id === "fda")!;
   const automation = marks.find((m) => m.id === "automation")!;
+  const status = view.enabled ? view.status : undefined;
+  // Not signed in shows up in the probe, so its button stays to check again after signing in.
+  const askAgain = !automation.done || status?.signedIn === "no";
+  const chats = status?.chats;
 
   return (
     <SectionCard labelId="messages-texts" title="Texts" icon="message-square" note="Let Tropos read your texts and send the ones you approve. Nothing is sent without showing you the text first.">
@@ -104,7 +108,7 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
                     Open Full Disk Access
                   </Button>
                 ) : null}
-                {mark.id === "automation" && !automation.done ? (
+                {mark.id === "automation" && askAgain ? (
                   <Button size="sm" disabled={probe.pending} onClick={() => void probe.run(() => admin("messages.probe")).then((out) => out && setView(out))}>
                     {probe.pending ? "Asking Messages…" : "Test Messages access"}
                   </Button>
@@ -112,6 +116,17 @@ function MessagesBody({ initial, footer, unavailable }: { initial: MessagesView;
               </li>
             ))}
           </ol>
+        ) : null}
+
+        {status?.noHistory ? (
+          <Notice tone="warn">Messages has no history on this Mac yet. Open Messages and sign in with your Apple Account; Full Disk Access can be checked once it has.</Notice>
+        ) : status?.signedIn === "no" ? (
+          <Notice tone="warn">Messages isn't signed in on this Mac, so texts can't be sent. Open Messages and sign in, then test Messages access again.</Notice>
+        ) : null}
+        {chats !== undefined ? (
+          <p className="text-[13px] text-ink-2">
+            I can see {chats} chat{chats === 1 ? "" : "s"}. Try asking: <span className="text-ink">who texted me today?</span>
+          </p>
         ) : null}
 
         {toggle.error ? <Notice tone="error">{toggle.error}</Notice> : null}

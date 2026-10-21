@@ -168,6 +168,9 @@ export const messagesStep: StepHandler = async (io) => {
     return "skip";
   }
 
+  if (view.status.noHistory) {
+    flow.note(wrapAll("Messages has no history on this Mac yet. Open Messages and sign in with your Apple Account; I can only check Full Disk Access once it has."));
+  }
   if (view.status.fullDiskAccess !== "yes") {
     try {
       await deps.messages.openSettings("fda");
@@ -185,15 +188,18 @@ export const messagesStep: StepHandler = async (io) => {
       return "next";
     }
   }
-  flow.success("Full Disk Access is on.");
+  flow.success(view.status?.chats !== undefined ? `Full Disk Access is on. I can see ${chatCount(view.status.chats)}.` : "Full Disk Access is on.");
 
   // Asking Messages once shows macOS's one-time "control Messages" prompt.
   flow.info("Checking that I may control Messages (macOS may ask you to allow it)…");
   view = await deps.messages.probe().catch(() => view);
-  if (view.status?.automation === "yes") flow.success("Texts are ready.");
-  else flow.info(wrapAll("macOS has not allowed Tropos to control Messages yet. You can finish this any time in Settings > Channels."));
+  if (view.status?.automation !== "yes") flow.info(wrapAll("macOS has not allowed Tropos to control Messages yet. You can finish this any time in Settings > Channels."));
+  else if (view.status.signedIn === "no") flow.info(wrapAll("Messages isn't signed in on this Mac, so I can't send texts yet. Open Messages and sign in, then check again in Settings > Channels."));
+  else flow.success("Texts are ready. Try: who texted me today?");
   return "next";
 };
+
+const chatCount = (n: number) => `${n} chat${n === 1 ? "" : "s"}`;
 
 // ---------- background service ----------
 
