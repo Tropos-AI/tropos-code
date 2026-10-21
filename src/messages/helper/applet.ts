@@ -37,9 +37,12 @@ export function helperTokenPath(runDir: string): string {
  * `open-settings fda|automation` opens that Privacy pane.
  *
  * Paths are checked physically, not just by spelling: the run folder must be a real directory (not a
- * symlink) or the helper does nothing; every `dest` must be an existing real directory named `snap-…`
- * directly inside it (the caller creates it); an attachment must be a real file (not a symlink) whose
- * physical folder lies inside the physical Attachments folder. Copies use `cp -P` onto exact file names.
+ * symlink) owned by the user, or the helper does nothing; every `dest` must be an existing real directory
+ * named `snap-…` directly inside it (the caller creates it); an attachment must be a real file (not a
+ * symlink) whose physical folder lies inside the physical Attachments folder. Every write then happens in
+ * one shell step that changes into the checked folder's physical path and confirms it with `pwd -P` before
+ * touching anything, so swapping a folder for a symlink after the check can't redirect it; files are
+ * created with the shell's noclobber (`set -C`), which never writes through a link planted at the name.
  *
  * The script has no `property` or `global`: an applet saves those back into its bundle when it quits, which
  * would break the signature and with it the grants.
@@ -74,7 +77,12 @@ end chatDbPath
 -- Handles every waiting request, including ones that arrive while it works; each one at most once.
 on processQueue()
 	set runDir to helperRunDir()
-	if isLink(runDir) or not isDir(runDir) then return
+	if isLink(runDir) or not isDir(runDir) or not isOwned(runDir) then return
+	try
+		set physRun to physicalDir(runDir)
+	on error
+		return
+	end try
 	set handled to {}
 	repeat 1000 times
 		set fresh to false
@@ -93,7 +101,7 @@ on processQueue()
 				if handled does not contain reqId then
 					set end of handled to reqId
 					set fresh to true
-					handleRequest(reqId)
+					handleRequest(reqId, physRun)
 				end if
 			end if
 		end repeat
@@ -101,11 +109,9 @@ on processQueue()
 	end repeat
 end processQueue
 
-on handleRequest(reqId)
-	set runDir to helperRunDir()
-	set reqPath to runDir & "/req-" & reqId & ".txt"
-	set bodyPath to runDir & "/req-" & reqId & ".body"
-	set resPath to runDir & "/res-" & reqId & ".txt"
+on handleRequest(reqId, physRun)
+	set reqPath to physRun & "/req-" & reqId & ".txt"
+	set bodyPath to physRun & "/req-" & reqId & ".body"
 	set reqLines to {}
 	set theBody to missing value
 	set authorized to false
@@ -139,7 +145,7 @@ on handleRequest(reqId)
 			set outcome to {"error", errNum as text, errMsg}
 		end try
 	end if
-	writeReply(resPath, outcome)
+	writeReply(physRun, reqId, outcome)
 end handleRequest
 
 -- The install's token, read fresh each time; empty when it is missing, unreadable or a symlink.
@@ -193,12 +199,13 @@ end doProbe
 on doSnapshot(reqArgs)
 	if (count of reqArgs) is not 1 then return badRequest("snapshot takes one folder")
 	set dest to item 1 of reqArgs
-	if not isSnapFolder(dest) then return badRequest("the snapshot folder must be an existing snap- folder in the helper's run folder")
+	set physDest to snapFolder(dest)
+	if physDest is "" then return badRequest("the snapshot folder must be an existing snap- folder in the helper's run folder")
 	set chatDb to chatDbPath()
 	try
-		copyTo(chatDb, dest & "/chat.db")
-		copyIfExists(chatDb & "-wal", dest & "/chat.db-wal")
-		copyIfExists(chatDb & "-shm", dest & "/chat.db-shm")
+		copyChecked(chatDb, physDest, "chat.db")
+		copyIfExists(chatDb & "-wal", physDest, "chat.db-wal")
+		copyIfExists(chatDb & "-shm", physDest, "chat.db-shm")
 	on error errMsg number errNum
 		return shellFailure(errMsg, errNum)
 	end try
@@ -208,7 +215,8 @@ end doSnapshot
 on doContacts(reqArgs)
 	if (count of reqArgs) is not 1 then return badRequest("contacts takes one folder")
 	set dest to item 1 of reqArgs
-	if not isSnapFolder(dest) then return badRequest("the contacts folder must be an existing snap- folder in the helper's run folder")
+	set physDest to snapFolder(dest)
+	if physDest is "" then return badRequest("the contacts folder must be an existing snap- folder in the helper's run folder")
 	set abDir to helperUserHome() & "/Library/Application Support/AddressBook"
 	set outcome to {"ok", "0"}
 	if not isDir(abDir) then return outcome
@@ -220,11 +228,11 @@ on doContacts(reqArgs)
 			if dbPath is not "" then
 				set n to n + 1
 				set subName to "contacts-" & n
-				set sub to dest & "/" & subName
-				do shell script "/bin/mkdir -m 700 " & quoted form of sub
-				copyTo(dbPath, sub & "/AddressBook-v22.abcddb")
-				copyIfExists(dbPath & "-wal", sub & "/AddressBook-v22.abcddb-wal")
-				copyIfExists(dbPath & "-shm", sub & "/AddressBook-v22.abcddb-shm")
+				do shell script pinTo(physDest) & "/bin/mkdir -m 700 ./" & quoted form of subName
+				set physSub to physDest & "/" & subName
+				copyChecked(dbPath, physSub, "AddressBook-v22.abcddb")
+				copyIfExists(dbPath & "-wal", physSub, "AddressBook-v22.abcddb-wal")
+				copyIfExists(dbPath & "-shm", physSub, "AddressBook-v22.abcddb-shm")
 				set end of outcome to subName & "/AddressBook-v22.abcddb"
 			end if
 		end repeat
@@ -238,12 +246,14 @@ on doAttachment(reqArgs)
 	if (count of reqArgs) is not 2 then return badRequest("attachment takes a file and a folder")
 	set src to item 1 of reqArgs
 	set dest to item 2 of reqArgs
-	if not isAttachment(src) then return badRequest("only files in Messages' Attachments folder can be copied")
-	if not isSnapFolder(dest) then return badRequest("the attachment folder must be an existing snap- folder in the helper's run folder")
+	set physSrcDir to attachmentFolder(src)
+	if physSrcDir is "" then return badRequest("only files in Messages' Attachments folder can be copied")
+	set physDest to snapFolder(dest)
+	if physDest is "" then return badRequest("the attachment folder must be an existing snap- folder in the helper's run folder")
 	set fileName to lastComponent(src)
 	set copied to dest & "/" & fileName
 	try
-		copyTo(src, copied)
+		copyChecked(physSrcDir & "/" & fileName, physDest, fileName)
 	on error errMsg number errNum
 		return shellFailure(errMsg, errNum)
 	end try
@@ -321,43 +331,46 @@ on isUnder(p, prefix)
 	return true
 end isUnder
 
--- An existing real directory named snap-... directly inside the physical run folder.
-on isSnapFolder(p)
+-- The physical path of p when it is an existing real directory named snap-... directly inside the
+-- physical run folder, else "".
+on snapFolder(p)
 	set runDir to helperRunDir()
-	if not isUnder(p, runDir & "/snap-") then return false
+	if not isUnder(p, runDir & "/snap-") then return ""
 	set nm to lastComponent(p)
 	considering case
-		if not (nm starts with "snap-") then return false
+		if not (nm starts with "snap-") then return ""
 	end considering
-	if isLink(p) or not isDir(p) then return false
+	if isLink(p) or not isDir(p) then return ""
 	try
 		set physDest to physicalDir(p)
 		set physRun to physicalDir(runDir)
 	on error
-		return false
+		return ""
 	end try
 	considering case
-		return physDest is (physRun & "/" & nm)
+		if physDest is not (physRun & "/" & nm) then return ""
 	end considering
-end isSnapFolder
+	return physDest
+end snapFolder
 
--- A real file (not a symlink) whose physical folder lies inside the physical Attachments folder.
-on isAttachment(p)
+-- The physical folder of p when p is a real file (not a symlink) inside the physical Attachments folder, else "".
+on attachmentFolder(p)
 	set attDir to helperUserHome() & "/Library/Messages/Attachments"
-	if not isUnder(p, attDir & "/") then return false
+	if not isUnder(p, attDir & "/") then return ""
 	set nm to lastComponent(p)
-	if nm is "" or nm is "." or nm is ".." then return false
-	if isLink(p) or not isFile(p) then return false
+	if nm is "" or nm is "." or nm is ".." then return ""
+	if isLink(p) or not isFile(p) then return ""
 	try
 		set physParent to physicalDir(parentOf(p))
 		set physAtt to physicalDir(attDir)
 	on error
-		return false
+		return ""
 	end try
 	considering case
-		return (physParent is physAtt) or (physParent starts with (physAtt & "/"))
+		if (physParent is physAtt) or (physParent starts with (physAtt & "/")) then return physParent
 	end considering
-end isAttachment
+	return ""
+end attachmentFolder
 
 on physicalDir(p)
 	return do shell script "cd -P -- " & quoted form of p & " && /bin/pwd -P"
@@ -380,6 +393,15 @@ on isDir(p)
 		return false
 	end try
 end isDir
+
+on isOwned(p)
+	try
+		do shell script "/bin/test -O " & quoted form of p
+		return true
+	on error
+		return false
+	end try
+end isOwned
 
 on isFile(p)
 	try
@@ -409,15 +431,21 @@ on parentOf(p)
 	return parentText
 end parentOf
 
--- Copies one file onto an exact name: whatever was at that name (a planted symlink included) is removed first.
-on copyTo(src, destFile)
-	do shell script "/bin/rm -f " & quoted form of destFile
-	do shell script "/bin/cp -P -p " & quoted form of src & " " & quoted form of destFile
-end copyTo
+-- The start of a shell step that works inside physFolder: it changes into it, confirms the physical path is
+-- still the one that was checked (so a folder swapped for a symlink since is refused), and turns on noclobber,
+-- so a file the step creates never writes through whatever was planted at its name.
+on pinTo(physFolder)
+	return "cd -P -- " & quoted form of physFolder & " || exit 1; [ \\"$(/bin/pwd -P)\\" = " & quoted form of physFolder & " ] || { echo 'the folder changed before the copy' >&2; exit 1; }; set -C; "
+end pinTo
 
-on copyIfExists(src, destFile)
+-- Copies src (never a symlink) to fileName inside the checked folder physFolder, in one shell step.
+on copyChecked(src, physFolder, fileName)
+	do shell script pinTo(physFolder) & "if [ -L " & quoted form of src & " ]; then echo 'refusing to copy a symlink' >&2; exit 1; fi; /bin/rm -f ./" & quoted form of fileName & " && /bin/cat -- " & quoted form of src & " > ./" & quoted form of fileName
+end copyChecked
+
+on copyIfExists(src, physFolder, fileName)
 	if not isFile(src) then return
-	copyTo(src, destFile)
+	copyChecked(src, physFolder, fileName)
 end copyIfExists
 
 on removeFile(p)
@@ -435,31 +463,16 @@ on shellFailure(errMsg, errNum)
 	return {"error", errNum as text, errMsg}
 end shellFailure
 
--- Writes the reply next to its final name, then renames it, so the client never reads half a reply.
-on writeReply(resPath, outcome)
-	set tmpPath to resPath & ".tmp"
-	try
-		do shell script "/bin/rm -f " & quoted form of tmpPath
-	on error
-		return
-	end try
-	if isLink(tmpPath) then return
+-- Writes the reply next to its final name, then renames it, so the client never reads half a reply. Both
+-- happen in one step pinned to the run folder; mv -h replaces a link at the name instead of following it.
+on writeReply(physRun, reqId, outcome)
+	set tmpName to "res-" & reqId & ".txt.tmp"
+	set resName to "res-" & reqId & ".txt"
 	set AppleScript's text item delimiters to linefeed
 	set outText to outcome as text
 	set AppleScript's text item delimiters to ""
 	try
-		set f to open for access (POSIX file tmpPath) with write permission
-		set eof f to 0
-		write outText to f as «class utf8»
-		close access f
-	on error
-		try
-			close access (POSIX file tmpPath)
-		end try
-		return
-	end try
-	try
-		do shell script "/bin/mv -f " & quoted form of tmpPath & " " & quoted form of resPath
+		do shell script pinTo(physRun) & "/bin/rm -f ./" & quoted form of tmpName & " && /usr/bin/printf '%s' " & quoted form of outText & " > ./" & quoted form of tmpName & " && /bin/mv -f -h ./" & quoted form of tmpName & " ./" & quoted form of resName
 	end try
 end writeReply
 `;

@@ -1,6 +1,6 @@
 // src/messages/helper/client.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { HelperClient } from "./client";
@@ -102,6 +102,24 @@ describe("HelperClient", () => {
     // Another client of the same install reuses it.
     await client(h.exec).request("status", []);
     expect(h.seen[1]!.token).toBe(token);
+  });
+
+  test("two clients starting at once agree on one token", async () => {
+    const h = fakeHelper(() => "ok\n0");
+    await Promise.all([client(h.exec).request("status", []), client(h.exec).request("status", []), client(h.exec).request("status", [])]);
+    const token = readFileSync(join(dirname(runDir), "token"), "utf8");
+    expect(h.seen.map((r) => r.token)).toEqual([token, token, token]);
+    // No temporary token files are left behind.
+    expect(readdirSync(dirname(runDir)).sort()).toEqual(["messages-helper", "token"]);
+  });
+
+  test("helpers/run and the run folder are private", async () => {
+    mkdirSync(runDir, { recursive: true, mode: 0o755 });
+    chmodSync(dirname(runDir), 0o755);
+    const h = fakeHelper(() => "ok\n0");
+    await client(h.exec).request("status", []);
+    expect(statSync(dirname(runDir)).mode & 0o777).toBe(0o700);
+    expect(statSync(runDir).mode & 0o777).toBe(0o700);
   });
 
   test("a token that is a symlink or damaged is replaced", async () => {

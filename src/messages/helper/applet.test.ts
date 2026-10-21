@@ -1,6 +1,6 @@
 // src/messages/helper/applet.test.ts
 import { describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { HELPER_BUNDLE_ID, HELPER_NAME, HELPER_VERSION, appleScriptString, appletSource, helperTokenPath } from "./applet";
@@ -42,7 +42,8 @@ describe("appletSource", () => {
 
   test("no request text is ever part of the script", () => {
     const source = appletSource(ONEIL);
-    expect(source).not.toMatch(/\$\{|\{\{|%s|__[A-Z]+__/);
+    // The reply is written with printf '%s', which prints its argument as data; any other %s would be a placeholder.
+    expect(source.split("printf '%s' ").join("")).not.toMatch(/\$\{|\{\{|%s|__[A-Z]+__/);
     // The script depends only on the two folders: other folders change only the path literals.
     const other = appletSource({ runDir: "/r", userHome: "/h" });
     const strip = (s: string, o: typeof ONEIL) =>
@@ -54,16 +55,19 @@ describe("appletSource", () => {
         .split(appleScriptString(o.userHome))
         .join("HOME");
     expect(strip(source, ONEIL)).toBe(strip(other, { runDir: "/r", userHome: "/h" }));
-    // Anything joined into a shell command goes through `quoted form of`.
+    // Anything joined into a shell command goes through `quoted form of` (pinTo builds the start of one).
+    let checked = 0;
     for (const line of withoutLiterals(source).split("\n")) {
-      const at = line.indexOf("do shell script");
-      if (at < 0) continue;
-      const parts = line.slice(at + "do shell script".length).split("&").map((p) => p.trim());
-      for (const part of parts) {
+      const marker = ["do shell script", 'return "" & quoted form of'].find((m) => line.includes(m));
+      if (!marker) continue;
+      checked++;
+      const start = line.indexOf(marker) + (marker === "do shell script" ? marker.length : "return".length);
+      for (const part of line.slice(start).split("&").map((p) => p.trim())) {
         if (/^""\)?$/.test(part) || part.startsWith('"" ')) continue;
-        expect(part).toMatch(/^quoted form of [A-Za-z]+\)?$/);
+        expect(part).toMatch(/^(quoted form of [A-Za-z]+\)?|pinTo\([A-Za-z]+\))$/);
       }
     }
+    expect(checked).toBeGreaterThan(10);
   });
 
   test("both entry points drain the queue, and the actions are all there", () => {
@@ -220,6 +224,86 @@ describe.skipIf(process.platform !== "darwin")("the compiled script, against a f
       // So is one at the reply's temporary name.
       expect(reply(runDir, "15")).toBe("ok\n0\nfda=yes");
       expect(readFileSync(join(dir, "victim2"), "utf8")).toBe("victim2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("without a token file, or with an empty one, every request is unauthorized", () => {
+    for (const variant of ["missing", "empty"] as const) {
+      const dir = mkdtempSync(join(tmpdir(), `tropos-applet-token-${variant}-`));
+      try {
+        const { home, runDir } = fakeHome(dir);
+        const tokenPath = join(dirname(runDir), "token");
+        if (variant === "missing") rmSync(tokenPath);
+        else writeFileSync(tokenPath, "");
+        request(runDir, "01", ["status"]);
+        request(runDir, "02", ["status"], "");
+        runApplet(dir, { runDir, userHome: home });
+        expect(reply(runDir, "01")).toStartWith("error\nunauthorized\n");
+        expect(reply(runDir, "02")).toStartWith("error\nunauthorized\n");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a reply never follows a link planted at its name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tropos-applet-reslink-"));
+    try {
+      const { home, runDir } = fakeHome(dir);
+      const victim = join(dir, "victim-dir");
+      mkdirSync(victim);
+      symlinkSync(victim, join(runDir, "res-16.txt"));
+      request(runDir, "16", ["status"]);
+      runApplet(dir, { runDir, userHome: home });
+      expect(lstatSync(join(runDir, "res-16.txt")).isSymbolicLink()).toBe(false);
+      expect(reply(runDir, "16")).toBe("ok\n0\nfda=yes");
+      expect(readdirSync(victim)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The race itself: the folder passed its check, then was swapped for a symlink before the write. The
+  // handlers are called directly on the loaded script with the physical path that was checked.
+  test("a folder swapped for a symlink after its check is never written into", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "tropos-applet-swap-")));
+    try {
+      const { home, runDir, messages } = fakeHome(dir);
+      const src = join(dir, "x.applescript");
+      writeFileSync(src, appletSource({ runDir, userHome: home }));
+      const scpt = join(dir, "x.scpt");
+      expect(Bun.spawnSync(["/usr/bin/osacompile", "-o", scpt, src]).exitCode).toBe(0);
+      const call = (handler: string, ...args: string[]) => {
+        const script = [
+          "on run argv",
+          "set s to load script (POSIX file (item 1 of argv))",
+          "try",
+          handler,
+          'return "done"',
+          "on error m",
+          'return "refused: " & m',
+          "end try",
+          "end run",
+        ];
+        const r = Bun.spawnSync(["/usr/bin/osascript", ...script.flatMap((l) => ["-e", l]), scpt, ...args]);
+        return r.stdout.toString().trim();
+      };
+      const elsewhere = join(dir, "elsewhere");
+      mkdirSync(elsewhere);
+      const real = snapFolder(runDir, "snap-real");
+      // A control: the checked folder is still the real one.
+      expect(call("tell s to copyChecked(item 2 of argv, item 3 of argv, \"chat.db\")", join(messages, "chat.db"), real)).toBe("done");
+      expect(readFileSync(join(real, "chat.db"), "utf8")).toBe("db");
+      // Swapped: the same name now points elsewhere.
+      const swapped = join(runDir, "snap-swapped");
+      symlinkSync(elsewhere, swapped);
+      expect(call("tell s to copyChecked(item 2 of argv, item 3 of argv, \"chat.db\")", join(messages, "chat.db"), swapped)).toMatch(
+        /^refused: .*folder changed/,
+      );
+      expect(call("tell s to writeReply(item 2 of argv, \"17\", {\"ok\", \"0\"})", swapped)).toBe("done");
+      expect(readdirSync(elsewhere)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

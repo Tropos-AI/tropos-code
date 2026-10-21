@@ -1,6 +1,6 @@
 // src/messages/helper/client.ts — talks to the Tropos Messages Helper through request/response files
 import { randomBytes } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { helperTokenPath } from "./applet";
 import type { Exec } from "./install";
@@ -62,7 +62,9 @@ export class HelperClient {
     if (args.some((a) => LINE_BREAK.test(a))) return { ok: false, code: "bad-request", message: "a helper argument can't contain a line break" };
     const timeoutMs = opts.timeoutMs ?? (action.startsWith("send-") ? SEND_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
 
+    // Both `helpers/run` and the run folder are private; folders that already existed are tightened.
     await mkdir(this.runDir, { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.runDir), 0o700);
     await chmod(this.runDir, 0o700);
     if (!this.swept) {
       this.swept = true;
@@ -127,29 +129,28 @@ export class HelperClient {
 
   /**
    * The install's request token, created when missing. Anything at its place that isn't a regular file
-   * holding a token (a symlink, a damaged file) is replaced; when two processes create it at once, the first wins.
+   * holding a token (a symlink, a damaged file) is replaced. A new token is written in full to a private
+   * temporary file and then hard-linked into place, which never replaces an existing file: when two
+   * processes create it at once, the first link wins and the other reads that one, never a half-written file.
    */
   private async token(): Promise<string> {
     const path = helperTokenPath(this.runDir);
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const st = await lstat(path).catch(() => undefined);
-    if (st?.isFile()) {
-      const text = (await readFile(path, "utf8")).trim();
-      if (TOKEN.test(text)) {
-        if ((st.mode & 0o777) !== 0o600) await chmod(path, 0o600);
-        return text;
-      }
-    }
-    if (st) await rm(path, { force: true });
+    const existing = await readTokenFile(path);
+    if (existing.token) return existing.token;
+    if (existing.present) await rm(path, { force: true });
+    const fresh = randomBytes(32).toString("hex");
+    const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+    await writeFile(tmp, fresh, { encoding: "utf8", mode: 0o600, flag: "wx" });
     try {
-      const fresh = randomBytes(32).toString("hex");
-      await writeFile(path, fresh, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await link(tmp, path);
       return fresh;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const text = (await readFile(path, "utf8")).trim();
-      if (!TOKEN.test(text)) throw new Error(`the helper token at ${path} is unreadable`);
-      return text;
+      const winner = await readTokenFile(path);
+      if (!winner.token) throw new Error(`the helper token at ${path} is unreadable`);
+      return winner.token;
+    } finally {
+      await rm(tmp, { force: true });
     }
   }
 
@@ -169,6 +170,17 @@ export class HelperClient {
       }),
     );
   }
+}
+
+/** A token file's token when it is a regular file (not a symlink) holding one; its mode is kept at 0600. */
+async function readTokenFile(path: string): Promise<{ present: boolean; token?: string }> {
+  const st = await lstat(path).catch(() => undefined);
+  if (!st) return { present: false };
+  if (!st.isFile()) return { present: true };
+  const text = (await readFile(path, "utf8")).trim();
+  if (!TOKEN.test(text)) return { present: true };
+  if ((st.mode & 0o777) !== 0o600) await chmod(path, 0o600);
+  return { present: true, token: text };
 }
 
 async function exists(path: string): Promise<boolean> {
