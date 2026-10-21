@@ -12,14 +12,6 @@ function personName(first: string | null, last: string | null, org: string | nul
   return person || org?.trim() || undefined;
 }
 
-/** Like sameHandle, but two numbers that both carry a country code must match in full: +1 691… is not +30 691…. */
-function sameContactHandle(a: string, b: string): boolean {
-  const na = normalizeHandle(a);
-  const nb = normalizeHandle(b);
-  if (na.startsWith("+") && nb.startsWith("+")) return na === nb;
-  return sameHandle(a, b);
-}
-
 /** Names from one or more AddressBook-v22.abcddb files, indexed by every key a handle can be written with. */
 export class Contacts {
   private readonly byKey = new Map<string, Array<{ name: string; handle: string }>>();
@@ -83,7 +75,7 @@ export class Contacts {
   /** The contact name for a phone number or email, written any way. */
   nameOf(handle: string): string | undefined {
     for (const key of handleKeys(handle)) {
-      for (const candidate of this.byKey.get(key) ?? []) if (sameContactHandle(handle, candidate.handle)) return candidate.name;
+      for (const candidate of this.byKey.get(key) ?? []) if (sameHandle(handle, candidate.handle)) return candidate.name;
     }
     return undefined;
   }
