@@ -43,6 +43,8 @@ export interface DiffAudit {
   deletions: number;
   /** Test files the agent changed or deleted (the hidden copies overwrite some of them before verifying). */
   testFilesTouched: string[];
+  /** Of those, the ones where lines that were already there were removed or changed: tests weakened, not just added. */
+  testFilesEdited: string[];
   /** Added lines that skip or focus tests (`.skip(`, `.only(`, `.todo(`), as "path: line". */
   focusMarkers: string[];
 }
@@ -55,7 +57,7 @@ const FOCUS_MARKER = /\b(test|it|describe)\.(skip|only|todo)\s*\(|\bx(it|describ
  * --numstat` and `git diff --cached --no-renames -U0` (renames show up as a delete plus an add).
  */
 export function auditDiff(numstat: string, patch: string): DiffAudit {
-  const audit: DiffAudit = { files: 0, insertions: 0, deletions: 0, testFilesTouched: [], focusMarkers: [] };
+  const audit: DiffAudit = { files: 0, insertions: 0, deletions: 0, testFilesTouched: [], testFilesEdited: [], focusMarkers: [] };
   for (const line of numstat.split("\n")) {
     const [added, removed, ...rest] = line.split("\t");
     const path = rest.join("\t");
@@ -64,7 +66,11 @@ export function auditDiff(numstat: string, patch: string): DiffAudit {
     // Binary files show "-" for both counts.
     audit.insertions += Number(added) || 0;
     audit.deletions += Number(removed) || 0;
-    if (TEST_FILE.test(path)) audit.testFilesTouched.push(path);
+    if (TEST_FILE.test(path)) {
+      audit.testFilesTouched.push(path);
+      // A changed line counts as one removed and one added, so only adding tests leaves this at 0.
+      if (Number(removed) > 0) audit.testFilesEdited.push(path);
+    }
   }
   let file = "";
   for (const line of patch.split("\n")) {

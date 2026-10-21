@@ -7,7 +7,7 @@ function trial(over: Partial<TrialResult>): TrialResult {
   return {
     runId: "r1", task: "t1", split: "dev", agent: "tropos", agentVersion: "0.1.0", model: "claude-opus-5-5", effort: "high", attempt: 1,
     startedAt: "", agentSeconds: 100, agentExit: 0, timedOut: false, pass: true, verifyExit: 0, verifyTail: "",
-    diff: { files: 1, insertions: 1, deletions: 0, testFilesTouched: [], focusMarkers: [] }, harnessError: null,
+    diff: { files: 1, insertions: 1, deletions: 0, testFilesTouched: [], testFilesEdited: [], focusMarkers: [] }, harnessError: null,
     isError: false, stop: "end_turn", turns: 10, toolCalls: 20, toolErrors: 2, costUsd: 1, inputTokens: 1, outputTokens: 1,
     ...over,
   };
@@ -16,7 +16,7 @@ function trial(over: Partial<TrialResult>): TrialResult {
 const results = [
   trial({}),
   trial({ task: "t2", pass: false, costUsd: 3, agentSeconds: 300, turns: 30, timedOut: true }),
-  trial({ task: "t3", split: "holdout", costUsd: null, diff: { files: 1, insertions: 1, deletions: 0, testFilesTouched: ["a.test.ts"], focusMarkers: [] } }),
+  trial({ task: "t3", split: "holdout", costUsd: null, diff: { files: 1, insertions: 1, deletions: 1, testFilesTouched: ["a.test.ts"], testFilesEdited: ["a.test.ts"], focusMarkers: [] } }),
   trial({ agent: "claude", effort: null, pass: false, costUsd: 2, harnessError: "docker died", agentSeconds: 0 }),
 ];
 
@@ -61,4 +61,11 @@ test("models get their own rows and columns, and old results without tool counts
   const rows = summarize([trial({}), old as TrialResult]);
   expect(rows.filter((r) => r.split === "all").map((r) => r.model)).toEqual(["claude-opus-5-5", "deepseek/deepseek-chat"]);
   expect(rows.find((r) => r.model === "deepseek/deepseek-chat")!.toolErrorRate).toBeNull();
+});
+
+test("adding tests isn't suspicious; weakening them is, and results from before the split still count every touch", () => {
+  const added = trial({ diff: { files: 1, insertions: 9, deletions: 0, testFilesTouched: ["a.test.ts"], testFilesEdited: [], focusMarkers: [] } });
+  const old = trial({ diff: { files: 1, insertions: 9, deletions: 0, testFilesTouched: ["a.test.ts"], focusMarkers: [] } as unknown as TrialResult["diff"] });
+  expect(summarize([added])[0]!.suspicious).toBe(0);
+  expect(summarize([old])[0]!.suspicious).toBe(1);
 });

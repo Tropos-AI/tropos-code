@@ -46,7 +46,7 @@ test("createWorkspace reports an unknown revision", async () => {
 });
 
 test("auditDiff counts changes and flags test edits and focus markers", () => {
-  const numstat = ["10\t2\tsrc/a.ts", "1\t0\tsrc/a.test.ts", "0\t30\ttest/e2e/print.e2e.test.ts", "-\t-\tassets/logo.png", ""].join("\n");
+  const numstat = ["10\t2\tsrc/a.ts", "1\t1\tsrc/a.test.ts", "0\t30\ttest/e2e/print.e2e.test.ts", "12\t0\tsrc/b.test.ts", "-\t-\tassets/logo.png", ""].join("\n");
   const patch = [
     "diff --git a/src/a.test.ts b/src/a.test.ts",
     "--- a/src/a.test.ts",
@@ -59,8 +59,10 @@ test("auditDiff counts changes and flags test edits and focus markers", () => {
     "+const only = 1; // test.only( in a comment of a source file still counts",
   ].join("\n");
   const audit = auditDiff(numstat, patch);
-  expect(audit).toMatchObject({ files: 4, insertions: 11, deletions: 32 });
-  expect(audit.testFilesTouched).toEqual(["src/a.test.ts", "test/e2e/print.e2e.test.ts"]);
+  expect(audit).toMatchObject({ files: 5, insertions: 23, deletions: 33 });
+  expect(audit.testFilesTouched).toEqual(["src/a.test.ts", "test/e2e/print.e2e.test.ts", "src/b.test.ts"]);
+  // Only added tests (src/b.test.ts) is not editing tests.
+  expect(audit.testFilesEdited).toEqual(["src/a.test.ts", "test/e2e/print.e2e.test.ts"]);
   expect(audit.focusMarkers).toEqual(['src/a.test.ts: test.skip("works", () => {', "src/a.ts: const only = 1; // test.only( in a comment of a source file still counts"]);
-  expect(auditDiff("", "")).toEqual({ files: 0, insertions: 0, deletions: 0, testFilesTouched: [], focusMarkers: [] });
+  expect(auditDiff("", "")).toEqual({ files: 0, insertions: 0, deletions: 0, testFilesTouched: [], testFilesEdited: [], focusMarkers: [] });
 });

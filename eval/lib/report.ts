@@ -23,7 +23,7 @@ export interface Summary {
   mixedTasks: number;
   timeouts: number;
   harnessErrors: number;
-  /** Trials whose diff edited or deleted test files, or added .skip/.only/.todo. */
+  /** Trials whose diff removed or changed lines in test files, or added .skip/.only/.todo. Adding tests isn't suspicious. */
   suspicious: number;
 }
 
@@ -92,7 +92,7 @@ export function summarize(results: TrialResult[]): Summary[] {
       mixedTasks,
       timeouts: trials.filter((t) => t.timedOut).length,
       harnessErrors: trials.filter((t) => t.harnessError).length,
-      suspicious: trials.filter((t) => t.diff && (t.diff.testFilesTouched.length > 0 || t.diff.focusMarkers.length > 0)).length,
+      suspicious: trials.filter((t) => t.diff && ((t.diff.testFilesEdited ?? t.diff.testFilesTouched).length > 0 || t.diff.focusMarkers.length > 0)).length,
     });
   }
   const splitOrder = (s: string) => (s === "all" ? 0 : s === "dev" ? 1 : 2);
