@@ -53,6 +53,20 @@ bun scripts/harness-lab.ts train --model claude-haiku-5-5            # dev tasks
 bun scripts/harness-lab.ts measure --model claude-haiku-5-5 --attempts 3   # holdout: built-in vs trained harness
 ```
 
+On Terminal-Bench, through harbor (download the tasks once, then split them once, before any result):
+
+```bash
+uvx --from harbor==0.24.0 harbor download terminal-bench@2.0 -o eval/tb-tasks
+bun scripts/harness-lab.ts tb-split --seed 1 --train 30               # eval/terminal-bench/split.json, committed
+bun scripts/harness-lab.ts train --bench tb --model claude-haiku-5-5   # the 30 train tasks, in eval/harness-home-tb
+bun scripts/harness-lab.ts measure --bench tb --model claude-haiku-5-5 --attempts 3   # the 59 test tasks
+```
+
+Terminal-Bench tasks have no checks besides the verifier, which is the benchmark's hidden test, so on them the lab
+judges runs only on how the agent worked (checked its work, tool errors, steps); the verifier is read only by
+`measure`. Each probe is a harbor trial with the harness under test uploaded into the task's container. Most task
+images are linux/amd64: on Apple Silicon they run emulated and slower, so prefer an x64 machine for the real numbers.
+
 `train` runs the harness lab on each dev task in a home of its own (`eval/harness-home`, never `~/.tropos`) and adopts
 there what did better. The lab sees only the visible checks (the type checker and the base versions of the test
 files); the hidden tests are run only by `measure`, which runs each holdout task with the built-in harness and with the

@@ -23,6 +23,17 @@ BIN_DIR = Path(os.environ.get("TROPOS_BIN_DIR", Path(__file__).resolve().parents
 # x64 task images may run under emulation on Apple Silicon, which lacks AVX2: use the baseline build.
 BINARIES = {"x86_64": "tropos-linux-x64-baseline", "aarch64": "tropos-linux-arm64", "arm64": "tropos-linux-arm64"}
 LOG = "tropos.jsonl"
+# The harness lab's probes (scripts/harness-lab.ts --bench tb) name a harness folder to run with; it goes here.
+HARNESS_DIR = "/opt/tropos-harness"
+
+
+def harness_source() -> Path | None:
+    """The harness folder TROPOS_HARNESS_DIR names, when it holds any file; None runs the built-in harness."""
+    raw = os.environ.get("TROPOS_HARNESS_DIR")
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.is_dir() and any(p.is_file() for p in path.rglob("*")) else None
 
 
 class TroposOptions(InstalledAgentOptions):
@@ -56,6 +67,11 @@ class TroposAgent(BaseInstalledAgent):
             raise FileNotFoundError(f"{source} is missing; build it with `bun scripts/eval.ts tb`")
         await environment.upload_file(source, "/usr/local/bin/tropos")
         await self.exec_as_root(environment, command="chmod 755 /usr/local/bin/tropos && tropos --version")
+        harness = harness_source()
+        if harness is not None:
+            await self.exec_as_root(environment, command=f"rm -rf {HARNESS_DIR} && mkdir -p {HARNESS_DIR}")
+            await environment.upload_dir(harness, HARNESS_DIR)
+            await self.exec_as_root(environment, command=f"chmod -R a+rX {HARNESS_DIR}")
 
     @override
     @with_prompt_template
@@ -79,6 +95,7 @@ class TroposAgent(BaseInstalledAgent):
             command=(
                 f"tropos -p {shlex.quote(instruction)} --model {shlex.quote(model)} "
                 f"--output-format stream-json --dangerously-skip-permissions {flags} "
+                f"{f'--harness-dir {HARNESS_DIR} ' if harness_source() is not None else ''}"
                 f"</dev/null 2>/dev/null | tee {shlex.quote(log)}"
             ),
             env=env,

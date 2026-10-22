@@ -20,3 +20,4 @@ playwright-report/
 eval/results/
 # The harness lab's own home for the eval (scripts/harness-lab.ts): trained harness, runs, library
 eval/harness-home/
+eval/tb-tasks/
