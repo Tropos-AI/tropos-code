@@ -1,8 +1,9 @@
 {
-  "run": "pilot-train-2",
-  "command": "train",
+  "run": "full-measure-1",
+  "command": "measure",
   "bench": "tb",
   "model": "claude-haiku-5-5",
-  "limit": 10,
-  "shards": 5
+  "attempts": 2,
+  "harness": "eval/harness-tb-full",
+  "shards": 59
 }
