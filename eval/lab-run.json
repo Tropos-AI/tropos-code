@@ -1,0 +1,7 @@
+{
+  "command": "train",
+  "bench": "tb",
+  "model": "claude-haiku-5-5",
+  "limit": 10,
+  "shards": 5
+}

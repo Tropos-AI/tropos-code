@@ -77,6 +77,16 @@ the paper: only the library carries over. Read the candidates, keep what makes s
 A run that timed out or crashed is never compared, on either side. Most task images are linux/amd64: on Apple Silicon
 they run emulated, slower and with more timeouts, so run the real numbers on an x64 machine.
 
+#### On GitHub's runners
+
+`.github/workflows/harness-lab.yml` runs the same commands on GitHub's x64 runners. Describe the run in
+`eval/lab-run.json` (`command`, `bench`, `model`, optionally `editorModel`, `tasks` or `limit`, `shards`, `attempts`,
+`harness`, `k`) and push it to a branch named `lab/...`: `harness-lab.ts plan` spreads the tasks over `shards` jobs
+(each may run 6 hours), every job uploads its candidates, library and results, and the run's summary page lists the
+candidates (train) or the report (measure). It needs the repository secret `ANTHROPIC_API_KEY`. The repository is
+public, so its run logs and artifacts are too: they hold task prompts, the agent's answers and harness changes, never
+the key.
+
 ### Adding a task
 
 ```bash

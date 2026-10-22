@@ -1,0 +1,109 @@
+name: Harness lab
+
+# Runs scripts/harness-lab.ts on GitHub's x64 runners: a push to a lab/... branch that changes eval/lab-run.json starts
+# the run that file describes (train or measure, on Terminal-Bench or the private tasks), spread over parallel jobs.
+# It spends API money: it needs the ANTHROPIC_API_KEY secret, and only people who can push branches can start it.
+on:
+  push:
+    branches: ["lab/**"]
+    paths: ["eval/lab-run.json"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      command: ${{ steps.plan.outputs.command }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - id: plan
+        run: |
+          echo "matrix=$(bun scripts/harness-lab.ts plan eval/lab-run.json)" >> "$GITHUB_OUTPUT"
+          echo "command=$(bun -e 'console.log((await Bun.file("eval/lab-run.json").json()).command)')" >> "$GITHUB_OUTPUT"
+
+  lab:
+    needs: plan
+    runs-on: ubuntu-latest
+    # A job may run 6 hours; the plan spreads the tasks so each shard ends well before.
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: lab (shard ${{ matrix.shard }})
+    steps:
+      # Terminal-Bench images are large; the runner's preinstalled toolchains make room for them.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af > /dev/null
+          df -h /
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Install uv
+        run: pipx install uv
+      - name: Download Terminal-Bench
+        run: uvx --from harbor==0.24.0 harbor download terminal-bench@2.0 -o eval/tb-tasks
+      - name: Run
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Words checked by `plan` (task names, model ids, paths); split on spaces on purpose.
+          ARGS: ${{ matrix.args }}
+        run: bun scripts/harness-lab.ts $ARGS
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lab-shard-${{ matrix.shard }}
+          path: |
+            eval/harness-home-tb/harness/candidates
+            eval/harness-home-tb/harness/library
+            eval/harness-home-tb/harness/lab/*/run.json
+            eval/harness-home/harness/candidates
+            eval/harness-home/harness/library
+            eval/harness-home/harness/lab/*/run.json
+            eval/results
+          if-no-files-found: warn
+          retention-days: 30
+
+  summary:
+    needs: [plan, lab]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: lab-shard-*
+          path: shards
+      - name: Summary
+        env:
+          COMMAND: ${{ needs.plan.outputs.command }}
+        run: |
+          if [ "$COMMAND" = "measure" ]; then
+            files=$(find shards -path '*results*' -name '*-harness.jsonl')
+            if [ -n "$files" ]; then bun scripts/harness-lab.ts report $files >> "$GITHUB_STEP_SUMMARY"; else echo "No measurements." >> "$GITHUB_STEP_SUMMARY"; fi
+          else
+            for home in shards/*/harness-home-tb shards/*/harness-home; do
+              [ -d "$home" ] && bun scripts/harness-lab.ts candidates --home "$home" >> "$GITHUB_STEP_SUMMARY"
+            done
+            true
+          fi

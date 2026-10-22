@@ -19,7 +19,7 @@ import { checksPassed } from "../src/harness/gate";
 import { LocalProbeRunner, type LabTask, type ProbeResult } from "../src/harness/probe";
 import { labOnTask, ownerProjectPaths, probeKey } from "../src/harness/service";
 import { BASE_TREE } from "../src/harness/base";
-import { readCandidate } from "../src/harness/candidates";
+import { listCandidates, readCandidate } from "../src/harness/candidates";
 import { DOMAINS } from "../src/harness/domain";
 import { lessonsSkillDir, globalHarnessDir, validateTree } from "../src/harness/tree";
 import { Ledger } from "../src/learning/ledger";
@@ -46,6 +46,9 @@ const USAGE = `Usage:
   bun scripts/harness-lab.ts measure [--bench tb] [--task <id>]... [--model <id>] [--attempts 2] [--harness <dir>] [--home <dir>]
       Run each test task with the built-in harness and with --harness (default: what train adopted), judge both with
       the hidden tests or Terminal-Bench's verifier, and report the totals and, per task, which harness solved it.
+  bun scripts/harness-lab.ts plan [eval/lab-run.json]      The CI matrix for a run described in that file.
+  bun scripts/harness-lab.ts candidates [--home <dir>]      What train left, to read before assemble.
+  bun scripts/harness-lab.ts report <measurements.jsonl>... One report from several measure runs (CI shards).
   bun scripts/harness-lab.ts tb-split [--seed 1] [--train 30]
       Split Terminal-Bench's tasks (downloaded to eval/tb-tasks by \`harbor download terminal-bench@2.0\`) into train
       and test once, before any result is seen; written to eval/terminal-bench/split.json.
@@ -147,6 +150,94 @@ async function train(values: Values, tasks: LabTask[]): Promise<number> {
   return 0;
 }
 
+interface LabRunConfig {
+  command: "train" | "measure";
+  bench?: "tb";
+  model: string;
+  editorModel?: string;
+  /** The tasks; by default the split's train or test part (Terminal-Bench) or the dev/holdout tasks. */
+  tasks?: string[];
+  /** Only the first `limit` of them: a pilot. */
+  limit?: number;
+  /** Jobs to spread the tasks over (CI jobs stop after 6 hours). */
+  shards: number;
+  attempts?: number;
+  /** For measure: the harness to measure, a folder in the repository (assemble makes one). */
+  harness?: string;
+  k?: number;
+}
+
+/**
+ * The CI matrix for a run described in a JSON file (.github/workflows/harness-lab.yml): one entry per shard, each with
+ * the arguments of this script for its tasks. Printed as {"include": [...]}.
+ */
+async function plan(file: string): Promise<number> {
+  const config = JSON.parse(await readFile(resolve(ROOT, file), "utf8")) as LabRunConfig;
+  if (config.command !== "train" && config.command !== "measure") throw new Error(`${file}: command must be train or measure`);
+  if (!config.model) throw new Error(`${file}: model is required`);
+  let tasks = config.tasks;
+  if (!tasks) {
+    if (config.bench === "tb") {
+      const split = JSON.parse(await readFile(TB_SPLIT, "utf8")) as { train: string[]; test: string[] };
+      tasks = split[config.command === "train" ? "train" : "test"];
+    } else tasks = selectTasks(await loadTasks(TASKS), { split: config.command === "train" ? "dev" : "holdout" }).map((t) => t.id);
+  }
+  tasks = tasks.slice(0, config.limit ?? tasks.length);
+  // Every word ends up on a CI command line: only plain names, model ids and repository paths.
+  const word = (what: string, value: string, pattern: RegExp) => {
+    if (!pattern.test(value)) throw new Error(`${file}: ${what} "${value}" isn't allowed here`);
+  };
+  for (const t of tasks) word("task", t, /^[a-z0-9][a-z0-9._-]*$/);
+  word("model", config.model, /^[A-Za-z0-9][A-Za-z0-9._/:-]*$/);
+  if (config.editorModel) word("editorModel", config.editorModel, /^[A-Za-z0-9][A-Za-z0-9._/:-]*$/);
+  if (config.harness) word("harness", config.harness, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/);
+  if (config.harness?.split("/").includes("..")) throw new Error(`${file}: harness must be a folder in the repository`);
+  for (const [what, n] of [["shards", config.shards], ["attempts", config.attempts ?? 1], ["k", config.k ?? 1], ["limit", config.limit ?? 1]] as const) {
+    if (!Number.isInteger(n) || n < 1 || n > 100) throw new Error(`${file}: ${what} must be a whole number from 1 to 100`);
+  }
+  const shards = Math.max(1, Math.min(config.shards, tasks.length));
+  const common = [
+    config.command,
+    ...(config.bench ? ["--bench", config.bench] : []),
+    "--model", config.model,
+    ...(config.editorModel ? ["--editor-model", config.editorModel] : []),
+    ...(config.attempts ? ["--attempts", String(config.attempts)] : []),
+    ...(config.harness ? ["--harness", config.harness] : []),
+    ...(config.k ? ["--k", String(config.k)] : []),
+  ];
+  const include = Array.from({ length: shards }, (_, i) => {
+    const mine = tasks.filter((_, j) => j % shards === i);
+    return { shard: i + 1, args: [...common, ...mine.flatMap((t) => ["--task", t])].join(" ") };
+  });
+  console.log(JSON.stringify({ include }));
+  return 0;
+}
+
+/** One report from the measurements of several runs (each CI shard writes its own .jsonl). */
+async function report(files: string[]): Promise<number> {
+  if (files.length === 0) throw new Error("report needs the measurement .jsonl files");
+  const rows: Measurement[] = [];
+  for (const file of files) for (const line of (await readFile(file, "utf8")).split("\n")) if (line.trim()) rows.push(JSON.parse(line) as Measurement);
+  const attempts = Math.max(...rows.map((r) => r.attempt));
+  console.log(renderMeasurement(`${files.length} file(s)`, rows, attempts));
+  return 0;
+}
+
+/** What train left: each candidate with its task, verdict and files, for reading before assemble. */
+async function candidates(values: Values): Promise<number> {
+  const labHome = resolve(ROOT, (values.home as string | undefined) ?? "eval/harness-home-tb");
+  const all = await listCandidates(labHome);
+  if (all.length === 0) console.log("No candidates.");
+  for (const c of all) {
+    console.log(`## ${c.id} · ${c.task.title} (${c.task.id})`);
+    console.log(`Verdict: ${c.verdict?.outcome ?? "untested"}${c.verdict?.reasons.length ? ` (${c.verdict.reasons.join("; ")})` : ""}`);
+    if (c.rationale) console.log(c.rationale);
+    for (const [path, value] of Object.entries(c.changes)) console.log(`\n### ${path}\n${value === null ? "(removed)" : value}`);
+    console.log("");
+  }
+  return 0;
+}
+
 /** The harness to measure: chosen candidates' changes, in order, and with --lessons the library's lessons skill. */
 async function assemble(values: Values): Promise<number> {
   const labHome = resolve(ROOT, (values.home as string | undefined) ?? "eval/harness-home-tb");
@@ -227,9 +318,10 @@ async function measure(values: Values, tasks: LabTask[], evalTasks: Map<string, 
 }
 
 const [command, ...rest] = process.argv.slice(2);
-const { values } = parseArgs({
+const { values, positionals } = parseArgs({
   args: rest,
   strict: true,
+  allowPositionals: true,
   options: {
     task: { type: "string", multiple: true },
     split: { type: "string" },
@@ -251,7 +343,10 @@ const { values } = parseArgs({
   },
 });
 if (command === "tb-split") process.exit(await tbSplit(values));
+if (command === "plan") process.exit(await plan(positionals[0] ?? "eval/lab-run.json"));
 if (command === "assemble") process.exit(await assemble(values));
+if (command === "report") process.exit(await report(positionals));
+if (command === "candidates") process.exit(await candidates(values));
 if (command !== "train" && command !== "measure") {
   console.error(USAGE);
   process.exit(64);
