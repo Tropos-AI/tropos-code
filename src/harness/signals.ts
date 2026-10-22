@@ -21,7 +21,18 @@ export interface BehaviourSignals {
 
 const WRITE_TOOLS = new Set(["Write", "Edit"]);
 /** Commands that check work; matched against the start of each shell segment. */
-const VERIFY = /(^|[;&|(]\s*|\s)(bun (run )?test|bun x tsc|npx tsc|tsc\b|npm (run )?(test|build|lint|typecheck)|pnpm (run )?(test|build|lint|typecheck)|yarn (test|build|lint|typecheck)|bun run (build|lint|typecheck)|pytest|python -m (pytest|unittest)|cargo (test|check|build|clippy)|go (test|vet|build)|make (test|check)|ruff|mypy|eslint|vitest|jest)\b/;
+const VERIFY = new RegExp(
+  "(^|[;&|(]\\s*|\\s)(" +
+    [
+      "bun (run )?test", "bun x tsc", "npx tsc", "tsc", "npm (run )?(test|build|lint|typecheck)", "pnpm (run )?(test|build|lint|typecheck)",
+      "yarn (test|build|lint|typecheck)", "bun run (build|lint|typecheck)", "node --test", "deno test", "vitest", "jest", "eslint",
+      "pytest", "python3? -m (pytest|unittest|py_compile)", "ruff", "mypy",
+      "cargo (test|check|build|clippy)", "go (test|vet|build)", "rustc", "javac", "mvn (test|verify|package)", "gradle (test|build)",
+      // Builds and compilers, which tasks outside a package manager use to check their work.
+      "make", "cmake --build", "ctest", "gcc", "g\\+\\+", "clang\\+?\\+?", "coqc",
+    ].join("|") +
+    ")(?![\\w-])",
+);
 
 export function isVerifyCommand(command: string): boolean {
   return VERIFY.test(command);
