@@ -22,7 +22,7 @@ const WORKFLOWS = join(import.meta.dir, "../../.github/workflows");
 const text = (name: string) => readFile(join(WORKFLOWS, name), "utf8");
 const load = async (name: string) => Bun.YAML.parse(await text(name)) as Workflow;
 const PRIVILEGED = ["release.yml", "promote.yml", "channels-health.yml"];
-const ALL = ["release-build.yml", ...PRIVILEGED, "ci.yml"];
+const ALL = ["release-build.yml", ...PRIVILEGED, "ci.yml", "harness-lab.yml"];
 const writes = (j: Job) => typeof j.permissions === "object" && Object.values(j.permissions).includes("write");
 /** Jobs that hold a write token or a protected environment's secrets (release-signing, channels-write). */
 const privileged = (j: Job) => writes(j) || j.environment !== undefined;
@@ -489,6 +489,20 @@ describe("permissions, environments and stage order", () => {
         if (step.uses === undefined) continue;
         const [action, sha] = step.uses.split("@");
         expect({ job: n, action, sha }).toEqual({ job: n, action: action!, sha: ACTIONS[action!] ?? "not allowed in a privileged workflow" });
+      }
+    }
+  });
+
+  test("harness-lab.yml runs only on pushes to lab/ branches, reads only, and only its lab steps see the API key", async () => {
+    const wf = await load("harness-lab.yml");
+    expect(wf.on).toEqual({ push: { branches: ["lab/**"], paths: ["eval/lab-run.json"] } });
+    expect(wf.permissions).toEqual({ contents: "read" });
+    for (const [n, j] of Object.entries(wf.jobs)) {
+      expect({ job: n, privileged: privileged(j) }).toEqual({ job: n, privileged: false });
+      for (const step of j.steps) {
+        const secrets = [...new Set([...JSON.stringify(step).matchAll(/secrets\.(\w+)/g)].map((m) => m[1]))];
+        const allowed = n === "lab" && (step.name === "Check the API key" || step.name === "Run") ? ["ANTHROPIC_API_KEY"] : [];
+        expect({ job: n, step: step.name ?? step.uses, secrets }).toEqual({ job: n, step: step.name ?? step.uses, secrets: allowed });
       }
     }
   });
