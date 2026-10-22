@@ -18,8 +18,22 @@ export const checksPassed = (p: ProbeResult): number => p.checks.filter((c) => c
 const TURN_GAIN = 0.85;
 const TURN_LOSS = 1.25;
 
+/**
+ * How a run may end and still be compared: on its own (end_turn), or at a limit the agent ran into itself. A timeout,
+ * a crash, an API error or an abort says something about the machine, not the harness: with timeouts common under
+ * emulation, "finished where the reference timed out" would adopt chance.
+ */
+const COMPARABLE_ENDS: ReadonlySet<string> = new Set(["end_turn", "max_turns", "max_tokens", "refusal", "context_exceeded"]);
+
+export function endedOnItsOwn(p: ProbeResult): boolean {
+  return p.signals.endReason !== null && COMPARABLE_ENDS.has(p.signals.endReason);
+}
+
 export function compareProbes(reference: ProbeResult, candidate: ProbeResult): Verdict {
   if (candidate.error) return { outcome: "invalid", reasons: [`${candidate.id} failed to run: ${candidate.error}`] };
+  for (const p of [reference, candidate]) {
+    if (!endedOnItsOwn(p)) return { outcome: "invalid", reasons: [`${p.id} didn't finish on its own (${p.signals.endReason ?? "no end"}): nothing to compare`] };
+  }
   if (candidate.audit && weakenedTests(candidate.audit)) {
     const where = [...candidate.audit.testFilesEdited, ...candidate.audit.focusMarkers].slice(0, 3).join("; ");
     return { outcome: "invalid", reasons: [`${candidate.id} weakened tests (${where})`] };
@@ -31,7 +45,7 @@ export function compareProbes(reference: ProbeResult, candidate: ProbeResult): V
   if (cc > rc) better.push(`checks passed ${rc} → ${cc}`);
   if (cc < rc) worse.push(`checks passed ${rc} → ${cc}`);
   if (r.endReason === "end_turn" && c.endReason !== "end_turn") worse.push(`finished with ${c.endReason ?? "nothing"} instead of end_turn`);
-  if (r.endReason !== "end_turn" && c.endReason === "end_turn") better.push(`finished (end_turn) where the reference stopped with ${r.endReason ?? "nothing"}`);
+  if (r.endReason !== "end_turn" && c.endReason === "end_turn") better.push(`finished (end_turn) where the reference stopped at ${r.endReason}`);
   if (c.verifiedAfterLastEdit && !r.verifiedAfterLastEdit) better.push("checked its work after the last change; the reference didn't");
   if (!c.verifiedAfterLastEdit && r.verifiedAfterLastEdit) worse.push("didn't check its work after the last change; the reference did");
   if (c.toolErrors < r.toolErrors) better.push(`tool errors ${r.toolErrors} → ${c.toolErrors}`);
@@ -47,7 +61,7 @@ export function compareProbes(reference: ProbeResult, candidate: ProbeResult): V
 /** Orders runs best first: valid before invalid, then checks, finished, checked, tool errors, turns. */
 export function rankProbes(probes: ProbeResult[]): ProbeResult[] {
   const key = (p: ProbeResult): number[] => [
-    p.error || (p.audit && weakenedTests(p.audit)) ? 0 : 1,
+    p.error || (p.audit && weakenedTests(p.audit)) || !endedOnItsOwn(p) ? 0 : 1,
     checksPassed(p),
     p.signals.endReason === "end_turn" ? 1 : 0,
     p.signals.verifiedAfterLastEdit ? 1 : 0,

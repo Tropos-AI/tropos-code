@@ -20,12 +20,12 @@ export interface BehaviourSignals {
 }
 
 const WRITE_TOOLS = new Set(["Write", "Edit"]);
-/** Commands that check work; matched against the start of each shell segment. */
+/** Commands that check work; each shell segment of a command is matched from its start. */
 const VERIFY = new RegExp(
-  "(^|[;&|(]\\s*|\\s)(" +
+  "^(" +
     [
       "bun (run )?test", "bun x tsc", "npx tsc", "tsc", "npm (run )?(test|build|lint|typecheck)", "pnpm (run )?(test|build|lint|typecheck)",
-      "yarn (test|build|lint|typecheck)", "bun run (build|lint|typecheck)", "node --test", "deno test", "vitest", "jest", "eslint",
+      "yarn (test|build|lint|typecheck)", "bun run (build|lint|typecheck)", "node --test", "deno test", "npx (vitest|jest)", "vitest", "jest", "eslint",
       "pytest", "python3? -m (pytest|unittest|py_compile)", "ruff", "mypy",
       "cargo (test|check|build|clippy)", "go (test|vet|build)", "rustc", "javac", "mvn (test|verify|package)", "gradle (test|build)",
       // Builds and compilers, which tasks outside a package manager use to check their work.
@@ -33,9 +33,19 @@ const VERIFY = new RegExp(
     ].join("|") +
     ")(?![\\w-])",
 );
+/** Words that only prefix the real command. */
+const PREFIX = /^(?:(?:sudo|time|nice|env|timeout\s+\S+)\s+|[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
+/**
+ * Asking a tool about itself is not using it: --version/--help anywhere, or -V/-h as its only argument. (-v can't
+ * count: it is pytest's verbose as much as gcc's version.)
+ */
+const ABOUT = /\s--(version|help)(\s|$)|^\S+(\s+\S+)?\s+-[Vh]$/;
 
 export function isVerifyCommand(command: string): boolean {
-  return VERIFY.test(command);
+  return command
+    .split(/\n|;|&&|\|\||\|/)
+    .map((segment) => segment.trim().replace(/^\(+\s*/, "").replace(PREFIX, ""))
+    .some((segment) => VERIFY.test(segment) && !ABOUT.test(segment) && !ABOUT.test(` ${segment}`));
 }
 
 function pathOf(input: unknown): string | undefined {

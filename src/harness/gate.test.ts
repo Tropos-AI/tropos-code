@@ -54,3 +54,12 @@ test("rankProbes puts valid, passing, finished, checked, clean, short runs first
   expect(rankProbes([a, b, c, d]).map((p) => p.id)).toEqual(["c", "b", "d", "a"]);
   expect(checksPassed(d)).toBe(1);
 });
+
+test("a timeout, crash or abort on either side makes the comparison invalid, never better", () => {
+  const timedOut = probe("ref", { signals: { endReason: "AgentTimeoutError" } });
+  expect(compareProbes(timedOut, probe("c"))).toEqual({ outcome: "invalid", reasons: ["ref didn't finish on its own (AgentTimeoutError): nothing to compare"] });
+  expect(compareProbes(ref, probe("c", { signals: { endReason: null } })).outcome).toBe("invalid");
+  expect(compareProbes(ref, probe("c", { signals: { endReason: "error" } })).outcome).toBe("invalid");
+  // A limit the agent ran into itself still compares.
+  expect(compareProbes(probe("ref", { signals: { endReason: "max_turns" } }), probe("c")).reasons).toContain("finished (end_turn) where the reference stopped at max_turns");
+});
