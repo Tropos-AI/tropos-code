@@ -244,10 +244,17 @@ async function assemble(values: Values): Promise<number> {
   const out = values.out as string | undefined;
   if (!out) throw new Error("assemble needs --out <dir>");
   const files = new Map<string, string>();
+  const writer = new Map<string, string>();
   for (const id of (values.candidate as string[] | undefined) ?? []) {
     const c = await readCandidate(labHome, id);
     if (!c) throw new Error(`no candidate ${id} in ${labHome}`);
     for (const [path, value] of Object.entries(c.changes)) {
+      // Each candidate holds whole files: a second one writing the same file differently would drop the first's change.
+      const earlier = writer.get(path);
+      if (earlier && files.get(path) !== (value ?? undefined)) {
+        throw new Error(`${earlier} and ${id} both change ${path}: merge them by hand into a file under --out, or pick one`);
+      }
+      writer.set(path, id);
       if (value === null) files.delete(path);
       else files.set(path, value);
     }

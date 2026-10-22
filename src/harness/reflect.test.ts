@@ -32,7 +32,7 @@ const run = (over: Partial<LabRun> = {}): LabRun => ({
   ...over,
 });
 
-const good = { title: "Test before finishing", cue: "a bun project", lesson: "run bun test after the last edit", evidence: ["run r1-comp-1: passed where r1-ref failed"], confidence: "high" };
+const good = { title: "Test before finishing", for: "agent" as const, cue: "a bun project", lesson: "run bun test after the last edit", evidence: ["run r1-comp-1: passed where r1-ref failed"], confidence: "high" };
 
 test("the reflector sees runs, proposals, decisions and the verdict", () => {
   const prompt = reflectorPrompt(run());
