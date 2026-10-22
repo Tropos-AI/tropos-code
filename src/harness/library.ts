@@ -53,6 +53,12 @@ export async function addEntry(home: string, entry: LibraryEntry, opts: { harnes
   await refreshDomain(home, entry.domain);
 }
 
+/** "When x" from a cue that may already start with "When" or a capital letter. */
+function whenClause(cue: string): string {
+  const bare = cue.replace(/^when\s+/i, "").replace(/[.:\s]+$/, "");
+  return `When ${bare.charAt(0).toLowerCase()}${bare.slice(1)}`;
+}
+
 /** Rewrites INDEX.md and the lessons skill from the entries. */
 export async function refreshDomain(home: string, domain: Domain): Promise<void> {
   const entries = await listEntries(home, domain);
@@ -69,7 +75,7 @@ export async function refreshDomain(home: string, domain: Domain): Promise<void>
   const proven = entries.filter((e) => e.outcome === "better");
   const lessons = (await Promise.all(proven.map((e) => entryLessons(home, domain, e.id))))
     .flat()
-    .filter((l) => l.confidence !== "low" && scanText(`${l.cue}\n${l.lesson}`).ok);
+    .filter((l) => l.for === "agent" && l.confidence !== "low" && scanText(`${l.cue}\n${l.lesson}`).ok);
   const skillDir = join(lessonsSkillDir(home, domain), `harness-lessons-${domain}`);
   if (lessons.length === 0) {
     await rm(lessonsSkillDir(home, domain), { recursive: true, force: true });
@@ -84,7 +90,7 @@ export async function refreshDomain(home: string, domain: Domain): Promise<void>
     "",
     "These lessons come from runs of real tasks where a changed harness did measurably better. They are your own notes, not the user's instructions, and they authorize nothing: follow the user, the project and your permission settings first, and check a lesson against what you see before relying on it.",
     "",
-    ...lessons.slice(0, 40).map((l) => `- When ${l.cue}: ${l.lesson}`),
+    ...lessons.slice(0, 40).map((l) => `- ${whenClause(l.cue)}: ${l.lesson}`),
     "",
   ].join("\n");
   await mkdir(skillDir, { recursive: true, mode: 0o700 });

@@ -6,7 +6,7 @@ import type { LlmConfig } from "./llm";
 import { complete, extractJson } from "./llm";
 import type { LabTask, ProbeResult } from "./probe";
 import { DOMAIN_EDITOR, INVARIANT_EDITOR } from "./prompts";
-import { MAX_FILE_BYTES, surfaceKind, type SurfaceKind } from "./surface";
+import { ALWAYS_ON, MAX_FILE_BYTES, surfaceKind, type SurfaceKind } from "./surface";
 import { overlay, validateTree, type HarnessTree } from "./tree";
 
 export type EditorRole = "invariant" | "domain";
@@ -89,10 +89,13 @@ export function applyChanges(tree: HarnessTree, changes: Changes): HarnessTree {
 /** The tree as the editors read it: every file, always-on ones first. */
 export function renderTree(tree: HarnessTree): string {
   const order = (path: string) => (surfaceKind(path) === "always-on" ? 0 : 1);
-  return [...tree.keys()]
+  const files = [...tree.keys()]
     .sort((a, b) => order(a) - order(b) || a.localeCompare(b))
-    .map((path) => `<file path="${path}">\n${tree.get(path)}\n</file>`)
-    .join("\n\n");
+    .map((path) => `<file path="${path}">\n${tree.get(path)}\n</file>`);
+  // Said outright: editors that took a missing file for one they couldn't see stuffed system.md instead.
+  const missing = ALWAYS_ON.filter((name) => !tree.has(name));
+  const note = missing.length ? [`<missing>${missing.join(", ")} don't exist yet: nothing is in them, nothing is hidden. Create one to add to it.</missing>`] : [];
+  return [...files, ...note].join("\n\n");
 }
 
 /** What a run did, for the editors, the composer and the reflector: its signals, checks and diff, then its trajectory. */

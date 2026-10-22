@@ -6,6 +6,8 @@ export type Confidence = "high" | "medium" | "low";
 
 export interface Lesson {
   title: string;
+  /** Who it is for: the agent doing tasks (loaded in sessions), or the editors improving harnesses (the lab only). */
+  for: "agent" | "editor";
   cue: string;
   lesson: string;
   /** Each line names a run id ("run <id>: what it showed"). */
@@ -13,7 +15,7 @@ export interface Lesson {
   confidence: Confidence;
 }
 
-const FIELD = /^-\s*(cue|lesson|evidence|confidence):\s*(.*)$/i;
+const FIELD = /^-\s*(for|cue|lesson|evidence|confidence):\s*(.*)$/i;
 const CONFIDENCE: readonly string[] = ["high", "medium", "low"];
 
 /** Sections that don't have every field are dropped; extra text is ignored. */
@@ -38,7 +40,9 @@ export function parseExperience(text: string): Lesson[] {
     const evidence = (fields.evidence ?? []).filter(Boolean);
     const title = titleLine.trim();
     if (!title || !fields.cue?.[0] || !fields.lesson?.[0] || evidence.length === 0 || !CONFIDENCE.includes(confidence)) continue;
-    lessons.push({ title, cue: fields.cue[0], lesson: fields.lesson[0], evidence, confidence: confidence as Confidence });
+    // Unsaid means the editors': a lesson reaches sessions only when it says it is for the agent.
+    const audience = (fields.for?.[0] ?? "").toLowerCase() === "agent" ? "agent" : "editor";
+    lessons.push({ title, for: audience, cue: fields.cue[0], lesson: fields.lesson[0], evidence, confidence: confidence as Confidence });
   }
   return lessons;
 }
@@ -46,7 +50,7 @@ export function parseExperience(text: string): Lesson[] {
 export function renderExperience(lessons: Lesson[]): string {
   return lessons
     .map((l) =>
-      [`## ${l.title}`, `- cue: ${l.cue}`, `- lesson: ${l.lesson}`, "- evidence:", ...l.evidence.map((e) => `  - ${e}`), `- confidence: ${l.confidence}`].join("\n"),
+      [`## ${l.title}`, `- for: ${l.for}`, `- cue: ${l.cue}`, `- lesson: ${l.lesson}`, "- evidence:", ...l.evidence.map((e) => `  - ${e}`), `- confidence: ${l.confidence}`].join("\n"),
     )
     .join("\n\n")
     .concat(lessons.length ? "\n" : "");

@@ -41,7 +41,7 @@ function lessonsFrom(raw: unknown): Lesson[] {
     const evidence = o.evidence.filter((e): e is string => typeof e === "string");
     // One line each: a newline would break EXPERIENCE.md's sections.
     const line = (s: string) => s.replace(/\s+/g, " ").trim();
-    return [{ title: line(o.title), cue: line(o.cue), lesson: line(o.lesson), evidence: evidence.map(line), confidence }];
+    return [{ title: line(o.title), for: o.for === "agent" ? ("agent" as const) : ("editor" as const), cue: line(o.cue), lesson: line(o.lesson), evidence: evidence.map(line), confidence }];
   });
 }
 

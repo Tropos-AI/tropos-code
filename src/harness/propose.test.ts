@@ -62,6 +62,7 @@ test("the editors see the task, the harness, the library and the reference run",
   const prompt = editorPrompt({ task, tree, reference, referenceTrajectory: "CALL Bash: ls", library: "lesson A" });
   expect(prompt).toContain('<task domain="ts-bun">\nFix the parser.\n</task>');
   expect(prompt).toContain('<file path="system.md">\nYou are T.\n</file>');
+  expect(prompt).toContain("<missing>tool-guidance.md don't exist yet: nothing is in them, nothing is hidden.");
   expect(prompt).toContain("<library>\nlesson A\n</library>");
   expect(prompt).toContain("checked its work after the last change: no");
   expect(prompt).toContain("Check `bun test`: failed\n1 fail");

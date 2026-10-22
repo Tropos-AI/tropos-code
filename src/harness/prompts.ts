@@ -79,9 +79,10 @@ Rules:
 - Each lesson needs evidence: the run ids whose contrast shows it ("run <id>: what happened"). A lesson no contrast supports is not a lesson; leave it out.
 - Lessons are about method (how to edit harnesses, what helped the agent work), never about this task's answer or this repository's facts, and never what the grader or the hidden checks wanted.
 - A change that made things worse is a lesson too.
+- Say who each lesson is for. "agent": how to do tasks of this kind well (it is loaded into the agent's sessions, so write it to the agent). "editor": how to change harnesses (judging runs, what to edit, what to leave alone); only the lab's editors read it.
 - Zero lessons is a fine answer.
 
 ${DATA_RULE}
 
 Answer with one JSON object and nothing else:
-{"lessons": [{"title": "short", "cue": "when this applies", "lesson": "what to do", "evidence": ["run <id>: …"], "confidence": "high" | "medium" | "low"}]}`;
+{"lessons": [{"title": "short", "for": "agent" | "editor", "cue": "when this applies", "lesson": "what to do", "evidence": ["run <id>: …"], "confidence": "high" | "medium" | "low"}]}`;
