@@ -1,8 +1,7 @@
 {
-  "run": "pilot-train-2",
+  "run": "full-train-1",
   "command": "train",
   "bench": "tb",
   "model": "claude-haiku-5-5",
-  "limit": 10,
-  "shards": 5
+  "shards": 30
 }
