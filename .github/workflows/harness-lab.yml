@@ -43,6 +43,14 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: lab (shard ${{ matrix.shard }})
     steps:
+      - name: Check the API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::The repository secret ANTHROPIC_API_KEY is missing or empty."
+            exit 1
+          fi
       # Terminal-Bench images are large; the runner's preinstalled toolchains make room for them.
       - name: Free disk space
         run: |
