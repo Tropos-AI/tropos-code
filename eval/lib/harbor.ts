@@ -58,6 +58,8 @@ export function fromHarborTrial(trial: HarborTrial, opts: { runId: string; agent
     isError: null,
     stop: null,
     turns: null,
+    toolCalls: null,
+    toolErrors: null,
     costUsd: trial.agent_result?.cost_usd ?? null,
     inputTokens: trial.agent_result?.n_input_tokens ?? null,
     outputTokens: trial.agent_result?.n_output_tokens ?? null,

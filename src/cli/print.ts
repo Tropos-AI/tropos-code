@@ -29,6 +29,8 @@ function finalText(message: Message | undefined): string {
 export class PrintRenderer {
   private lastAssistant: Message | undefined;
   private turns = 0;
+  private toolCalls = 0;
+  private toolErrors = 0;
   private inputTokens = 0;
   private outputTokens = 0;
   private cost: number | undefined = 0;
@@ -45,6 +47,10 @@ export class PrintRenderer {
     if (event.type === "assistant") {
       this.lastAssistant = event.message;
       this.turns++;
+    }
+    if (event.type === "tool_end") {
+      this.toolCalls++;
+      if (event.status === "error") this.toolErrors++;
     }
     if (event.type === "usage") {
       this.inputTokens += event.inputTokens;
@@ -80,6 +86,9 @@ export class PrintRenderer {
         is_error: reason !== "end_turn",
         stop: reason,
         num_turns: this.turns,
+        // Finished tool calls, and those that failed (a denial is not a failure): the eval's tool-error rate.
+        num_tool_calls: this.toolCalls,
+        num_tool_errors: this.toolErrors,
         usage: { input_tokens: this.inputTokens, output_tokens: this.outputTokens },
         cost_usd: this.cost ?? null,
         error: this.lastError,

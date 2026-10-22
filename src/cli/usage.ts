@@ -39,6 +39,7 @@ Advanced:
                                    start over without reinstalling
   tcode security audit             check the setup for risky settings
   tcode migrate openclaw|hermes    bring over identity, memory and skills from those tools
+  tcode harness status|lab|adopt   what your sessions run with besides the model, and the lab that tests changes to it
   tcode -- <prompt>                everything after -- is the prompt (e.g. tcode -- status)
 
 Options:
@@ -55,6 +56,9 @@ Options:
       --dangerously-skip-permissions
                                    approve every action without asking
       --add-dir <dir>              let tools work in another directory (repeatable)
+      --confine                    run commands in the sandbox and keep tools inside the project
+                                   (your own hooks and MCP servers still run as configured)
+      --harness-dir <dir>          run with this harness folder instead of the adopted one
   -v, --version                    print the version
   -h, --help                       show this help
 

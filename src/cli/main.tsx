@@ -45,13 +45,15 @@ import {
 import { closeRuntime } from "./shutdown";
 import { USAGE } from "./usage";
 import { runGatewayCommand } from "../gateway/commands";
+import { confinedBackend, confinementAvailable } from "../exec/confined";
+import { harnessWarnings, loadHarness } from "../harness/tree";
 import { createLifecycleContext } from "./lifecycle/context";
 import { loadLifecycle } from "./lifecycle";
 import type { LifecycleContext } from "./lifecycle/types";
 import { GatewayConfigError, configPermissionWarning, gatewayDir, loadGatewayConfig } from "../gateway/config";
 import { runGateway, type GatewayRun } from "../gateway/daemon";
 import { FilePairing } from "../gateway/pairing";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 /** sysexits.h EX_USAGE; distinct from the print-mode exit codes in EXIT_CODES. */
 export const EXIT_USAGE = 64;
@@ -279,9 +281,10 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
   }
 
   await layoutAtStart(home, VERSION, err);
-  const ext = await loadExtensions({ cwd, home, settings, env });
+  const harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons, ...(opts.harnessDir ? { dir: resolveToolPath(opts.harnessDir, cwd) } : {}) });
+  const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
   // Warnings quote repo file names and server output: keep their escape sequences away from the terminal.
-  for (const warning of ext.warnings) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
+  for (const warning of [...ext.warnings, ...harnessWarnings(harness)]) err(`tcode: ${sanitizeForTerminal(warning)}\n`);
   const subagents: SubagentHolder = {};
   // The current session, for SessionSearch to skip; set once the session is open below.
   let sessionId = "";
@@ -303,11 +306,28 @@ async function run(argv: string[], deps: MainDeps): Promise<number> {
     modelPrefs: new ModelPrefs(home),
     role: "owner",
     secrets: new SecretVault(),
+    system: harness.system,
   };
-  // The owner's terminal can schedule too; results go to the owner's chat.
-  ctx.tools = [...ctx.tools, await ownerCronTool(home)];
+  if (opts.confine) {
+    // Confined or not at all: a probe run on the host would let a harness under test touch the machine.
+    if (!(await confinementAvailable())) {
+      err("tcode: --confine needs sandbox-exec (macOS) or bwrap (Linux), and neither works here.\n");
+      return 1;
+    }
+    // The harness folders in effect stay readable: its scripts are meant to be run.
+    const readable = harness.layers.flatMap((layer) => (layer.applied && layer.dir && layer.files.length > 0 ? [layer.dir] : []));
+    // TROPOS_CONFINE_DENY names more folders to hide (the owner's Tropos home, from a probe); it can only add denials.
+    const denied = (env.TROPOS_CONFINE_DENY ?? "").split(delimiter).filter((p) => isAbsolute(p));
+    // And TROPOS_CONFINE_OTHER_PROJECTS the owner's projects, whose .env files are hidden as in a chat.
+    const otherProjects = (env.TROPOS_CONFINE_OTHER_PROJECTS ?? "").split(delimiter).filter((p) => isAbsolute(p));
+    ctx.exec = confinedBackend({ project: cwd, home, userHome: homedir(), env, readable, denied, otherProjects });
+    ctx.confined = true;
+  }
+  // The owner's terminal can schedule too; results go to the owner's chat. A confined session (a harness probe) gets
+  // neither this nor setup: both act outside the sandbox, on the owner's jobs and configuration.
+  if (!ctx.confined) ctx.tools = [...ctx.tools, await ownerCronTool(home)];
   // And change Tropos's setup, through the dashboard's own handlers; a running gateway is told to reload by signal.
-  if (ctx.role === "owner") {
+  if (ctx.role === "owner" && !ctx.confined) {
     ctx.tools = [
       ...ctx.tools,
       createSetupTool({ home, userHome: homedir(), who: { role: ctx.role, origin: "local" }, admin: sessionAdmin(home, env, homedir()), ledger: ext.ledger, reload: () => requestGatewayReload(home), secrets: ctx.secrets, providers: router }),

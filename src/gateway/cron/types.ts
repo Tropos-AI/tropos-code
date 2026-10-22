@@ -3,6 +3,8 @@ import { z } from "zod";
 import { scheduleSchema } from "./schedule";
 
 export const DEFAULT_MAX_RUNTIME_MS = 15 * 60_000;
+/** A job through the harness lab runs its task four times or more. */
+export const RECURSIVE_MAX_RUNTIME_MS = 3 * 3_600_000;
 
 export const jobSchema = z.object({
   id: z.string().min(1),
@@ -24,6 +26,11 @@ export const jobSchema = z.object({
   maxRuntimeMs: z.number().int().positive().optional(),
   /** Rule strings such as "Bash(npm test:*)" a scheduled run may use without asking. */
   allowCommands: z.array(z.string()).optional(),
+  /**
+   * Run through the harness lab with this many compositions (src/gateway/cron/harness-recursion.ts): four or more runs
+   * of the task in confined copies, the best handed over as a branch. Owner jobs in git projects only.
+   */
+  harnessRecursion: z.number().int().min(1).max(5).optional(),
 });
 export type CronJob = z.infer<typeof jobSchema>;
 

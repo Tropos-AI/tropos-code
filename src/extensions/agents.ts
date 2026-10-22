@@ -130,8 +130,9 @@ export async function loadAgents(dirs: ExtensionDir[]): Promise<{ agents: AgentD
       const name = qualifiedName(dir, bare);
       if (loaded.has(name)) continue;
       // A built-in is what the model reaches for by default: a cloned repo must not rewrite it.
-      if (dir.source === "project" && BUILTIN_AGENTS.some((b) => b.name === name)) {
-        warnings.push(`Skipped agent ${name} (${path}): a project agent can't replace a built-in one; give it another name`);
+      // The same for the harness's: a lab's editor wrote them, from trajectories that may quote untrusted text.
+      if ((dir.source === "project" || dir.source === "harness") && BUILTIN_AGENTS.some((b) => b.name === name)) {
+        warnings.push(`Skipped agent ${name} (${path}): a ${dir.source} agent can't replace a built-in one; give it another name`);
         continue;
       }
       const description = fmString(data, "description");
@@ -141,8 +142,8 @@ export async function loadAgents(dirs: ExtensionDir[]): Promise<{ agents: AgentD
       }
       let model = fmString(data, "model");
       if (model === "inherit") model = undefined;
-      if (model && dir.source === "project" && !isAnthropicModelId(model)) {
-        warnings.push(`Agent ${name} ignores model "${model}": a project agent may only pick an Anthropic model`);
+      if (model && (dir.source === "project" || dir.source === "harness") && !isAnthropicModelId(model)) {
+        warnings.push(`Agent ${name} ignores model "${model}": a ${dir.source} agent may only pick an Anthropic model`);
         model = undefined;
       }
       const maxTurns = parseMaxTurns(data.maxTurns);

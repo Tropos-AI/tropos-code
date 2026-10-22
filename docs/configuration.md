@@ -40,7 +40,7 @@ Lists (`permissions.*`, `additionalDirectories`, `disabledPlugins`) are combined
 
 **Repository files are untrusted**: they arrive with the code, so `.tropos/settings.json` and
 `.tropos/settings.local.json` may only set an Anthropic `model`, `effort`, `theme`, `refusalFallback`, and `ask`/`deny`
-rules. Anything else in them is ignored with a warning naming it. Put the rest in a file under `~/.tropos/`.
+rules (never `learning` or `harness`). Anything else in them is ignored with a warning naming it. Put the rest in a file under `~/.tropos/`.
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
@@ -67,6 +67,12 @@ rules. Anything else in them is ignored with a warning naming it. Put the rest i
 | `learning.flushAt` | number 0.3–0.95 | `0.7` | Fraction of the context window at which the flush review runs |
 | `learning.curator` | boolean | `true` | The weekly skill tidy-up |
 | `learning.askBeforeSaving` | boolean | `false` | Ask before the agent saves to its own notes, journal, skills, specialists or identity |
+| `harness.lab` | boolean | `false` | The gateway runs the [harness lab](memory-skills-learning.md#the-harness-lab) once a week on a few recent sessions per project. Every task runs four times or more, so it is off until you turn it on |
+| `harness.autoAdopt` | boolean | `true` | Adopt what the lab found better without asking, when it adds no scripts; you get a message with the undo |
+| `harness.tasksPerWeek` | integer 1–10 | `2` | Past sessions per project the weekly lab replays (6 tasks a week at most) |
+| `harness.editorModel` | string | the session model | The model that proposes and composes harness changes |
+| `harness.lessons` | boolean | `true` | Sessions load the lab's lessons for their kind of project, as a skill |
+| `harness.suggest` | boolean | `true` | The background review may suggest standing rules; they wait, untested, for the lab |
 
 Example:
 
@@ -148,6 +154,7 @@ a repository may be symbolic links only within that repository. `/init` creates 
 | `worktrees/` | Git worktrees for chat work |
 | `sandbox-cache/` | Package caches for sandboxed chat commands |
 | `snapshots/` | Shadow repositories for `/undo` |
+| `harness/` | The harness: `active/` (adopted for every project), `projects/<key>/active/` (for one), `candidates/`, `lab/` (the lab's runs) and `library/` (lessons by kind of project) |
 | `backups/` | Backups |
 
 Set `TROPOS_HOME` to use another folder instead of `~/.tropos` (useful for a second, separate setup or for

@@ -51,6 +51,12 @@ describe("parseCli", () => {
     expect(o.prompt).toBe("fix the bug");
   });
 
+  test("--harness-dir and --confine appear only when given", () => {
+    expect(parseCli(["-p", "x", "--harness-dir", "/c", "--confine"])).toMatchObject({ harnessDir: "/c", confine: true });
+    const plain = parseCli(["-p", "x"]);
+    expect("harnessDir" in plain || "confine" in plain).toBe(false);
+  });
+
   test("add-dir is repeatable", () => {
     expect(parseCli(["--add-dir", "../a", "--add-dir", "/b"]).addDir).toEqual(["../a", "/b"]);
   });

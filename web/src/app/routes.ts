@@ -13,6 +13,7 @@ export const PAGES = [
   { id: "skills", label: "Skills", title: "Skills", icon: "layers", group: "Agent" },
   { id: "agents", label: "Agents", title: "Agents", icon: "bot", group: "Agent" },
   { id: "memory", label: "Memory", title: "Memory", icon: "brain", group: "Agent" },
+  { id: "harness", label: "Harness", title: "Harness", icon: "flask-conical", group: "Agent" },
   { id: "extensions", label: "Extensions", title: "Extensions", icon: "package", group: "Agent" },
   { id: "status", label: "Status", title: "Status & health", icon: "activity", group: "Control" },
   { id: "settings", label: "Settings", title: "Settings", icon: "settings", group: "Control" },

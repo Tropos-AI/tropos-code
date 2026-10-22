@@ -35,6 +35,22 @@ async function put(path: string, text: string) {
 const load = (settings: Partial<Settings> = {}) => loadExtensions({ cwd, home, settings: { ...DEFAULT_SETTINGS, ...settings }, env: {}, connect: false });
 
 describe("loadExtensions", () => {
+  test("the harness adds skills, agents and hooks, and is read again on reload", async () => {
+    const layer = join(home, "harness", "active");
+    await put(join(layer, "skills", "bun-tests", "SKILL.md"), "---\ndescription: How to run bun tests\n---\nRun bun test.");
+    await put(join(layer, "agents", "checker.md"), "---\nname: checker\ndescription: Checks work\n---\nCheck it.");
+    await put(join(layer, "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "${TROPOS_PLUGIN_ROOT}/x.sh" }] }] } }));
+    let harness = { skillDirs: [join(layer, "skills")], agentDirs: [join(layer, "agents")], hooksFile: join(layer, "hooks.json") };
+    const ext = await loadExtensions({ cwd, home, settings: DEFAULT_SETTINGS, env: {}, connect: false, harness: () => harness });
+    expect(ext.skills.find((s) => s.name === "bun-tests")?.source).toBe("harness");
+    expect(ext.agents.find((a) => a.name === "checker")?.source).toBe("harness");
+    expect(ext.hookConfig.plugins).toEqual([{ name: "harness", root: layer, hooks: { Stop: [{ hooks: [{ type: "command", command: `${layer}/x.sh` }] }] } }]);
+    harness = { skillDirs: [], agentDirs: [], hooksFile: join(layer, "hooks.json") };
+    await ext.reload();
+    expect(ext.skills.some((s) => s.name === "bun-tests")).toBe(false);
+  });
+
+
   test("loads project and user commands, skills and agents, plus plugin ones", async () => {
     await put(join(cwd, ".tropos", "commands", "review.md"), "---\ndescription: Review it\n---\nReview $ARGUMENTS");
     await put(join(home, "workspace", "skills", "deploy", "SKILL.md"), "---\ndescription: Deploy the app\n---\nSteps");

@@ -14,6 +14,7 @@ import { ProjectsPage } from "@/app/pages/ProjectsPage";
 import { SetupPage } from "@/app/pages/SetupPage";
 import { StatusPage } from "@/app/pages/StatusPage";
 import { ChatPage } from "@/app/pages/ChatPage";
+import { HarnessPage } from "@/app/pages/HarnessPage";
 import { MemoryPage } from "@/app/pages/MemoryPage";
 import { SettingsPage } from "@/app/pages/SettingsPage";
 import { SkillsPage } from "@/app/pages/SkillsPage";
@@ -31,6 +32,7 @@ const PAGE_COMPONENTS: Record<PageId, ComponentType> = {
   skills: SkillsPage,
   agents: AgentsPage,
   memory: MemoryPage,
+  harness: HarnessPage,
   extensions: ExtensionsPage,
   status: StatusPage,
   settings: SettingsPage,

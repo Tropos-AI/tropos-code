@@ -3,7 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { firstRun, nextRun } from "./schedule";
 import { CronStore } from "./store";
-import { DEFAULT_MAX_RUNTIME_MS, type CronDeps, type CronJob, type CronService, type RunRecord, type RunStatus } from "./types";
+import { DEFAULT_MAX_RUNTIME_MS, RECURSIVE_MAX_RUNTIME_MS, type CronDeps, type CronJob, type CronService, type RunRecord, type RunStatus } from "./types";
 
 export const DELIVER_CHARS = 3500;
 export const DEFAULT_LATE_MS = 6 * 3_600_000;
@@ -116,7 +116,8 @@ export function createCronService(opts: CronServiceOptions = {}): CronService & 
       let status: RunStatus = "ok";
       let text = "";
       let error: string | undefined;
-      const limit = job.maxRuntimeMs ?? DEFAULT_MAX_RUNTIME_MS;
+      // Only the owner can set harnessRecursion (the Cron tool refuses it elsewhere), so the longer limit is theirs.
+      const limit = job.maxRuntimeMs ?? (job.harnessRecursion ? RECURSIVE_MAX_RUNTIME_MS : DEFAULT_MAX_RUNTIME_MS);
       let timedOut = false;
       const watchdog = setTimer(() => {
         timedOut = true;

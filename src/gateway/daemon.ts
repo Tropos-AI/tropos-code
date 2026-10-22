@@ -72,6 +72,8 @@ import { suggestionTool, withSuggestions } from "../suggest/wire";
 import { CronStore } from "./cron/store";
 import { createCronGatewayService } from "./cron/service";
 import { createCuratorService } from "./curator-service";
+import { createHarnessLabService } from "./harness-lab-service";
+import { recursiveJobRunner } from "./cron/harness-recursion";
 import { OwnerClaimStore } from "./owner-claim";
 import { TelegramAdapter, type TelegramAdapterOptions } from "./telegram/adapter";
 import { TelegramApi } from "./telegram/api";
@@ -254,7 +256,10 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
   );
 
   // The scheduler: jobs run in fresh sandboxed sessions of their project and are delivered through the channels.
-  const cron = createCronGatewayService({ log: (m) => run.err(`gateway: cron: ${m}\n`) });
+  // The harness lab starts probes as `tcode -p`: the same program the gateway runs as.
+  const runtime = basename(process.execPath).toLowerCase();
+  const labCommand = (runtime === "bun" || runtime === "node") && process.argv[1] ? [process.execPath, process.argv[1]] : [process.execPath];
+  const cron = createCronGatewayService({ log: (m) => run.err(`gateway: cron: ${m}\n`), recursive: recursiveJobRunner({ home, command: labCommand, env: process.env }) });
   const cronStore = new CronStore(home);
 
   // Docker's answer; asked only for sessions that run in Docker.
@@ -726,7 +731,8 @@ async function runLockedGateway(run: GatewayRun): Promise<number> {
       telegramConnected: () => adapters.some((a) => a.name === "telegram"),
       log: (m) => run.err(`gateway: heartbeat: ${m}\n`),
     });
-    for (const service of [cron, createCuratorService({ log: (m) => run.err(`gateway: curator: ${m}\n`) }), heartbeat, ...(run.services ?? [])]) {
+    const harnessLab = createHarnessLabService({ command: labCommand, env: process.env, log: (m) => run.err(`gateway: harness lab: ${m}\n`) });
+    for (const service of [cron, createCuratorService({ log: (m) => run.err(`gateway: curator: ${m}\n`) }), heartbeat, harnessLab, ...(run.services ?? [])]) {
       try {
         await service.start(serviceDeps);
         startedServices.push(service);

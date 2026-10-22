@@ -128,7 +128,7 @@ export function skillListing(skills: Skill[], budget = SKILL_LISTING_BUDGET): st
   const listed = skills.filter((s) => s.modelInvocable);
   if (listed.length === 0) return "";
   // Repo and learned skills say so: the model follows their procedure but gives them no more authority than project memory.
-  const label = (s: Skill) => (s.source === "project" || s.source === "learned" ? `${s.name} (${s.source})` : s.name);
+  const label = (s: Skill) => (s.source === "project" || s.source === "learned" || s.source === "harness" ? `${s.name} (${s.source})` : s.name);
   const full = listed.map((s) => neutraliseHarnessTags(cap(`- ${label(s)}: ${s.description}${s.whenToUse ? ` — ${s.whenToUse}` : ""}`, MAX_LINE)));
   const short = listed.map((s) => `- ${s.name}`);
   const open = "<skills>";

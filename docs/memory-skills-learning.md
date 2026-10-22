@@ -98,6 +98,36 @@ At most once a week, the curator moves learned skills that nobody used for 30 da
 `skills-learned/.archive/`. It never deletes anything, and leaves learned skills you edited by hand alone. It also
 archives specialists nobody used for 60 days. Archived skills can be restored from the dashboard's Skills page.
 
+## The harness lab
+
+The review learns from one conversation and saves at once. The harness lab is slower and stricter: it changes how
+the agent works only when a change has been run and measured. The harness is everything around the model: the system
+prompt, standing rules (`guardrails.md`), tool guidance, skills, helper scripts and subagents, layered under
+`~/.tropos/harness/` (see [tcode harness](cli-reference.md#tcode-harness)).
+
+For one task, the lab:
+
+1. runs it with the current harness (the reference);
+2. asks two editors for a change: one for how the agent works (tools, checking its work, planning), one for knowledge
+   of this kind of project (as skills that load only when they fit);
+3. runs the task with each change, composes the next harness from what the runs showed, and runs that;
+4. keeps the composition as a candidate only if it did better: the project's own checks first, then whether the agent
+   checked its work, made fewer tool errors and took fewer steps. A run that edited or skipped existing tests never
+   counts as better.
+
+Every run is a fresh copy of the project's last commit, in a Tropos home of its own (none of your notes, keys or
+sessions), with its commands in the sandbox. Your checkout is never touched. Lessons the runs support go to a library
+per kind of project; later labs read them, and sessions in such projects load the lessons of runs that did better.
+
+Run it with `tcode harness lab "<task>"` (or `--replay-recent 3` for your last sessions here), or turn on the weekly
+lab (`harness.lab`, or the switch on the dashboard's Harness page). Candidates wait on the Harness page and in
+`tcode harness candidates`; with `harness.autoAdopt` on, a candidate that adds no scripts is adopted for you and you get
+a message with the undo. Scripts, and anything a session's review suggested, are always yours to adopt. Every adoption
+is in the ledger, so `/learned undo` and `tcode harness revert` take it back.
+
+A scheduled job can also run through the lab (`tcode cron add … --harness-recursion 1`): the best of its runs is
+committed on a new branch for you to merge.
+
 ## Seeing and undoing what it learned
 
 - **Terminal:** `/learned` lists every change to notes, skills and identity; `/learned undo` reverts the latest.

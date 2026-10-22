@@ -4,6 +4,7 @@
 import type { Model } from "../api/model";
 import { errorText } from "../error-text";
 import { ModelPrefs } from "../config/model-prefs";
+import { harnessWarnings, loadHarness } from "../harness/tree";
 import { SettingsError, loadSettings, settingsPaths } from "../config/settings";
 import { compileRules } from "../permissions/engine";
 import { ProviderRouter } from "../providers/router";
@@ -69,7 +70,9 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
   for (const rule of invalid) warnings.push(`ignoring invalid permission rule "${rule}"`);
   const picked = pickShell(env.SHELL, (name) => Bun.which(name));
   const router = new ProviderRouter({ home, env, settings: settings.providers });
-  const ext = await loadExtensions({ cwd, home, settings, env });
+  let harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons });
+  warnings.push(...harnessWarnings(harness));
+  const ext = await loadExtensions({ cwd, home, settings, env, harness: () => harness });
   warnings.push(...ext.warnings);
   const rgPath = Bun.which("rg");
   const ctx: AppContext = {
@@ -89,13 +92,16 @@ export async function loadProjectContext(input: ProjectContextInput): Promise<Pr
     env,
     modelPrefs: new ModelPrefs(home),
     role: "owner",
+    system: harness.system,
   };
   const newSessionContext = async (): Promise<SessionContext> => {
+    // First, so a harness adopted while the gateway runs reaches the next session with its skills; never throws.
+    harness = await loadHarness({ home, cwd, lessons: settings.harness.lessons });
     await ext.reload().catch((err) => warnings.push(`couldn't re-read skills, commands and agents: ${errorText(err)}`));
     const holder: SubagentHolder = {};
     let current = "";
     return {
-      ctx: { ...ctx, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
+      ctx: { ...ctx, system: harness.system, secrets: new SecretVault(), subagents: holder, tools: sessionTools(createTools({ rgPath }), ext, { home, cwd, holder, sessionId: () => current }) },
       setSessionId: (id) => {
         current = id;
       },

@@ -33,6 +33,13 @@ describe("tcode cron", () => {
     expect(store.list()).toHaveLength(1);
   });
 
+  test("add --harness-recursion runs the job through the harness lab", async () => {
+    expect(await run(["add", "--name", "n", "--schedule", "every day at 03:00", "--prompt", "p", "--harness-recursion", "2"], f.ctx)).toBe(0);
+    expect(store.list()[0]!.harnessRecursion).toBe(2);
+    expect(f.stdout()).toContain("It runs through the harness lab (k=2)");
+    expect(await run(["add", "--name", "n", "--schedule", "every day at 03:00", "--prompt", "p", "--harness-recursion", "9"], f.ctx)).toBe(64);
+  });
+
   test("add without required flags is a usage error", async () => {
     expect(await run(["add", "--name", "n"], f.ctx)).toBe(64);
     expect(await run(["add", "--name"], f.ctx)).toBe(64);

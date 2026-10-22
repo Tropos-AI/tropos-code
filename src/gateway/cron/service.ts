@@ -1,6 +1,6 @@
 // src/gateway/cron/service.ts — the scheduler as a gateway service: connects the engine to the daemon's sessions and channels.
 import type { GatewayService, GatewayServiceDeps } from "../types";
-import { createJobRunner } from "./runner";
+import { createJobRunner, type JobRunnerDeps } from "./runner";
 import { createCronService, type CronServiceOptions } from "./scheduler";
 import type { RunRecord } from "./types";
 
@@ -10,8 +10,8 @@ export interface CronGatewayService extends GatewayService {
   running(): number;
 }
 
-export function createCronGatewayService(opts: CronServiceOptions & { log?: (message: string) => void } = {}): CronGatewayService {
-  const { log, ...schedulerOptions } = opts;
+export function createCronGatewayService(opts: CronServiceOptions & { log?: (message: string) => void; recursive?: JobRunnerDeps["recursive"] } = {}): CronGatewayService {
+  const { log, recursive, ...schedulerOptions } = opts;
   const engine = createCronService(schedulerOptions);
   return {
     name: "cron",
@@ -23,6 +23,7 @@ export function createCronGatewayService(opts: CronServiceOptions & { log?: (mes
           openSession: (projectId, opts) => deps.openSession(projectId, opts),
           ownerChat: deps.ownerChat,
           projectPath: async (projectId) => (await deps.projects.get(projectId))?.path,
+          ...(recursive ? { recursive } : {}),
         }),
         deliver: (target, text) => deps.deliver(target, text),
         log,

@@ -44,6 +44,23 @@ export interface Settings {
   learning: LearningSettings;
   /** Texts on this Mac through the Messages and SendIMessage tools (src/messages). User layers only: it reads other people's messages. */
   messages: boolean;
+  /** The harness lab (src/harness). User layers only: it spends tokens and changes what every session is told. */
+  harness: HarnessSettings;
+}
+
+export interface HarnessSettings {
+  /** The gateway runs the lab once a week on recent sessions of each project. Off by default: every task runs 4+ times. */
+  lab: boolean;
+  /** Adopt a lab candidate that did better and adds no scripts without asking (the owner is told, and can undo). */
+  autoAdopt: boolean;
+  /** Past sessions per project the weekly lab replays. */
+  tasksPerWeek: number;
+  /** The editors' model; the probes' model (the session's) when unset. */
+  editorModel?: string;
+  /** Sessions in a project load the library's lessons for its kind of project. */
+  lessons: boolean;
+  /** The background review may suggest harness changes; the lab tests them before anything uses them. */
+  suggest: boolean;
 }
 
 export interface LearningSettings {
@@ -106,9 +123,10 @@ export interface ProviderSetting {
   api?: "chat" | "responses" | "anthropic";
 }
 
-export type PartialSettings = Partial<Omit<Settings, "permissions" | "learning">> & {
+export type PartialSettings = Partial<Omit<Settings, "permissions" | "learning" | "harness">> & {
   permissions?: Partial<PermissionRulesConfig>;
   learning?: Partial<LearningSettings>;
+  harness?: Partial<HarnessSettings>;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -131,6 +149,7 @@ export const DEFAULT_SETTINGS: Settings = {
   disabledPlugins: [],
   learning: { review: true, interval: 10, flushAt: 0.7, curator: true, askBeforeSaving: false },
   messages: false,
+  harness: { lab: false, autoAdopt: true, tasksPerWeek: 2, lessons: true, suggest: true },
 };
 
 export interface SettingsPaths {
@@ -241,6 +260,17 @@ const layerSchema = z.object({
     .partial()
     .optional(),
   messages: z.boolean().optional(),
+  harness: z
+    .object({
+      lab: z.boolean(),
+      autoAdopt: z.boolean(),
+      tasksPerWeek: z.number().int().min(1).max(10),
+      editorModel: z.string().min(1),
+      lessons: z.boolean(),
+      suggest: z.boolean(),
+    })
+    .partial()
+    .optional(),
 });
 
 /** Drops undefined values so a partial layer never blanks a field it didn't set. */
@@ -277,6 +307,7 @@ export function mergeSettings(base: Settings, layer: PartialSettings): Settings 
     disabledPlugins: union(base.disabledPlugins, layer.disabledPlugins),
     learning: { ...base.learning, ...definedOnly(layer.learning) },
     messages: layer.messages ?? base.messages,
+    harness: { ...base.harness, ...definedOnly(layer.harness) },
   };
 }
 
@@ -339,7 +370,8 @@ function restrictRepoLayer(path: string, layer: PartialSettings): { layer: Parti
   if (layer.autoUpdatesChannel !== undefined) ignored.push("autoUpdatesChannel");
   // Hooks, MCP servers, formatters and language servers run programs; plugins choose which run.
   // Learning spends the user's tokens in the background and writes prompt text under ~/.tropos.
-  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins", "learning", "messages"] as const) {
+  // The harness lab spends tokens too, and what it adopts is every later session's prompt.
+  for (const key of ["hooks", "mcpServers", "formatter", "lsp", "snapshots", "memory", "disabledPlugins", "learning", "messages", "harness"] as const) {
     if (layer[key] !== undefined) ignored.push(key);
   }
   // A model id picks the provider too ("deepseek/…", "ollama/…"): a repo may choose among Anthropic

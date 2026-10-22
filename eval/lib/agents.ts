@@ -11,6 +11,9 @@ export interface AgentReport {
   isError: boolean | null;
   stop: string | null;
   turns: number | null;
+  /** Finished tool calls, and how many of them failed. */
+  toolCalls: number | null;
+  toolErrors: number | null;
   costUsd: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -44,7 +47,7 @@ export function lastResultLine(stdout: string): Record<string, unknown> | null {
   return null;
 }
 
-const EMPTY: AgentReport = { isError: null, stop: null, turns: null, costUsd: null, inputTokens: null, outputTokens: null };
+const EMPTY: AgentReport = { isError: null, stop: null, turns: null, toolCalls: null, toolErrors: null, costUsd: null, inputTokens: null, outputTokens: null };
 
 export const tropos: AgentAdapter = {
   name: "tropos",
@@ -61,6 +64,8 @@ export const tropos: AgentAdapter = {
       isError: typeof r.is_error === "boolean" ? r.is_error : null,
       stop: typeof r.stop === "string" ? r.stop : null,
       turns: num(r.num_turns),
+      toolCalls: num(r.num_tool_calls),
+      toolErrors: num(r.num_tool_errors),
       costUsd: num(r.cost_usd),
       inputTokens: num(usage.input_tokens),
       outputTokens: num(usage.output_tokens),
@@ -83,6 +88,9 @@ export const claude: AgentAdapter = {
       isError: typeof r.is_error === "boolean" ? r.is_error : null,
       stop: typeof r.subtype === "string" ? r.subtype : null,
       turns: num(r.num_turns),
+      // Claude Code's result line doesn't count tool calls.
+      toolCalls: null,
+      toolErrors: null,
       costUsd: num(r.total_cost_usd) ?? num(r.cost_usd),
       inputTokens: num(usage.input_tokens),
       outputTokens: num(usage.output_tokens),

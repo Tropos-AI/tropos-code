@@ -13,6 +13,8 @@ import { HOOK_EVENTS, addLocalAllowRule, isAnthropicModelId, type Settings } fro
 import { environmentBlock } from "../context/environment";
 import { loadMemory } from "../context/memory";
 import { SYSTEM_PROMPT, buildContextText } from "../context/system-prompt";
+import { HARNESS_SUGGESTION_RULES, parseSuggestion, saveSuggestion } from "../harness/suggest";
+import { harnessRoot } from "../harness/tree";
 import { resolveLayoutPath, workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentLabel } from "../extensions/agents";
 import { createSkillManageTool } from "../memory/skill-manage";
@@ -85,6 +87,10 @@ export interface AppContext {
   contextBlocks?: () => Promise<string[]>;
   /** Owner sessions only: sees the agent's events to note whether a project's pinned test commands pass (src/suggest). */
   testWatch?: { observe(e: AgentEvent): void };
+  /** The system prompt from the project's harness tree (src/harness/tree.ts); the built-in one when unset. */
+  system?: string;
+  /** `--confine`: tool paths outside allowedDirs are denied, as in a messaging chat (Bash is confined through `exec`). */
+  confined?: boolean;
 }
 
 export function createToolContext(ctx: AppContext): Omit<ToolContext, "signal"> {
@@ -126,10 +132,11 @@ export function permissionContext(ctx: AppContext, mode: Mode): PermissionContex
     // `~` in a rule is the user's home; everything of Tropos's own (stores, own files) comes from ctx.home below.
     home: homedir(),
     allowedDirs: ctx.allowedDirs,
-    confine: ctx.origin === "channel",
+    confine: ctx.origin === "channel" || ctx.confined === true,
     role: ctx.role,
     autonomy: ctx.autonomy?.(),
-    ownFiles: ownFileGuards(ctx.home),
+    // The harness too: what is there becomes the next session's prompt, skills and hooks, so no broad allow rule writes it.
+    ownFiles: ownFileGuards(ctx.home, [...workspaceOwnPaths(ctx.home), harnessRoot(ctx.home)]),
     instructionFiles: ownFileGuards(ctx.home, workspaceInstructionPaths(ctx.home)),
     stores: {
       // The journal (workspace/memory) is in troposStorePaths; the project's old notes folder stays a store, held to the same no-links check.
@@ -200,6 +207,8 @@ export function makeAgent(
   },
 ): Agent {
   const config = () => ({ model: opts.state().model, effort: opts.state().effort, refusalFallback: ctx.settings.refusalFallback });
+  // Read once when the context was built: a fixed prompt keeps the cache prefix stable for the whole session.
+  const system = ctx.system ?? SYSTEM_PROMPT;
   const permissions = () => permissionContext(ctx, opts.state().mode);
   // The main agent and its subagents share one prompt queue, so their permission dialogs never overlap.
   const askPermission = serializeAsks((prompt, signal) => opts.ui.askPermission(prompt, signal));
@@ -242,10 +251,14 @@ export function makeAgent(
           // Only the reviews that may create a specialist see what was delegated lately.
           const withDelegations = kind === "skill" || kind === "combined" || kind === "final";
           if (withDelegations) prompt = `${prompt}\n\n${await delegationContext(ctx.home).catch(() => "")}`.trim();
+          // The same reviews may suggest standing rules for the harness; only the owner's sessions, and only untested
+          // candidates come of it (src/harness/suggest.ts).
+          const suggest = withDelegations && ctx.role === "owner" && ctx.settings.harness.suggest;
+          if (suggest) prompt = `${prompt}\n\n${HARNESS_SUGGESTION_RULES}`;
           const result = await runReviewAgent({
             model: ctx.model,
             tools: ctx.tools,
-            system: SYSTEM_PROMPT,
+            system,
             config,
             permissions,
             hooks: opts.hooks,
@@ -258,6 +271,8 @@ export function makeAgent(
             home: ctx.home,
           });
           agent?.addCost(result.costUsd);
+          const suggestion = suggest ? parseSuggestion(result.reply) : null;
+          if (suggestion) await saveSuggestion(ctx.home, ctx.cwd, { id: opts.session().id }, suggestion).catch(() => null);
           return result;
         },
       })
@@ -266,7 +281,7 @@ export function makeAgent(
   ctx.subagents.deps = {
     model: ctx.model,
     tools: ctx.tools,
-    system: SYSTEM_PROMPT,
+    system,
     config,
     // Without the role and stores: a subagent's saves to Tropos's stores ask through the shared queue, because
     // its tool results never reach the user as a learned notice.
@@ -313,7 +328,7 @@ export function makeAgent(
     {
       model: ctx.model,
       tools: ctx.tools,
-      system: SYSTEM_PROMPT,
+      system,
       config,
       permissions,
       askPermission,
@@ -482,6 +497,7 @@ export async function extensionPanel(ctx: AppContext, what: ListTopic): Promise<
         sections: [
           { title: "Yours (~/.tropos/workspace/skills)", items: bySource("user") },
           { title: "Learned on its own (~/.tropos/workspace/skills-learned)", items: bySource("learned") },
+          { title: "From the harness (~/.tropos/harness)", items: bySource("harness") },
           { title: "This project", items: bySource("project") },
           { title: "Plugins", items: bySource("plugin") },
         ].filter((section) => section.items.length > 0),

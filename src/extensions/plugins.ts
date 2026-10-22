@@ -66,28 +66,36 @@ function fillRoot(text: string, root: string): string {
 }
 
 function loadHooks(name: string, root: string, warnings: string[]): HooksSetting {
-  const path = join(root, "hooks", "hooks.json");
+  return readHooksFile(`Plugin ${name}`, join(root, "hooks", "hooks.json"), root, warnings, "hooks/hooks.json");
+}
+
+/**
+ * A hooks file in Claude Code's plugin shape (`{ "hooks": … }` or the bare settings shape), with `${TROPOS_PLUGIN_ROOT}`
+ * filled in as `root`; problems go to `warnings`, labelled with `label` and naming the file as `shown`. A missing file
+ * is no hooks.
+ */
+export function readHooksFile(label: string, path: string, root: string, warnings: string[], shown = path): HooksSetting {
   let raw: unknown;
   try {
     raw = readJson(path);
   } catch (err) {
-    warnings.push(`Plugin ${name}: cannot read hooks/hooks.json: ${errorText(err)}`);
+    warnings.push(`${label}: cannot read ${shown}: ${errorText(err)}`);
     return {};
   }
   if (raw === null) return {};
   // Claude Code's file wraps the events in { "hooks": … }; accept that and the bare settings shape.
   const wrapped = raw && typeof raw === "object" && !Array.isArray(raw) && "hooks" in raw ? (raw as { hooks: unknown }).hooks : raw;
   if (!wrapped || typeof wrapped !== "object" || Array.isArray(wrapped)) {
-    warnings.push(`Plugin ${name}: hooks/hooks.json must be an object of hook events`);
+    warnings.push(`${label}: ${shown} must be an object of hook events`);
     return {};
   }
   const known = new Set<string>(HOOK_EVENTS);
   const events = Object.keys(wrapped).filter((k) => !known.has(k));
-  if (events.length > 0) warnings.push(`Plugin ${name}: ignored unsupported hook events: ${events.join(", ")}`);
+  if (events.length > 0) warnings.push(`${label}: ignored unsupported hook events: ${events.join(", ")}`);
   const kept = Object.fromEntries(Object.entries(wrapped).filter(([k]) => known.has(k)));
   const parsed = hooksSchema.safeParse(kept);
   if (!parsed.success) {
-    warnings.push(`Plugin ${name}: hooks/hooks.json ignored: ${issues(parsed.error)}`);
+    warnings.push(`${label}: ${shown} ignored: ${issues(parsed.error)}`);
     return {};
   }
   const hooks: HooksSetting = {};

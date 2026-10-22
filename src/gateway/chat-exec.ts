@@ -1,10 +1,11 @@
 // src/gateway/chat-exec.ts — where a chat's (or a scheduled run's) commands run: on the host, confined to the project
 // by the OS when it can be, or in a Docker container.
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import type { Confinement, ExecBackend } from "../exec/backend";
 import { confinedBackend, unconfinedBackend } from "../exec/confined";
 import { ConfinementError, requireSingleLinks } from "../exec/confinement-paths";
 import { DockerBackend } from "../exec/docker";
+import { globalHarnessDir, projectHarnessDir } from "../harness/tree";
 import { workspaceInstructionPaths, workspaceOwnPaths } from "../home/layout";
 import { agentsDir, guestWorkspaceDir, workspaceDir } from "../paths";
 import type { GatewayConfig } from "./config";
@@ -89,7 +90,12 @@ export async function chatBackend(input: ChatBackendInput): Promise<{ backend: E
     // A command may not read the .env files of the owner's other projects (the session's own project is skipped).
     const own = input.project === undefined ? undefined : realOr(input.project);
     const otherProjects = ownerProjects(config, input.home).filter((p) => realOr(p) !== own);
-    return { backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner", otherProjects }), confined: true };
+    // The adopted harness's scripts live in the denied Tropos home; the agent runs them, so they stay readable.
+    const readable = [globalHarnessDir(input.home), ...(input.project === undefined ? [] : [projectHarnessDir(input.home, realOr(input.project))])].filter((d) => existsSync(d));
+    return {
+      backend: confinedBackend({ project: workspace, home: input.home, userHome: input.userHome, env: input.env, protectInstructions: role !== "owner", otherProjects, readable }),
+      confined: true,
+    };
   } catch (err) {
     // A project that can't be confined (a linked sandbox cache, an untrusted bwrap …) gets no session, not a bare shell.
     if (err instanceof ConfinementError) throw new SandboxUnavailableError(err.message);

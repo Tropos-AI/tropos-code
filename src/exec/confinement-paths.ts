@@ -247,6 +247,10 @@ export function confinementPaths(opts: {
   protectInstructions?: boolean;
   /** The owner's other projects (the registered ones and the built-in workspaces); the session's own may be among them. */
   otherProjects?: readonly string[];
+  /** Folders commands may read although they sit inside a denied one: the harness in effect, whose scripts they run. */
+  readable?: readonly string[];
+  /** More folders commands may not read: the owner's Tropos home, when this session's is another (a harness probe's). */
+  denied?: readonly string[];
 }): ConfinementPaths {
   const platform = opts.platform ?? process.platform;
   const userHome = real(opts.userHome);
@@ -274,8 +278,16 @@ export function confinementPaths(opts: {
     husky: withLinkTarget(join(project, ".husky"), project),
     worktreesRoot: real(worktreesDir(opts.home)),
     linkedGitDirs: linkedGitDirs(project, real(worktreesDir(opts.home))),
-    deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home]),
-    readCarveOuts: [real(join(opts.home, "workspace")), real(worktreesDir(opts.home))],
+    // The default Tropos home as well as this one: a session whose TROPOS_HOME points elsewhere (a harness probe's
+    // fresh home) must not reach the owner's keys and memory either.
+    deniedReads: unique([...SECRET_PATHS.map((p) => real(resolve(userHome, p))), home, real(resolve(userHome, ".tropos")), ...(opts.denied ?? []).map(real)]),
+    readCarveOuts: unique([
+      real(join(opts.home, "workspace")),
+      real(worktreesDir(opts.home)),
+      // A project kept inside the Tropos home (a probe's copy of one) is still the session's to read.
+      ...([home, real(resolve(userHome, ".tropos")), ...(opts.denied ?? []).map(real)].some((root) => isInside(project, root)) ? [project] : []),
+      ...(opts.readable ?? []).map(real),
+    ]),
     ownFiles: unique(workspaceOwnPaths(home).map(real)),
     instructionFiles: opts.protectInstructions ? unique(workspaceInstructionPaths(home).map(real)) : [],
     otherProjects: deep,

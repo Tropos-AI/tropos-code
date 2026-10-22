@@ -1,5 +1,6 @@
 // src/cli/extensions.ts
 import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { runSubagent } from "../agent/subagent";
@@ -10,10 +11,11 @@ import { HOOK_EVENTS, type HooksSetting, type Settings } from "../config/setting
 import { createAgentManageTool } from "../extensions/agent-manage";
 import { type AgentDefinition } from "../extensions/agents";
 import { loadCommands, type CustomCommand } from "../extensions/commands";
-import { loadPlugins, pluginRoots, type LoadedPlugin } from "../extensions/plugins";
+import { loadPlugins, pluginRoots, readHooksFile, type LoadedPlugin } from "../extensions/plugins";
 import { loadSkills, type Skill } from "../extensions/skills";
 import { extensionDirs } from "../extensions/sources";
 import { Formatters } from "../format/formatters";
+import type { Harness } from "../harness/tree";
 import { HookRunner, type HookRunnerConfig } from "../hooks/runner";
 import { LspManager } from "../lsp/manager";
 import { McpManager } from "../mcp/manager";
@@ -87,7 +89,14 @@ export interface LoadExtensionsOptions {
   userHome?: string;
   /** Tests stand in for another OS; the Messages tools exist only on darwin. */
   platform?: NodeJS.Platform;
+  /**
+   * The harness in effect (src/harness/tree.ts): its skill and agent folders load after the user's own, its hooks file
+   * after settings and plugins. Read each time extensions are read, so a session sees the harness adopted since.
+   */
+  harness?: () => HarnessExtensions;
 }
+
+export type HarnessExtensions = Pick<Harness, "skillDirs" | "agentDirs" | "hooksFile">;
 
 function hasHooks(hooks: HooksSetting): boolean {
   return HOOK_EVENTS.some((event) => (hooks[event]?.length ?? 0) > 0);
@@ -100,7 +109,7 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
   warnings.push(...loaded.warnings);
   const plugins = loaded.plugins;
   const roots = pluginRoots(plugins);
-  const dirs = (kind: "commands" | "skills" | "agents") => extensionDirs(kind, { cwd, home, plugins: roots });
+  const dirs = (kind: "commands" | "skills" | "agents") => extensionDirs(kind, { cwd, home, plugins: roots, harness: opts.harness?.() });
 
   const readAll = async () => {
     const [commands, skills, agents] = await Promise.all([
@@ -126,6 +135,13 @@ export async function loadExtensions(opts: LoadExtensionsOptions): Promise<Exten
     hooks: settings.hooks,
     plugins: enabled.filter((p) => hasHooks(p.hooks)).map((p) => ({ name: p.name, root: p.root, hooks: p.hooks })),
   };
+  // Hooks run code, so only an adopted harness has them (Harness.hooksFile); they load once, at start.
+  const harnessHooks = opts.harness?.().hooksFile;
+  if (harnessHooks) {
+    const root = dirname(harnessHooks);
+    const hooks = readHooksFile("Harness", harnessHooks, root, warnings);
+    if (hasHooks(hooks)) hookConfig.plugins = [...(hookConfig.plugins ?? []), { name: "harness", root, hooks }];
+  }
 
   const servers = { ...Object.fromEntries(enabled.flatMap((p) => Object.entries(p.mcpServers))), ...settings.mcpServers };
   let mcp: McpManager | null = null;

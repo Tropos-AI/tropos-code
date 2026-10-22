@@ -18,6 +18,10 @@ export interface CliOptions {
   permissionMode?: Mode;
   dangerouslySkipPermissions: boolean;
   addDir: string[];
+  /** A harness folder used in place of the adopted overlays (src/harness/tree.ts): how the harness lab runs a probe. */
+  harnessDir?: string;
+  /** Run Bash confined to the project (sandbox-exec / bwrap) and deny tool paths outside it: the lab's probes. */
+  confine?: boolean;
   help: boolean;
   version: boolean;
   /** `tcode gateway`: run as the always-on gateway instead of a session. */
@@ -189,6 +193,8 @@ export function parseCli(argv: string[]): CliOptions {
         "permission-mode": { type: "string" },
         "dangerously-skip-permissions": { type: "boolean", default: false },
         "add-dir": { type: "string", multiple: true, default: [] },
+        "harness-dir": { type: "string" },
+        confine: { type: "boolean" },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -227,6 +233,9 @@ export function parseCli(argv: string[]): CliOptions {
     permissionMode,
     dangerouslySkipPermissions: v["dangerously-skip-permissions"] ?? false,
     addDir: v["add-dir"] ?? [],
+    // Only when given, so the options of every older command line stay exactly as they were.
+    ...(v["harness-dir"] !== undefined ? { harnessDir: v["harness-dir"] } : {}),
+    ...(v.confine ? { confine: true } : {}),
     help: v.help ?? false,
     version: v.version ?? false,
   };

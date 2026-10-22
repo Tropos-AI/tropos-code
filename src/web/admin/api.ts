@@ -187,6 +187,68 @@ export interface MemoryAdmin {
   "memory.delete": { params: { target: MemoryTarget; index: number; expected: string }; result: { ok: true } };
 }
 
+// ---------- harness ----------
+
+export interface HarnessCandidateView {
+  id: string;
+  createdAt: string;
+  source: "lab" | "review";
+  scope: "global" | "project";
+  project?: string;
+  domain: string;
+  task: string;
+  files: { path: string; change: "write" | "remove" }[];
+  verdict?: { outcome: "better" | "same" | "worse" | "invalid"; reasons: string[] };
+  rationale: string;
+  decisions: { decision: string; evidence: string }[];
+  status: "pending" | "adopted" | "discarded" | "reverted";
+  /** Adds or changes scripts: adopting it needs `allowCode`. */
+  runsCode: boolean;
+}
+
+export interface HarnessRunView {
+  id: string;
+  startedAt: string;
+  task: string;
+  outcome: "better" | "same" | "worse" | "invalid";
+  reasons: string[];
+  runs: number;
+  costUsd: number | null;
+  candidate?: string;
+}
+
+export interface HarnessSettingsView {
+  lab: boolean;
+  autoAdopt: boolean;
+  tasksPerWeek: number;
+  editorModel?: string;
+  lessons: boolean;
+  suggest: boolean;
+}
+
+export interface HarnessOverview {
+  /** The layers every project shares: the built-in base and the adopted global one. */
+  layers: { name: string; dir?: string; files: string[]; applied: boolean; problems: string[] }[];
+  alwaysOnChars: number;
+  alwaysOnLimit: number;
+  candidates: HarnessCandidateView[];
+  runs: HarnessRunView[];
+  library: { domain: string; entries: number; lessons: number }[];
+  settings: HarnessSettingsView;
+}
+
+export interface HarnessAdmin {
+  "harness.overview": { params: undefined; result: HarnessOverview };
+  /** What adopting the candidate would change in its layer, as a unified patch. */
+  "harness.diff": { params: { id: string }; result: { patch: string } };
+  /** `allowCode` is the owner's yes to a candidate that adds scripts. */
+  "harness.adopt": { params: { id: string; allowCode?: boolean }; result: HarnessOverview };
+  "harness.revert": { params: { id: string }; result: HarnessOverview };
+  "harness.discard": { params: { id: string }; result: HarnessOverview };
+  /** Changes settings.harness in ~/.tropos/settings.json; only the fields given. */
+  "harness.settings": { params: Partial<HarnessSettingsView>; result: HarnessOverview };
+}
+
 // ---------- skills ----------
 
 export type SkillSource = "user" | "learned";
@@ -647,7 +709,8 @@ export type AdminMap = StatusAdmin &
   ProactiveAdmin &
   MessagesAdmin &
   MemoryAdmin &
-  SkillsAdmin;
+  SkillsAdmin &
+  HarnessAdmin;
 
 export type AdminMethod = keyof AdminMap;
 
@@ -722,6 +785,12 @@ export const ADMIN_METHODS: AdminMethod[] = [
   "skills.delete",
   "skills.archived",
   "skills.restore",
+  "harness.overview",
+  "harness.diff",
+  "harness.adopt",
+  "harness.revert",
+  "harness.discard",
+  "harness.settings",
   "mcp.test",
   "plugins.setEnabled",
   "onboard.state",

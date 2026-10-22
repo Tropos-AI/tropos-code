@@ -59,6 +59,9 @@ The sidebar shows the Tropos logo and the installed version at the top, and grou
   See [Agents and specialists](agents-and-specialists.md).
 - **Memory.** The notes the agent keeps about you and the work; edit or delete entries. See
   [Memory, skills and learning](memory-skills-learning.md).
+- **Harness.** What the agent runs with besides the model, the changes the harness lab tested and left for you (each
+  with its verdict, the reasons and the diff; Adopt or Discard), adopted changes with Revert, the lab's runs, the
+  library, and the switches for the weekly lab. See [Memory, skills and learning](memory-skills-learning.md#the-harness-lab).
 - **Extensions.** Three tabs: **MCP** (add, test, turn on or off, remove servers), **Hooks** (the shell commands that
   run on agent events) and **Plugins** (turn on or off). See [MCP servers, plugins and skills](mcp-plugins-skills.md).
 

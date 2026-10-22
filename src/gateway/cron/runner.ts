@@ -19,6 +19,8 @@ export interface JobRunnerDeps {
   /** The project's directory, for the permission context; undefined when the project is gone. */
   projectPath(projectId: string): Promise<string | undefined>;
   home: string;
+  /** Runs a job with `harnessRecursion` through the harness lab; unset, such a job runs as a plain one. */
+  recursive?(job: CronJob, cwd: string, signal: AbortSignal): Promise<{ text: string }>;
 }
 
 /**
@@ -71,6 +73,8 @@ export function createJobRunner(deps: JobRunnerDeps): CronDeps["runJob"] {
     const cwd = await deps.projectPath(job.project);
     if (!cwd) throw new Error(`The project "${job.project}" doesn't exist any more.`);
     const untrusted = untrustedJob(job, await deps.ownerChat?.());
+    // A guest's job never gets the lab: it runs the owner's model many times over and hands over a branch.
+    if (job.harnessRecursion && deps.recursive && !untrusted) return deps.recursive(job, cwd, signal);
     const session = await deps.openSession(job.project, { untrusted });
     await session.clear();
     let last = "";
