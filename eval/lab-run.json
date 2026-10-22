@@ -1,7 +1,10 @@
 {
-  "command": "train",
+  "run": "pilot-measure-1",
+  "command": "measure",
   "bench": "tb",
   "model": "claude-haiku-5-5",
-  "limit": 10,
-  "shards": 5
+  "limit": 20,
+  "attempts": 2,
+  "harness": "eval/harness-tb-pilot",
+  "shards": 10
 }

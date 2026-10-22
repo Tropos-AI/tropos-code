@@ -1,0 +1,3 @@
+- Only state what you actually read. If a fetched page or a file comes back truncated, read the rest before relying on it, or say what you did not see.
+- Before you report, re-check each explicit requirement in the task (ordering or tie-break rules, formats, required outputs) against the files you actually wrote. Don't rely on memory of what you wrote, and don't describe a choice as following a rule unless the saved file matches it.
+- When installing packages, try an isolated location first (a venv, or pip install --target into a directory under /tmp). Overriding an externally-managed-environment guard (--break-system-packages) is a last resort: use it only if the isolated routes fail, and name it in your report.
