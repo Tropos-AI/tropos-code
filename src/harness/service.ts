@@ -19,7 +19,8 @@ import { projectDir, readSessionFile } from "../session/store";
 import type { MessageParam } from "../session/store";
 import { adoptCandidate, candidateRunsCode, listCandidates, readCandidate, saveCandidate, type Candidate } from "./candidates";
 import { detectDomain } from "./domain";
-import { runLab, type LabRun } from "./lab";
+import { compareProbes } from "./gate";
+import { labDir, runLab, saveLabRun, writeOverlay, type LabRun } from "./lab";
 import { libraryMaterial } from "./library";
 import type { LlmConfig } from "./llm";
 import { LocalProbeRunner, type LabTask, type ProbeRunner } from "./probe";
@@ -181,15 +182,51 @@ export interface LabTaskResult {
   pending?: string;
 }
 
+/** Runs the reference and the candidate once more; true when the candidate is better again, on the same grounds. */
+async function confirmed(run: LabRun, base: HarnessTree, tree: HarnessTree, task: LabTask, o: { home: string; runner: ProbeRunner; signal: AbortSignal; log?: (line: string) => void }): Promise<boolean> {
+  const probe = async (t: HarnessTree, label: string) => {
+    const dir = join(labDir(o.home, run.id), label);
+    const harnessDir = join(dir, "harness");
+    const harnessFiles = await writeOverlay(harnessDir, t);
+    o.log?.(`probe ${label}: running ${task.id} again`);
+    return o.runner.run({ task, harnessDir, dir, id: `${run.id}-${label}`, label, harnessFiles }, o.signal);
+  };
+  const reference = await probe(base, "confirm-ref");
+  const candidate = await probe(tree, "confirm-cand");
+  run.probes.push(reference, candidate);
+  run.confirmation = compareProbes(reference, candidate);
+  await saveLabRun(o.home, run);
+  return run.confirmation.outcome === "better" && run.confirmation.reasons.some((r) => /^(checks passed|checked its work|finished)/.test(r));
+}
+
 /**
  * Lab, reflection and (with `autoAdopt`) adoption of the candidate when it improved and runs no code. Review
  * suggestions for the same domain and scope join the first step and are marked as tested.
  */
 export async function labOnTask(
   task: LabTask,
-  o: { home: string; runner: ProbeRunner; llm: LlmConfig; model: string; scope: "global" | "project"; k: number; mode: "parallel" | "sequential"; autoAdopt: boolean; ledger: Ledger; signal: AbortSignal; log?: (line: string) => void },
+  o: {
+    home: string;
+    runner: ProbeRunner;
+    llm: LlmConfig;
+    model: string;
+    scope: "global" | "project";
+    k: number;
+    mode: "parallel" | "sequential";
+    autoAdopt: boolean;
+    /**
+     * Before adopting on its own, run the reference and the candidate once more and adopt only if the candidate is
+     * better again: one pair of runs can be chance. Off only where the caller decides another way.
+     */
+    confirm?: boolean;
+    /** Start from this harness instead of the adopted one (an experiment where every task starts from the base). */
+    startFrom?: HarnessTree;
+    ledger: Ledger;
+    signal: AbortSignal;
+    log?: (line: string) => void;
+  },
 ): Promise<LabTaskResult> {
-  const base = await adoptedTree(o.home, task.repo, o.scope);
+  const base = o.startFrom ?? (await adoptedTree(o.home, task.repo, o.scope));
   // What the layer below the scope holds can be replaced in it, never removed from it.
   const fixed = new Set((o.scope === "project" ? await adoptedTree(o.home, task.repo, "global") : BASE_TREE).keys());
   const suggestions = (await listCandidates(o.home)).filter((c) => c.source === "review" && c.status === "pending" && c.domain === task.domain && c.scope === o.scope);
@@ -223,7 +260,9 @@ export async function labOnTask(
     else if (suggestions.length > 0) result.pending = "it was composed with a session review's suggestion, which only the owner adopts";
     // One run each way: fewer steps or tool errors alone may be chance. The checks or checking its work are not.
     else if (!run.verdict.reasons.some((r) => /^(checks passed|checked its work|finished)/.test(r))) result.pending = "it did better only on steps or tool errors, in one run each; worth a look before it is kept";
-    else {
+    else if (o.confirm !== false && finalTree && !(await confirmed(run, base, finalTree, task, o))) {
+      result.pending = `the improvement didn't repeat in a second pair of runs (${run.confirmation?.outcome}: ${run.confirmation?.reasons.join("; ") || "no difference"})`;
+    } else {
       const adopted = await adoptCandidate(o.home, candidate.id, { ledger: o.ledger, actor: "review" });
       if (adopted.ok) result.adopted = adopted.candidate;
       else result.pending = adopted.reason;

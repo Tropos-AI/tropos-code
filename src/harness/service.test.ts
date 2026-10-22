@@ -1,5 +1,5 @@
 // src/harness/service.test.ts
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -159,4 +159,54 @@ test("labFromSettings runs the lab with the owner's model and settings", async (
   expect(r.run).toMatchObject({ model: "claude-haiku-5-5", editorModel: "claude-opus-5-5", scope: "global" });
   expect(r.run.verdict.reasons).toEqual(["no proposal changed the harness"]);
   expect(router.requests[0]?.model).toBe("claude-opus-5-5");
+});
+
+/** "Run the tests." passes the check, except in the second pair when `flaky` says so. */
+class ConfirmRunner implements ProbeRunner {
+  constructor(private readonly flaky: boolean) {}
+  async run(input: ProbeInput): Promise<ProbeResult> {
+    const rule = input.harnessFiles.some((f) => /Run the tests/.test(readFileSync(join(input.harnessDir, f), "utf8")));
+    const ok = rule && !(this.flaky && input.label === "confirm-cand");
+    await writeFile(join(input.dir, "trajectory.jsonl"), "");
+    return {
+      id: input.id, label: input.label, harness: input.harnessFiles, finalText: "", seconds: 1, error: null,
+      checks: [{ command: "bun test", ok, exit: ok ? 0 : 1, timedOut: false, tail: "", seconds: 1 }],
+      audit: { files: 1, insertions: 1, deletions: 0, testFilesTouched: [], testFilesEdited: [], focusMarkers: [] },
+      signals: { turns: 5, toolCalls: 5, toolErrors: 0, filesWritten: 1, verifiedAfterLastEdit: ok, rereadWritten: 0, endReason: "end_turn", costUsd: 0 },
+    };
+  }
+}
+
+describe("adopting on its own needs the improvement twice", () => {
+  const steps = () => {
+    const rule = () => reply([textBlock(JSON.stringify({ files: { "guardrails.md": "Run the tests." } }))]);
+    return new FakeModel([rule, () => reply([textBlock('{"files": {}}')]), rule, () => reply([textBlock('{"lessons": []}')])]);
+  };
+  const run = async (flaky: boolean, over: Record<string, unknown> = {}) =>
+    labOnTask(await taskFromPrompt(repo, "Fix the date parser"), {
+      home, runner: new ConfirmRunner(flaky), llm: { model: steps(), id: "m", effort: "high" }, model: "m", scope: "global", k: 1, mode: "parallel",
+      autoAdopt: true, ledger: new Ledger(home), signal: new AbortController().signal, ...over,
+    });
+
+  test("repeated: adopted, with the second pair on record", async () => {
+    const r = await run(false);
+    expect(r.adopted?.status).toBe("adopted");
+    expect(r.run.confirmation?.outcome).toBe("better");
+    expect(r.run.probes.map((p) => p.label)).toContain("confirm-cand");
+  });
+
+  test("not repeated: it waits for the owner", async () => {
+    const r = await run(true);
+    expect(r.adopted).toBeUndefined();
+    expect(r.pending).toStartWith("the improvement didn't repeat in a second pair of runs (same");
+  });
+
+  test("startFrom runs the lab from the given harness, not the adopted one", async () => {
+    await mkdir(globalHarnessDir(home), { recursive: true });
+    await writeFile(join(globalHarnessDir(home), "guardrails.md"), "Run the tests.");
+    const adopted = await run(false, { autoAdopt: false });
+    expect(adopted.run.verdict.outcome).not.toBe("better"); // the adopted layer already passes
+    const fromBase = await run(false, { autoAdopt: false, startFrom: BASE_TREE });
+    expect(fromBase.run.verdict.outcome).toBe("better");
+  });
 });

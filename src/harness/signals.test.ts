@@ -15,7 +15,10 @@ test("verify commands", () => {
   for (const c of ["bun test", "bun x tsc --noEmit", "cd a && bun test src/x.test.ts", "cargo test", "npm run build", "pytest -q", "go vet ./...", "coqc plus_comm.v", "make", "gcc -o a a.c && ./a", "g++ x.cpp", "python3 -m pytest"]) {
     expect(isVerifyCommand(c)).toBe(true);
   }
-  for (const c of ["ls", "git diff", "cat test.ts", "echo testing", "make-dir x", "gcc-config", "cat Makefile"]) expect(isVerifyCommand(c)).toBe(false);
+  for (const c of ["ls", "git diff", "cat test.ts", "echo testing", "make-dir x", "gcc-config", "cat Makefile", "echo make", "which gcc", "cat notes | grep tsc", "tsc --version", "gcc -V", "make --help"]) {
+    expect(isVerifyCommand(c)).toBe(false);
+  }
+  for (const c of ["CI=1 bun test", "pytest -v tests/", "pytest -v", "sudo make install", "timeout 60 pytest -q", "(cd build && make)", "ls; make", "git add -A || cargo check"]) expect(isVerifyCommand(c)).toBe(true);
 });
 
 test("a run that edits, then tests, then re-reads", () => {

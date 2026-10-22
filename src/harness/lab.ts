@@ -9,7 +9,7 @@ import { addCost, type LlmConfig } from "./llm";
 import { BASE_TREE } from "./base";
 import { newId, saveCandidate, type Candidate } from "./candidates";
 import { compose, select, type Composition } from "./compose";
-import { compareProbes, rankProbes, type Verdict } from "./gate";
+import { compareProbes, endedOnItsOwn, rankProbes, type Verdict } from "./gate";
 import type { LabTask, ProbeResult, ProbeRunner } from "./probe";
 import { applyChanges, propose, type Changes, type EditorRole, type Proposal } from "./propose";
 import { parseTrajectory, renderTrajectory } from "./signals";
@@ -78,6 +78,8 @@ export interface LabRun {
   verdict: Verdict;
   /** The candidate written when the verdict was "better". */
   candidate?: string;
+  /** A second pair of runs (reference and candidate again) before adopting on its own; see labOnTask. */
+  confirmation?: Verdict;
   /** Editors, composer, selector and every probe together; null when none of them reported a cost. */
   costUsd: number | null;
 }
@@ -188,6 +190,11 @@ export async function runLab(task: LabTask, opts: LabOptions): Promise<LabRun> {
       run.verdict = { outcome: "invalid", reasons: [`the reference run failed: ${reference.probe.error}`] };
       return run;
     }
+    // Nothing could be compared with it (src/harness/gate.ts), so the editors aren't asked.
+    if (!endedOnItsOwn(reference.probe)) {
+      run.verdict = { outcome: "invalid", reasons: [`the reference run didn't finish on its own (${reference.probe.signals.endReason ?? "no end"})`] };
+      return run;
+    }
     const finals: Ran[] = [];
     if (opts.mode === "parallel") {
       for (let i = 1; i <= opts.k; i++) finals.push(await step(reference, i));
@@ -259,4 +266,9 @@ export async function pruneLabRun(home: string, id: string): Promise<void> {
   const run = await readLabRun(home, id);
   if (!run) return;
   for (const probe of run.probes) await rm(join(labDir(home, id), probe.label), { recursive: true, force: true });
+}
+
+export async function saveLabRun(home: string, run: LabRun): Promise<void> {
+  await mkdir(labDir(home, run.id), { recursive: true, mode: 0o700 });
+  await writeFile(join(labDir(home, run.id), "run.json"), `${JSON.stringify(run, null, 2)}\n`, { mode: 0o600 });
 }
