@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { dockerCheck } from "../../src/gateway/daemon";
 import type { ChildProcess } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { FakeModel, reply, textBlock, toolUseBlock, type Step } from "../helpers/fake-model";
@@ -235,8 +235,11 @@ describe("tcode gateway", () => {
     );
     const gw = startGateway([() => reply([textBlock("Hello team, all quiet.")])]);
     await server.waitFor(() => server.textsTo(CHAT).some((t) => t.includes("morning") && t.includes("Hello team, all quiet.")), 8_000);
-    // Nobody paired: the delivery goes to the chat the job names, and the run is on record.
-    const runs = (await readFile(join(home, "gateway", "cron", "runs.jsonl"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { jobId: string; status: string });
+    // Nobody paired: the delivery goes to the chat the job names, and the run is on record. The scheduler records the
+    // run right after delivering it, so the record may land a moment after the message.
+    const runsFile = join(home, "gateway", "cron", "runs.jsonl");
+    await server.waitFor(() => existsSync(runsFile), 8_000);
+    const runs = (await readFile(runsFile, "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { jobId: string; status: string });
     expect(runs).toEqual([expect.objectContaining({ jobId: "job-1", status: "ok" })]);
     expect(gw.backends).toHaveLength(1); // its Bash would have gone through the sandbox backend
     gw.stop();
