@@ -1,4 +1,5 @@
 {
+  "run": "pilot-train-2",
   "command": "train",
   "bench": "tb",
   "model": "claude-haiku-5-5",
